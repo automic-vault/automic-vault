@@ -502,7 +502,7 @@ fn sandboxed_trace_command(
 }
 
 fn should_bypass_trace_agent_sandbox() -> bool {
-    cfg!(test) && env::var_os("CODEX_CI").is_some()
+    cfg!(debug_assertions) && env::var_os("CODEX_CI").is_some()
 }
 
 fn trace_sandbox_profile(runtime_root: &Path, agent: TraceAgent) -> String {
@@ -1438,10 +1438,14 @@ pub(crate) fn is_trace_subcommand(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
     #[cfg(unix)]
     use std::os::unix::ffi::OsStringExt;
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
+    use std::process::{Command, Stdio};
+    use std::thread;
 
     #[test]
     fn trace_output_schema_requires_all_step_properties() {
@@ -1610,6 +1614,149 @@ mod tests {
             Some(value) => unsafe { env::set_var("CODEX_CI", value) },
             None => unsafe { env::remove_var("CODEX_CI") },
         }
+    }
+
+    #[test]
+    fn trace_fetch_and_download_cover_success_and_truncation_paths() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            for (index, mut stream) in listener.incoming().take(2).flatten().enumerate() {
+                let mut request = [0_u8; 1024];
+                let _ = stream.read(&mut request);
+                let body = if index == 0 {
+                    "echo traced\n".to_string()
+                } else {
+                    "x".repeat((MAX_TRACE_SCRIPT_BYTES as usize) + 8)
+                };
+                write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                )
+                .unwrap();
+                stream.flush().unwrap();
+            }
+        });
+        let progress = TraceProgress::new(false);
+        let fetched = fetch_trace_script_for_command(
+            &format!("curl http://{address}/install.sh | sh"),
+            &progress,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(fetched.url, format!("http://{address}/install.sh"));
+        assert_eq!(fetched.interpreter, "sh");
+        assert_eq!(fetched.body, "echo traced\n");
+        assert!(!fetched.truncated);
+
+        let truncated = download_trace_script(&format!("http://{address}/truncated.sh")).unwrap();
+        assert_eq!(truncated.0.len(), MAX_TRACE_SCRIPT_BYTES as usize);
+        assert!(truncated.1);
+
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn trace_sandbox_helpers_cover_non_bypass_and_home_variants() {
+        let _env_lock = crate::global_test_env_lock();
+        let previous_codex_ci = env::var_os("CODEX_CI");
+        let previous_home = env::var_os("HOME");
+
+        unsafe {
+            env::remove_var("CODEX_CI");
+            env::set_var("HOME", "/tmp/trace-home");
+        }
+
+        let runtime = tempfile::tempdir().unwrap();
+        let command = sandboxed_trace_command(runtime.path(), "codex", TraceAgent::Claude).unwrap();
+        assert_eq!(command.get_program(), OsStr::new(TRACE_SANDBOX_EXEC_PATH));
+        let args = command.get_args().collect::<Vec<_>>();
+        assert_eq!(args[0], OsStr::new("-f"));
+        assert_eq!(args[2], OsStr::new("codex"));
+        let profile_path = runtime.path().join("trace-agent.sb");
+        let profile = fs::read_to_string(&profile_path).unwrap();
+        assert!(profile.contains(".claude"));
+        assert!(!profile.contains(".codex"));
+
+        unsafe { env::remove_var("HOME") };
+        let profile = trace_sandbox_profile(runtime.path(), TraceAgent::Auto);
+        assert!(!profile.contains(".claude"));
+        assert!(!profile.contains(".codex"));
+
+        match previous_codex_ci {
+            Some(value) => unsafe { env::set_var("CODEX_CI", value) },
+            None => unsafe { env::remove_var("CODEX_CI") },
+        }
+        match previous_home {
+            Some(value) => unsafe { env::set_var("HOME", value) },
+            None => unsafe { env::remove_var("HOME") },
+        }
+    }
+
+    #[test]
+    fn trace_child_io_and_output_helpers_cover_failure_paths() {
+        let mut child = Command::new("/bin/sh")
+            .arg("-c")
+            .arg("exit 0")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        assert_eq!(
+            write_child_stdin(&mut child, "trace me").unwrap_err(),
+            "failed to open trace agent stdin"
+        );
+        child.wait().unwrap();
+
+        let child = Command::new("/bin/sh")
+            .arg("-c")
+            .arg("printf 'sandbox exploded\\n' >&2; exit 2")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        assert_eq!(
+            collect_trace_agent_output("codex", child).unwrap_err(),
+            "codex trace agent failed: sandbox exploded"
+        );
+
+        let child = Command::new("/bin/sh")
+            .arg("-c")
+            .arg("exit 3")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        assert_eq!(
+            collect_trace_agent_output("claude", child).unwrap_err(),
+            "claude trace agent exited without a successful status"
+        );
+    }
+
+    #[test]
+    fn trace_json_parsers_cover_result_envelope_and_fallback_paths() {
+        let from_result = parse_trace_agent_output(
+            r#"{"result":"{\"steps\":[{\"description\":\"Installs\",\"operation\":\"install\",\"path\":\"/tmp/av\",\"network\":null}]}"}"#,
+        )
+        .unwrap();
+        assert_eq!(from_result.steps[0].path.as_deref(), Some("/tmp/av"));
+
+        let from_direct_envelope = parse_trace_agent_output(
+            r#"{"steps":[{"description":"Touches","operation":"modify","path":"~/.zshrc","network":null}]}"#,
+        )
+        .unwrap();
+        assert_eq!(from_direct_envelope.steps[0].path.as_deref(), Some("~/.zshrc"));
+
+        let embedded = parse_trace_agent_embedded_json(
+            "prefix {\"steps\":[{\"description\":\"broken\"}]} suffix {\"steps\":[{\"description\":\"Downloads\",\"operation\":\"download\",\"path\":null,\"network\":\"https://example.test\"}]} trailing",
+        )
+        .unwrap();
+        assert_eq!(embedded.steps[0].operation, "download");
     }
 
     #[test]

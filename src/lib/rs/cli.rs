@@ -1435,3 +1435,172 @@ pub(crate) fn is_secret_scanner_subcommand(value: &str) -> bool {
 pub(crate) fn is_serve_subcommand(value: &str) -> bool {
     value == "serve"
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[cfg(unix)]
+    use std::os::unix::ffi::OsStringExt;
+
+    fn invocation(name: &str) -> Invocation {
+        Invocation {
+            binary_name: "av".to_string(),
+            name: name.to_string(),
+            mode: None,
+        }
+    }
+
+    #[test]
+    fn secret_scanner_parser_rejects_duplicate_unknown_and_missing_paths() {
+        let request = parse_secret_scanner_request_from_iter(
+            &invocation("av scan"),
+            vec![OsString::from("--jsonl"), OsString::from("--path"), OsString::from("/tmp/secrets")]
+                .into_iter(),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(request.output, OutputMode::Jsonl);
+        assert_eq!(request.path, Some(PathBuf::from("/tmp/secrets")));
+
+        assert_eq!(
+            parse_secret_scanner_request_from_iter(
+                &invocation("av scan"),
+                vec![OsString::from("--path"), OsString::from("/tmp/a"), OsString::from("--path")]
+                    .into_iter(),
+            )
+            .unwrap_err(),
+            "secret scanner path specified more than once"
+        );
+        assert_eq!(
+            parse_secret_scanner_request_from_iter(
+                &invocation("av scan"),
+                vec![OsString::from("--wat")].into_iter(),
+            )
+            .unwrap_err(),
+            "unknown argument '--wat'"
+        );
+        assert_eq!(
+            parse_secret_scanner_request_from_iter(
+                &invocation("av scan"),
+                vec![OsString::from("/tmp/a"), OsString::from("/tmp/b")].into_iter(),
+            )
+            .unwrap_err(),
+            "supports a single scan path"
+        );
+        assert_eq!(
+            parse_secret_scanner_request_from_iter(
+                &invocation("av scan"),
+                vec![OsString::from("--path")].into_iter(),
+            )
+            .unwrap_err(),
+            "missing value for --path"
+        );
+        #[cfg(unix)]
+        assert_eq!(
+            parse_secret_scanner_request_from_iter(
+                &invocation("av scan"),
+                vec![OsString::from_vec(vec![0xff])].into_iter(),
+            )
+            .unwrap_err(),
+            "secret scanner path must be valid UTF-8"
+        );
+    }
+
+    #[test]
+    fn package_name_parsers_cover_cask_isotope_and_fallback_edges() {
+        assert_eq!(
+            parse_package_name(&OsString::from("cask:")).unwrap_err(),
+            "package qualifier 'cask:' is missing a cask name"
+        );
+        assert_eq!(
+            parse_package_name(&OsString::from("cask:iterm2/tap")).unwrap_err(),
+            "qualified package name must not contain additional path separators"
+        );
+        assert_eq!(
+            parse_package_name(&OsString::from("isotope:")).unwrap_err(),
+            "package qualifier 'isotope:' is missing an isotope name"
+        );
+        assert_eq!(
+            parse_package_name(&OsString::from("isotope:gh/tools")).unwrap_err(),
+            "qualified package name must not contain additional path separators"
+        );
+
+        assert_eq!(
+            parse_uninstall_package_name(&OsString::from("cask:")).unwrap_err(),
+            "package qualifier 'cask:' is missing a cask name"
+        );
+        assert_eq!(
+            parse_uninstall_package_name(&OsString::from("cask:iterm2/tap")).unwrap_err(),
+            "qualified package name must not contain additional path separators"
+        );
+        assert_eq!(
+            parse_uninstall_package_name(&OsString::from("isotope:")).unwrap_err(),
+            "package qualifier 'isotope:' is missing an isotope name"
+        );
+        assert_eq!(
+            parse_uninstall_package_name(&OsString::from("isotope:gh/tools")).unwrap_err(),
+            "qualified package name must not contain additional path separators"
+        );
+        assert_eq!(
+            parse_uninstall_package_name(&OsString::from("slash/name")).unwrap_err(),
+            "package name must not contain path separators"
+        );
+    }
+
+    #[test]
+    fn alias_target_and_install_root_helpers_cover_uncovered_variants() {
+        assert_eq!(
+            parse_package_alias_target("cask:").unwrap_err(),
+            "package qualifier 'cask:' is missing a cask name"
+        );
+        assert_eq!(
+            parse_package_alias_target("cask:visual-studio/code").unwrap_err(),
+            "qualified package name must not contain additional path separators"
+        );
+        let cask_target = parse_package_alias_target("cask:iterm2").unwrap();
+        assert_eq!(cask_target.display_name(), "cask:iterm2");
+        assert_eq!(
+            cask_target.clone().into_requested_package(),
+            RequestedPackage::HomebrewCask("iterm2".to_string())
+        );
+        let npm_target = parse_package_alias_target("npm:@scope/pkg").unwrap();
+        assert_eq!(
+            npm_target.into_requested_package(),
+            RequestedPackage::NpmPackage {
+                package: "@scope/pkg".to_string(),
+                version: None,
+            }
+        );
+        let pip_target = parse_package_alias_target("pip:Requests").unwrap();
+        assert_eq!(
+            pip_target.into_requested_package(),
+            RequestedPackage::PipPackage("requests".to_string())
+        );
+
+        assert_eq!(
+            package_install_root(Path::new("/tmp/opt"), "isotope:").unwrap_err(),
+            "package qualifier 'isotope:' is missing an isotope name"
+        );
+        assert_eq!(
+            package_install_root(Path::new("/tmp/opt"), "isotope:aws-cli").unwrap(),
+            Path::new("/tmp/opt").join("awscli")
+        );
+        assert_eq!(
+            parse_embedded_provider("npm:").unwrap_err(),
+            "package qualifier 'npm:' is missing a package name"
+        );
+        assert_eq!(
+            parse_embedded_provider("cask:").unwrap_err(),
+            "package qualifier 'cask:' is missing a cask name"
+        );
+        assert_eq!(parse_embedded_provider("pkg:custom").unwrap(), None);
+
+        assert!(
+            ensure_alias_install_target_unambiguous(
+                "__coverage_alias__",
+                &PackageAliasTarget::NpmPackage("coverage-npm".to_string()),
+            )
+            .is_ok()
+        );
+    }
+}
