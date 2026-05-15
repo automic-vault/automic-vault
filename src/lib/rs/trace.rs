@@ -502,8 +502,12 @@ fn sandboxed_trace_command(
 }
 
 fn should_bypass_trace_agent_sandbox() -> bool {
-    env::var_os("CODEX_CI").is_some()
-        && (cfg!(debug_assertions) || env::var_os("LLVM_PROFILE_FILE").is_some())
+    // Tests can opt into bypassing sandbox-exec explicitly when the host
+    // environment does not permit nested sandboxing. Release builds must
+    // never allow this bypass.
+    cfg!(debug_assertions)
+        && env::var_os("CODEX_CI").is_some()
+        && env::var_os("NUKE_TEST_BYPASS_TRACE_SANDBOX").is_some()
 }
 
 fn trace_sandbox_profile(runtime_root: &Path, agent: TraceAgent) -> String {
@@ -1604,8 +1608,10 @@ mod tests {
     fn sandboxed_trace_command_bypasses_sandbox_under_codex_ci() {
         let _env_lock = crate::global_test_env_lock();
         let previous_codex_ci = env::var_os("CODEX_CI");
+        let previous_bypass = env::var_os("NUKE_TEST_BYPASS_TRACE_SANDBOX");
 
         unsafe { env::set_var("CODEX_CI", "1") };
+        unsafe { env::set_var("NUKE_TEST_BYPASS_TRACE_SANDBOX", "1") };
         let command =
             sandboxed_trace_command(Path::new("/tmp/trace-runtime"), "codex", TraceAgent::Codex)
                 .unwrap();
@@ -1614,6 +1620,10 @@ mod tests {
         match previous_codex_ci {
             Some(value) => unsafe { env::set_var("CODEX_CI", value) },
             None => unsafe { env::remove_var("CODEX_CI") },
+        }
+        match previous_bypass {
+            Some(value) => unsafe { env::set_var("NUKE_TEST_BYPASS_TRACE_SANDBOX", value) },
+            None => unsafe { env::remove_var("NUKE_TEST_BYPASS_TRACE_SANDBOX") },
         }
     }
 
