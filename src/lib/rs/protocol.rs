@@ -678,4 +678,26 @@ mod tests {
         assert_eq!(migration["id"], 15);
         assert!(migration["result"]["packages"].is_array());
     }
+
+    #[test]
+    fn dispatch_request_routes_make_default_and_migrate_isotope_errors() {
+        let make_default = dispatch_request(core::ProtocolRequest {
+            id: 16,
+            method: "packages.makeDefault".to_string(),
+            params: serde_json::json!({"package": "coverage-missing"}),
+        })
+        .unwrap_err();
+        assert_eq!(make_default.id, 16);
+        assert_eq!(make_default.error.code, 500);
+
+        let migrate = dispatch_request(core::ProtocolRequest {
+            id: 17,
+            method: "packages.migrateIsotope".to_string(),
+            params: serde_json::json!({"isotope": "bad/name"}),
+        })
+        .unwrap_err();
+        assert_eq!(migrate.id, 17);
+        assert_eq!(migrate.error.code, 500);
+        assert!(migrate.error.message.contains("invalid isotope name"));
+    }
 }

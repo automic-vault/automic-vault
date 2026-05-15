@@ -502,7 +502,8 @@ fn sandboxed_trace_command(
 }
 
 fn should_bypass_trace_agent_sandbox() -> bool {
-    cfg!(debug_assertions) && env::var_os("CODEX_CI").is_some()
+    env::var_os("CODEX_CI").is_some()
+        && (cfg!(debug_assertions) || env::var_os("LLVM_PROFILE_FILE").is_some())
 }
 
 fn trace_sandbox_profile(runtime_root: &Path, agent: TraceAgent) -> String {

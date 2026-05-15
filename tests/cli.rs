@@ -579,6 +579,52 @@ fn subs_trace_command_covers_agent_selection_and_outputs() {
 }
 
 #[test]
+fn subs_help_topics_and_root_gated_commands_cover_dispatch_edges() {
+    for topic in [
+        "uninstall",
+        "outdated",
+        "update",
+        "list",
+        "info",
+        "search",
+        "scan",
+        "trace",
+        "serve",
+        "inject",
+        "save",
+        "gate",
+        "contain",
+        "install",
+    ] {
+        let output = run_nuke(&["help", topic]);
+        assert!(output.status.success(), "topic={topic} stderr={}", stderr(&output));
+        assert!(stdout(&output).contains("Usage:"), "topic={topic}");
+    }
+
+    let output = run_nuke(&["help", "wat"]);
+    assert!(output.status.success());
+    assert!(stdout(&output).contains("PACKAGE SYSTEM"));
+
+    let output = run_nuke(&["update"]);
+    assert!(!output.status.success());
+    assert!(stderr(&output).contains("must be run as root"));
+
+    let output = run_nuke(&["uninstall", "ripgrep"]);
+    assert!(!output.status.success());
+    assert!(stderr(&output).contains("package ripgrep is not installed"));
+
+    let _guard = PackageRootGuard::install(
+        "coverage-cli-uninstall",
+        "0.0.1",
+        serde_json::json!({
+            "formula": "coverage-cli-uninstall"
+        }),
+    );
+    let output = run_nuke(&["uninstall", "coverage-cli-uninstall"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+}
+
+#[test]
 fn subs_serve_command_covers_non_server_paths() {
     let output = run_nuke(&["serve", "--help"]);
     assert!(output.status.success());

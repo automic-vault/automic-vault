@@ -1603,4 +1603,401 @@ mod tests {
             .is_ok()
         );
     }
+
+    #[test]
+    fn request_parsers_cover_help_version_missing_and_flag_shapes() {
+        assert!(
+            parse_i_request_from_iter(&invocation("av install"), Vec::<OsString>::new().into_iter())
+                .unwrap_err()
+                .contains("missing package name")
+        );
+        assert!(
+            parse_i_request_from_iter(
+                &invocation("av install"),
+                vec![OsString::from("--help")].into_iter(),
+            )
+            .unwrap()
+            .is_none()
+        );
+        assert!(
+            parse_i_request_from_iter(
+                &invocation("av install"),
+                vec![OsString::from("--version")].into_iter(),
+            )
+            .unwrap()
+            .is_none()
+        );
+
+        assert!(
+            parse_uninstall_request_from_iter(
+                &invocation("av uninstall"),
+                Vec::<OsString>::new().into_iter(),
+            )
+            .unwrap_err()
+            .contains("missing package name")
+        );
+        assert!(
+            parse_uninstall_request_from_iter(
+                &invocation("av uninstall"),
+                vec![OsString::from("--help")].into_iter(),
+            )
+            .unwrap()
+            .is_none()
+        );
+        assert!(
+            parse_uninstall_request_from_iter(
+                &invocation("av uninstall"),
+                vec![OsString::from("--version")].into_iter(),
+            )
+            .unwrap()
+            .is_none()
+        );
+        let uninstall = parse_uninstall_request_from_iter(
+            &invocation("av uninstall"),
+            vec![OsString::from("brew:ripgrep"), OsString::from("npm:@scope/pkg")].into_iter(),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(uninstall.packages, ["ripgrep", "npm:@scope/pkg"]);
+
+        assert!(
+            parse_update_request_from_iter(
+                &invocation("av update"),
+                vec![OsString::from("--help")].into_iter(),
+            )
+            .unwrap()
+            .is_none()
+        );
+        assert!(
+            parse_update_request_from_iter(
+                &invocation("av update"),
+                vec![OsString::from("--version")].into_iter(),
+            )
+            .unwrap()
+            .is_none()
+        );
+        let update = parse_update_request_from_iter(
+            &invocation("av update"),
+            vec![
+                OsString::from("--no-self-update"),
+                OsString::from("ripgrep"),
+                OsString::from("npm:@scope/pkg@1.2.3"),
+            ]
+            .into_iter(),
+        )
+        .unwrap()
+        .unwrap();
+        assert!(update.no_self_update);
+        match update.selection {
+            PackageSelection::Requested(packages) => assert_eq!(packages.len(), 2),
+            PackageSelection::AllInstalled => panic!("expected requested packages"),
+        }
+
+        assert!(
+            parse_info_request_from_iter(&invocation("av info"), Vec::<OsString>::new().into_iter())
+                .unwrap_err()
+                .contains("missing package name")
+        );
+        assert!(
+            parse_info_request_from_iter(
+                &invocation("av info"),
+                vec![OsString::from("--json")].into_iter(),
+            )
+            .unwrap_err()
+            .contains("missing package name")
+        );
+        assert!(
+            parse_info_request_from_iter(
+                &invocation("av info"),
+                vec![OsString::from("--help")].into_iter(),
+            )
+            .unwrap()
+            .is_none()
+        );
+        assert!(
+            parse_info_request_from_iter(
+                &invocation("av info"),
+                vec![OsString::from("--version")].into_iter(),
+            )
+            .unwrap()
+            .is_none()
+        );
+        let info = parse_info_request_from_iter(
+            &invocation("av info"),
+            vec![OsString::from("--json"), OsString::from("ripgrep")].into_iter(),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(info.output, OutputMode::Json);
+
+        assert!(
+            parse_search_request_from_iter(
+                &invocation("av search"),
+                Vec::<OsString>::new().into_iter(),
+            )
+            .unwrap_err()
+            .contains("missing query")
+        );
+        assert!(
+            parse_search_request_from_iter(
+                &invocation("av search"),
+                vec![OsString::from("--jsonl")].into_iter(),
+            )
+            .unwrap_err()
+            .contains("missing query")
+        );
+        assert!(
+            parse_search_request_from_iter(
+                &invocation("av search"),
+                vec![OsString::from("--help")].into_iter(),
+            )
+            .unwrap()
+            .is_none()
+        );
+        assert!(
+            parse_search_request_from_iter(
+                &invocation("av search"),
+                vec![OsString::from("--version")].into_iter(),
+            )
+            .unwrap()
+            .is_none()
+        );
+        assert!(
+            parse_search_request_from_iter(
+                &invocation("av search"),
+                vec![OsString::from("rg"), OsString::from("ripgrep")].into_iter(),
+            )
+            .unwrap_err()
+            .contains("single query string")
+        );
+
+        assert!(
+            parse_package_status_request_from_iter(
+                &invocation("av list"),
+                vec![OsString::from("--help")].into_iter(),
+                print_list_usage,
+            )
+            .unwrap()
+            .is_none()
+        );
+        assert!(
+            parse_package_status_request_from_iter(
+                &invocation("av list"),
+                vec![OsString::from("--version")].into_iter(),
+                print_list_usage,
+            )
+            .unwrap()
+            .is_none()
+        );
+        let all_installed = parse_package_status_request_from_iter(
+            &invocation("av list"),
+            vec![OsString::from("--json")].into_iter(),
+            print_list_usage,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(all_installed.output, OutputMode::Json);
+        assert!(matches!(all_installed.selection, PackageSelection::AllInstalled));
+    }
+
+    #[test]
+    fn request_parsers_cover_output_conflicts_and_search_path_edges() {
+        assert_eq!(
+            update_output_mode(OutputMode::Json, &OsString::from("--jsonl")).unwrap_err(),
+            "cannot combine --json and --jsonl"
+        );
+        assert_eq!(
+            update_output_mode(OutputMode::Jsonl, &OsString::from("--json")).unwrap_err(),
+            "cannot combine --json and --jsonl"
+        );
+        assert_eq!(
+            update_output_mode(OutputMode::Human, &OsString::from("--wat")).unwrap(),
+            OutputMode::Human
+        );
+
+        let request = parse_search_request_from_iter(
+            &invocation("av search"),
+            vec![OsString::from("--jsonl"), OsString::from("rg")].into_iter(),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(request.output, OutputMode::Jsonl);
+        assert_eq!(request.query, "rg");
+
+        let request = parse_package_status_request_from_iter(
+            &invocation("av outdated"),
+            vec![
+                OsString::from("ripgrep"),
+                OsString::from("npm:@scope/pkg"),
+                OsString::from("--jsonl"),
+            ]
+            .into_iter(),
+            print_outdated_usage,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(request.output, OutputMode::Jsonl);
+        match request.selection {
+            PackageSelection::Requested(packages) => assert_eq!(packages.len(), 2),
+            PackageSelection::AllInstalled => panic!("expected requested packages"),
+        }
+    }
+
+    #[test]
+    fn alias_and_provider_resolution_cover_ambiguous_and_fallback_paths() {
+        assert_eq!(
+            PackageAliasTarget::HomebrewFormula("ripgrep".to_string()).into_requested_package(),
+            RequestedPackage::HomebrewFormula("ripgrep".to_string())
+        );
+
+        assert_eq!(
+            package_install_root(Path::new("/tmp/opt"), "isotope:coverage-missing").unwrap(),
+            Path::new("/tmp/opt")
+                .join(ISOTOPE_INSTALL_ROOT_DIR)
+                .join("coverage-missing")
+        );
+
+        assert_eq!(
+            parse_package_alias_target("brew:ripgrep")
+                .unwrap()
+                .into_requested_package(),
+            RequestedPackage::HomebrewFormula("ripgrep".to_string())
+        );
+        assert_eq!(
+            parse_package_alias_target("target-without-qualifier").unwrap_err(),
+            "alias targets must use a package qualifier"
+        );
+
+        assert_eq!(
+            parse_embedded_provider("ripgrep").unwrap(),
+            Some(EmbeddedPackage::Formula("ripgrep".to_string()))
+        );
+
+        let mut db = load_db().unwrap();
+        ensure_db_schema(&db).unwrap();
+
+        db.entries.insert(
+            "coverage-provider".to_string(),
+            "npm:coverage-npm".to_string(),
+        );
+        assert_eq!(
+            resolve_i_root_package_with_db("coverage-provider", &db, |_| Ok(false)).unwrap(),
+            EmbeddedPackage::NpmPackage("coverage-npm".to_string())
+        );
+        assert!(
+            resolve_i_root_package_with_db("coverage-provider", &db, |_| Ok(true))
+                .unwrap_err()
+                .contains("ambiguous")
+        );
+
+        db.entries.insert(
+            "coverage-custom".to_string(),
+            "pkg:custom-provider".to_string(),
+        );
+        assert_eq!(
+            resolve_i_root_package_with_db("coverage-custom", &db, |_| Ok(false)).unwrap(),
+            EmbeddedPackage::Formula("coverage-custom".to_string())
+        );
+
+        let target = PackageAliasTarget::HomebrewFormula("ripgrep".to_string());
+        db.entries.insert(
+            "coverage-alias".to_string(),
+            "npm:coverage-npm".to_string(),
+        );
+        assert!(
+            ensure_alias_install_target_unambiguous_with_db(
+                "coverage-alias",
+                &target,
+                &db,
+                |_| Ok(false),
+            )
+            .unwrap_err()
+            .contains("ambiguous")
+        );
+
+        db.entries.insert(
+            "coverage-formula-alias".to_string(),
+            "coverage-formula-alias".to_string(),
+        );
+        assert!(
+            ensure_alias_install_target_unambiguous_with_db(
+                "coverage-formula-alias",
+                &target,
+                &db,
+                |_| Ok(false),
+            )
+            .unwrap_err()
+            .contains("ambiguous")
+        );
+        assert!(
+            ensure_alias_install_target_unambiguous_with_db(
+                "ripgrep",
+                &target,
+                &db,
+                |_| Ok(true),
+            )
+            .unwrap_err()
+            .contains("ambiguous")
+        );
+
+        let mut stderr = Vec::new();
+        write_full_formula_recommendation("ffmpeg", &mut stderr).unwrap();
+        assert!(String::from_utf8(stderr).unwrap().contains("ffmpeg-full"));
+        assert!(print_full_formula_recommendation("imagemagick").is_ok());
+    }
+
+    #[test]
+    fn package_helper_variants_cover_pip_npm_and_provider_branches() {
+        assert_eq!(
+            validate_pip_package_name("").unwrap_err(),
+            "package qualifier 'pip:' is missing a package name"
+        );
+        assert_eq!(
+            validate_pip_package_name("bad/name").unwrap_err(),
+            "pip package names must not contain path separators"
+        );
+        assert!(
+            validate_pip_package_name("bad!name")
+                .unwrap_err()
+                .contains("may only contain ASCII letters")
+        );
+        assert_eq!(normalize_pip_package_name("My..Pkg__Name"), "my-pkg-name");
+
+        assert_eq!(
+            parse_embedded_provider("npm:coverage-npm").unwrap(),
+            Some(EmbeddedPackage::NpmPackage("coverage-npm".to_string()))
+        );
+        assert_eq!(
+            parse_embedded_provider("cask:codex").unwrap(),
+            Some(EmbeddedPackage::Cask("codex".to_string()))
+        );
+        assert_eq!(parse_embedded_provider("pkg:custom").unwrap(), None);
+
+        assert_eq!(
+            parse_npm_package_request("@scope/pkg@1.2.3").unwrap(),
+            ("@scope/pkg".to_string(), Some("1.2.3".to_string()))
+        );
+        assert_eq!(
+            parse_npm_package_request("coverage-npm@1.2.3").unwrap(),
+            ("coverage-npm".to_string(), Some("1.2.3".to_string()))
+        );
+        assert_eq!(
+            parse_npm_package_request("@scope/pkg").unwrap(),
+            ("@scope/pkg".to_string(), None)
+        );
+
+        assert_eq!(
+            parse_uninstall_package_name(&OsString::from("brew:")).unwrap_err(),
+            "package qualifier 'brew:' is missing a formula name"
+        );
+        assert_eq!(
+            parse_uninstall_package_name(&OsString::from("brew:ripgrep/tools")).unwrap_err(),
+            "qualified package name must not contain additional path separators"
+        );
+        #[cfg(unix)]
+        assert_eq!(
+            parse_uninstall_package_name(&OsString::from_vec(vec![0xff])).unwrap_err(),
+            "package name must be valid UTF-8"
+        );
+    }
 }
