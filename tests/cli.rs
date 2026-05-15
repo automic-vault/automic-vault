@@ -617,13 +617,15 @@ fn subs_help_topics_and_root_gated_commands_cover_dispatch_edges() {
     assert!(output.status.success());
     assert!(stdout(&output).contains("PACKAGE SYSTEM"));
 
-    let output = run_nuke(&["update"]);
-    assert!(!output.status.success());
-    assert!(stderr(&output).contains("must be run as root"));
+    if unsafe { libc::geteuid() } != 0 {
+        let output = run_nuke(&["update"]);
+        assert!(!output.status.success());
+        assert!(stderr(&output).contains("must be run as root"));
+    }
 
-    let output = run_nuke(&["uninstall", "ripgrep"]);
+    let output = run_nuke(&["uninstall", "coverage-cli-uninstall-missing"]);
     assert!(!output.status.success());
-    assert!(stderr(&output).contains("package ripgrep is not installed"));
+    assert!(stderr(&output).contains("package coverage-cli-uninstall-missing is not installed"));
 
     let _guard = PackageRootGuard::install(
         "coverage-cli-uninstall",

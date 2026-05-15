@@ -1606,7 +1606,7 @@ mod tests {
 
     #[test]
     fn sandboxed_trace_command_bypasses_sandbox_under_codex_ci() {
-        let _env_lock = crate::global_test_env_lock();
+        let _env_lock = crate::global_test_env_lock().lock().unwrap();
         let previous_codex_ci = env::var_os("CODEX_CI");
         let previous_bypass = env::var_os("NUKE_TEST_BYPASS_TRACE_SANDBOX");
 
