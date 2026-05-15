@@ -5752,6 +5752,9 @@ fn handle_allowed_failure<W: Write>(
 }
 
 fn pkg_allow_contains(flag: &str) -> bool {
+    if !homebrew_debug_allowance_enabled() {
+        return false;
+    }
     env::var("PKG_ALLOW")
         .ok()
         .is_some_and(|value| pkg_allow_value_contains(&value, flag))
@@ -10645,6 +10648,14 @@ long_prefix = re.compile(r'/opt/python@3.12/[0-9\\._abrc]+')\n"
         } else {
             assert_eq!(value, "other-flag");
         }
+    }
+
+    #[test]
+    fn pkg_allow_runtime_override_stays_debug_only() {
+        let _env_lock = test_env_lock().lock().unwrap();
+        let _env = TestEnvGuard::set(&[("PKG_ALLOW", "relocation-failures")]);
+
+        assert_eq!(pkg_allow_contains("relocation-failures"), cfg!(debug_assertions));
     }
 
     #[test]

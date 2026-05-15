@@ -882,7 +882,7 @@ pub fn verify_helper_codesign_identity() -> Result<(), String> {
 
 #[cfg(target_os = "macos")]
 fn verify_cli_install_signatures(source_paths: &[&Path], caller_path: &Path) -> Result<(), String> {
-    if expected_codesign_identity().is_none() {
+    if required_codesign_identity()?.is_none() {
         return Ok(());
     }
     if source_paths.is_empty() {
@@ -929,7 +929,7 @@ fn verify_cli_install_signatures(
 
 #[cfg(target_os = "macos")]
 fn verify_expected_codesign_identity(path: &Path) -> Result<(), String> {
-    if expected_codesign_identity().is_none() {
+    if required_codesign_identity()?.is_none() {
         return Ok(());
     }
     let signature = code_signature_authorities(path)?;
@@ -947,7 +947,7 @@ fn ensure_expected_codesign_identity(
     path: &Path,
     authorities: &[String],
 ) -> Result<(), String> {
-    let Some(expected) = expected_codesign_identity() else {
+    let Some(expected) = required_codesign_identity()? else {
         return Ok(());
     };
 
@@ -961,6 +961,15 @@ fn ensure_expected_codesign_identity(
             "{label} is not signed with expected identity {expected}: {}",
             path.display()
         )),
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn required_codesign_identity() -> Result<Option<&'static str>, String> {
+    match expected_codesign_identity() {
+        Some(expected) => Ok(Some(expected)),
+        None if cfg!(debug_assertions) => Ok(None),
+        None => Err("release build missing embedded codesign identity".to_string()),
     }
 }
 
