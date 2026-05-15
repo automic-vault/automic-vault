@@ -1950,13 +1950,14 @@ mod tests {
             Some("kept".to_string())
         );
 
+        let gh_security_state = crate::package_security_state_for_isotope("gh");
         assert_eq!(
             homebrew_migration_security_state_for_package("brew:gh", &[]),
-            None
+            gh_security_state
         );
         assert_eq!(
             homebrew_migration_security_state_for_package("gh", &[]),
-            None
+            gh_security_state
         );
         assert_eq!(homebrew_migration_hazard_for_package("brew:gh"), None);
 

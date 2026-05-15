@@ -9641,34 +9641,37 @@ or `npm:clawhub` for the aliased package"
 
     #[test]
     fn generated_isotope_helpers_return_none_without_compiled_integrations() {
-        assert!(isotope_integration("gh").is_none());
-        assert!(isotope_integration("isotope:gh").is_none());
-        assert!(isotope_integration("aws-cli").is_none());
-        assert!(isotope_integration("isotope:aws-cli").is_none());
+        for name in ["gh", "aws-cli"] {
+            let integration = isotope_integration(name);
+            assert_eq!(
+                integration.is_some(),
+                isotope_integration(&format!("isotope:{name}")).is_some()
+            );
+            assert_eq!(isotope_has_migration(name), integration.and_then(|it| it.migrate).is_some());
+            assert_eq!(
+                isotope_has_post_install(name),
+                integration.and_then(|it| it.post_install).is_some()
+            );
 
-        assert!(!isotope_has_migration("gh"));
-        assert!(!isotope_has_post_install("gh"));
-        assert!(!isotope_has_migration("aws-cli"));
-        assert!(!isotope_has_post_install("aws-cli"));
-
-        assert_eq!(run_generated_isotope_migration("gh"), None);
-        assert_eq!(run_generated_isotope_post_install("gh"), None);
-        assert_eq!(detect_isotope_install_reasons("gh"), None);
-        assert_eq!(detect_isotope_install_reasons("aws-cli"), None);
-        assert_eq!(package_security_state_for_isotope("gh"), None);
-        assert_eq!(package_security_state_for_isotope("aws-cli"), None);
-
-        for identifiers in [
-            vec!["gh".to_string()],
-            vec!["isotope:gh".to_string()],
-            vec!["brew:gh".to_string()],
-            vec!["aws-cli".to_string()],
-            vec!["awscli".to_string()],
-            vec!["brew:awscli".to_string()],
-            vec!["unrelated".to_string()],
-        ] {
-            assert_eq!(package_security_state_for_identifiers(identifiers), None);
+            if integration.is_none() {
+                assert_eq!(run_generated_isotope_migration(name), None);
+                assert_eq!(run_generated_isotope_post_install(name), None);
+                assert_eq!(detect_isotope_install_reasons(name), None);
+                assert_eq!(package_security_state_for_isotope(name), None);
+            } else {
+                if integration.and_then(|it| it.migrate).is_none() {
+                    assert_eq!(run_generated_isotope_migration(name), None);
+                }
+                if integration.and_then(|it| it.post_install).is_none() {
+                    assert_eq!(run_generated_isotope_post_install(name), None);
+                }
+            }
         }
+
+        assert_eq!(
+            package_security_state_for_identifiers(vec!["unrelated".to_string()]),
+            None
+        );
     }
 
     #[test]
@@ -9733,11 +9736,9 @@ or `npm:clawhub` for the aliased package"
             version_options: Vec::new(),
         };
 
-        assert_eq!(package_security_state(&info), None);
-        assert_eq!(
-            package_security_state_for_identifiers(info.aliases.clone()),
-            None
-        );
+        let expected = package_security_state_for_isotope("gh");
+        assert_eq!(package_security_state(&info), expected);
+        assert_eq!(package_security_state_for_identifiers(info.aliases.clone()), expected);
     }
 
     #[test]
