@@ -1573,6 +1573,36 @@ mod tests {
         }
     }
 
+    #[test]
+    fn grouped_versioned_formulae_prefers_unversioned_primary_and_sorted_passthrough() {
+        let grouped = group_installed_versioned_formulae(vec![
+            installed_formula_summary("python@3.12", "3.12.11"),
+            installed_formula_summary("python", "3.14.2"),
+            installed_formula_summary("python@3.14", "3.14.2"),
+            core::InstalledPackageSummary {
+                name: "codex".to_string(),
+                source: PackageReceiptSource::Cask {
+                    cask_name: "codex".to_string(),
+                },
+                version: "1.0.0".to_string(),
+                description: Some("Codex".to_string()),
+                installed_versions: Vec::new(),
+                install_package_names: Vec::new(),
+                security_state: None,
+            },
+        ]);
+
+        assert_eq!(grouped.len(), 2);
+        assert_eq!(grouped[0].name, "codex");
+        assert_eq!(grouped[1].name, "python");
+        assert_eq!(grouped[1].version, "3.14.2");
+        assert_eq!(grouped[1].installed_versions, ["3.14.2", "3.12.11", "3.14.2"]);
+        assert_eq!(
+            grouped[1].install_package_names,
+            ["python@3.14", "python@3.12", "python"]
+        );
+    }
+
     fn installed_formula_summary(name: &str, version: &str) -> core::InstalledPackageSummary {
         core::InstalledPackageSummary {
             name: name.to_string(),
@@ -1880,6 +1910,103 @@ mod tests {
             package.name == "cask:codex"
                 && package.version.is_none()
                 && package.description.is_none()
+                && package.is_migratable
+        }));
+    }
+
+    #[test]
+    fn homebrew_migration_helper_metadata_and_security_paths_are_stable() {
+        let tapped = HomebrewInfoFormula {
+            name: "mise".to_string(),
+            full_name: "jdx/mise/mise".to_string(),
+            tap: "jdx/mise".to_string(),
+            description: "Runtime manager".to_string(),
+            installed: vec![HomebrewInfoInstall {
+                version: "2026.5.0".to_string(),
+                installed_on_request: true,
+            }],
+        };
+        assert!(tapped.is_installed_on_request());
+        assert!(!tapped.is_migratable());
+        assert_eq!(tapped.migration_display_name(), "jdx/mise/mise");
+
+        let untapped = HomebrewInfoFormula {
+            name: "uv".to_string(),
+            full_name: "uv".to_string(),
+            tap: String::new(),
+            description: String::new(),
+            installed: vec![HomebrewInfoInstall {
+                version: String::new(),
+                installed_on_request: false,
+            }],
+        };
+        assert!(!untapped.is_installed_on_request());
+        assert!(untapped.is_migratable());
+        assert_eq!(untapped.migration_display_name(), "uv");
+
+        assert_eq!(empty_string_as_none(String::new()), None);
+        assert_eq!(
+            empty_string_as_none("kept".to_string()),
+            Some("kept".to_string())
+        );
+
+        assert_eq!(
+            homebrew_migration_security_state_for_package("brew:gh", &[]),
+            None
+        );
+        assert_eq!(
+            homebrew_migration_security_state_for_package("gh", &[]),
+            None
+        );
+        assert_eq!(homebrew_migration_hazard_for_package("brew:gh"), None);
+
+        let info = system_info();
+        assert_eq!(info.version, env!("CARGO_PKG_VERSION"));
+        assert_eq!(info.protocol_version, core::PROTOCOL_VERSION);
+        assert_eq!(info.build_id, env!("NUKE_BUILD_ID"));
+    }
+
+    #[test]
+    fn homebrew_migration_packages_preserve_tapped_formula_metadata() {
+        let report: HomebrewInfoReport = serde_json::from_value(serde_json::json!({
+            "formulae": [
+                {
+                    "name": "mise",
+                    "full_name": "jdx/mise/mise",
+                    "tap": "jdx/mise",
+                    "desc": "Runtime manager",
+                    "installed": [
+                        {
+                            "version": "2026.5.0",
+                            "installed_on_request": true
+                        }
+                    ]
+                }
+            ],
+            "casks": [
+                {
+                    "token": "codex",
+                    "desc": "OpenAI Codex",
+                    "version": "0.1.0"
+                }
+            ]
+        }))
+        .unwrap();
+
+        let packages = homebrew_migration_packages_from_report(report);
+        assert_eq!(packages.len(), 2);
+        assert!(packages.iter().any(|package| {
+            package.name == "brew:jdx/mise/mise"
+                && package.version.as_deref() == Some("2026.5.0")
+                && package.description.as_deref() == Some("Runtime manager")
+                && package.tap.as_deref() == Some("jdx/mise")
+                && !package.is_migratable
+        }));
+        assert!(packages.iter().any(|package| {
+            package.name == "cask:codex"
+                && package.version.as_deref() == Some("0.1.0")
+                && package.description.as_deref() == Some("OpenAI Codex")
+                && package.tap.is_none()
                 && package.is_migratable
         }));
     }

@@ -9640,6 +9640,107 @@ or `npm:clawhub` for the aliased package"
     }
 
     #[test]
+    fn generated_isotope_helpers_return_none_without_compiled_integrations() {
+        assert!(isotope_integration("gh").is_none());
+        assert!(isotope_integration("isotope:gh").is_none());
+        assert!(isotope_integration("aws-cli").is_none());
+        assert!(isotope_integration("isotope:aws-cli").is_none());
+
+        assert!(!isotope_has_migration("gh"));
+        assert!(!isotope_has_post_install("gh"));
+        assert!(!isotope_has_migration("aws-cli"));
+        assert!(!isotope_has_post_install("aws-cli"));
+
+        assert_eq!(run_generated_isotope_migration("gh"), None);
+        assert_eq!(run_generated_isotope_post_install("gh"), None);
+        assert_eq!(detect_isotope_install_reasons("gh"), None);
+        assert_eq!(detect_isotope_install_reasons("aws-cli"), None);
+        assert_eq!(package_security_state_for_isotope("gh"), None);
+        assert_eq!(package_security_state_for_isotope("aws-cli"), None);
+
+        for identifiers in [
+            vec!["gh".to_string()],
+            vec!["isotope:gh".to_string()],
+            vec!["brew:gh".to_string()],
+            vec!["aws-cli".to_string()],
+            vec!["awscli".to_string()],
+            vec!["brew:awscli".to_string()],
+            vec!["unrelated".to_string()],
+        ] {
+            assert_eq!(package_security_state_for_identifiers(identifiers), None);
+        }
+    }
+
+    #[test]
+    fn post_install_dispatcher_covers_supported_and_default_paths() {
+        assert!(post_install_hooks::supports("python@3.14"));
+        assert!(post_install_hooks::supports("openssl@3"));
+        assert!(post_install_hooks::supports_dependency("openssl@3"));
+        assert!(!post_install_hooks::supports_dependency("python@3.14"));
+        assert!(!post_install_hooks::supports("ripgrep"));
+
+        let temp = TempDir::new().unwrap();
+        let prefix = temp.path().join("opt/python@3.14");
+        let bin_dir = temp.path().join("bin");
+        fs::create_dir_all(prefix.parent().unwrap().join("python@3.14")).unwrap();
+        fs::create_dir_all(&bin_dir).unwrap();
+        fs::write(bin_dir.join("python3.14"), b"").unwrap();
+        fs::write(bin_dir.join("pip3.14"), b"").unwrap();
+
+        let python = post_install_hooks::run("python@3.14", &prefix, &bin_dir).unwrap();
+        assert_eq!(
+            python.managed_stubs,
+            vec![
+                "pip".to_string(),
+                "pip3".to_string(),
+                "python".to_string(),
+                "python3".to_string(),
+            ]
+        );
+
+        let openssl = post_install_hooks::run("openssl@3", temp.path(), &bin_dir).unwrap();
+        assert_eq!(openssl, post_install_hooks::PostInstallOutcome::default());
+
+        let unsupported = post_install_hooks::run("ripgrep", temp.path(), &bin_dir).unwrap();
+        assert_eq!(unsupported, post_install_hooks::PostInstallOutcome::default());
+    }
+
+    #[test]
+    fn package_security_state_uses_source_and_alias_identifiers_without_integrations() {
+        let info = PackageInfo {
+            package_name: "gh".to_string(),
+            qualified_name: "brew:gh".to_string(),
+            install_root: PathBuf::from("/opt/gh"),
+            installed: false,
+            source: Some(PackageReceiptSource::Formula {
+                root_formula: "gh".to_string(),
+            }),
+            source_error: None,
+            aliases: vec!["GH".to_string(), "GitHub".to_string()],
+            aliases_error: None,
+            installed_version: None,
+            latest_version: None,
+            latest_version_error: None,
+            executable_paths: Vec::new(),
+            executable_paths_error: None,
+            popularity: None,
+            last_updated_at: None,
+            homebrew_info: None,
+            homebrew_info_error: None,
+            npm_homepage: None,
+            npm_package_info_error: None,
+            security_state: None,
+            version_options: Vec::new(),
+        };
+
+        assert_eq!(package_security_state(&info), None);
+        assert_eq!(
+            package_security_state_for_identifiers(info.aliases.clone()),
+            None
+        );
+    }
+
+    #[test]
     fn resolve_scanned_package_statuses_warns_for_other_dirs() {
         let mut warnings = Vec::new();
         let statuses = resolve_scanned_package_statuses(
@@ -12818,6 +12919,84 @@ info: requested `imagemagick`; `brew:imagemagick-full` is recommended instead\n"
         assert!(err.contains("unsupported db schema"));
         assert_eq!(fs::read(&data_path).unwrap(), cached_data);
         assert!(!meta_path.exists());
+    }
+
+    #[test]
+    fn refresh_remote_combined_data_skips_recent_check_and_invalid_metadata_defaults() {
+        let temp = TempDir::new().unwrap();
+        let data_path = temp.path().join("db.json");
+        let meta_path = temp.path().join("db.meta.json");
+
+        fs::write(&meta_path, b"not-json").unwrap();
+        let parsed = read_remote_combined_data_metadata(&meta_path);
+        assert!(parsed.etag.is_none());
+        assert!(parsed.checked_at.is_none());
+
+        let metadata = RemoteCombinedDataMetadata {
+            etag: Some("\"cached-etag\"".to_string()),
+            checked_at: Some(current_unix_timestamp().unwrap()),
+        };
+        fs::write(&meta_path, serde_json::to_vec(&metadata).unwrap()).unwrap();
+
+        let refreshed = refresh_remote_combined_data_with(
+            "http://127.0.0.1:9/db.json",
+            temp.path(),
+            &data_path,
+            &meta_path,
+            u64::MAX,
+        )
+        .unwrap();
+
+        assert!(!refreshed);
+        let parsed = read_remote_combined_data_metadata(&meta_path);
+        assert_eq!(parsed.etag, metadata.etag);
+        assert_eq!(parsed.checked_at, metadata.checked_at);
+        assert!(!data_path.exists());
+    }
+
+    #[test]
+    fn trusted_remote_data_helpers_reject_bad_shapes_and_permissions() {
+        let temp = TempDir::new().unwrap();
+        let dir_file = temp.path().join("not-a-dir");
+        let data_path = temp.path().join("db.json");
+        fs::write(&dir_file, b"file").unwrap();
+        fs::write(&data_path, EMBEDDED_COMBINED_DATA).unwrap();
+        fs::set_permissions(&data_path, fs::Permissions::from_mode(0o644)).unwrap();
+
+        assert!(!trusted_remote_data_path(&dir_file, &data_path, false));
+        assert!(!trusted_remote_data_path(temp.path(), &temp.path().join("missing.json"), false));
+
+        fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o777)).unwrap();
+        assert!(!trusted_remote_data_path(temp.path(), &data_path, false));
+
+        let metadata = fs::metadata(&data_path).unwrap();
+        assert!(trusted_remote_data_metadata(&metadata, false));
+        assert!(!trusted_remote_data_metadata(&metadata, true));
+    }
+
+    #[test]
+    fn remote_combined_data_writers_persist_cache_and_metadata() {
+        let temp = TempDir::new().unwrap();
+        let cache_dir = temp.path().join("cache");
+        let data_path = cache_dir.join("db.json");
+        let meta_path = cache_dir.join("db.meta.json");
+        let bytes = test_combined_data_json();
+        let metadata = RemoteCombinedDataMetadata {
+            etag: Some("\"next-etag\"".to_string()),
+            checked_at: Some(current_unix_timestamp().unwrap()),
+        };
+
+        write_remote_combined_data(&cache_dir, &data_path, &bytes).unwrap();
+        write_remote_combined_data_metadata(&cache_dir, &meta_path, &metadata).unwrap();
+
+        assert_eq!(fs::read(&data_path).unwrap(), bytes);
+        let parsed = read_remote_combined_data_metadata(&meta_path);
+        assert_eq!(parsed.etag, metadata.etag);
+        assert_eq!(parsed.checked_at, metadata.checked_at);
+        assert_eq!(fs::metadata(&cache_dir).unwrap().permissions().mode() & 0o777, 0o755);
+        assert_eq!(fs::metadata(&data_path).unwrap().permissions().mode() & 0o777, 0o644);
+        assert_eq!(fs::metadata(&meta_path).unwrap().permissions().mode() & 0o777, 0o644);
+        assert!(current_unix_timestamp().unwrap() > 0);
     }
 
     #[test]
