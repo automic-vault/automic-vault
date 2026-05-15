@@ -1671,7 +1671,7 @@ mod tests {
 
     #[test]
     fn trace_sandbox_helpers_cover_non_bypass_and_home_variants() {
-        let _env_lock = crate::global_test_env_lock();
+        let _env_lock = crate::global_test_env_lock().lock().unwrap();
         let previous_codex_ci = env::var_os("CODEX_CI");
         let previous_home = env::var_os("HOME");
 
