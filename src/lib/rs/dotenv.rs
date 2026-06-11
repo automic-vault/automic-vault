@@ -788,6 +788,21 @@ fn run_dotenv_export(
         store,
         Some(&previous.keys),
     )?;
+    crate::audit::record(
+        crate::audit::Event::new(
+            crate::audit::EVENT_SECRET_INJECT,
+            crate::audit::DECISION_APPROVED,
+        )
+        .mode("export")
+        .keys(loaded.values.keys().cloned())
+        .dotenv(
+            loaded.env_path.to_string_lossy().into_owned(),
+            loaded.project_root.to_string_lossy().into_owned(),
+            loaded.env_sha256.clone(),
+            loaded.public_key_fingerprint.clone(),
+        )
+        .outcome("print"),
+    );
     print_shell_exports(options.shell, &previous, &loaded);
     Ok(())
 }
@@ -808,6 +823,30 @@ fn run_dotenv_run(
         store,
         None,
     )?;
+    crate::audit::record(
+        crate::audit::Event::new(
+            crate::audit::EVENT_SECRET_INJECT,
+            crate::audit::DECISION_APPROVED,
+        )
+        .mode("run")
+        .keys(loaded.values.keys().cloned())
+        .exec(
+            options.command.to_string_lossy().into_owned(),
+            command_line.clone(),
+        )
+        .cwd(
+            env::current_dir()
+                .map(|dir| dir.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+        )
+        .dotenv(
+            loaded.env_path.to_string_lossy().into_owned(),
+            loaded.project_root.to_string_lossy().into_owned(),
+            loaded.env_sha256.clone(),
+            loaded.public_key_fingerprint.clone(),
+        )
+        .outcome("spawn"),
+    );
 
     let mut command = Command::new(&options.command);
     command.args(&options.args);

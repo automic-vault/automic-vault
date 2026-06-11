@@ -31,6 +31,7 @@ use time::format_description::well_known::Rfc3339;
 use ureq::Error as UreqError;
 use walkdir::WalkDir;
 
+mod audit;
 mod brew;
 mod cask;
 mod cli_help;

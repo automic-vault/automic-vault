@@ -697,6 +697,11 @@ pub(crate) fn dispatch_pkg(invocation: &Invocation, mut args: env::ArgsOs) -> Re
         return vault::run_vault_entry(&program_name, args)
             .map_err(|err| format!("{RENDERED_ERROR_PREFIX}{program_name}: {err}"));
     }
+    if crate::audit::is_audit_subcommand(subcommand) || crate::audit::is_log_subcommand(subcommand) {
+        let program_name = format!("{} {subcommand}", invocation.binary_name);
+        return crate::audit::run_audit_cli(&program_name, subcommand, args)
+            .map_err(|err| format!("{RENDERED_ERROR_PREFIX}{program_name}: {err}"));
+    }
     let Some(mode) = Mode::from_name(subcommand) else {
         print_pkg_usage(&invocation.name);
         return Err(format!("unknown subcommand '{subcommand}'"));

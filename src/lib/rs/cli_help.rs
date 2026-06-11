@@ -285,6 +285,12 @@ impl<'a> HelpScreen<'a> {
                 "Explain likely file-changing steps without running a command.",
             ),
             command_line("gate", None, "Block until a manual approval is decided."),
+            command_line(
+                "log",
+                None,
+                "Show the audit log of secret pulls and command runs.",
+            ),
+            command_line("audit", None, "Enable, verify, and inspect the audit log."),
             HelpLine::plain(""),
             section_line("LOCAL SYSTEM"),
             command_line("open", None, "Open Automic Vault.app."),

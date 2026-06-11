@@ -113,7 +113,27 @@ where
         let _ = fs::remove_file(&pending_url);
         return Err(err);
     }
-    wait_for_gate_decision(&request_id)
+    let outcome = wait_for_gate_decision(&request_id);
+    crate::audit::record(
+        crate::audit::Event::new(
+            crate::audit::EVENT_COMMAND_GATE,
+            if outcome.is_ok() {
+                crate::audit::DECISION_APPROVED
+            } else {
+                crate::audit::DECISION_DENIED
+            },
+        )
+        .message(request.message.clone())
+        .cwd(request.cwd.clone())
+        .parent(
+            request.parent_process.pid as i64,
+            request.parent_process.executable_path.clone(),
+            request.parent_process.display_name.clone(),
+        )
+        .request_id(request_id.clone())
+        .reason(outcome.as_ref().err().cloned()),
+    );
+    outcome
 }
 
 fn parent_process_snapshot() -> ParentProcessSnapshot {

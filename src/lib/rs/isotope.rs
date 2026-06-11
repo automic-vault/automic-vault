@@ -259,9 +259,20 @@ fn dispatch_credential_helper(
         .credential_helper
         .ok_or_else(|| format!("credential helper protocol '{protocol}' is not callable"))?;
     disable_core_dumps()?;
+    let caller = current_credential_helper_caller_context();
+    let parent = parent_process_snapshot();
+    crate::audit::record(
+        crate::audit::Event::new(
+            crate::audit::EVENT_SECRET_PULL,
+            crate::audit::DECISION_OBSERVED,
+        )
+        .mode(protocol.to_string())
+        .token_present(caller.token.is_some())
+        .parent(parent.pid as i64, parent.executable_path, parent.display_name),
+    );
     credential_helper(CredentialHelperInvocation {
         args: args.collect(),
-        caller: current_credential_helper_caller_context(),
+        caller,
         store,
     })
 }
@@ -558,7 +569,7 @@ fn run_isotope(options: &IsotopeOptions, store: &dyn CredentialStore) -> Result<
     };
 
     if !credential_keys.is_empty() && !automatically_approved {
-        request_isotope_approval(
+        if let Err(err) = request_isotope_approval(
             executable_path_for_approval,
             always_allow_scope.as_ref().ok(),
             options,
@@ -567,7 +578,18 @@ fn run_isotope(options: &IsotopeOptions, store: &dyn CredentialStore) -> Result<
             requested_script_path,
             script_root_controlled,
             can_always_allow,
-        )?;
+        ) {
+            crate::audit::record(
+                crate::audit::Event::new(
+                    crate::audit::EVENT_APPROVAL_DECISION,
+                    crate::audit::DECISION_DENIED,
+                )
+                .keys(credential_keys.iter().cloned())
+                .exec(resolved_target_string.clone(), Vec::new())
+                .reason(Some(err.clone())),
+            );
+            return Err(err);
+        }
     } else if automatically_approved {
         let _ = post_distributed_notification_with_object(
             AUTOMATIC_APPROVAL_NOTIFICATION,
@@ -593,6 +615,38 @@ fn run_isotope(options: &IsotopeOptions, store: &dyn CredentialStore) -> Result<
             return Err(err);
         }
     };
+    // Pre-exec audit: `exec_prepared` replaces the process image, so this must
+    // be the last thing recorded. Best-effort; never blocks the exec.
+    if !credential_keys.is_empty() {
+        let parent = parent_process_snapshot();
+        crate::audit::record(
+            crate::audit::Event::new(
+                crate::audit::EVENT_SECRET_INJECT,
+                if automatically_approved {
+                    crate::audit::DECISION_AUTO_GRANT
+                } else {
+                    crate::audit::DECISION_APPROVED
+                },
+            )
+            .keys(credential_keys.iter().cloned())
+            .exec(
+                prepared.exec_path.clone(),
+                prepared
+                    .argv
+                    .iter()
+                    .map(|arg| arg.to_string_lossy().into_owned())
+                    .collect(),
+            )
+            .cwd(
+                env::current_dir()
+                    .map(|dir| dir.to_string_lossy().into_owned())
+                    .unwrap_or_default(),
+            )
+            .parent(parent.pid as i64, parent.executable_path, parent.display_name)
+            .outcome("exec"),
+        );
+    }
+
     let result = exec_prepared(prepared);
     zeroize_credentials(&mut credentials);
     result
@@ -1541,6 +1595,23 @@ fn keychain_read_secret_if_present(
     _account: &str,
 ) -> Result<Option<String>, String> {
     Err("isotope keychain integration is only available on macOS".to_string())
+}
+
+/// Crate-internal accessors so the audit module can store/read its optional
+/// HMAC signing key in the same Keychain backend used for isotope secrets.
+pub(crate) fn keychain_read_audit_secret(
+    service: &str,
+    account: &str,
+) -> Result<Option<String>, String> {
+    keychain_read_secret_if_present(service, account)
+}
+
+pub(crate) fn keychain_write_audit_secret(
+    service: &str,
+    account: &str,
+    value: &str,
+) -> Result<(), String> {
+    keychain_write_secret(service, account, value)
 }
 
 #[cfg(target_os = "macos")]

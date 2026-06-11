@@ -308,6 +308,18 @@ where
     };
     notify_containment_started(&session);
 
+    // Pre-exec audit: `sandbox.exec()` below replaces the process image.
+    crate::audit::record(
+        crate::audit::Event::new(
+            crate::audit::EVENT_COMMAND_CONTAIN,
+            crate::audit::DECISION_OBSERVED,
+        )
+        .exec(session.command.clone(), session.args.clone())
+        .cwd(session.cwd.clone())
+        .request_id(session.agent_id.clone())
+        .outcome("exec"),
+    );
+
     let mut sandbox = Command::new(sandbox_exec_path());
     sandbox
         .arg("-f")
