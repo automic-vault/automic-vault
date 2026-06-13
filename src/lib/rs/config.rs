@@ -1,12 +1,9 @@
 use std::env;
-use std::fs;
-use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 
 const DEFAULT_AUDIT_MAX_BYTES: u64 = 8 * 1024 * 1024;
 const AUDIT_LOG_RELATIVE: &str = "Library/Logs/av/audit.jsonl";
-const AUDIT_CONFIG_RELATIVE: &str = "Library/Application Support/Automic Vault/audit-config.json";
 
 const DEBUG_OPT_ROOT: &str = "/tmp/opt";
 const DEBUG_BIN_ROOT: &str = "/tmp/usr/local/bin";
@@ -75,20 +72,6 @@ pub(crate) fn npm_registry_root() -> String {
         .unwrap_or_else(|| NPM_REGISTRY_ROOT.to_string())
 }
 
-/// Whether the audit log is enabled. Default OFF (opt-in). `AV_AUDIT=1|on|true`
-/// or `=0|off|false` overrides everything; otherwise a test override applies.
-pub(crate) fn audit_enabled() -> bool {
-    // Precedence: AV_AUDIT env (one-shot / CI override) > test override >
-    // persisted config file (`av audit enable`/`disable`) > default OFF.
-    if let Some(flag) = env_flag("AV_AUDIT") {
-        return flag;
-    }
-    if let Some(enabled) = audit_overrides().enabled {
-        return enabled;
-    }
-    read_audit_config().enabled.unwrap_or(false)
-}
-
 /// Resolved path to the active audit log. Honors `AV_AUDIT_PATH`, then a test
 /// override, then `~/Library/Logs/av/audit.jsonl`.
 pub(crate) fn audit_log_path() -> Result<PathBuf, String> {
@@ -123,56 +106,6 @@ pub(crate) fn audit_max_bytes() -> u64 {
         .unwrap_or(DEFAULT_AUDIT_MAX_BYTES)
 }
 
-/// On-disk audit config. Extensible; only the on/off toggle is wired today.
-#[derive(Clone, Default, serde::Serialize, serde::Deserialize)]
-struct AuditFileConfig {
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    enabled: Option<bool>,
-}
-
-/// Path to the persisted audit config file. Honors `AV_AUDIT_CONFIG_PATH`, then
-/// a test override, then `~/Library/Application Support/Automic Vault/audit-config.json`.
-pub(crate) fn audit_config_path() -> Result<PathBuf, String> {
-    if let Some(value) = env::var_os("AV_AUDIT_CONFIG_PATH") {
-        if !value.is_empty() {
-            return Ok(PathBuf::from(value));
-        }
-    }
-    if let Some(path) = audit_overrides().config_path {
-        return Ok(path);
-    }
-    let home = env::var_os("HOME").ok_or_else(|| "HOME is not set".to_string())?;
-    Ok(PathBuf::from(home).join(AUDIT_CONFIG_RELATIVE))
-}
-
-/// Best-effort read of the audit config file (missing/invalid -> defaults).
-fn read_audit_config() -> AuditFileConfig {
-    let Ok(path) = audit_config_path() else {
-        return AuditFileConfig::default();
-    };
-    match fs::read_to_string(&path) {
-        Ok(content) => serde_json::from_str(&content).unwrap_or_default(),
-        Err(_) => AuditFileConfig::default(),
-    }
-}
-
-/// Persist the on/off toggle to the audit config file (file mode 0600). Returns
-/// the path written. Used by `av audit enable`/`disable`.
-pub(crate) fn set_persisted_audit_enabled(enabled: bool) -> Result<PathBuf, String> {
-    let path = audit_config_path()?;
-    if let Some(dir) = path.parent() {
-        fs::create_dir_all(dir).map_err(|err| format!("failed to create {}: {err}", dir.display()))?;
-    }
-    let mut config = read_audit_config();
-    config.enabled = Some(enabled);
-    let json = serde_json::to_string_pretty(&config)
-        .map_err(|err| format!("failed to serialize audit config: {err}"))?;
-    fs::write(&path, format!("{json}\n"))
-        .map_err(|err| format!("failed to write {}: {err}", path.display()))?;
-    let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o600));
-    Ok(path)
-}
-
 fn env_flag(key: &str) -> Option<bool> {
     let value = env::var(key).ok()?;
     match value.trim().to_ascii_lowercase().as_str() {
@@ -184,9 +117,7 @@ fn env_flag(key: &str) -> Option<bool> {
 
 #[derive(Clone, Default)]
 struct AuditOverrides {
-    enabled: Option<bool>,
     path: Option<PathBuf>,
-    config_path: Option<PathBuf>,
 }
 
 static AUDIT_OVERRIDES: OnceLock<Mutex<AuditOverrides>> = OnceLock::new();
@@ -200,19 +131,11 @@ fn audit_overrides() -> AuditOverrides {
 }
 
 #[cfg(test)]
-pub(crate) fn set_test_audit_overrides(
-    enabled: Option<bool>,
-    path: Option<PathBuf>,
-    config_path: Option<PathBuf>,
-) {
+pub(crate) fn set_test_audit_overrides(path: Option<PathBuf>) {
     *AUDIT_OVERRIDES
         .get_or_init(|| Mutex::new(AuditOverrides::default()))
         .lock()
-        .unwrap() = AuditOverrides {
-        enabled,
-        path,
-        config_path,
-    };
+        .unwrap() = AuditOverrides { path };
 }
 
 #[cfg(test)]

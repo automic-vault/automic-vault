@@ -6,11 +6,11 @@
 //!   thread is involved.
 //! - **Non-blocking**: a single `O_APPEND` write, no `fsync`, and every error is
 //!   swallowed — auditing must never break or slow a gated operation.
-//! - **Optional**: gated on [`crate::config::audit_enabled`] (default OFF). Turn
-//!   it on/off persistently with `av audit enable` / `av audit disable` (writes
-//!   `~/Library/Application Support/Automic Vault/audit-config.json`); the
-//!   `AV_AUDIT` env var overrides the file for one-shot/CI use. When disabled,
-//!   [`record`] returns before touching the filesystem.
+//! - **Always on**: there is no off switch — a secrets vault should always
+//!   record secret access, and the trail must not be silently disable-able.
+//!   `record` is best-effort and self-contained. (`AV_AUDIT_PATH` relocates the
+//!   log, `AV_AUDIT_NO_ARGV` redacts argv/cwd, `AV_AUDIT_HMAC` adds the HMAC
+//!   layer — these tune *how* it records, never *whether*.)
 //! - **No secret values**: the [`Body`] type has no field that can hold a secret
 //!   value. Emit sites pass key *names*, paths, argv, decisions — never values.
 //! - **Tamper-evident**: every record carries a SHA-256 hash chain (always on);
@@ -259,10 +259,10 @@ impl Record {
 }
 
 /// THE entry point used at every emit site. Best-effort, never panics, exec-safe.
+/// Auditing is always on (a secrets vault should always record secret access);
+/// `try_record` swallows every error so a failed write never disturbs the gated
+/// operation.
 pub(crate) fn record(event: Event) {
-    if !crate::config::audit_enabled() {
-        return;
-    }
     let _ = try_record(event);
 }
 
@@ -675,8 +675,6 @@ pub(crate) fn run_audit_cli(
         Some("verify") => run_verify(program_name, &argv[1..]),
         Some("path") => run_path(),
         Some("setup") => run_setup(),
-        Some("enable") => run_set_enabled(true),
-        Some("disable") => run_set_enabled(false),
         Some("tail") | None => run_log_view(program_name, &argv),
         Some("--help") | Some("-h") => {
             print_audit_usage(program_name);
@@ -686,20 +684,6 @@ pub(crate) fn run_audit_cli(
     }
 }
 
-fn run_set_enabled(enabled: bool) -> Result<(), String> {
-    let path = crate::config::set_persisted_audit_enabled(enabled)?;
-    println!(
-        "audit logging {} ({})",
-        if enabled { "enabled" } else { "disabled" },
-        path.display()
-    );
-    if std::env::var_os("AV_AUDIT").is_some() {
-        eprintln!(
-            "note: the AV_AUDIT environment variable is set and overrides this setting for the current environment"
-        );
-    }
-    Ok(())
-}
 
 fn run_setup() -> Result<(), String> {
     if !crate::config::audit_hmac_enabled() {
@@ -724,17 +708,6 @@ fn run_path() -> Result<(), String> {
             Ok(Some(_))
         );
     println!("path:    {}", path.display());
-    if let Ok(config_path) = crate::config::audit_config_path() {
-        println!("config:  {}", config_path.display());
-    }
-    println!(
-        "enabled: {}",
-        if crate::config::audit_enabled() {
-            "yes"
-        } else {
-            "no"
-        }
-    );
     println!(
         "hmac:    {}",
         if !crate::config::audit_hmac_enabled() {
@@ -875,15 +848,7 @@ fn run_log_view(program_name: &str, args: &[String]) -> Result<(), String> {
 
     if records.is_empty() {
         if !json {
-            let state = if crate::config::audit_enabled() {
-                "enabled"
-            } else {
-                "disabled"
-            };
-            println!(
-                "No audit records at {} (auditing is {state}).",
-                path.display()
-            );
+            println!("No audit records yet at {}.", path.display());
         }
         return Ok(());
     }
@@ -935,13 +900,11 @@ fn json_str(value: &str) -> String {
 }
 
 fn print_audit_usage(program: &str) {
-    println!("Usage: {program} <enable|disable|verify|path|setup|tail> [--json]");
+    println!("Usage: {program} <verify|path|setup|tail> [--json]");
     println!();
-    println!("Manage, inspect, and verify the av audit log.");
-    println!("  enable   turn audit logging on (persisted to the config file)");
-    println!("  disable  turn audit logging off");
+    println!("Inspect and verify the av audit log (always on).");
     println!("  verify   check the hash chain (and HMAC, if enabled)");
-    println!("  path     show the log path and enabled/HMAC state");
+    println!("  path     show the log path and HMAC state");
     println!("  setup    provision the optional Keychain HMAC key (needs AV_AUDIT_HMAC=1)");
 }
 
@@ -1104,7 +1067,7 @@ mod tests {
         let _guard = crate::global_test_env_lock().lock().unwrap();
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("audit.jsonl");
-        crate::config::set_test_audit_overrides(Some(true), Some(path.clone()), None);
+        crate::config::set_test_audit_overrides(Some(path.clone()));
 
         record(
             Event::new(EVENT_SECRET_INJECT, DECISION_AUTO_GRANT)
@@ -1133,24 +1096,11 @@ mod tests {
     }
 
     #[test]
-    fn disabled_writes_nothing() {
-        let _guard = crate::global_test_env_lock().lock().unwrap();
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("audit.jsonl");
-        crate::config::set_test_audit_overrides(Some(false), Some(path.clone()), None);
-
-        record(Event::new(EVENT_SECRET_INJECT, DECISION_APPROVED).keys(["A_KEY".to_string()]));
-
-        crate::config::clear_test_audit_overrides();
-        assert!(!path.exists());
-    }
-
-    #[test]
     fn rotation_preserves_chain() {
         let _guard = crate::global_test_env_lock().lock().unwrap();
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("audit.jsonl");
-        crate::config::set_test_audit_overrides(Some(true), Some(path.clone()), None);
+        crate::config::set_test_audit_overrides(Some(path.clone()));
         // SAFETY: env mutation is serialized by the global test env lock.
         unsafe {
             std::env::set_var("AV_AUDIT_MAX_BYTES", "300");
@@ -1178,7 +1128,7 @@ mod tests {
         let _guard = crate::global_test_env_lock().lock().unwrap();
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("audit.jsonl");
-        crate::config::set_test_audit_overrides(Some(true), Some(path.clone()), None);
+        crate::config::set_test_audit_overrides(Some(path.clone()));
 
         record(
             Event::new(EVENT_SECRET_INJECT, DECISION_AUTO_GRANT)
@@ -1237,32 +1187,18 @@ mod tests {
     }
 
     #[test]
-    fn config_file_toggles_enabled_state() {
+    fn always_on_writes_without_any_toggle() {
         let _guard = crate::global_test_env_lock().lock().unwrap();
         let dir = tempfile::tempdir().unwrap();
-        let cfg = dir.path().join("audit-config.json");
-        // enabled override = None so the persisted file decides the state.
-        crate::config::set_test_audit_overrides(None, None, Some(cfg.clone()));
+        let path = dir.path().join("audit.jsonl");
+        crate::config::set_test_audit_overrides(Some(path.clone()));
 
-        assert!(
-            !crate::config::audit_enabled(),
-            "default OFF when no config file exists"
-        );
-
-        let written = crate::config::set_persisted_audit_enabled(true).unwrap();
-        assert_eq!(written, cfg);
-        assert!(cfg.exists());
-        assert!(
-            crate::config::audit_enabled(),
-            "enabled after `av audit enable`"
-        );
-
-        crate::config::set_persisted_audit_enabled(false).unwrap();
-        assert!(
-            !crate::config::audit_enabled(),
-            "disabled after `av audit disable`"
-        );
+        // No enable step — recording happens unconditionally.
+        record(Event::new(EVENT_SECRET_INJECT, DECISION_APPROVED).keys(["A_KEY".to_string()]));
 
         crate::config::clear_test_audit_overrides();
+        assert!(path.exists(), "audit log is written with no opt-in");
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(content.lines().count(), 1);
     }
 }

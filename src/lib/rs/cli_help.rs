@@ -290,7 +290,7 @@ impl<'a> HelpScreen<'a> {
                 None,
                 "Show the audit log of secret pulls and command runs.",
             ),
-            command_line("audit", None, "Enable, verify, and inspect the audit log."),
+            command_line("audit", None, "Verify and inspect the audit log."),
             HelpLine::plain(""),
             section_line("LOCAL SYSTEM"),
             command_line("open", None, "Open Automic Vault.app."),
