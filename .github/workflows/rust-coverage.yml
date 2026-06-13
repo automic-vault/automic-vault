@@ -49,8 +49,8 @@ jobs:
 
       - name: Verify isotope coverage paths
         run: |
-          grep -Eq '^SF:.*/data/isotopes/.+\.rs$' lcov.info
-          grep -Eq '^SF:.*/data/radioisotopes/.+\.rs$' lcov.info
+          grep -Eq '^SF:.*/isotopes/.+\.rs$' lcov.info
+          grep -Eq '^SF:.*/radioisotopes/.+\.rs$' lcov.info
 
       - name: Upload Rust coverage to Coveralls
         uses: coverallsapp/github-action@v2
