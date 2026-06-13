@@ -84,9 +84,17 @@ fn run_shell_with_test_av(shell: &str, script: &str, cwd: &Path) -> Option<Outpu
 fn write_fake_trace_agent(bin_dir: &std::path::Path, name: &str, response: &str) {
     fs::create_dir_all(bin_dir).unwrap();
     let path = bin_dir.join(name);
+    let guard = if name == "codex" {
+        "case \" $* \" in *\" --skip-git-repo-check \"*) ;; *) echo 'Not inside a trusted directory and --skip-git-repo-check was not specified.' >&2; exit 1 ;; esac\n"
+    } else {
+        ""
+    };
     fs::write(
         &path,
-        format!("#!/bin/sh\ncat >/dev/null\nprintf '%s\\n' '{}'\n", response),
+        format!(
+            "#!/bin/sh\n{}cat >/dev/null\nprintf '%s\\n' '{}'\n",
+            guard, response
+        ),
     )
     .unwrap();
     let mut permissions = fs::metadata(&path).unwrap().permissions();

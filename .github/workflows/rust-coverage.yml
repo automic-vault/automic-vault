@@ -24,7 +24,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          rm -rf data/isotopes data/radioisotopes
+          rm -rf ../av.db/data/isotopes ../av.db/data/radioisotopes
           scripts/sync-isotope-checkouts.sh
 
       - name: Install Rust

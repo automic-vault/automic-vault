@@ -28,6 +28,7 @@ struct TransferSendOptions {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct TransferReceiveOptions {
     stdin: bool,
+    check: bool,
     replace: bool,
 }
 
@@ -132,9 +133,11 @@ pub(crate) fn run_transfer_entry(program_name: &str, args: env::ArgsOs) -> Resul
     };
     match command {
         TransferCommand::Send(options) => run_transfer_send(&options, &KeychainTransferSecretStore),
-        TransferCommand::Receive(options) => run_transfer_receive(&options, |request| {
-            vault::request_key_transfer_import(request)
-        }),
+        TransferCommand::Receive(options) => {
+            run_transfer_receive(&options, vault::ensure_vaultd_available, |request| {
+                vault::request_key_transfer_import(request)
+            })
+        }
     }
 }
 
@@ -252,6 +255,7 @@ fn parse_transfer_receive(
     args: impl Iterator<Item = OsString>,
 ) -> Result<Option<TransferReceiveOptions>, String> {
     let mut stdin = false;
+    let mut check = false;
     let mut replace = false;
     for arg in args {
         if is_help_flag(&arg) {
@@ -266,6 +270,10 @@ fn parse_transfer_receive(
             stdin = true;
             continue;
         }
+        if arg == "--check" {
+            check = true;
+            continue;
+        }
         if arg == "--replace" {
             replace = true;
             continue;
@@ -275,11 +283,22 @@ fn parse_transfer_receive(
             arg.to_string_lossy()
         ));
     }
+    if check {
+        return Ok(Some(TransferReceiveOptions {
+            stdin,
+            check,
+            replace,
+        }));
+    }
     if !stdin {
         print_transfer_receive_usage(program_name);
         return Err("transfer receive requires --stdin".to_string());
     }
-    Ok(Some(TransferReceiveOptions { stdin, replace }))
+    Ok(Some(TransferReceiveOptions {
+        stdin,
+        check,
+        replace,
+    }))
 }
 
 fn next_transfer_value<I>(args: &mut std::iter::Peekable<I>, flag: &str) -> Result<String, String>
@@ -297,6 +316,10 @@ fn run_transfer_send(
     store: &dyn TransferSecretStore,
 ) -> Result<(), String> {
     let mut bundle = build_transfer_bundle(options, store)?;
+    if let Err(err) = check_remote_transfer_receiver(options) {
+        zeroize_transfer_bundle(&mut bundle);
+        return Err(err);
+    }
     let item_count = bundle.items.len();
     let ssh_args = build_ssh_command_args(options);
     let mut payload = serde_json::to_string(&bundle)
@@ -330,6 +353,52 @@ fn run_transfer_send(
         options.ssh_target
     );
     Ok(())
+}
+
+fn check_remote_transfer_receiver(options: &TransferSendOptions) -> Result<(), String> {
+    let output = Command::new("ssh")
+        .args(build_ssh_check_command_args(options))
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|err| format!("failed to start ssh for transfer check: {err}"))?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    transfer_check_failure_result(&options.ssh_target, &output.status.to_string(), &stderr)
+}
+
+fn transfer_check_failure_result(
+    ssh_target: &str,
+    status: &str,
+    stderr: &str,
+) -> Result<(), String> {
+    if stderr.contains("unknown transfer receive argument '--check'") {
+        return Ok(());
+    }
+    let stderr = stderr.trim();
+    if stderr.contains("vaultd unavailable") {
+        let detail = stderr
+            .strip_prefix("av transfer: ")
+            .unwrap_or(stderr)
+            .trim();
+        if detail.is_empty() {
+            return Err(format!(
+                "receiving Automic Vault.app is unavailable on {}; open Automic Vault.app there and try again",
+                ssh_target
+            ));
+        }
+        return Err(format!(
+            "receiving Automic Vault.app is unavailable on {}; open Automic Vault.app there and try again ({detail})",
+            ssh_target
+        ));
+    }
+    if stderr.is_empty() {
+        return Err(format!(
+            "transfer check failed on {ssh_target}: ssh exited with {status}"
+        ));
+    }
+    Err(format!("transfer check failed on {ssh_target}: {stderr}"))
 }
 
 fn build_transfer_bundle(
@@ -390,35 +459,53 @@ fn local_hostname() -> String {
 }
 
 fn build_ssh_command_args(options: &TransferSendOptions) -> Vec<String> {
+    build_ssh_command_args_for(options, false)
+}
+
+fn build_ssh_check_command_args(options: &TransferSendOptions) -> Vec<String> {
+    build_ssh_command_args_for(options, true)
+}
+
+fn build_ssh_command_args_for(options: &TransferSendOptions, check: bool) -> Vec<String> {
     let mut args = options.ssh_options.clone();
     args.push(options.ssh_target.clone());
     args.push(remote_receive_command(
         &options.remote_av,
         options.remote_av_explicit,
         options.replace,
+        check,
     ));
     args
 }
 
-fn remote_receive_command(remote_av: &str, remote_av_explicit: bool, replace: bool) -> String {
+fn remote_receive_command(
+    remote_av: &str,
+    remote_av_explicit: bool,
+    replace: bool,
+    check: bool,
+) -> String {
     if !remote_av_explicit && remote_av == DEFAULT_REMOTE_AV {
         return format!(
             "if command -v {} >/dev/null 2>&1; then exec {}; else exec {}; fi",
             shell_quote(DEFAULT_REMOTE_AV),
-            remote_receive_invocation(DEFAULT_REMOTE_AV, replace),
-            remote_receive_invocation(INSTALLED_REMOTE_AV, replace)
+            remote_receive_invocation(DEFAULT_REMOTE_AV, replace, check),
+            remote_receive_invocation(INSTALLED_REMOTE_AV, replace, check)
         );
     }
-    remote_receive_invocation(remote_av, replace)
+    remote_receive_invocation(remote_av, replace, check)
 }
 
-fn remote_receive_invocation(remote_av: &str, replace: bool) -> String {
+fn remote_receive_invocation(remote_av: &str, replace: bool, check: bool) -> String {
     let mut parts = vec![
         shell_quote(remote_av),
         shell_quote("transfer"),
         shell_quote("receive"),
-        shell_quote("--stdin"),
     ];
+    if check {
+        parts.push(shell_quote("--check"));
+    } else {
+        parts.push(shell_quote("--stdin"));
+    }
     if replace {
         parts.push(shell_quote("--replace"));
     }
@@ -432,10 +519,19 @@ fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
 
-fn run_transfer_receive<I>(options: &TransferReceiveOptions, import: I) -> Result<(), String>
+fn run_transfer_receive<C, I>(
+    options: &TransferReceiveOptions,
+    check_daemon: C,
+    import: I,
+) -> Result<(), String>
 where
+    C: FnOnce() -> Result<(), String>,
     I: FnOnce(KeyTransferImportRequest) -> Result<KeyTransferImportResponse, String>,
 {
+    if options.check {
+        check_daemon()?;
+        return Ok(());
+    }
     if !options.stdin {
         return Err("transfer receive requires --stdin".to_string());
     }
@@ -844,6 +940,98 @@ mod tests {
     }
 
     #[test]
+    fn transfer_parse_error_edges_cover_remaining_branches() {
+        assert!(
+            parse_transfer_command("av transfer", [OsString::from("--help")].into_iter())
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            parse_transfer_command("av transfer", [OsString::from("--version")].into_iter())
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            parse_transfer_command(
+                "av transfer",
+                [
+                    OsString::from("--no-dotenv"),
+                    OsString::from("--ssh-option"),
+                    OsString::from("-A"),
+                    OsString::from("host"),
+                ]
+                .into_iter()
+            )
+            .unwrap()
+            .is_some()
+        );
+        assert_eq!(
+            parse_transfer_command(
+                "av transfer",
+                [
+                    OsString::from("--key"),
+                    OsString::from("TOKEN"),
+                    OsString::from("--key"),
+                    OsString::from("TOKEN"),
+                    OsString::from("host"),
+                ]
+                .into_iter()
+            )
+            .unwrap_err(),
+            "duplicate key requested: TOKEN"
+        );
+        assert_eq!(
+            parse_transfer_command(
+                "av transfer",
+                [
+                    OsString::from("--remote-av"),
+                    OsString::from(""),
+                    OsString::from("host"),
+                ]
+                .into_iter()
+            )
+            .unwrap_err(),
+            "--remote-av must not be empty"
+        );
+        assert_eq!(
+            parse_transfer_command(
+                "av transfer",
+                [OsString::from("one"), OsString::from("two")].into_iter()
+            )
+            .unwrap_err(),
+            "transfer supports one ssh target"
+        );
+        assert_eq!(
+            parse_transfer_command("av transfer", [OsString::from(" ")].into_iter()).unwrap_err(),
+            "empty ssh target"
+        );
+        assert!(
+            parse_transfer_command(
+                "av transfer",
+                [OsString::from("receive"), OsString::from("--help")].into_iter()
+            )
+            .unwrap()
+            .is_none()
+        );
+        assert!(
+            parse_transfer_command(
+                "av transfer",
+                [OsString::from("receive"), OsString::from("--version")].into_iter()
+            )
+            .unwrap()
+            .is_none()
+        );
+        assert_eq!(
+            parse_transfer_command(
+                "av transfer",
+                [OsString::from("receive"), OsString::from("--bogus")].into_iter()
+            )
+            .unwrap_err(),
+            "unknown transfer receive argument '--bogus'"
+        );
+    }
+
+    #[test]
     fn transfer_parse_receive_requires_stdin() {
         assert_eq!(
             parse_transfer_command(
@@ -868,7 +1056,61 @@ mod tests {
             panic!("expected receive command");
         };
         assert!(options.stdin);
+        assert!(!options.check);
         assert!(options.replace);
+
+        let command = parse_transfer_command(
+            "av transfer",
+            [OsString::from("receive"), OsString::from("--check")].into_iter(),
+        )
+        .unwrap()
+        .unwrap();
+        let TransferCommand::Receive(options) = command else {
+            panic!("expected receive command");
+        };
+        assert!(!options.stdin);
+        assert!(options.check);
+    }
+
+    #[test]
+    fn transfer_keychain_store_wrappers_reject_invalid_inputs_before_keychain() {
+        let store = KeychainTransferSecretStore;
+        assert!(
+            !store
+                .export_dotenv_private_key(Path::new("/definitely/missing/.env"))
+                .unwrap_err()
+                .is_empty()
+        );
+        assert!(
+            store
+                .load_isotope_secret("BAD-NAME")
+                .unwrap_err()
+                .contains("invalid isotope key name")
+        );
+        assert!(
+            store
+                .load_existing_dotenv_private_key("abc")
+                .unwrap_err()
+                .contains("hex value")
+        );
+        assert!(
+            store
+                .store_dotenv_private_key("abc", "value")
+                .unwrap_err()
+                .contains("hex value")
+        );
+        assert!(
+            store
+                .load_existing_isotope_secret("BAD-NAME")
+                .unwrap_err()
+                .contains("invalid isotope key name")
+        );
+        assert!(
+            store
+                .store_isotope_secret("BAD-NAME", "value")
+                .unwrap_err()
+                .contains("invalid isotope key name")
+        );
     }
 
     #[test]
@@ -930,6 +1172,60 @@ mod tests {
     }
 
     #[test]
+    fn transfer_run_send_receive_and_zeroize_edges() {
+        let store = StubTransferStore::default();
+        let options = TransferSendOptions {
+            ssh_target: "me@mac".to_string(),
+            file: PathBuf::from(".env"),
+            include_dotenv: false,
+            keys: Vec::new(),
+            replace: false,
+            ssh_options: Vec::new(),
+            remote_av: DEFAULT_REMOTE_AV.to_string(),
+            remote_av_explicit: false,
+        };
+        assert!(
+            run_transfer_send(&options, &store)
+                .unwrap_err()
+                .contains("nothing to transfer")
+        );
+        assert_eq!(
+            run_transfer_receive(
+                &TransferReceiveOptions {
+                    stdin: false,
+                    check: false,
+                    replace: false,
+                },
+                || unreachable!("check=false returns before daemon check"),
+                |_| unreachable!("stdin=false returns before import"),
+            )
+            .unwrap_err(),
+            "transfer receive requires --stdin"
+        );
+        assert_eq!(shell_quote(""), "''");
+        assert_eq!(pluralize(1, "key", "keys"), "1 key");
+        assert_eq!(pluralize(2, "key", "keys"), "2 keys");
+
+        let (public_key, private_key) = transfer_keypair();
+        let mut transfer_bundle = bundle(vec![
+            dotenv_item(public_key, private_key),
+            TransferBundleItem::IsotopeSecret {
+                key: "TOKEN".to_string(),
+                value: "secret".to_string(),
+            },
+        ]);
+        zeroize_transfer_bundle(&mut transfer_bundle);
+        assert!(matches!(
+            &transfer_bundle.items[0],
+            TransferBundleItem::DotenvPrivateKey { private_key, .. } if private_key.is_empty()
+        ));
+        assert!(matches!(
+            &transfer_bundle.items[1],
+            TransferBundleItem::IsotopeSecret { value, .. } if value.is_empty()
+        ));
+    }
+
+    #[test]
     fn transfer_ssh_command_shell_quotes_remote_command() {
         let options = TransferSendOptions {
             ssh_target: "me@mac".to_string(),
@@ -971,6 +1267,82 @@ mod tests {
         assert_eq!(
             args[1],
             "if command -v 'av' >/dev/null 2>&1; then exec 'av' 'transfer' 'receive' '--stdin'; else exec '/usr/local/bin/av' 'transfer' 'receive' '--stdin'; fi"
+        );
+    }
+
+    #[test]
+    fn transfer_ssh_check_command_uses_receive_check() {
+        let options = TransferSendOptions {
+            ssh_target: "me@mac".to_string(),
+            file: PathBuf::from(".env"),
+            include_dotenv: true,
+            keys: Vec::new(),
+            replace: false,
+            ssh_options: Vec::new(),
+            remote_av: DEFAULT_REMOTE_AV.to_string(),
+            remote_av_explicit: false,
+        };
+
+        let args = build_ssh_check_command_args(&options);
+
+        assert_eq!(args[0], "me@mac");
+        assert_eq!(
+            args[1],
+            "if command -v 'av' >/dev/null 2>&1; then exec 'av' 'transfer' 'receive' '--check'; else exec '/usr/local/bin/av' 'transfer' 'receive' '--check'; fi"
+        );
+    }
+
+    #[test]
+    fn transfer_receive_check_pings_daemon_without_reading_stdin() {
+        let options = TransferReceiveOptions {
+            stdin: false,
+            check: true,
+            replace: false,
+        };
+        let mut checked = false;
+        let mut imported = false;
+
+        run_transfer_receive(
+            &options,
+            || {
+                checked = true;
+                Ok(())
+            },
+            |_| {
+                imported = true;
+                Err("unexpected import".to_string())
+            },
+        )
+        .unwrap();
+
+        assert!(checked);
+        assert!(!imported);
+    }
+
+    #[test]
+    fn transfer_check_failure_result_handles_expected_remote_errors() {
+        assert!(
+            transfer_check_failure_result(
+                "me@mac",
+                "exit status: 1",
+                "av transfer: unknown transfer receive argument '--check'\n",
+            )
+            .is_ok()
+        );
+
+        assert_eq!(
+            transfer_check_failure_result(
+                "me@mac",
+                "exit status: 1",
+                "av transfer: vaultd unavailable at /tmp/vault.sock: Connection refused\n",
+            )
+            .unwrap_err(),
+            "receiving Automic Vault.app is unavailable on me@mac; open Automic Vault.app there and try again (vaultd unavailable at /tmp/vault.sock: Connection refused)"
+        );
+
+        assert_eq!(
+            transfer_check_failure_result("me@mac", "exit status: 255", "").unwrap_err(),
+            "transfer check failed on me@mac: ssh exited with exit status: 255"
         );
     }
 
@@ -1077,6 +1449,11 @@ mod tests {
     #[test]
     fn transfer_validates_bundle_schema_duplicates_and_fingerprints() {
         let (public_key, private_key) = transfer_keypair();
+        assert_eq!(
+            validate_transfer_bundle(&bundle(Vec::new())).unwrap_err(),
+            "transfer bundle contains no keys"
+        );
+
         let mut wrong_schema = bundle(vec![dotenv_item(public_key.clone(), private_key.clone())]);
         wrong_schema.schema_version = 999;
         assert!(
@@ -1113,6 +1490,14 @@ mod tests {
             ]))
             .unwrap_err()
             .contains("duplicate isotope key")
+        );
+        assert!(
+            validate_transfer_bundle(&bundle(vec![
+                dotenv_item(public_key.clone(), private_key.clone()),
+                dotenv_item(public_key, private_key),
+            ]))
+            .unwrap_err()
+            .contains("duplicate dotenv private key")
         );
     }
 

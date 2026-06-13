@@ -1,12 +1,11 @@
 [package]
 name = "nucleus"
-version = "1.18.2"
+version = "1.19.1"
 edition = "2024"
 autobins = false
 build = "build.rs"
 
 [workspace]
-members = ["src/web"]
 resolver = "3"
 
 [features]

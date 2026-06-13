@@ -1,8 +1,0 @@
-#!/bin/sh
-
-cd "$(dirname "$0")/../.."
-
-git pull origin main --rebase
-git -C data/radioisotopes/ pull origin main --rebase
-git -C data/isotopes/gh-cli/ pull origin trunk --rebase
-git -C data/isotopes/supabase-cli/ pull origin trunk --rebase

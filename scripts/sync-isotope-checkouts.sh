@@ -5,8 +5,9 @@ set -euo pipefail
 org="automic-vault"
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "${script_dir}/.." && pwd)"
-clone_root="${AUTOMIC_VAULT_REPO_CACHE:-${repo_root}/data/isotopes}"
-radioisotopes_dir="${AUTOMIC_VAULT_RADIOISOTOPES_REPO:-${repo_root}/data/radioisotopes}"
+av_db_root="${AV_DB_ROOT:-${repo_root}/../av.db}"
+clone_root="${AUTOMIC_VAULT_REPO_CACHE:-${av_db_root}/../isotopes}"
+radioisotopes_dir="${AUTOMIC_VAULT_RADIOISOTOPES_REPO:-${av_db_root}/../radioisotopes}"
 depth=1
 
 usage() {
@@ -20,9 +21,9 @@ during builds and coverage runs.
 
 Options:
   --clone-root PATH         Directory for isotope fork clones.
-                            Defaults to data/isotopes.
+                            Defaults to ../isotopes.
   --radioisotopes-dir PATH  Directory for the radioisotopes checkout.
-                            Defaults to data/radioisotopes.
+                            Defaults to ../radioisotopes.
   --depth N                 Shallow fetch depth. Defaults to 1.
   --help                    Show this help.
 EOF

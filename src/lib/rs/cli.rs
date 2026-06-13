@@ -219,7 +219,7 @@ pub(crate) fn run_info(invocation: &Invocation, mut args: env::ArgsOs) -> Result
     let config = load_config()?;
     let info = resolve_package_info(&config, &request.package)?;
     match request.output {
-        OutputMode::Human => print!("{}\n", format_package_info(&info)),
+        OutputMode::Human => println!("{}", format_package_info(&info)),
         OutputMode::Json | OutputMode::Jsonl => {
             println!(
                 "{}",
@@ -464,13 +464,13 @@ pub(crate) fn dispatch_pkg(invocation: &Invocation, mut args: env::ArgsOs) -> Re
         print_pkg_usage(&invocation.name);
         return Err("missing subcommand".to_string());
     };
-    if let Some(words) = split_shebang_subcommand_arg(&first_arg) {
-        if words.first().and_then(|word| word.to_str()) == Some("inject") {
-            let program_name = format!("{} inject", invocation.binary_name);
-            let normalized_args = words.into_iter().skip(1).chain(args);
-            return isotope::run_isotope_entry(&program_name, normalized_args)
-                .map_err(|err| format!("{RENDERED_ERROR_PREFIX}{program_name}: {err}"));
-        }
+    if let Some(words) = split_shebang_subcommand_arg(&first_arg)
+        && words.first().and_then(|word| word.to_str()) == Some("inject")
+    {
+        let program_name = format!("{} inject", invocation.binary_name);
+        let normalized_args = words.into_iter().skip(1).chain(args);
+        return isotope::run_isotope_entry(&program_name, normalized_args)
+            .map_err(|err| format!("{RENDERED_ERROR_PREFIX}{program_name}: {err}"));
     }
 
     if is_help_flag(&first_arg) {
@@ -1621,10 +1621,10 @@ pub(crate) fn package_install_root(opt_root: &Path, package_name: &str) -> Resul
                 "qualified package name must not contain additional path separators".to_string(),
             );
         }
-        if let Ok(record) = isotope_package_data(isotope) {
-            if let Some(modified_package) = isotope_modified_package_name(record)? {
-                return Ok(opt_root.join(modified_package));
-            }
+        if let Ok(record) = isotope_package_data(isotope)
+            && let Some(modified_package) = isotope_modified_package_name(record)?
+        {
+            return Ok(opt_root.join(modified_package));
         }
         return Ok(opt_root.join(ISOTOPE_INSTALL_ROOT_DIR).join(isotope));
     }

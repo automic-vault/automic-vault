@@ -153,6 +153,24 @@ macro_rules! launcher_post_install_extra_tests {
 
                     fs::remove_dir_all(temp).unwrap();
                 }
+
+                #[cfg(unix)]
+                #[test]
+                fn covers_absolute_symlink_original_resolution() {
+                    let temp = temp_dir("absolute-symlink");
+                    fs::create_dir_all(&temp).unwrap();
+                    let target = temp.join("target-launcher");
+                    write_executable(&target, b"#!/bin/sh\nprintf target\n");
+                    let launcher = temp.join("launcher");
+                    std::os::unix::fs::symlink(&target, &launcher).unwrap();
+
+                    assert_eq!(original_launcher_path(&launcher).unwrap(), target);
+
+                    let _ = $wrap(&launcher).unwrap();
+
+                    assert!(launcher_is_wrapped(&launcher).unwrap());
+                    fs::remove_dir_all(temp).unwrap();
+                }
             }
         }
     };
@@ -285,6 +303,24 @@ macro_rules! two_stage_launcher_post_install_extra_tests {
                     );
                     assert!(launcher_is_wrapped(&launcher).unwrap());
 
+                    fs::remove_dir_all(temp).unwrap();
+                }
+
+                #[cfg(unix)]
+                #[test]
+                fn covers_absolute_symlink_original_resolution() {
+                    let temp = temp_dir("absolute-symlink");
+                    fs::create_dir_all(&temp).unwrap();
+                    let target = temp.join("target-launcher");
+                    write_executable(&target, b"#!/bin/sh\nprintf target\n");
+                    let launcher = temp.join("launcher");
+                    std::os::unix::fs::symlink(&target, &launcher).unwrap();
+
+                    assert_eq!(original_launcher_path(&launcher).unwrap(), target);
+
+                    let _ = $wrap(&launcher).unwrap();
+
+                    assert!(launcher_is_wrapped(&launcher).unwrap());
                     fs::remove_dir_all(temp).unwrap();
                 }
             }

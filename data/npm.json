@@ -1,8 +1,0 @@
-{
-  "@tobilu/qmd": {
-    "homebrewDeps": ["sqlite"]
-  },
-  "openclaw": {
-    "homebrewDeps": ["sqlite"]
-  }
-}

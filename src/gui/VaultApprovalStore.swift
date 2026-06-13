@@ -205,6 +205,7 @@ enum DotenvApprovalMode: String, Codable, Equatable {
 
 struct DotenvApprovalRequestSnapshot: Codable, Equatable {
     let id: String
+    let approvalToken: String
     let mode: DotenvApprovalMode
     let envFilePath: String
     let projectRoot: String
@@ -218,6 +219,7 @@ struct DotenvApprovalRequestSnapshot: Codable, Equatable {
 
     enum CodingKeys: String, CodingKey {
         case id
+        case approvalToken = "approval_token"
         case mode
         case envFilePath = "env_file_path"
         case projectRoot = "project_root"
@@ -232,6 +234,7 @@ struct DotenvApprovalRequestSnapshot: Codable, Equatable {
 
     init(
         id: String,
+        approvalToken: String = "",
         mode: DotenvApprovalMode,
         envFilePath: String,
         projectRoot: String,
@@ -244,6 +247,7 @@ struct DotenvApprovalRequestSnapshot: Codable, Equatable {
         command: [String] = []
     ) {
         self.id = id
+        self.approvalToken = approvalToken
         self.mode = mode
         self.envFilePath = envFilePath
         self.projectRoot = projectRoot
@@ -259,6 +263,7 @@ struct DotenvApprovalRequestSnapshot: Codable, Equatable {
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(String.self, forKey: .id)
+        approvalToken = try container.decodeIfPresent(String.self, forKey: .approvalToken) ?? ""
         mode = try container.decode(DotenvApprovalMode.self, forKey: .mode)
         envFilePath = try container.decode(String.self, forKey: .envFilePath)
         projectRoot = try container.decode(String.self, forKey: .projectRoot)
@@ -280,8 +285,16 @@ struct DotenvApprovalRequestSnapshot: Codable, Equatable {
 
 struct DotenvApprovalDecision: Codable, Equatable {
     let id: String
+    let approvalToken: String?
     let approved: Bool
     let reason: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case approvalToken = "approval_token"
+        case approved
+        case reason
+    }
 }
 
 enum DotenvNotification {

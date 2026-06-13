@@ -17,21 +17,21 @@ The repository already has enough data to generate a useful first catalog:
   - 4 package aliases
   - 2 npm install overlays
   - 2 PyPI install overlays
-- `data/geiger-counter.json`
+- `../av.db/data/geiger-counter.json`
   - 8,359 Homebrew formula risk classifications
   - category, confidence, level, reasons, and signals
-- `data/approval-gates/brew/*.yaml`
+- `../av.db/data/approval-gates/brew/*.yaml`
   - 20 curated approval-gate manifests
   - package descriptions, entrypoints, risky command rules, severities, and
     coverage review dates
-- `data/radioisotopes/*`
-  - 107 local radioisotope package directories with manifests and README notes
+- `../radioisotopes/*`
+  - radioisotope package directories with manifests and README notes
 - `www/pkg/`
   - already generated static HTML package pages
   - current manifest reports 8,783 pages
   - split today as 8,375 brew, 53 cask, 353 npm, and 2 pip pages
 
-There is also an existing generator: `scripts/generate-pkg-pages.py`.
+The moved generator now lives at `../av.db/scripts/generate-pkg-pages.py`.
 
 ## Can Do With Current Data
 
@@ -84,7 +84,7 @@ Missing from current formula data:
 - full dependency list
 
 Those can be fetched from Homebrew formula metadata, but they are not currently
-stored in `data/db.json` or `data/combined.json`.
+stored in `../av.db/cache/automic-vault/db.json` or `../av.db/cache/automic-vault/combined.json`.
 
 ### Install Section
 
@@ -129,7 +129,7 @@ Available now:
 - command-rule severities and descriptions for those approval-gated packages
 
 Current generator uses isotope and approval-gate data, but does not appear to
-use `data/geiger-counter.json`. Using Geiger would immediately make non-isotope
+use `../av.db/data/geiger-counter.json`. Using Geiger would immediately make non-isotope
 Homebrew pages less thin.
 
 Still needs new data for:
@@ -149,7 +149,7 @@ Partly can do now.
 
 Available now:
 
-- Homebrew formula executable names from `data/db.json.entries`
+- Homebrew formula executable names from `../av.db/cache/automic-vault/db.json` `entries`
   - example: `aws` and `aws_completer` map to `awscli`
   - example: `rg` maps to `ripgrep`
 - cask binary source/target entries
@@ -159,7 +159,7 @@ Available now:
 
 Important generator gap:
 
-`data/db.json.entries` maps formula executables to plain formula names such as
+`../av.db/cache/automic-vault/db.json` `entries` maps formula executables to plain formula names such as
 `awscli`, not qualified keys like `brew:awscli`. The current package-page
 generator only consumes entry values containing `:`, so formula executable
 aliases are present in current data but not rendered on pages like
@@ -340,7 +340,7 @@ These do not require new source data:
 The best first pass does not need a large crawl:
 
 1. Use current data plus Geiger to make Homebrew pages materially better.
-2. Fix formula executable rendering from `data/db.json.entries`.
+2. Fix formula executable rendering from `../av.db/cache/automic-vault/db.json` `entries`.
 3. Add explicit install commands and package-manager links.
 4. Gate indexing: publish/index only pages with summary plus at least one of
    executable data, Geiger data, approval-gate data, isotope data, cask binary
@@ -350,4 +350,3 @@ The best first pass does not need a large crawl:
 6. Add npm and PyPI registry snapshots after that.
 7. Build the related/cross-ecosystem graph last; it is important, but low
    quality inferred links would actively weaken the package pages.
-

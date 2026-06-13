@@ -64,7 +64,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         installDotenvApprovalObserverIfNeeded()
         startRemoteDatabaseRefreshTimer()
         applyDockBadge(snapshot: statusStore.loadSnapshot())
-        showMainWindow()
+        if hasPendingApprovalOnLaunch() == false {
+            showMainWindow()
+        }
         appUpdateCoordinator.startAutomaticChecks()
         presentPendingVaultApprovalIfNeeded()
         presentPendingKeyTransferApprovalIfNeeded()
@@ -115,6 +117,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         try? dotenvApprovalStore.saveDecision(
             DotenvApprovalDecision(
                 id: approval.id,
+                approvalToken: approval.approvalToken,
                 approved: false,
                 reason: "Automic Vault quit before dotenv approval"
             )
@@ -149,6 +152,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         for url in urls {
             handleDeepLink(url)
         }
+    }
+
+    private func hasPendingApprovalOnLaunch() -> Bool {
+        vaultApprovalStore.loadPendingApproval() != nil
+            || keyTransferApprovalStore.loadPendingApproval() != nil
+            || isotopeApprovalStore.loadPendingApproval() != nil
+            || gateApprovalStore.loadPendingApproval() != nil
+            || dotenvApprovalStore.loadPendingApproval() != nil
     }
 
     private func makeMainMenu() -> NSMenu {
@@ -480,12 +491,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard activeApprovalID != approval.id else { return }
         activeApprovalID = approval.id
 
-        let window = showContainmentWindow(sessionID: approval.intent.agentID)
-            ?? makeOrRestoreMainWindow()
+        let window: NSWindow
+        if let containmentWindow = showContainmentWindow(sessionID: approval.intent.agentID) {
+            window = containmentWindow
+        } else {
+            showMainWindow()
+            window = makeOrRestoreMainWindow()
+        }
         if NSApp.isActive == false || window.isKeyWindow == false {
             _ = NSApp.requestUserAttention(.criticalRequest)
         }
-        NSApp.activate(ignoringOtherApps: true)
 
         let alert = NSAlert()
         alert.messageText = L10n.string("Approve Command Execution")
@@ -693,6 +708,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         try? dotenvApprovalStore.saveDecision(
             DotenvApprovalDecision(
                 id: approval.id,
+                approvalToken: approval.approvalToken,
                 approved: approved,
                 reason: approved ? nil : (reason ?? "Denied by operator")
             )

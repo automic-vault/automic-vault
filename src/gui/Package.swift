@@ -21,12 +21,14 @@ let package = Package(
             name: "AutomicVaultApp",
             dependencies: [
                 .product(name: "AppUpdater", package: "AppUpdater"),
+                "ServiceManagementShim",
             ],
             path: ".",
             exclude: [
                 "AutomicVault.entitlements",
                 "MenuBarAppDelegate.swift",
                 "MenuBarMain.swift",
+                "ServiceManagementShim",
                 "VaultDaemon.swift",
                 "Tests",
             ],
@@ -61,6 +63,11 @@ let package = Package(
             resources: [
                 .process("Resources"),
             ]
+        ),
+        .target(
+            name: "ServiceManagementShim",
+            path: "ServiceManagementShim",
+            publicHeadersPath: "include"
         ),
         .testTarget(
             name: "AutomicVaultGUITests",

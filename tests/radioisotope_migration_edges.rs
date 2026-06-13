@@ -49,6 +49,194 @@ macro_rules! radioisotope_source {
     };
 }
 
+macro_rules! migration_keychain_extra_tests {
+    () => {
+        #[cfg(test)]
+        mod av_keychain_extra_tests {
+            use super::*;
+            use std::fs;
+            use std::time::{SystemTime, UNIX_EPOCH};
+
+            fn temp_root(label: &str) -> std::path::PathBuf {
+                let suffix = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos();
+                std::env::temp_dir().join(format!(
+                    "radioisotope-migrate-{label}-{}-{suffix}",
+                    module_path!().replace("::", "_")
+                ))
+            }
+
+            #[test]
+            fn covers_keys_and_coverage_keychain_stub() {
+                let declared_keys = keys();
+                assert!(!declared_keys.is_empty());
+
+                let store = KeychainCredentialStore;
+                let err = store.store_secret(declared_keys[0], "value").unwrap_err();
+                assert!(err.contains("keychain"));
+            }
+
+            #[test]
+            fn covers_top_level_missing_default_locations() {
+                let _lock = crate::global_test_env_lock().lock().unwrap();
+                let root = temp_root("empty-defaults");
+                let home = root.join("home");
+                let xdg_cache = root.join("xdg-cache");
+                let xdg_config = root.join("xdg-config");
+                let xdg_runtime = root.join("xdg-runtime");
+                let xdg_state = root.join("xdg-state");
+                fs::create_dir_all(&home).unwrap();
+                fs::create_dir_all(&xdg_cache).unwrap();
+                fs::create_dir_all(&xdg_config).unwrap();
+                fs::create_dir_all(&xdg_runtime).unwrap();
+                fs::create_dir_all(&xdg_state).unwrap();
+
+                let _env_guards = [
+                    crate::EnvGuard::set("HOME", &home),
+                    crate::EnvGuard::set("XDG_CACHE_HOME", &xdg_cache),
+                    crate::EnvGuard::set("XDG_CONFIG_HOME", &xdg_config),
+                    crate::EnvGuard::set("XDG_RUNTIME_DIR", &xdg_runtime),
+                    crate::EnvGuard::set("XDG_STATE_HOME", &xdg_state),
+                    crate::EnvGuard::remove("AKAMAI_EDGERC"),
+                    crate::EnvGuard::remove("ANSIBLE_GALAXY_TOKEN_PATH"),
+                    crate::EnvGuard::remove("ARGOCD_CONFIG_DIR"),
+                    crate::EnvGuard::remove("BITWARDENCLI_APPDATA_DIR"),
+                    crate::EnvGuard::remove("CARGO_HOME"),
+                    crate::EnvGuard::remove("CAROOT"),
+                    crate::EnvGuard::remove("CIVO_CONFIG"),
+                    crate::EnvGuard::remove("COMPOSER_HOME"),
+                    crate::EnvGuard::remove("CX_CONFIG_FILE_PATH"),
+                    crate::EnvGuard::remove("DCOS_DIR"),
+                    crate::EnvGuard::remove("DIGITALOCEAN_CONFIG"),
+                    crate::EnvGuard::remove("GLAB_CONFIG_DIR"),
+                    crate::EnvGuard::remove("HCLOUD_CONFIG"),
+                    crate::EnvGuard::remove("HELM_CONFIG_HOME"),
+                    crate::EnvGuard::remove("HELM_REPOSITORY_CONFIG"),
+                    crate::EnvGuard::remove("KUBECONFIG"),
+                    crate::EnvGuard::remove("MCP_REMOTE_CONFIG_DIR"),
+                    crate::EnvGuard::remove("NETRC"),
+                    crate::EnvGuard::remove("NPM_CONFIG_USERCONFIG"),
+                    crate::EnvGuard::remove("OCI_CLI_CONFIG_FILE"),
+                    crate::EnvGuard::remove("PULUMI_CREDENTIALS_PATH"),
+                    crate::EnvGuard::remove("PULUMI_HOME"),
+                    crate::EnvGuard::remove("RCLONE_CONFIG"),
+                    crate::EnvGuard::remove("REGISTRY_AUTH_FILE"),
+                    crate::EnvGuard::remove("TALOSCONFIG"),
+                    crate::EnvGuard::remove("TALOS_HOME"),
+                    crate::EnvGuard::remove("UV_CREDENTIALS_DIR"),
+                    crate::EnvGuard::remove("VAGRANT_HOME"),
+                ];
+
+                migrate_credentials().unwrap();
+                fs::remove_dir_all(root).unwrap();
+            }
+        }
+    };
+}
+
+macro_rules! migration_keychain_module_extra_tests {
+    ($module:ident, $path:literal) => {
+        mod $module {
+            include!(radioisotope_source!($path));
+            migration_keychain_extra_tests!();
+        }
+    };
+}
+
+migration_keychain_module_extra_tests!(acli_migrate_keychain, "/acli/migrate.rs");
+migration_keychain_module_extra_tests!(aliyun_cli_migrate_keychain, "/aliyun-cli/migrate.rs");
+migration_keychain_module_extra_tests!(ast_cli_migrate_keychain, "/ast-cli/migrate.rs");
+migration_keychain_module_extra_tests!(astra_migrate_keychain, "/astra/migrate.rs");
+migration_keychain_module_extra_tests!(bitwarden_cli_migrate_keychain, "/bitwarden-cli/migrate.rs");
+migration_keychain_module_extra_tests!(buf_migrate_keychain, "/buf/migrate.rs");
+migration_keychain_module_extra_tests!(censys_migrate_keychain, "/censys/migrate.rs");
+migration_keychain_module_extra_tests!(checkov_migrate_keychain, "/checkov/migrate.rs");
+migration_keychain_module_extra_tests!(circleci_migrate_keychain, "/circleci/migrate.rs");
+migration_keychain_module_extra_tests!(civo_migrate_keychain, "/civo/migrate.rs");
+migration_keychain_module_extra_tests!(
+    cloudsmith_cli_migrate_keychain,
+    "/cloudsmith-cli/migrate.rs"
+);
+migration_keychain_module_extra_tests!(composer_migrate_keychain, "/composer/migrate.rs");
+migration_keychain_module_extra_tests!(dcos_cli_migrate_keychain, "/dcos-cli/migrate.rs");
+migration_keychain_module_extra_tests!(
+    dropbox_uploader_migrate_keychain,
+    "/dropbox-uploader/migrate.rs"
+);
+migration_keychain_module_extra_tests!(fastly_migrate_keychain, "/fastly/migrate.rs");
+migration_keychain_module_extra_tests!(fauna_shell_migrate_keychain, "/fauna-shell/migrate.rs");
+migration_keychain_module_extra_tests!(firebase_cli_migrate_keychain, "/firebase-cli/migrate.rs");
+migration_keychain_module_extra_tests!(flyctl_migrate_keychain, "/flyctl/migrate.rs");
+migration_keychain_module_extra_tests!(gcli_migrate_keychain, "/gcli/migrate.rs");
+migration_keychain_module_extra_tests!(gallery_dl_migrate_keychain, "/gallery-dl/migrate.rs");
+migration_keychain_module_extra_tests!(goat_migrate_keychain, "/goat/migrate.rs");
+migration_keychain_module_extra_tests!(gotify_migrate_keychain, "/gotify/migrate.rs");
+migration_keychain_module_extra_tests!(gptcommit_migrate_keychain, "/gptcommit/migrate.rs");
+migration_keychain_module_extra_tests!(graphite_migrate_keychain, "/graphite/migrate.rs");
+migration_keychain_module_extra_tests!(hcloud_migrate_keychain, "/hcloud/migrate.rs");
+migration_keychain_module_extra_tests!(helm_migrate_keychain, "/helm/migrate.rs");
+migration_keychain_module_extra_tests!(heroku_migrate_keychain, "/heroku/migrate.rs");
+migration_keychain_module_extra_tests!(
+    huggingface_cli_migrate_keychain,
+    "/huggingface-cli/migrate.rs"
+);
+migration_keychain_module_extra_tests!(imap_backup_migrate_keychain, "/imap-backup/migrate.rs");
+migration_keychain_module_extra_tests!(k6_migrate_keychain, "/k6/migrate.rs");
+migration_keychain_module_extra_tests!(
+    kubernetes_cli_migrate_keychain,
+    "/kubernetes-cli/migrate.rs"
+);
+migration_keychain_module_extra_tests!(mariadb_migrate_keychain, "/mariadb/migrate.rs");
+migration_keychain_module_extra_tests!(maven_migrate_keychain, "/maven/migrate.rs");
+migration_keychain_module_extra_tests!(mcp_remote_migrate_keychain, "/mcp-remote/migrate.rs");
+migration_keychain_module_extra_tests!(mercurial_migrate_keychain, "/mercurial/migrate.rs");
+migration_keychain_module_extra_tests!(mkcert_migrate_keychain, "/mkcert/migrate.rs");
+migration_keychain_module_extra_tests!(mycli_migrate_keychain, "/mycli/migrate.rs");
+migration_keychain_module_extra_tests!(mysql_client_migrate_keychain, "/mysql-client/migrate.rs");
+migration_keychain_module_extra_tests!(mysql_migrate_keychain, "/mysql/migrate.rs");
+migration_keychain_module_extra_tests!(mysql_8_0_migrate_keychain, "/mysql@8.0/migrate.rs");
+migration_keychain_module_extra_tests!(mysql_8_4_migrate_keychain, "/mysql@8.4/migrate.rs");
+migration_keychain_module_extra_tests!(netlify_cli_migrate_keychain, "/netlify-cli/migrate.rs");
+migration_keychain_module_extra_tests!(node_migrate_keychain, "/node/migrate.rs");
+migration_keychain_module_extra_tests!(node_18_migrate_keychain, "/node@18/migrate.rs");
+migration_keychain_module_extra_tests!(oci_cli_migrate_keychain, "/oci-cli/migrate.rs");
+migration_keychain_module_extra_tests!(openhue_cli_migrate_keychain, "/openhue-cli/migrate.rs");
+migration_keychain_module_extra_tests!(ordercli_migrate_keychain, "/ordercli/migrate.rs");
+migration_keychain_module_extra_tests!(ossutil_migrate_keychain, "/ossutil/migrate.rs");
+migration_keychain_module_extra_tests!(oxide_cli_migrate_keychain, "/oxide-cli/migrate.rs");
+migration_keychain_module_extra_tests!(phylum_cli_migrate_keychain, "/phylum-cli/migrate.rs");
+migration_keychain_module_extra_tests!(plumber_migrate_keychain, "/plumber/migrate.rs");
+migration_keychain_module_extra_tests!(pnpm_migrate_keychain, "/pnpm/migrate.rs");
+migration_keychain_module_extra_tests!(pulumi_migrate_keychain, "/pulumi/migrate.rs");
+migration_keychain_module_extra_tests!(railway_migrate_keychain, "/railway/migrate.rs");
+migration_keychain_module_extra_tests!(rclone_migrate_keychain, "/rclone/migrate.rs");
+migration_keychain_module_extra_tests!(runpodctl_migrate_keychain, "/runpodctl/migrate.rs");
+migration_keychain_module_extra_tests!(sbt_migrate_keychain, "/sbt/migrate.rs");
+migration_keychain_module_extra_tests!(sentry_cli_migrate_keychain, "/sentry-cli/migrate.rs");
+migration_keychain_module_extra_tests!(shodan_migrate_keychain, "/shodan/migrate.rs");
+migration_keychain_module_extra_tests!(soracom_cli_migrate_keychain, "/soracom-cli/migrate.rs");
+migration_keychain_module_extra_tests!(sqlcmd_migrate_keychain, "/sqlcmd/migrate.rs");
+migration_keychain_module_extra_tests!(sslmate_migrate_keychain, "/sslmate/migrate.rs");
+migration_keychain_module_extra_tests!(talosctl_migrate_keychain, "/talosctl/migrate.rs");
+migration_keychain_module_extra_tests!(
+    terraform_core_migrate_keychain,
+    "/terraform-core/migrate.rs"
+);
+migration_keychain_module_extra_tests!(todoist_cli_migrate_keychain, "/todoist-cli/migrate.rs");
+migration_keychain_module_extra_tests!(travis_migrate_keychain, "/travis/migrate.rs");
+migration_keychain_module_extra_tests!(uaa_cli_migrate_keychain, "/uaa-cli/migrate.rs");
+migration_keychain_module_extra_tests!(uv_migrate_keychain, "/uv/migrate.rs");
+migration_keychain_module_extra_tests!(vagrant_migrate_keychain, "/vagrant/migrate.rs");
+migration_keychain_module_extra_tests!(vault_migrate_keychain, "/vault/migrate.rs");
+migration_keychain_module_extra_tests!(
+    virustotal_cli_migrate_keychain,
+    "/virustotal-cli/migrate.rs"
+);
+migration_keychain_module_extra_tests!(vultr_migrate_keychain, "/vultr/migrate.rs");
+migration_keychain_module_extra_tests!(wsk_migrate_keychain, "/wsk/migrate.rs");
+
 mod snyk_migrate {
     include!(radioisotope_source!("/snyk/migrate.rs"));
 
@@ -1189,6 +1377,7 @@ mod ansible_migrate {
 
 mod argocd_migrate {
     include!(radioisotope_source!("/argocd/migrate.rs"));
+    migration_keychain_extra_tests!();
 }
 
 mod doctl_migrate {
@@ -1286,6 +1475,8 @@ mod glab_migrate {
             std::fs::remove_dir_all(temp).unwrap();
         }
     }
+
+    migration_keychain_extra_tests!();
 }
 
 mod jfrog_cli_migrate {
@@ -1294,6 +1485,7 @@ mod jfrog_cli_migrate {
 
 mod maestro_migrate {
     include!(radioisotope_source!("/maestro/migrate.rs"));
+    migration_keychain_extra_tests!();
 }
 
 mod minio_mc_migrate {
@@ -1398,6 +1590,8 @@ mod podman_migrate {
             std::fs::remove_dir_all(temp).unwrap();
         }
     }
+
+    migration_keychain_extra_tests!();
 }
 
 mod qwen_code_migrate {
@@ -1514,6 +1708,7 @@ mod s3cmd_migrate {
 
 mod skopeo_migrate {
     include!(radioisotope_source!("/skopeo/migrate.rs"));
+    migration_keychain_extra_tests!();
 }
 
 mod terraform_migrate {
@@ -1522,6 +1717,7 @@ mod terraform_migrate {
 
 mod transifex_cli_migrate {
     include!(radioisotope_source!("/transifex-cli/migrate.rs"));
+    migration_keychain_extra_tests!();
 }
 
 mod wakatime_cli_migrate {

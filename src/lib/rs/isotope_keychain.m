@@ -23,6 +23,37 @@ static NSMutableDictionary *isotope_generic_password_query(NSString *service,
   return query;
 }
 
+static NSMutableDictionary *
+isotope_dotenv_private_key_query(NSString *service, NSString *account,
+                                 NSString *accessGroup) {
+  return [@{
+    (__bridge id)kSecClass: (__bridge id)kSecClassGenericPassword,
+    (__bridge id)kSecAttrService: service,
+    (__bridge id)kSecAttrAccount: account,
+    (__bridge id)kSecUseDataProtectionKeychain: @YES,
+    (__bridge id)kSecAttrAccessGroup: accessGroup,
+  } mutableCopy];
+}
+
+static NSMutableDictionary *
+isotope_legacy_generic_passwords_query(NSString *service) {
+  NSMutableDictionary *query = [@{
+    (__bridge id)kSecClass: (__bridge id)kSecClassGenericPassword,
+    (__bridge id)kSecAttrService: service,
+  } mutableCopy];
+
+  SecKeychainRef defaultKeychain = NULL;
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+  OSStatus status = SecKeychainCopyDefault(&defaultKeychain);
+#pragma clang diagnostic pop
+  if (status == errSecSuccess && defaultKeychain != NULL) {
+    query[(__bridge id)kSecUseKeychain] = CFBridgingRelease(defaultKeychain);
+  }
+
+  return query;
+}
+
 static NSString *isotope_security_error_message(OSStatus status,
                                                 NSString *fallbackPrefix) {
   NSString *message = (__bridge_transfer NSString *)
@@ -103,6 +134,22 @@ bool isotope_generic_password_exists(const char *service_cstr,
                                      const char *account_cstr,
                                      char **error_cstr,
                                      int *status_out);
+char *isotope_copy_dotenv_private_key_with_status(
+    const char *service_cstr, const char *account_cstr,
+    const char *access_group_cstr, char **error_cstr, int *status_out);
+bool isotope_store_dotenv_private_key(const char *service_cstr,
+                                      const char *account_cstr,
+                                      const char *access_group_cstr,
+                                      const char *value_cstr,
+                                      char **error_cstr, int *status_out);
+bool isotope_delete_dotenv_private_key_with_status(
+    const char *service_cstr, const char *account_cstr,
+    const char *access_group_cstr, char **error_cstr, int *status_out);
+char *isotope_copy_legacy_dotenv_private_key_accounts_json_with_status(
+    const char *service_cstr, char **error_cstr, int *status_out);
+bool isotope_delete_legacy_generic_password_with_status(
+    const char *service_cstr, const char *account_cstr, char **error_cstr,
+    int *status_out);
 
 char *isotope_copy_generic_password_json(const char *service_cstr,
                                          const char *account_cstr,
@@ -232,6 +279,321 @@ bool isotope_generic_password_exists(const char *service_cstr,
       *error_cstr = strdup(message.UTF8String);
     }
     return false;
+  }
+}
+
+char *isotope_copy_dotenv_private_key_with_status(
+    const char *service_cstr, const char *account_cstr,
+    const char *access_group_cstr, char **error_cstr, int *status_out) {
+  @autoreleasepool {
+    if (error_cstr != NULL) {
+      *error_cstr = NULL;
+    }
+    if (status_out != NULL) {
+      *status_out = errSecSuccess;
+    }
+
+    if (service_cstr == NULL || account_cstr == NULL ||
+        access_group_cstr == NULL) {
+      if (error_cstr != NULL) {
+        *error_cstr = strdup("invalid dotenv keychain lookup arguments");
+      }
+      return NULL;
+    }
+
+    NSString *service = [NSString stringWithUTF8String:service_cstr];
+    NSString *account = [NSString stringWithUTF8String:account_cstr];
+    NSString *accessGroup =
+        [NSString stringWithUTF8String:access_group_cstr];
+    if (service == nil || account == nil || accessGroup == nil) {
+      if (error_cstr != NULL) {
+        *error_cstr = strdup("dotenv keychain lookup arguments must be UTF-8");
+      }
+      return NULL;
+    }
+
+    NSMutableDictionary *query =
+        isotope_dotenv_private_key_query(service, account, accessGroup);
+    query[(__bridge id)kSecReturnData] = @YES;
+    query[(__bridge id)kSecMatchLimit] = (__bridge id)kSecMatchLimitOne;
+
+    CFTypeRef result = NULL;
+    OSStatus status =
+        SecItemCopyMatching((__bridge CFDictionaryRef)query, &result);
+    if (status_out != NULL) {
+      *status_out = (int)status;
+    }
+    if (status != errSecSuccess) {
+      if (error_cstr != NULL) {
+        NSString *message =
+            isotope_security_error_message(status, @"dotenv keychain lookup failed");
+        *error_cstr = strdup(message.UTF8String);
+      }
+      return NULL;
+    }
+
+    NSData *data = CFBridgingRelease(result);
+    if (data == nil) {
+      if (error_cstr != NULL) {
+        *error_cstr = strdup("dotenv keychain lookup did not return data");
+      }
+      return NULL;
+    }
+
+    char *copy = calloc(data.length + 1, sizeof(char));
+    if (copy == NULL) {
+      if (error_cstr != NULL) {
+        *error_cstr = strdup("failed to allocate dotenv keychain buffer");
+      }
+      return NULL;
+    }
+    memcpy(copy, data.bytes, data.length);
+    copy[data.length] = '\0';
+    return copy;
+  }
+}
+
+bool isotope_store_dotenv_private_key(const char *service_cstr,
+                                      const char *account_cstr,
+                                      const char *access_group_cstr,
+                                      const char *value_cstr,
+                                      char **error_cstr, int *status_out) {
+  @autoreleasepool {
+    if (error_cstr != NULL) {
+      *error_cstr = NULL;
+    }
+    if (status_out != NULL) {
+      *status_out = errSecSuccess;
+    }
+
+    if (service_cstr == NULL || account_cstr == NULL ||
+        access_group_cstr == NULL || value_cstr == NULL) {
+      if (error_cstr != NULL) {
+        *error_cstr = strdup("invalid dotenv keychain write arguments");
+      }
+      return false;
+    }
+
+    NSString *service = [NSString stringWithUTF8String:service_cstr];
+    NSString *account = [NSString stringWithUTF8String:account_cstr];
+    NSString *accessGroup =
+        [NSString stringWithUTF8String:access_group_cstr];
+    NSString *value = [NSString stringWithUTF8String:value_cstr];
+    if (service == nil || account == nil || accessGroup == nil ||
+        value == nil) {
+      if (error_cstr != NULL) {
+        *error_cstr = strdup("dotenv keychain write arguments must be UTF-8");
+      }
+      return false;
+    }
+
+    NSData *data = [value dataUsingEncoding:NSUTF8StringEncoding];
+    NSMutableDictionary *query =
+        isotope_dotenv_private_key_query(service, account, accessGroup);
+    NSDictionary *attributes = @{(__bridge id)kSecValueData: data};
+    OSStatus status =
+        SecItemUpdate((__bridge CFDictionaryRef)query,
+                      (__bridge CFDictionaryRef)attributes);
+    if (status == errSecItemNotFound) {
+      NSMutableDictionary *createQuery = [query mutableCopy];
+      createQuery[(__bridge id)kSecValueData] = data;
+      status = SecItemAdd((__bridge CFDictionaryRef)createQuery, NULL);
+    }
+
+    if (status_out != NULL) {
+      *status_out = (int)status;
+    }
+    if (status != errSecSuccess) {
+      if (error_cstr != NULL) {
+        NSString *message =
+            isotope_security_error_message(status, @"dotenv keychain write failed");
+        *error_cstr = strdup(message.UTF8String);
+      }
+      return false;
+    }
+
+    return true;
+  }
+}
+
+bool isotope_delete_dotenv_private_key_with_status(
+    const char *service_cstr, const char *account_cstr,
+    const char *access_group_cstr, char **error_cstr, int *status_out) {
+  @autoreleasepool {
+    if (error_cstr != NULL) {
+      *error_cstr = NULL;
+    }
+    if (status_out != NULL) {
+      *status_out = errSecSuccess;
+    }
+
+    if (service_cstr == NULL || account_cstr == NULL ||
+        access_group_cstr == NULL) {
+      if (error_cstr != NULL) {
+        *error_cstr = strdup("invalid dotenv keychain delete arguments");
+      }
+      return false;
+    }
+
+    NSString *service = [NSString stringWithUTF8String:service_cstr];
+    NSString *account = [NSString stringWithUTF8String:account_cstr];
+    NSString *accessGroup =
+        [NSString stringWithUTF8String:access_group_cstr];
+    if (service == nil || account == nil || accessGroup == nil) {
+      if (error_cstr != NULL) {
+        *error_cstr = strdup("dotenv keychain delete arguments must be UTF-8");
+      }
+      return false;
+    }
+
+    NSMutableDictionary *query =
+        isotope_dotenv_private_key_query(service, account, accessGroup);
+    OSStatus status = SecItemDelete((__bridge CFDictionaryRef)query);
+    if (status_out != NULL) {
+      *status_out = (int)status;
+    }
+    if (status != errSecSuccess && status != errSecItemNotFound) {
+      if (error_cstr != NULL) {
+        NSString *message =
+            isotope_security_error_message(status, @"dotenv keychain delete failed");
+        *error_cstr = strdup(message.UTF8String);
+      }
+      return false;
+    }
+    return true;
+  }
+}
+
+char *isotope_copy_legacy_dotenv_private_key_accounts_json_with_status(
+    const char *service_cstr, char **error_cstr, int *status_out) {
+  @autoreleasepool {
+    if (error_cstr != NULL) {
+      *error_cstr = NULL;
+    }
+    if (status_out != NULL) {
+      *status_out = errSecSuccess;
+    }
+
+    if (service_cstr == NULL) {
+      if (error_cstr != NULL) {
+        *error_cstr = strdup("invalid legacy dotenv keychain enumeration arguments");
+      }
+      return NULL;
+    }
+
+    NSString *service = [NSString stringWithUTF8String:service_cstr];
+    if (service == nil) {
+      if (error_cstr != NULL) {
+        *error_cstr =
+            strdup("legacy dotenv keychain enumeration arguments must be UTF-8");
+      }
+      return NULL;
+    }
+
+    NSMutableDictionary *query = isotope_legacy_generic_passwords_query(service);
+    query[(__bridge id)kSecReturnAttributes] = @YES;
+    query[(__bridge id)kSecMatchLimit] = (__bridge id)kSecMatchLimitAll;
+
+    CFTypeRef result = NULL;
+    OSStatus status =
+        SecItemCopyMatching((__bridge CFDictionaryRef)query, &result);
+    if (status == errSecItemNotFound) {
+      status = errSecSuccess;
+      result = CFRetain((__bridge CFTypeRef)@[]);
+    }
+    if (status_out != NULL) {
+      *status_out = (int)status;
+    }
+    if (status != errSecSuccess) {
+      if (error_cstr != NULL) {
+        NSString *message = isotope_security_error_message(
+            status, @"legacy dotenv keychain enumeration failed");
+        *error_cstr = strdup(message.UTF8String);
+      }
+      return NULL;
+    }
+
+    id rawRecords = CFBridgingRelease(result);
+    NSArray *records = [rawRecords isKindOfClass:NSArray.class]
+                           ? rawRecords
+                           : (rawRecords == nil ? @[] : @[ rawRecords ]);
+    NSMutableArray<NSString *> *accounts = [NSMutableArray array];
+    for (id record in records) {
+      if (![record isKindOfClass:NSDictionary.class]) {
+        continue;
+      }
+      id account = record[(__bridge id)kSecAttrAccount];
+      if ([account isKindOfClass:NSString.class]) {
+        [accounts addObject:account];
+      }
+    }
+
+    NSError *jsonError = nil;
+    NSData *json = [NSJSONSerialization dataWithJSONObject:accounts
+                                                   options:0
+                                                     error:&jsonError];
+    if (json == nil) {
+      if (error_cstr != NULL) {
+        NSString *message = jsonError.localizedDescription ?:
+            @"failed to encode legacy dotenv keychain account list";
+        *error_cstr = strdup(message.UTF8String);
+      }
+      return NULL;
+    }
+    NSString *jsonString =
+        [[NSString alloc] initWithData:json encoding:NSUTF8StringEncoding];
+    if (jsonString == nil) {
+      if (error_cstr != NULL) {
+        *error_cstr =
+            strdup("legacy dotenv keychain account list was not UTF-8");
+      }
+      return NULL;
+    }
+    return strdup(jsonString.UTF8String);
+  }
+}
+
+bool isotope_delete_legacy_generic_password_with_status(
+    const char *service_cstr, const char *account_cstr, char **error_cstr,
+    int *status_out) {
+  @autoreleasepool {
+    if (error_cstr != NULL) {
+      *error_cstr = NULL;
+    }
+    if (status_out != NULL) {
+      *status_out = errSecSuccess;
+    }
+
+    if (service_cstr == NULL || account_cstr == NULL) {
+      if (error_cstr != NULL) {
+        *error_cstr = strdup("invalid legacy keychain delete arguments");
+      }
+      return false;
+    }
+
+    NSString *service = [NSString stringWithUTF8String:service_cstr];
+    NSString *account = [NSString stringWithUTF8String:account_cstr];
+    if (service == nil || account == nil) {
+      if (error_cstr != NULL) {
+        *error_cstr = strdup("legacy keychain delete arguments must be UTF-8");
+      }
+      return false;
+    }
+
+    NSMutableDictionary *query = isotope_generic_password_query(service, account);
+    OSStatus status = SecItemDelete((__bridge CFDictionaryRef)query);
+    if (status_out != NULL) {
+      *status_out = (int)status;
+    }
+    if (status != errSecSuccess && status != errSecItemNotFound) {
+      if (error_cstr != NULL) {
+        NSString *message =
+            isotope_security_error_message(status, @"legacy keychain delete failed");
+        *error_cstr = strdup(message.UTF8String);
+      }
+      return false;
+    }
+    return true;
   }
 }
 

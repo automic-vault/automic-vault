@@ -6,6 +6,9 @@ import Security
 import Darwin
 #endif
 
+private let localPeerTokenSocketOptionLevel = Int32(0)
+private let localPeerTokenSocketOptionName = Int32(0x006)
+
 private struct VaultClientApprovalRequest: Codable {
     let id: String
     let intent: VaultExecutionIntent
@@ -109,6 +112,28 @@ private enum KeyTransferImportItem: Codable {
     }
 }
 
+private struct DotenvKeychainLoadRequest: Codable {
+    let id: String
+    let account: String
+}
+
+private struct DotenvKeychainStoreRequest: Codable {
+    let id: String
+    let account: String
+    let privateKey: String
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case account
+        case privateKey = "private_key"
+    }
+}
+
+private struct DotenvKeychainDeleteRequest: Codable {
+    let id: String
+    let account: String
+}
+
 private struct KeyTransferImportPlan {
     let approval: KeyTransferApprovalRequestSnapshot
     let actions: [KeyTransferImportAction]
@@ -125,6 +150,9 @@ private enum VaultClientRequest: Codable {
     case approvalRequest(VaultClientApprovalRequest)
     case keyTransferApprovalRequest(KeyTransferApprovalRequestSnapshot)
     case keyTransferImportRequest(KeyTransferImportRequest)
+    case dotenvKeychainLoadRequest(DotenvKeychainLoadRequest)
+    case dotenvKeychainStoreRequest(DotenvKeychainStoreRequest)
+    case dotenvKeychainDeleteRequest(DotenvKeychainDeleteRequest)
 
     enum CodingKeys: String, CodingKey {
         case type
@@ -139,6 +167,9 @@ private enum VaultClientRequest: Codable {
         case approvalRequest = "approval_request"
         case keyTransferApprovalRequest = "key_transfer_approval_request"
         case keyTransferImportRequest = "key_transfer_import_request"
+        case dotenvKeychainLoadRequest = "dotenv_keychain_load_request"
+        case dotenvKeychainStoreRequest = "dotenv_keychain_store_request"
+        case dotenvKeychainDeleteRequest = "dotenv_keychain_delete_request"
     }
 
     init(from decoder: Decoder) throws {
@@ -164,6 +195,18 @@ private enum VaultClientRequest: Codable {
             self = .keyTransferImportRequest(
                 try container.decode(KeyTransferImportRequest.self, forKey: .request)
             )
+        case .dotenvKeychainLoadRequest:
+            self = .dotenvKeychainLoadRequest(
+                try container.decode(DotenvKeychainLoadRequest.self, forKey: .request)
+            )
+        case .dotenvKeychainStoreRequest:
+            self = .dotenvKeychainStoreRequest(
+                try container.decode(DotenvKeychainStoreRequest.self, forKey: .request)
+            )
+        case .dotenvKeychainDeleteRequest:
+            self = .dotenvKeychainDeleteRequest(
+                try container.decode(DotenvKeychainDeleteRequest.self, forKey: .request)
+            )
         }
     }
 
@@ -186,6 +229,18 @@ private enum VaultClientRequest: Codable {
             var container = encoder.container(keyedBy: CodingKeys.self)
             try container.encode(RequestType.keyTransferImportRequest, forKey: .type)
             try container.encode(request, forKey: .request)
+        case .dotenvKeychainLoadRequest(let request):
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encode(RequestType.dotenvKeychainLoadRequest, forKey: .type)
+            try container.encode(request, forKey: .request)
+        case .dotenvKeychainStoreRequest(let request):
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encode(RequestType.dotenvKeychainStoreRequest, forKey: .type)
+            try container.encode(request, forKey: .request)
+        case .dotenvKeychainDeleteRequest(let request):
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encode(RequestType.dotenvKeychainDeleteRequest, forKey: .type)
+            try container.encode(request, forKey: .request)
         }
     }
 }
@@ -195,6 +250,9 @@ private enum VaultDaemonEvent: Encodable {
     case execChunk(id: String, stream: String, data: String)
     case execComplete(id: String, exitCode: Int32)
     case keyTransferImportResponse(id: String, imported: Int, alreadyPresent: Int)
+    case dotenvKeychainLoadResponse(id: String, privateKey: String?)
+    case dotenvKeychainStoreResponse(id: String, stored: Bool)
+    case dotenvKeychainDeleteResponse(id: String, deleted: Bool)
     case error(id: String?, code: Int, message: String)
 
     enum CodingKeys: String, CodingKey {
@@ -207,6 +265,9 @@ private enum VaultDaemonEvent: Encodable {
         case exitCode = "exit_code"
         case imported
         case alreadyPresent = "already_present"
+        case privateKey = "private_key"
+        case stored
+        case deleted
         case code
         case message
     }
@@ -216,6 +277,9 @@ private enum VaultDaemonEvent: Encodable {
         case execChunk = "exec_chunk"
         case execComplete = "exec_complete"
         case keyTransferImportResponse = "key_transfer_import_response"
+        case dotenvKeychainLoadResponse = "dotenv_keychain_load_response"
+        case dotenvKeychainStoreResponse = "dotenv_keychain_store_response"
+        case dotenvKeychainDeleteResponse = "dotenv_keychain_delete_response"
         case error
     }
 
@@ -241,6 +305,18 @@ private enum VaultDaemonEvent: Encodable {
             try container.encode(id, forKey: .id)
             try container.encode(imported, forKey: .imported)
             try container.encode(alreadyPresent, forKey: .alreadyPresent)
+        case .dotenvKeychainLoadResponse(let id, let privateKey):
+            try container.encode(EventType.dotenvKeychainLoadResponse, forKey: .type)
+            try container.encode(id, forKey: .id)
+            try container.encodeIfPresent(privateKey, forKey: .privateKey)
+        case .dotenvKeychainStoreResponse(let id, let stored):
+            try container.encode(EventType.dotenvKeychainStoreResponse, forKey: .type)
+            try container.encode(id, forKey: .id)
+            try container.encode(stored, forKey: .stored)
+        case .dotenvKeychainDeleteResponse(let id, let deleted):
+            try container.encode(EventType.dotenvKeychainDeleteResponse, forKey: .type)
+            try container.encode(id, forKey: .id)
+            try container.encode(deleted, forKey: .deleted)
         case .error(let id, let code, let message):
             try container.encode(EventType.error, forKey: .type)
             try container.encodeIfPresent(id, forKey: .id)
@@ -251,6 +327,15 @@ private enum VaultDaemonEvent: Encodable {
 }
 
 final class VaultDaemon {
+    private static let dotenvKeychainService = "com.automicvault.dotenv"
+    private static let defaultDotenvKeychainAccessGroup = "ZU76A67LGU.com.automicvault.dotenv"
+    private static let dotenvPrivateKeyAccountPrefix = "DOTENV_PRIVATE_KEY:"
+    private static let dotenvBrokerAuthorizedClientsInfoKey = "AVDotenvKeychainBrokerAuthorizedClients"
+    private static let defaultDotenvBrokerAuthorizedClientIdentifiers = [
+        "com.automicvault.av",
+        "com.automicvault.menu-helper.av"
+    ]
+
     struct Configuration {
         let socketURL: URL
     }
@@ -263,6 +348,7 @@ final class VaultDaemon {
     private let queue = DispatchQueue(label: "com.automicvault.vault.daemon", qos: .userInitiated)
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
+    private let dotenvKeychainAccessGroup: String
     private let activeRequestLock = NSLock()
     private let stateLock = NSLock()
     private var activeRequestID: String?
@@ -279,6 +365,9 @@ final class VaultDaemon {
         self.configuration = configuration
         self.openMainWindow = openMainWindow
         self.notifyUser = notifyUser
+        self.dotenvKeychainAccessGroup =
+            Bundle.main.object(forInfoDictionaryKey: "AVDotenvKeychainAccessGroup") as? String
+            ?? Self.defaultDotenvKeychainAccessGroup
     }
 
     func start() {
@@ -402,6 +491,12 @@ final class VaultDaemon {
             processKeyTransferApprovalRequest(request, clientFD: clientFD)
         case .keyTransferImportRequest(let request):
             processKeyTransferImportRequest(request, clientFD: clientFD)
+        case .dotenvKeychainLoadRequest(let request):
+            processDotenvKeychainLoadRequest(request, clientFD: clientFD)
+        case .dotenvKeychainStoreRequest(let request):
+            processDotenvKeychainStoreRequest(request, clientFD: clientFD)
+        case .dotenvKeychainDeleteRequest(let request):
+            processDotenvKeychainDeleteRequest(request, clientFD: clientFD)
         }
     }
 
@@ -566,6 +661,79 @@ final class VaultDaemon {
         }
     }
 
+    private func processDotenvKeychainLoadRequest(
+        _ request: DotenvKeychainLoadRequest,
+        clientFD: Int32
+    ) {
+        guard requireAuthorizedDotenvKeychainClient(clientFD: clientFD, id: request.id) else {
+            return
+        }
+
+        do {
+            try validateDotenvPrivateKeyAccount(request.account)
+            let privateKey = try dotenvPrivateKeyRead(account: request.account)
+            send(
+                .dotenvKeychainLoadResponse(
+                    id: request.id,
+                    privateKey: privateKey
+                ),
+                to: clientFD
+            )
+        } catch {
+            send(
+                .error(id: request.id, code: 500, message: error.localizedDescription),
+                to: clientFD
+            )
+        }
+    }
+
+    private func processDotenvKeychainStoreRequest(
+        _ request: DotenvKeychainStoreRequest,
+        clientFD: Int32
+    ) {
+        guard requireAuthorizedDotenvKeychainClient(clientFD: clientFD, id: request.id) else {
+            return
+        }
+
+        do {
+            try validateDotenvPrivateKeyAccount(request.account)
+            try validateDotenvPrivateKey(request.privateKey)
+            try dotenvPrivateKeyWrite(account: request.account, value: request.privateKey)
+            send(
+                .dotenvKeychainStoreResponse(id: request.id, stored: true),
+                to: clientFD
+            )
+        } catch {
+            send(
+                .error(id: request.id, code: 500, message: error.localizedDescription),
+                to: clientFD
+            )
+        }
+    }
+
+    private func processDotenvKeychainDeleteRequest(
+        _ request: DotenvKeychainDeleteRequest,
+        clientFD: Int32
+    ) {
+        guard requireAuthorizedDotenvKeychainClient(clientFD: clientFD, id: request.id) else {
+            return
+        }
+
+        do {
+            try validateDotenvPrivateKeyAccount(request.account)
+            let deleted = try dotenvPrivateKeyDelete(account: request.account)
+            send(
+                .dotenvKeychainDeleteResponse(id: request.id, deleted: deleted),
+                to: clientFD
+            )
+        } catch {
+            send(
+                .error(id: request.id, code: 500, message: error.localizedDescription),
+                to: clientFD
+            )
+        }
+    }
+
     private func keyTransferImportPlan(
         for request: KeyTransferImportRequest
     ) throws -> KeyTransferImportPlan {
@@ -599,8 +767,7 @@ final class VaultDaemon {
                     throw daemonError("duplicate dotenv private key \(fingerprintPrefix(publicKeyFingerprint))")
                 }
 
-                let existing = try keychainRead(
-                    service: "com.automicvault.dotenv",
+                let existing = try dotenvPrivateKeyRead(
                     account: dotenvPrivateKeyAccount(publicKeyFingerprint: publicKeyFingerprint)
                 )
                 let replacingExisting = existing.map { $0 != privateKey } ?? false
@@ -688,8 +855,7 @@ final class VaultDaemon {
         for action in actions {
             switch action {
             case .storeDotenvPrivateKey(let publicKeyFingerprint, let privateKey):
-                try keychainWrite(
-                    service: "com.automicvault.dotenv",
+                try dotenvPrivateKeyWrite(
                     account: dotenvPrivateKeyAccount(publicKeyFingerprint: publicKeyFingerprint),
                     value: privateKey
                 )
@@ -705,7 +871,7 @@ final class VaultDaemon {
     }
 
     private func dotenvPrivateKeyAccount(publicKeyFingerprint: String) -> String {
-        "DOTENV_PRIVATE_KEY:\(publicKeyFingerprint)"
+        "\(Self.dotenvPrivateKeyAccountPrefix)\(publicKeyFingerprint)"
     }
 
     private func validateDotenvPublicKeyName(_ name: String) throws {
@@ -714,6 +880,14 @@ final class VaultDaemon {
         else {
             throw daemonError("invalid dotenv public key name: \(name)")
         }
+    }
+
+    private func validateDotenvPrivateKeyAccount(_ account: String) throws {
+        guard account.hasPrefix(Self.dotenvPrivateKeyAccountPrefix) else {
+            throw daemonError("invalid dotenv private key account")
+        }
+        let fingerprint = String(account.dropFirst(Self.dotenvPrivateKeyAccountPrefix.count))
+        try validateHex(fingerprint, bytes: 32, label: "dotenv public key fingerprint")
     }
 
     private func validateDotenvPrivateKey(_ value: String) throws {
@@ -753,6 +927,75 @@ final class VaultDaemon {
 
     private func fingerprintPrefix(_ value: String) -> String {
         String(value.prefix(12))
+    }
+
+    private func dotenvPrivateKeyRead(account: String) throws -> String? {
+        let query = dotenvPrivateKeyQuery(account: account).merging([
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne
+        ]) { _, new in new }
+        var result: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        if status == errSecItemNotFound {
+            return try keychainRead(service: Self.dotenvKeychainService, account: account)
+        }
+        guard status == errSecSuccess else {
+            throw dotenvKeychainError(action: "load", account: account, status: status)
+        }
+        guard let data = result as? Data,
+              let value = String(data: data, encoding: .utf8)
+        else {
+            throw daemonError("dotenv keychain lookup did not return UTF-8 data")
+        }
+        return value
+    }
+
+    private func dotenvPrivateKeyWrite(account: String, value: String) throws {
+        let data = Data(value.utf8)
+        let query = dotenvPrivateKeyQuery(account: account)
+        let attributes: [String: Any] = [
+            kSecValueData as String: data
+        ]
+        var status = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
+        if status == errSecItemNotFound {
+            var createQuery = query
+            createQuery[kSecValueData as String] = data
+            status = SecItemAdd(createQuery as CFDictionary, nil)
+        }
+        guard status == errSecSuccess else {
+            throw dotenvKeychainError(action: "store", account: account, status: status)
+        }
+    }
+
+    private func dotenvPrivateKeyDelete(account: String) throws -> Bool {
+        let query = dotenvPrivateKeyQuery(account: account)
+        let status = SecItemDelete(query as CFDictionary)
+        if status == errSecItemNotFound {
+            return false
+        }
+        guard status == errSecSuccess else {
+            throw dotenvKeychainError(action: "delete", account: account, status: status)
+        }
+        return true
+    }
+
+    private func dotenvPrivateKeyQuery(account: String) -> [String: Any] {
+        [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: Self.dotenvKeychainService,
+            kSecAttrAccount as String: account,
+            kSecUseDataProtectionKeychain as String: true,
+            kSecAttrAccessGroup as String: dotenvKeychainAccessGroup
+        ]
+    }
+
+    private func dotenvKeychainError(action: String, account: String, status: OSStatus) -> Error {
+        let securityMessage = securityErrorMessage(status)
+        var message = "failed to \(action) dotenv private key \(account) in Data Protection keychain access group \(dotenvKeychainAccessGroup): \(securityMessage)"
+        if status == -34018 || securityMessage.localizedCaseInsensitiveContains("entitlement") {
+            message += "; ensure this binary is signed with keychain-access-groups containing \(dotenvKeychainAccessGroup); verify with `codesign -d --entitlements - <path>`"
+        }
+        return daemonError(message)
     }
 
     private func keychainRead(service: String, account: String) throws -> String? {
@@ -828,6 +1071,92 @@ final class VaultDaemon {
             throw daemonError("keychain access failed: \(securityErrorMessage(status))")
         }
         return access
+    }
+
+    private func requireAuthorizedDotenvKeychainClient(clientFD: Int32, id: String) -> Bool {
+        guard let auditToken = peerAuditToken(for: clientFD),
+              authorizedDotenvBrokerRequirements.contains(where: { requirement in
+                  process(auditToken: auditToken, satisfies: requirement)
+              })
+        else {
+            send(
+                .error(
+                    id: id,
+                    code: 403,
+                    message: "dotenv keychain broker request rejected: unauthorized client"
+                ),
+                to: clientFD
+            )
+            return false
+        }
+        return true
+    }
+
+    private var authorizedDotenvBrokerRequirements: [String] {
+        if let configured = Bundle.main.object(
+            forInfoDictionaryKey: Self.dotenvBrokerAuthorizedClientsInfoKey
+        ) as? [String] {
+            let requirements = configured.filter { $0.isEmpty == false }
+            if requirements.isEmpty == false {
+                return requirements
+            }
+        }
+
+        let configuredTeamIdentifier = dotenvKeychainAccessGroup
+            .components(separatedBy: ".")
+            .first ?? ""
+        let teamIdentifier = configuredTeamIdentifier.isEmpty
+            ? "ZU76A67LGU"
+            : configuredTeamIdentifier
+        return Self.defaultDotenvBrokerAuthorizedClientIdentifiers.map { identifier in
+            "identifier \"\(identifier)\" and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and certificate leaf[subject.OU] = \"\(teamIdentifier)\""
+        }
+    }
+
+    private func peerAuditToken(for clientFD: Int32) -> Data? {
+        var auditToken = audit_token_t()
+        var length = socklen_t(MemoryLayout<audit_token_t>.size)
+        let result = withUnsafeMutablePointer(to: &auditToken) { pointer in
+            getsockopt(
+                clientFD,
+                localPeerTokenSocketOptionLevel,
+                localPeerTokenSocketOptionName,
+                pointer,
+                &length
+            )
+        }
+        guard result == 0, length == socklen_t(MemoryLayout<audit_token_t>.size) else {
+            return nil
+        }
+        return withUnsafeBytes(of: auditToken) { Data($0) }
+    }
+
+    private func process(auditToken: Data, satisfies requirementString: String) -> Bool {
+        let attributes: [String: Any] = [
+            kSecGuestAttributeAudit as String: auditToken
+        ]
+        var guest: SecCode?
+        let codeStatus = SecCodeCopyGuestWithAttributes(
+            nil,
+            attributes as CFDictionary,
+            SecCSFlags(),
+            &guest
+        )
+        guard codeStatus == errSecSuccess, let guest else {
+            return false
+        }
+
+        var requirement: SecRequirement?
+        let requirementStatus = SecRequirementCreateWithString(
+            requirementString as CFString,
+            SecCSFlags(),
+            &requirement
+        )
+        guard requirementStatus == errSecSuccess, let requirement else {
+            return false
+        }
+
+        return SecCodeCheckValidity(guest, SecCSFlags(), requirement) == errSecSuccess
     }
 
     private func securityErrorMessage(_ status: OSStatus) -> String {

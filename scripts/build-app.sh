@@ -70,6 +70,56 @@ configure_codesign_identity() {
   export CODESIGN_IDENTITY
 }
 
+team_identifier_from_identity() {
+  local identity="$1"
+  if [[ "$identity" =~ '\(([A-Z0-9]+)\)[[:space:]]*$' ]]; then
+    printf '%s' "$match[1]"
+  fi
+}
+
+valid_team_identifier() {
+  local team_identifier="$1"
+  if [[ "$team_identifier" =~ '^[A-Z0-9]+$' ]]; then
+    printf '%s' "$team_identifier"
+  fi
+}
+
+configure_dotenv_keychain_access_group() {
+  if [[ -n "${AV_DOTENV_KEYCHAIN_ACCESS_GROUP:-}" ]]; then
+    AV_DOTENV_KEYCHAIN_ACCESS_GROUP="$(unquote_build_env_value "$AV_DOTENV_KEYCHAIN_ACCESS_GROUP")"
+    export AV_DOTENV_KEYCHAIN_ACCESS_GROUP
+    return
+  fi
+
+  local team_identifier=""
+  if [[ -n "${APPLE_TEAM_ID:-}" ]]; then
+    team_identifier="$(valid_team_identifier "$(unquote_build_env_value "$APPLE_TEAM_ID")")"
+  fi
+  if [[ -z "$team_identifier" && -n "${TEAM_IDENTIFIER:-}" ]]; then
+    team_identifier="$(valid_team_identifier "$(unquote_build_env_value "$TEAM_IDENTIFIER")")"
+  fi
+  if [[ -z "$team_identifier" && -n "${CODESIGN_IDENTITY:-}" ]]; then
+    team_identifier="$(team_identifier_from_identity "$CODESIGN_IDENTITY")"
+  fi
+  [[ -n "$team_identifier" ]] || team_identifier="ZU76A67LGU"
+
+  AV_DOTENV_KEYCHAIN_ACCESS_GROUP="${team_identifier}.com.automicvault.dotenv"
+  export AV_DOTENV_KEYCHAIN_ACCESS_GROUP
+}
+
+uses_real_codesign_identity() {
+  [[ -n "${CODESIGN_IDENTITY:-}" && "$CODESIGN_IDENTITY" != "-" ]]
+}
+
+normalize_profile_path() {
+  local path="$1"
+  path="$(unquote_build_env_value "$path")"
+  if [[ "$path" == "~/"* ]]; then
+    path="$HOME/${path#~/}"
+  fi
+  printf '%s' "$path"
+}
+
 rust_protocol_version() {
   awk -F'"' '/PROTOCOL_VERSION[[:space:]]*:/ { print $2; exit }' "$ROOT_DIR/src/lib/rs/core.rs"
 }
@@ -116,6 +166,7 @@ done
 
 load_build_env
 configure_codesign_identity
+configure_dotenv_keychain_access_group
 
 case "$CONFIGURATION" in
   debug|release)
@@ -148,6 +199,18 @@ ENRICHMENT_MANIFESTS_JSON="$BUILD_DIR/enrichment-manifests.json"
 ICON_NAME="gui-icon"
 ICONSET_DIR="$BUILD_DIR/$ICON_NAME.iconset"
 ICON_ICNS="$BUILD_DIR/$ICON_NAME.icns"
+SERVICE_MANAGEMENT_SHIM_DIR="$GUI_DIR/ServiceManagementShim"
+SERVICE_MANAGEMENT_SHIM_INCLUDE_DIR="$SERVICE_MANAGEMENT_SHIM_DIR/include"
+SERVICE_MANAGEMENT_SHIM_SOURCE="$SERVICE_MANAGEMENT_SHIM_DIR/ServiceManagementShim.m"
+SERVICE_MANAGEMENT_SHIM_HEADER="$SERVICE_MANAGEMENT_SHIM_INCLUDE_DIR/ServiceManagementShim.h"
+SERVICE_MANAGEMENT_SHIM_MODULEMAP="$SERVICE_MANAGEMENT_SHIM_INCLUDE_DIR/module.modulemap"
+SERVICE_MANAGEMENT_SHIM_OBJECT="$BUILD_DIR/ServiceManagementShim.o"
+DOTENV_ENTITLEMENTS="$BUILD_DIR/dotenv-keychain.entitlements"
+HELPER_ENTITLEMENTS="$BUILD_DIR/nuke-helper.entitlements"
+DOTENV_KEYCHAIN_ENTITLEMENT_ENABLED=false
+if uses_real_codesign_identity; then
+  DOTENV_KEYCHAIN_ENTITLEMENT_ENABLED=true
+fi
 [[ -n "${MIN_MACOS_VERSION:-}" ]] || cli_die "Set MIN_MACOS_VERSION in .env"
 NUKE_PROTOCOL_VERSION="$(rust_protocol_version)"
 [[ -n "$NUKE_PROTOCOL_VERSION" ]] || cli_die "Could not read PROTOCOL_VERSION from src/lib/rs/core.rs"
@@ -176,20 +239,21 @@ fi
 APP_BUNDLE_ID="com.automicvault"
 MENU_BUNDLE_ID="com.automicvault.menu-helper"
 HELPER_BUNDLE_ID="com.automicvault.nuke-helper"
-
-cli_step "Validating package database"
-if package_database_check="$("$ROOT_DIR/scripts/build-combined-json.py" --check 2>&1)"; then
-  cli_info "${package_database_check}"
-elif [[ "$PUBLISH_BUILD" == "true" ]]; then
-  cli_error "${package_database_check}"
-  cli_die "Package database must be current for published builds."
-else
-  cli_warn "${package_database_check}"
-  cli_step "Regenerating package database"
-  "$ROOT_DIR/scripts/build-combined-json.py"
-  package_database_check="$("$ROOT_DIR/scripts/build-combined-json.py" --check 2>&1)"
-  cli_info "${package_database_check}"
+APP_PROVISIONING_PROFILE="${AV_APP_PROVISIONING_PROFILE:-}"
+MENU_PROVISIONING_PROFILE="${AV_MENU_PROVISIONING_PROFILE:-}"
+if [[ -n "$APP_PROVISIONING_PROFILE" ]]; then
+  APP_PROVISIONING_PROFILE="$(normalize_profile_path "$APP_PROVISIONING_PROFILE")"
 fi
+if [[ -n "$MENU_PROVISIONING_PROFILE" ]]; then
+  MENU_PROVISIONING_PROFILE="$(normalize_profile_path "$MENU_PROVISIONING_PROFILE")"
+fi
+COMBINED_DB_PATH="${AV_COMBINED_DB_PATH:-${ROOT_DIR}/../av.db/cache/automic-vault/combined.json}"
+
+cli_step "Locating package database"
+if [[ ! -f "$COMBINED_DB_PATH" ]]; then
+  cli_die "Missing package database: ${COMBINED_DB_PATH}. Generate it in ../av.db or set AV_COMBINED_DB_PATH."
+fi
+cli_info "${COMBINED_DB_PATH}"
 
 if [[ -z "$APPLE_TEAM_ID" && -n "${CODESIGN_IDENTITY:-}" ]]; then
   if [[ "${CODESIGN_IDENTITY}" =~ \(([A-Z0-9]+)\)[[:space:]]*$ ]]; then
@@ -212,6 +276,9 @@ if [[ -n "$APPLE_TEAM_ID" ]]; then
 else
   unset APPLE_TEAM_ID
 fi
+DOTENV_KEYCHAIN_BROKER_TEAM_ID="${AV_DOTENV_KEYCHAIN_ACCESS_GROUP%%.*}"
+DOTENV_KEYCHAIN_BROKER_AV_REQUIREMENT="identifier \"${APP_BUNDLE_ID}.av\" and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and certificate leaf[subject.OU] = \"${DOTENV_KEYCHAIN_BROKER_TEAM_ID}\""
+DOTENV_KEYCHAIN_BROKER_MENU_AV_REQUIREMENT="identifier \"${MENU_BUNDLE_ID}.av\" and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and certificate leaf[subject.OU] = \"${DOTENV_KEYCHAIN_BROKER_TEAM_ID}\""
 export NUKE_HELPER_VERSION
 SHARED_SWIFT_SOURCES=(
   "$GUI_DIR/Localization.swift"
@@ -358,6 +425,286 @@ adhoc_sign_bundle() {
   codesign "${args[@]}" "$target_path"
 }
 
+write_entitlements() {
+  local output_path="$1"
+  local include_dotenv_group="$2"
+
+  cat >"$output_path" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+"http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+PLIST
+  if [[ "$include_dotenv_group" == "true" ]]; then
+    cat >>"$output_path" <<PLIST
+  <key>keychain-access-groups</key>
+  <array>
+    <string>${AV_DOTENV_KEYCHAIN_ACCESS_GROUP}</string>
+  </array>
+PLIST
+  fi
+  cat >>"$output_path" <<PLIST
+</dict>
+</plist>
+PLIST
+}
+
+verify_keychain_access_group_entitlement() {
+  local target_path="$1"
+  local label="$2"
+  local output
+
+  if ! output="$(codesign -d --entitlements - "$target_path" 2>/dev/null)"; then
+    cli_die "Failed to read entitlements for $label: $target_path"
+  fi
+  if [[ "$output" != *"${AV_DOTENV_KEYCHAIN_ACCESS_GROUP}"* ]]; then
+    cli_error "$output"
+    cli_die "$label is missing keychain access group ${AV_DOTENV_KEYCHAIN_ACCESS_GROUP}"
+  fi
+}
+
+verify_codesign_signature() {
+  local target_path="$1"
+  local label="$2"
+
+  if ! codesign --verify --strict --verbose=4 "$target_path" >&2; then
+    cli_die "$label failed strict codesign verification: $target_path"
+  fi
+}
+
+decode_provisioning_profile() {
+  local profile_path="$1"
+  local output_path="$2"
+
+  if /usr/bin/security cms -D -i "$profile_path" >"$output_path" 2>/dev/null; then
+    return 0
+  fi
+
+  if command -v openssl >/dev/null 2>&1 &&
+      openssl smime \
+        -inform DER \
+        -verify \
+        -noverify \
+        -in "$profile_path" \
+        -out "$output_path" \
+        >/dev/null 2>&1; then
+    return 0
+  fi
+
+  cli_die "Unable to decode provisioning profile: $profile_path"
+}
+
+try_decode_provisioning_profile() {
+  local profile_path="$1"
+  local output_path="$2"
+
+  if /usr/bin/security cms -D -i "$profile_path" >"$output_path" 2>/dev/null; then
+    return 0
+  fi
+
+  if command -v openssl >/dev/null 2>&1 &&
+      openssl smime \
+        -inform DER \
+        -verify \
+        -noverify \
+        -in "$profile_path" \
+        -out "$output_path" \
+        >/dev/null 2>&1; then
+    return 0
+  fi
+
+  return 1
+}
+
+profile_plist_value() {
+  local plist_path="$1"
+  local key_path="$2"
+
+  /usr/libexec/PlistBuddy -c "Print $key_path" "$plist_path" 2>/dev/null || true
+}
+
+profile_matches_bundle() {
+  local profile_path="$1"
+  local bundle_id="$2"
+  local decoded_path app_identifier team_identifier expected_app_identifier keychain_groups
+
+  decoded_path="$(mktemp "${TMPDIR:-/tmp}/automic-vault-profile.XXXXXX.plist")"
+  if ! try_decode_provisioning_profile "$profile_path" "$decoded_path"; then
+    rm -f "$decoded_path"
+    return 1
+  fi
+
+  app_identifier="$(profile_plist_value "$decoded_path" ":Entitlements:com.apple.application-identifier")"
+  team_identifier="$(profile_plist_value "$decoded_path" ":Entitlements:com.apple.developer.team-identifier")"
+  keychain_groups="$(profile_plist_value "$decoded_path" ":Entitlements:keychain-access-groups")"
+  rm -f "$decoded_path"
+
+  expected_app_identifier="${team_identifier}.${bundle_id}"
+  [[ -n "$team_identifier" ]] || return 1
+  [[ "$app_identifier" == "$expected_app_identifier" ]] || return 1
+  [[ "$AV_DOTENV_KEYCHAIN_ACCESS_GROUP" == "${team_identifier}."* ]] || return 1
+  [[ "$keychain_groups" == *"$AV_DOTENV_KEYCHAIN_ACCESS_GROUP"* ||
+     "$keychain_groups" == *"${team_identifier}.*"* ]]
+}
+
+describe_provisioning_profile() {
+  local profile_path="$1"
+  local decoded_path name app_identifier team_identifier keychain_groups
+
+  decoded_path="$(mktemp "${TMPDIR:-/tmp}/automic-vault-profile.XXXXXX.plist")"
+  if ! try_decode_provisioning_profile "$profile_path" "$decoded_path"; then
+    rm -f "$decoded_path"
+    cli_error "  $profile_path: unable to decode"
+    return
+  fi
+
+  name="$(profile_plist_value "$decoded_path" ":Name")"
+  app_identifier="$(profile_plist_value "$decoded_path" ":Entitlements:com.apple.application-identifier")"
+  team_identifier="$(profile_plist_value "$decoded_path" ":Entitlements:com.apple.developer.team-identifier")"
+  keychain_groups="$(profile_plist_value "$decoded_path" ":Entitlements:keychain-access-groups" | tr '\n' ' ')"
+  rm -f "$decoded_path"
+
+  cli_info "$profile_path"
+  cli_info "  name: ${name:-unknown}"
+  cli_info "  application-identifier: ${app_identifier:-missing}"
+  cli_info "  team: ${team_identifier:-missing}"
+  cli_info "  keychain-access-groups: ${keychain_groups:-missing}"
+}
+
+print_provisioning_profile_diagnostics() {
+  local bundle_id="$1"
+  local env_var="$2"
+  local search_dir="$HOME/Library/MobileDevice/Provisioning Profiles"
+  local team_identifier="${AV_DOTENV_KEYCHAIN_ACCESS_GROUP%%.*}"
+  local profile found=false
+
+  cli_error "No matching Developer ID provisioning profile found for $bundle_id."
+  cli_error "Required application-identifier: ${team_identifier}.${bundle_id}"
+  cli_error "Required keychain access group: $AV_DOTENV_KEYCHAIN_ACCESS_GROUP"
+  cli_error "Searched: $search_dir"
+
+  if [[ -d "$search_dir" ]]; then
+    while IFS= read -r profile; do
+      if [[ "$found" == "false" ]]; then
+        cli_error "Installed profiles:"
+        found=true
+      fi
+      describe_provisioning_profile "$profile"
+    done < <(find "$search_dir" -type f \( -name '*.provisionprofile' -o -name '*.mobileprovision' \) 2>/dev/null | sort)
+  fi
+
+  if [[ "$found" == "false" ]]; then
+    cli_error "Installed profiles: none"
+  fi
+
+  cli_die "Set $env_var to an explicit profile path if it is stored elsewhere."
+}
+
+find_provisioning_profile() {
+  local bundle_id="$1"
+  local search_dir="$HOME/Library/MobileDevice/Provisioning Profiles"
+  local profile
+  [[ -d "$search_dir" ]] || return 1
+
+  while IFS= read -r profile; do
+    if profile_matches_bundle "$profile" "$bundle_id"; then
+      printf '%s\n' "$profile"
+      return 0
+    fi
+  done < <(find "$search_dir" -type f \( -name '*.provisionprofile' -o -name '*.mobileprovision' \) 2>/dev/null | sort)
+
+  return 1
+}
+
+resolve_provisioning_profile() {
+  local current_profile="$1"
+  local bundle_id="$2"
+  local env_var="$3"
+  local label="$4"
+
+  if [[ -n "$current_profile" ]]; then
+    current_profile="$(normalize_profile_path "$current_profile")"
+    [[ -f "$current_profile" ]] || cli_die "$label provisioning profile not found: $current_profile"
+    printf '%s\n' "$current_profile"
+    return 0
+  fi
+
+  if current_profile="$(find_provisioning_profile "$bundle_id")"; then
+    cli_info "Using $label provisioning profile: $current_profile"
+    printf '%s\n' "$current_profile"
+    return 0
+  fi
+
+  print_provisioning_profile_diagnostics "$bundle_id" "$env_var"
+}
+
+validate_provisioning_profile() {
+  local profile_path="$1"
+  local bundle_id="$2"
+  local label="$3"
+  local decoded_path app_identifier team_identifier expected_app_identifier keychain_groups
+
+  [[ -f "$profile_path" ]] || cli_die "$label provisioning profile not found: $profile_path"
+
+  decoded_path="$(mktemp "$BUILD_DIR/${label//[^A-Za-z0-9]/-}.profile.XXXXXX.plist")"
+  decode_provisioning_profile "$profile_path" "$decoded_path"
+
+  app_identifier="$(profile_plist_value "$decoded_path" ":Entitlements:com.apple.application-identifier")"
+  team_identifier="$(profile_plist_value "$decoded_path" ":Entitlements:com.apple.developer.team-identifier")"
+  keychain_groups="$(profile_plist_value "$decoded_path" ":Entitlements:keychain-access-groups")"
+  rm -f "$decoded_path"
+
+  expected_app_identifier="${team_identifier}.${bundle_id}"
+  if [[ -z "$team_identifier" || "$app_identifier" != "$expected_app_identifier" ]]; then
+    cli_error "Profile application identifier: ${app_identifier:-missing}"
+    cli_die "$label provisioning profile must contain application identifier $expected_app_identifier"
+  fi
+
+  if [[ "$AV_DOTENV_KEYCHAIN_ACCESS_GROUP" != "${team_identifier}."* ]]; then
+    cli_error "Profile team identifier: $team_identifier"
+    cli_die "$label provisioning profile team does not match access group $AV_DOTENV_KEYCHAIN_ACCESS_GROUP"
+  fi
+
+  if [[ "$keychain_groups" != *"$AV_DOTENV_KEYCHAIN_ACCESS_GROUP"* &&
+        "$keychain_groups" != *"${team_identifier}.*"* ]]; then
+    cli_error "$keychain_groups"
+    cli_die "$label provisioning profile does not cover keychain access group $AV_DOTENV_KEYCHAIN_ACCESS_GROUP"
+  fi
+}
+
+require_dotenv_provisioning_profiles() {
+  [[ "$DOTENV_KEYCHAIN_ENTITLEMENT_ENABLED" == "true" ]] || return 0
+
+  APP_PROVISIONING_PROFILE="$(
+    resolve_provisioning_profile \
+      "$APP_PROVISIONING_PROFILE" \
+      "$APP_BUNDLE_ID" \
+      "AV_APP_PROVISIONING_PROFILE" \
+      "Automic Vault app"
+  )"
+  MENU_PROVISIONING_PROFILE="$(
+    resolve_provisioning_profile \
+      "$MENU_PROVISIONING_PROFILE" \
+      "$MENU_BUNDLE_ID" \
+      "AV_MENU_PROVISIONING_PROFILE" \
+      "menu helper app"
+  )"
+
+  validate_provisioning_profile "$APP_PROVISIONING_PROFILE" "$APP_BUNDLE_ID" "Automic Vault app"
+  validate_provisioning_profile "$MENU_PROVISIONING_PROFILE" "$MENU_BUNDLE_ID" "menu helper app"
+}
+
+embed_provisioning_profile() {
+  local profile_path="$1"
+  local target_bundle="$2"
+  local bundle_id="$3"
+  local label="$4"
+
+  validate_provisioning_profile "$profile_path" "$bundle_id" "$label"
+  cp "$profile_path" "$target_bundle/Contents/embedded.provisionprofile"
+}
+
 build_icon() {
   local source_png="$1"
   local iconset_dir="$2"
@@ -445,6 +792,12 @@ cli_info "Configuration: $CONFIGURATION"
 cli_info "Output: $APP_DIR"
 
 mkdir -p "$BUILD_DIR"
+if [[ "$DOTENV_KEYCHAIN_ENTITLEMENT_ENABLED" != "true" ]]; then
+  cli_warn "Skipping dotenv keychain access-group entitlement for ad-hoc signing"
+fi
+require_dotenv_provisioning_profiles
+write_entitlements "$DOTENV_ENTITLEMENTS" "$DOTENV_KEYCHAIN_ENTITLEMENT_ENABLED"
+write_entitlements "$HELPER_ENTITLEMENTS" false
 cli_step "Building Rust binaries"
 cargo build \
   --release \
@@ -484,27 +837,39 @@ mkdir -p \
   "$HELPERS_DIR" \
   "$MENU_MACOS_DIR" \
   "$MENU_RESOURCES_DIR"
+rm -f \
+  "$APP_DIR/Contents/embedded.provisionprofile" \
+  "$MENU_APP_DIR/Contents/embedded.provisionprofile"
 
 cp "$SWIFT_PACKAGE_BIN_DIR/AutomicVaultApp" "$EXECUTABLE"
 
-if ! is_current "$MENU_EXECUTABLE" "${SHARED_SWIFT_SOURCES[@]}" "${MENU_SWIFT_SOURCES[@]}"; then
+if ! is_current "$MENU_EXECUTABLE" "${SHARED_SWIFT_SOURCES[@]}" "${MENU_SWIFT_SOURCES[@]}" "$SERVICE_MANAGEMENT_SHIM_SOURCE" "$SERVICE_MANAGEMENT_SHIM_HEADER" "$SERVICE_MANAGEMENT_SHIM_MODULEMAP"; then
   cli_step "Building menu bar helper"
+  if ! is_current "$SERVICE_MANAGEMENT_SHIM_OBJECT" "$SERVICE_MANAGEMENT_SHIM_SOURCE" "$SERVICE_MANAGEMENT_SHIM_HEADER"; then
+    xcrun clang \
+      -target "$(uname -m)-apple-macos${MIN_MACOS_VERSION}" \
+      -I "$SERVICE_MANAGEMENT_SHIM_INCLUDE_DIR" \
+      -c "$SERVICE_MANAGEMENT_SHIM_SOURCE" \
+      -o "$SERVICE_MANAGEMENT_SHIM_OBJECT"
+  fi
   xcrun swiftc \
     "${SWIFT_OPT_FLAGS[@]}" \
     -target "$(uname -m)-apple-macos${MIN_MACOS_VERSION}" \
+    -I "$SERVICE_MANAGEMENT_SHIM_INCLUDE_DIR" \
     -framework AppKit \
     -framework Foundation \
     -framework QuartzCore \
     -framework ServiceManagement \
     -framework UserNotifications \
     -o "$MENU_EXECUTABLE" \
+    "$SERVICE_MANAGEMENT_SHIM_OBJECT" \
     "${SHARED_SWIFT_SOURCES[@]}" \
     "${MENU_SWIFT_SOURCES[@]}"
 fi
 
 cli_step "Assembling app bundle"
 cp "$RUST_BIN_DIR/av" "$RESOURCES_DIR/av"
-cp "$ROOT_DIR/data/combined.json" "$RESOURCES_DIR/combined.json"
+cp "$COMBINED_DB_PATH" "$RESOURCES_DIR/combined.json"
 rm -f "$RESOURCES_DIR/isotopes.json"
 cp "$ENRICHMENT_MANIFESTS_JSON" "$RESOURCES_DIR/enrichment-manifests.json"
 cp "$RUST_BIN_DIR/nuke-helper" "$HELPER_EXECUTABLE"
@@ -513,7 +878,7 @@ copy_localizations "$RESOURCES_DIR"
 copy_pack_images "$RESOURCES_DIR"
 cp "$ICON_ICNS" "$MENU_RESOURCES_DIR/$MENU_APP_ICON_NAME.icns"
 cp "$RUST_BIN_DIR/av" "$MENU_RESOURCES_DIR/av"
-cp "$ROOT_DIR/data/combined.json" "$MENU_RESOURCES_DIR/combined.json"
+cp "$COMBINED_DB_PATH" "$MENU_RESOURCES_DIR/combined.json"
 rm -f "$MENU_RESOURCES_DIR/isotopes.json"
 cp "$ENRICHMENT_MANIFESTS_JSON" "$MENU_RESOURCES_DIR/enrichment-manifests.json"
 copy_localizations "$MENU_RESOURCES_DIR"
@@ -580,6 +945,13 @@ cat >"$APP_DIR/Contents/Info.plist" <<PLIST
   <string>${NUKE_PROTOCOL_VERSION}</string>
   <key>NukeHelperVersion</key>
   <string>${NUKE_HELPER_VERSION}</string>
+  <key>AVDotenvKeychainAccessGroup</key>
+  <string>${AV_DOTENV_KEYCHAIN_ACCESS_GROUP}</string>
+  <key>AVDotenvKeychainBrokerAuthorizedClients</key>
+  <array>
+    <string>${DOTENV_KEYCHAIN_BROKER_AV_REQUIREMENT}</string>
+    <string>${DOTENV_KEYCHAIN_BROKER_MENU_AV_REQUIREMENT}</string>
+  </array>
   <key>LSMinimumSystemVersion</key>
   <string>${MIN_MACOS_VERSION}</string>
   <key>NSAppTransportSecurity</key>
@@ -640,36 +1012,68 @@ cat >"$MENU_APP_DIR/Contents/Info.plist" <<PLIST
   <string>${APP_BUILD_ID}</string>
   <key>NukeProtocolVersion</key>
   <string>${NUKE_PROTOCOL_VERSION}</string>
+  <key>AVDotenvKeychainAccessGroup</key>
+  <string>${AV_DOTENV_KEYCHAIN_ACCESS_GROUP}</string>
+  <key>AVDotenvKeychainBrokerAuthorizedClients</key>
+  <array>
+    <string>${DOTENV_KEYCHAIN_BROKER_AV_REQUIREMENT}</string>
+    <string>${DOTENV_KEYCHAIN_BROKER_MENU_AV_REQUIREMENT}</string>
+  </array>
 </dict>
 </plist>
 PLIST
 
-if [[ -n "${CODESIGN_IDENTITY:-}" ]]; then
+if [[ "$DOTENV_KEYCHAIN_ENTITLEMENT_ENABLED" == "true" ]]; then
+  cli_step "Embedding Developer ID provisioning profiles"
+  embed_provisioning_profile \
+    "$APP_PROVISIONING_PROFILE" \
+    "$APP_DIR" \
+    "$APP_BUNDLE_ID" \
+    "Automic Vault app"
+  embed_provisioning_profile \
+    "$MENU_PROVISIONING_PROFILE" \
+    "$MENU_APP_DIR" \
+    "$MENU_BUNDLE_ID" \
+    "menu helper app"
+fi
+
+if uses_real_codesign_identity; then
   cli_step "Signing bundle with Developer ID"
   sign_binary "$RESOURCES_DIR/av" "${APP_BUNDLE_ID}.av"
   sign_binary "$MENU_RESOURCES_DIR/av" "${MENU_BUNDLE_ID}.av"
   sign_binary \
     "$HELPER_EXECUTABLE" \
     "$HELPER_BUNDLE_ID" \
-    "$ROOT_DIR/src/helper/NukeHelper.entitlements"
-  sign_binary "$MENU_EXECUTABLE" "$MENU_BUNDLE_ID"
-  sign_bundle "$MENU_APP_DIR" "$MENU_BUNDLE_ID"
+    "$HELPER_ENTITLEMENTS"
+  sign_binary "$MENU_EXECUTABLE" "$MENU_BUNDLE_ID" "$DOTENV_ENTITLEMENTS"
+  sign_bundle "$MENU_APP_DIR" "$MENU_BUNDLE_ID" "$DOTENV_ENTITLEMENTS"
   sign_bundle \
     "$APP_DIR" \
     "$APP_BUNDLE_ID" \
-    "$ROOT_DIR/src/gui/AutomicVault.entitlements"
+    "$DOTENV_ENTITLEMENTS"
 else
   cli_step "Signing bundle ad-hoc"
   adhoc_sign_binary "$RESOURCES_DIR/av"
   adhoc_sign_binary "$MENU_RESOURCES_DIR/av"
   adhoc_sign_binary \
     "$HELPER_EXECUTABLE" \
-    "$ROOT_DIR/src/helper/NukeHelper.entitlements"
-  adhoc_sign_binary "$MENU_EXECUTABLE"
-  adhoc_sign_bundle "$MENU_APP_DIR"
+    "$HELPER_ENTITLEMENTS"
+  adhoc_sign_binary "$MENU_EXECUTABLE" "$DOTENV_ENTITLEMENTS"
+  adhoc_sign_bundle "$MENU_APP_DIR" "$DOTENV_ENTITLEMENTS"
   adhoc_sign_bundle \
     "$APP_DIR" \
-    "$ROOT_DIR/src/gui/AutomicVault.entitlements"
+    "$DOTENV_ENTITLEMENTS"
+fi
+
+verify_codesign_signature "$RESOURCES_DIR/av" "bundled av"
+verify_codesign_signature "$MENU_RESOURCES_DIR/av" "menu bundled av"
+verify_codesign_signature "$HELPER_EXECUTABLE" "privileged helper"
+verify_codesign_signature "$MENU_EXECUTABLE" "menu helper executable"
+verify_codesign_signature "$MENU_APP_DIR" "menu helper app"
+verify_codesign_signature "$APP_DIR" "Automic Vault app"
+if [[ "$DOTENV_KEYCHAIN_ENTITLEMENT_ENABLED" == "true" ]]; then
+  verify_keychain_access_group_entitlement "$MENU_APP_DIR" "menu helper app"
+  verify_keychain_access_group_entitlement "$APP_DIR" "Automic Vault app"
 fi
 
 cli_done "App bundle ready"

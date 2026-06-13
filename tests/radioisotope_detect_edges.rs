@@ -979,3 +979,348 @@ mod git_detect {
         }
     }
 }
+
+mod k6_detect {
+    include!(radioisotope_source!("/k6/detect.rs"));
+
+    #[cfg(test)]
+    mod av_extra_tests {
+        use super::*;
+        use std::fs;
+
+        #[test]
+        fn covers_top_level_cloud_token_detection() {
+            let _lock = crate::global_test_env_lock().lock().unwrap();
+            let root = crate::unique_temp_dir("k6");
+            let home = root.join("home");
+            let config_dir = home.join("Library/Application Support/k6");
+            fs::create_dir_all(&config_dir).unwrap();
+            fs::write(
+                config_dir.join("config.json"),
+                r#"{"token":"k6-cloud-token"}"#,
+            )
+            .unwrap();
+
+            let _home = crate::EnvGuard::set("HOME", &home);
+            let reasons = install_insecurity_reasons().unwrap();
+            assert_eq!(reasons.len(), 1);
+            assert!(reasons[0].contains("config.json"));
+            assert!(install_is_insecure().unwrap());
+
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+}
+
+mod tailscale_detect {
+    include!(radioisotope_source!("/tailscale/detect.rs"));
+
+    #[cfg(test)]
+    mod av_extra_tests {
+        use super::*;
+        use std::fs;
+
+        #[test]
+        fn covers_top_level_plaintext_state_detection() {
+            let _lock = crate::global_test_env_lock().lock().unwrap();
+            let root = crate::unique_temp_dir("tailscale");
+            let home = root.join("home");
+            let xdg_data = root.join("xdg-data");
+            let state_dir = xdg_data.join("tailscale");
+            fs::create_dir_all(&home).unwrap();
+            fs::create_dir_all(&state_dir).unwrap();
+            fs::write(
+                state_dir.join("tailscaled.state"),
+                r#"{"_machinekey":"mkey:plaintext"}"#,
+            )
+            .unwrap();
+
+            let _home = crate::EnvGuard::set("HOME", &home);
+            let _xdg = crate::EnvGuard::set("XDG_DATA_HOME", &xdg_data);
+            let reasons = install_insecurity_reasons().unwrap();
+            assert_eq!(reasons.len(), 1);
+            assert!(reasons[0].contains("tailscaled.state"));
+            assert!(!tailscale_state_contains_plaintext_identity("[]").unwrap());
+
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+}
+
+mod mariadb_detect {
+    include!(radioisotope_source!("/mariadb/detect.rs"));
+
+    #[cfg(test)]
+    mod av_extra_tests {
+        use super::*;
+        use std::fs;
+
+        #[test]
+        fn covers_top_level_defaults_file_detection() {
+            let _lock = crate::global_test_env_lock().lock().unwrap();
+            let root = crate::unique_temp_dir("mariadb");
+            let home = root.join("home");
+            fs::create_dir_all(&home).unwrap();
+            fs::write(home.join(".my.cnf"), "[client]\npassword = real-secret\n").unwrap();
+
+            let _home = crate::EnvGuard::set("HOME", &home);
+            let reasons = install_insecurity_reasons().unwrap();
+            assert_eq!(reasons.len(), 1);
+            assert!(reasons[0].contains(".my.cnf"));
+            assert!(
+                read_to_string(&root)
+                    .unwrap_err()
+                    .contains("failed to read")
+            );
+
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+}
+
+mod poetry_detect {
+    include!(radioisotope_source!("/poetry/detect.rs"));
+
+    #[cfg(test)]
+    mod av_extra_tests {
+        use super::*;
+        use std::fs;
+
+        #[test]
+        fn covers_top_level_auth_file_detection() {
+            let _lock = crate::global_test_env_lock().lock().unwrap();
+            let root = crate::unique_temp_dir("poetry");
+            let home = root.join("home");
+            let xdg_config = root.join("xdg-config");
+            let auth_dir = xdg_config.join("pypoetry");
+            fs::create_dir_all(&home).unwrap();
+            fs::create_dir_all(&auth_dir).unwrap();
+            fs::write(
+                auth_dir.join("auth.toml"),
+                "[http-basic.private]\nusername = \"u\"\npassword = \"real-secret\"\n",
+            )
+            .unwrap();
+
+            let _home = crate::EnvGuard::set("HOME", &home);
+            let _xdg = crate::EnvGuard::set("XDG_CONFIG_HOME", &xdg_config);
+            let reasons = install_insecurity_reasons().unwrap();
+            assert_eq!(reasons.len(), 1);
+            assert!(reasons[0].contains("auth.toml"));
+            assert!(!poetry_auth_contains_secret(
+                "[pypi-token]\ntoken = \"${TOKEN}\"\n"
+            ));
+
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+}
+
+mod cloudflared_detect {
+    include!(radioisotope_source!("/cloudflared/detect.rs"));
+
+    #[cfg(test)]
+    mod av_extra_tests {
+        use super::*;
+        use std::fs;
+
+        #[test]
+        fn covers_top_level_recursive_file_detection() {
+            let _lock = crate::global_test_env_lock().lock().unwrap();
+            let root = crate::unique_temp_dir("cloudflared");
+            let home = root.join("home");
+            let config_home = root.join("xdg-config");
+            let config_dir = config_home.join("cloudflared/nested");
+            fs::create_dir_all(&home).unwrap();
+            fs::create_dir_all(&config_dir).unwrap();
+            fs::write(
+                config_dir.join("cert.pem"),
+                "-----BEGIN PRIVATE KEY-----\nsecret\n-----END PRIVATE KEY-----\n",
+            )
+            .unwrap();
+            fs::write(
+                config_dir.join("tunnel.json"),
+                r#"{"TunnelSecret":"secret"}"#,
+            )
+            .unwrap();
+
+            let _home = crate::EnvGuard::set("HOME", &home);
+            let _xdg = crate::EnvGuard::set("XDG_CONFIG_HOME", &config_home);
+            let reasons = install_insecurity_reasons().unwrap();
+            assert_eq!(reasons.len(), 2);
+            assert!(reasons.iter().any(|reason| reason.contains("cert.pem")));
+            assert!(reasons.iter().any(|reason| reason.contains("tunnel.json")));
+            assert_eq!(json_string_value(r#""a\"b" tail"#), Some(r#"a\"b"#));
+
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+}
+
+mod databricks_detect {
+    include!(radioisotope_source!("/databricks/detect.rs"));
+
+    #[cfg(test)]
+    mod av_extra_tests {
+        use super::*;
+        use std::fs;
+
+        #[test]
+        fn covers_top_level_profile_detection() {
+            let _lock = crate::global_test_env_lock().lock().unwrap();
+            let root = crate::unique_temp_dir("databricks");
+            let home = root.join("home");
+            let xdg_config = root.join("xdg-config");
+            let config_dir = xdg_config.join("databricks");
+            fs::create_dir_all(&home).unwrap();
+            fs::create_dir_all(&config_dir).unwrap();
+            fs::write(
+                config_dir.join("config"),
+                "[prod]\nhost = https://example.cloud.databricks.com\nclient_secret = 'real-secret'\n",
+            )
+            .unwrap();
+
+            let _home = crate::EnvGuard::set("HOME", &home);
+            let _xdg = crate::EnvGuard::set("XDG_CONFIG_HOME", &xdg_config);
+            let reasons = install_insecurity_reasons().unwrap();
+            assert_eq!(reasons.len(), 1);
+            assert!(reasons[0].contains("databricks"));
+            assert!(!databricks_config_contains_secret(
+                "token = ${DATABRICKS_TOKEN}\n"
+            ));
+
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+}
+
+mod docker_machine_detect {
+    include!(radioisotope_source!("/docker-machine/detect.rs"));
+
+    #[cfg(test)]
+    mod av_extra_tests {
+        use super::*;
+        use std::fs;
+
+        #[test]
+        fn covers_top_level_recursive_key_detection() {
+            let _lock = crate::global_test_env_lock().lock().unwrap();
+            let root = crate::unique_temp_dir("docker-machine");
+            let home = root.join("home");
+            let machine_dir = home.join(".docker/machine/machines/default");
+            fs::create_dir_all(&machine_dir).unwrap();
+            fs::write(
+                machine_dir.join("id_rsa"),
+                "-----BEGIN RSA PRIVATE KEY-----\nsecret\n-----END RSA PRIVATE KEY-----\n",
+            )
+            .unwrap();
+
+            let _home = crate::EnvGuard::set("HOME", &home);
+            let reasons = install_insecurity_reasons().unwrap();
+            assert_eq!(reasons.len(), 1);
+            assert!(reasons[0].contains("id_rsa"));
+            assert!(file_contains_unencrypted_private_key(&machine_dir.join("id_rsa")).unwrap());
+
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+}
+
+mod imap_backup_detect {
+    include!(radioisotope_source!("/imap-backup/detect.rs"));
+
+    #[cfg(test)]
+    mod av_extra_tests {
+        use super::*;
+        use std::fs;
+
+        #[test]
+        fn covers_top_level_password_detection() {
+            let _lock = crate::global_test_env_lock().lock().unwrap();
+            let root = crate::unique_temp_dir("imap-backup");
+            let home = root.join("home");
+            let config_dir = home.join(".imap-backup");
+            fs::create_dir_all(&config_dir).unwrap();
+            fs::write(
+                config_dir.join("config.json"),
+                r#"{"accounts":[{"username":"a@example.com","password":"real-secret"}]}"#,
+            )
+            .unwrap();
+
+            let _home = crate::EnvGuard::set("HOME", &home);
+            let reasons = install_insecurity_reasons().unwrap();
+            assert_eq!(reasons.len(), 1);
+            assert!(reasons[0].contains("config.json"));
+            assert_eq!(
+                parse_json_string(r#""pa\\ss" tail"#),
+                Some(r#"pa\ss"#.to_string())
+            );
+
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+}
+
+mod rclone_detect {
+    include!(radioisotope_source!("/rclone/detect.rs"));
+
+    #[cfg(test)]
+    mod av_extra_tests {
+        use super::*;
+        use std::fs;
+
+        #[test]
+        fn covers_top_level_explicit_config_detection() {
+            let _lock = crate::global_test_env_lock().lock().unwrap();
+            let root = crate::unique_temp_dir("rclone");
+            fs::create_dir_all(&root).unwrap();
+            let config = root.join("rclone.conf");
+            fs::write(&config, "[remote]\nclient_secret = real-secret\n").unwrap();
+
+            let _config = crate::EnvGuard::set("RCLONE_CONFIG", &config);
+            let reasons = install_insecurity_reasons().unwrap();
+            assert_eq!(reasons.len(), 1);
+            assert!(reasons[0].contains("rclone.conf"));
+            assert!(line_has_secret_value("refresh_token = real-secret"));
+
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+}
+
+mod wget2_detect {
+    include!(radioisotope_source!("/wget2/detect.rs"));
+
+    #[cfg(test)]
+    mod av_extra_tests {
+        use super::*;
+        use std::fs;
+
+        #[test]
+        fn covers_top_level_netrc_and_config_detection() {
+            let _lock = crate::global_test_env_lock().lock().unwrap();
+            let root = crate::unique_temp_dir("wget2");
+            let home = root.join("home");
+            let xdg_config = root.join("xdg-config");
+            let wget_dir = xdg_config.join("wget2");
+            fs::create_dir_all(&home).unwrap();
+            fs::create_dir_all(&wget_dir).unwrap();
+            fs::write(
+                home.join(".netrc"),
+                "machine example.com login me password supersecret\n",
+            )
+            .unwrap();
+            fs::write(wget_dir.join("wget2rc"), "proxy-password = anothersecret\n").unwrap();
+
+            let _home = crate::EnvGuard::set("HOME", &home);
+            let _xdg = crate::EnvGuard::set("XDG_CONFIG_HOME", &xdg_config);
+            let reasons = install_insecurity_reasons().unwrap();
+            assert_eq!(reasons.len(), 2);
+            assert!(reasons.iter().any(|reason| reason.contains(".netrc")));
+            assert!(reasons.iter().any(|reason| reason.contains("wget2rc")));
+            assert!(password_key_name("--https-password"));
+            assert!(!secret_value_is_real("placeholder-secret"));
+
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+}

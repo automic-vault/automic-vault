@@ -1,0 +1,4 @@
+module ServiceManagementShim {
+    header "ServiceManagementShim.h"
+    export *
+}

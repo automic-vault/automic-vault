@@ -53,6 +53,7 @@ mod info;
 mod install;
 mod isotope;
 mod trace;
+#[allow(clippy::all, dead_code, unused_parens, unused_variables)]
 mod isotope_integrations {
     include!(concat!(env!("OUT_DIR"), "/isotope_integrations.rs"));
 }
@@ -82,6 +83,8 @@ pub(crate) use stubs::*;
 pub(crate) use trace::*;
 pub use vault::vault_main_entry;
 pub use vault::{
+    DotenvKeychainDeleteRequest, DotenvKeychainDeleteResponse, DotenvKeychainLoadRequest,
+    DotenvKeychainLoadResponse, DotenvKeychainStoreRequest, DotenvKeychainStoreResponse,
     ExecutionIntent, KeyTransferApprovalItem, KeyTransferApprovalRequest,
     KeyTransferApprovalSource, KeyTransferImportItem, KeyTransferImportRequest,
     KeyTransferImportResponse, VaultApprovalRequest, VaultApprovalResponse, VaultClientRequest,
@@ -131,7 +134,7 @@ mod post_install_hooks {
 
 const DB_SCHEMA_VERSION: u32 = 7;
 #[cfg(all(not(test), feature = "packaged-db"))]
-const EMBEDDED_COMBINED_DATA: &[u8] = include_bytes!("../../../data/combined.json");
+const EMBEDDED_COMBINED_DATA: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/combined.json"));
 #[cfg(any(test, not(feature = "packaged-db")))]
 const EMBEDDED_COMBINED_DATA: &[u8] = include_bytes!("fixtures/coverage-combined.json");
 const EMBEDDED_POST_INSTALL_CHECK_SKIP: &str =
@@ -548,8 +551,11 @@ struct EmbeddedCaskMetadata {
     homepage: String,
     #[serde(default)]
     aliases: Vec<String>,
+    #[serde(default)]
     url: String,
+    #[serde(default)]
     sha256: String,
+    #[serde(default)]
     version: String,
     #[serde(default)]
     dependencies: Vec<String>,
@@ -1931,10 +1937,9 @@ fn final_progress_style() -> ProgressStyle {
 
 fn sanitize_progress_message(message: &str) -> String {
     message
-        .split(|ch| ch == '\n' || ch == '\r')
+        .split(['\n', '\r'])
         .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .last()
+        .rfind(|line| !line.is_empty())
         .map(|line| {
             line.chars()
                 .filter(|ch| !ch.is_control())
@@ -2282,7 +2287,7 @@ fn run_i_formula(
                 },
             )?;
             sync_stubs(&plan, &graph, &previous_stubs)?;
-            run_package_post_install(&plan, &installs, &managed_bin_root())?;
+            run_package_post_install(&plan, installs, &managed_bin_root())?;
             installed_stub_paths(&plan)
         })();
         if install_result.is_err() {
@@ -2313,6 +2318,7 @@ fn run_i_cask(
     let progress = InstallProgress::with_callback(&package_name, progress_callback);
     let result = (|| {
         let cask = embedded_cask(&cask_name)?;
+        ensure_cask_install_metadata(&cask_name, &cask)?;
         let dependency_graph = resolve_formula_specs(&cask.dependencies, config, true)?;
         let plan = InstallPlan::for_i(package_name.clone(), cask_name.clone());
         let previous_stubs = load_stub_manifest(&plan.package_manifest_path())?.stubs;
@@ -2683,13 +2689,13 @@ fn install_isotope_stubs(
     let progress = InstallProgress::with_callback(&package_name, progress_callback);
     let record = isotope_package_data(isotope_name)?.clone();
     let plan = InstallPlan::for_i_isotope(package_name, isotope_name);
-    if let Some(replaced_package) = isotope_replaced_package_name(&record)? {
-        if package_install_root(&opt_pkg_root(), &replaced_package)?.exists() {
-            return Err(format!(
-                "cannot install isotope stubs while replacement package is installed: \
+    if let Some(replaced_package) = isotope_replaced_package_name(&record)?
+        && package_install_root(&opt_pkg_root(), &replaced_package)?.exists()
+    {
+        return Err(format!(
+            "cannot install isotope stubs while replacement package is installed: \
                  {replaced_package}"
-            ));
-        }
+        ));
     }
     let previous_stubs = load_stub_manifest(&plan.package_manifest_path())?.stubs;
     let executables_manifest =
@@ -2785,7 +2791,7 @@ fn imagemagick_stub_exclusions(
 
     current
         .iter()
-        .filter_map(|(name, _)| (name != "magick").then(|| name.clone()))
+        .filter_map(|(name, _)| (name != "magick").then_some(name.clone()))
         .collect()
 }
 
@@ -2858,10 +2864,10 @@ fn npm_package_homebrew_dependencies(package: &str) -> Vec<String> {
     if let Some(entry) = data.get(package) {
         return entry.homebrew_dependencies.clone();
     }
-    if let Some((_, leaf_name)) = package.rsplit_once('/') {
-        if let Some(entry) = data.get(leaf_name) {
-            return entry.homebrew_dependencies.clone();
-        }
+    if let Some((_, leaf_name)) = package.rsplit_once('/')
+        && let Some(entry) = data.get(leaf_name)
+    {
+        return entry.homebrew_dependencies.clone();
     }
     Vec::new()
 }
@@ -2998,20 +3004,17 @@ fn installable_isotope_name_for_target(
         if !isotope_is_installable(isotope) {
             continue;
         }
-        match isotope_targets_package(isotope, target) {
-            Ok(true) => return Ok(Some(isotope_unqualified_name(&isotope.name).to_string())),
-            Ok(false) | Err(_) => {}
+        if let Ok(true) = isotope_targets_package(isotope, target) {
+            return Ok(Some(isotope_unqualified_name(&isotope.name).to_string()));
         }
     }
 
-    if let PackageAliasTarget::HomebrewFormula(formula) = target {
-        if versioned_isotope_base(formula).is_some() {
-            if let Ok(record) = isotope_package_data(formula) {
-                if isotope_is_installable(record) {
-                    return Ok(Some(formula.clone()));
-                }
-            }
-        }
+    if let PackageAliasTarget::HomebrewFormula(formula) = target
+        && versioned_isotope_base(formula).is_some()
+        && let Ok(record) = isotope_package_data(formula)
+        && isotope_is_installable(record)
+    {
+        return Ok(Some(formula.clone()));
     }
 
     Ok(None)
@@ -3082,10 +3085,10 @@ fn run_generated_isotope_migration(name: &str) -> Option<Result<(), String>> {
 }
 
 fn run_generated_isotope_post_install(name: &str) -> Option<Result<(), String>> {
-    if let Some(integration) = exact_isotope_integration(name) {
-        if let Some(post_install) = integration.post_install {
-            return Some(post_install());
-        }
+    if let Some(integration) = exact_isotope_integration(name)
+        && let Some(post_install) = integration.post_install
+    {
+        return Some(post_install());
     }
     let formula = isotope_unqualified_name(name);
     let base = versioned_isotope_base(formula)?;
@@ -3146,17 +3149,17 @@ where
         .cloned()
         .collect::<Vec<_>>();
     for identifier in &versioned_identifiers {
-        if embedded_isotope_data().contains_key(&isotope_qualified_name(identifier)) {
-            if let Some(state) = package_security_state_for_isotope(identifier) {
-                return Some(state);
-            }
+        if embedded_isotope_data().contains_key(&isotope_qualified_name(identifier))
+            && let Some(state) = package_security_state_for_isotope(identifier)
+        {
+            return Some(state);
         }
     }
     for identifier in &versioned_identifiers {
-        if versioned_isotope_base(identifier).is_some() {
-            if let Some(state) = package_security_state_for_isotope(identifier) {
-                return Some(state);
-            }
+        if versioned_isotope_base(identifier).is_some()
+            && let Some(state) = package_security_state_for_isotope(identifier)
+        {
+            return Some(state);
         }
     }
 
@@ -3882,10 +3885,10 @@ impl SecretScanSkips {
 
             let raw_skip_path = normalize_path(&raw_base.join(skip_path));
             paths.insert(raw_skip_path.clone());
-            if !raw_skip_path.is_absolute() {
-                if let Some(cwd) = &cwd {
-                    paths.insert(normalize_path(&cwd.join(&raw_skip_path)));
-                }
+            if !raw_skip_path.is_absolute()
+                && let Some(cwd) = &cwd
+            {
+                paths.insert(normalize_path(&cwd.join(&raw_skip_path)));
             }
         }
 
@@ -4051,6 +4054,7 @@ where
     Ok((scanned_files, file_probes))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn scan_secret_probe_path<F>(
     path: &Path,
     findings: &mut Vec<SecretScannerFinding>,
@@ -4116,7 +4120,7 @@ fn secret_scan_should_skip_entry(entry: &walkdir::DirEntry) -> bool {
     }
 
     let path = entry.path().to_string_lossy();
-    path.contains("/data/isotopes/") || path.contains("/data/radioisotopes/")
+    path.contains("/isotopes/") || path.contains("/radioisotopes/")
 }
 
 fn default_secret_scan_paths() -> Vec<PathBuf> {
@@ -4240,7 +4244,7 @@ fn scan_secret_file(path: &Path) -> Result<Vec<SecretScannerFinding>, String> {
 
     let bytes =
         fs::read(path).map_err(|err| format!("failed to read {}: {err}", path.display()))?;
-    if bytes.iter().any(|byte| *byte == 0) {
+    if bytes.contains(&0) {
         return Ok(Vec::new());
     }
     let Ok(contents) = String::from_utf8(bytes) else {
@@ -4607,9 +4611,7 @@ fn secret_unquoted_value_looks_like_source_reference(value: &str) -> bool {
     if secret_raw_value_is_quoted(value) {
         return false;
     }
-    let value = value
-        .trim()
-        .trim_end_matches(|ch: char| matches!(ch, ',' | ';'));
+    let value = value.trim().trim_end_matches([',', ';']);
     if value.is_empty() {
         return false;
     }
@@ -4710,7 +4712,7 @@ fn source_reference_char(ch: char) -> bool {
 fn normalized_secret_value(value: &str) -> &str {
     let value = value
         .trim()
-        .trim_end_matches(|ch: char| matches!(ch, ',' | ';' | '}' | ']' | ')' | ':'))
+        .trim_end_matches([',', ';', '}', ']', ')', ':'])
         .trim();
     let value = if secret_raw_value_is_quoted(value) {
         value
@@ -5177,7 +5179,7 @@ fn secret_line_contains_quoted_secret_literal(line: &str) -> bool {
         let quote = ch;
         let mut escaped = false;
         let start = chars.peek().map_or(line.len(), |(index, _)| *index);
-        while let Some((index, next)) = chars.next() {
+        for (index, next) in chars.by_ref() {
             if escaped {
                 escaped = false;
                 continue;
@@ -5676,7 +5678,7 @@ fn install_dependency_formulas(
         return Ok(());
     }
 
-    let rewrite_rules = build_rewrite_rules(plan, &installs);
+    let rewrite_rules = build_rewrite_rules(plan, installs);
     install_package(
         config,
         plan,
@@ -5685,7 +5687,7 @@ fn install_dependency_formulas(
         &rewrite_rules,
         progress,
     )?;
-    run_package_post_install(plan, &installs, &managed_bin_root())
+    run_package_post_install(plan, installs, &managed_bin_root())
 }
 
 fn incremental_root_is_seeded(plan: &InstallPlan) -> bool {
@@ -5762,10 +5764,8 @@ fn vendor_root_is_current(
     if !plan.install_root.is_dir() {
         return Ok(false);
     }
-    if !installs.is_empty() {
-        if !package_is_current(plan, &installs, bottle_tag)? {
-            return Ok(false);
-        }
+    if !installs.is_empty() && !package_is_current(plan, installs, bottle_tag)? {
+        return Ok(false);
     }
     let Some(receipt) = load_package_receipt(&plan.root_receipt_path())? else {
         return Ok(false);
@@ -5961,6 +5961,28 @@ fn install_cask_root(
     Ok(())
 }
 
+fn ensure_cask_install_metadata(
+    cask_name: &str,
+    cask: &EmbeddedCaskMetadata,
+) -> Result<(), String> {
+    if cask.version.trim().is_empty() {
+        return Err(format!(
+            "cask {cask_name} is missing version metadata in the package database"
+        ));
+    }
+    if cask.url.trim().is_empty() {
+        return Err(format!(
+            "cask {cask_name} is missing archive URL metadata in the package database"
+        ));
+    }
+    if cask.sha256.trim().is_empty() {
+        return Err(format!(
+            "cask {cask_name} is missing sha256 metadata in the package database"
+        ));
+    }
+    Ok(())
+}
+
 fn install_isotope_root(
     plan: &InstallPlan,
     isotope: &IsotopePackageData,
@@ -6149,7 +6171,7 @@ fn install_time_commands_are_usable<const N: usize>(
             continue;
         }
         if let Some(progress) = progress {
-            progress.log(&format!("{executable} runtime probe failed"));
+            progress.log(format!("{executable} runtime probe failed"));
         }
         return Ok(false);
     }
@@ -6194,15 +6216,14 @@ fn resolve_dependency_install_state(
     let mut changed_specs = Vec::new();
     let can_reuse = incremental_root_is_seeded(plan);
     for spec in graph {
-        if can_reuse {
-            if let Some(receipt) = formula_spec_receipt_is_current(plan, spec, bottle_tag)? {
-                reusable_installs.push(InstalledFormula {
-                    spec: spec.clone(),
-                    keg_dir_name: receipt.version,
-                    archive_path: PathBuf::new(),
-                });
-                continue;
-            }
+        if can_reuse && let Some(receipt) = formula_spec_receipt_is_current(plan, spec, bottle_tag)?
+        {
+            reusable_installs.push(InstalledFormula {
+                spec: spec.clone(),
+                keg_dir_name: receipt.version,
+                archive_path: PathBuf::new(),
+            });
+            continue;
         }
         changed_specs.push(spec.clone());
     }
@@ -6616,6 +6637,7 @@ fn write_pip_entrypoint_stubs(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_sandboxed_npm_install_command(
     sandbox_exec: impl AsRef<Path>,
     npm: impl AsRef<Path>,
@@ -6888,6 +6910,7 @@ fn escape_sandbox_path(path: &Path) -> String {
         .replace('"', "\\\"")
 }
 
+#[allow(clippy::too_many_arguments)]
 fn install_vendor_copy_file(
     plan: &InstallPlan,
     _graph: &[FormulaSpec],
@@ -7560,7 +7583,7 @@ fn build_formula_index() -> Result<Vec<FormulaIndexEntry>, String> {
 fn collect_formula_aliases(entries: Vec<FormulaIndexEntry>) -> HashMap<String, String> {
     let mut aliases = HashMap::new();
     for entry in entries {
-        for alias in entry.aliases.into_iter().chain(entry.oldnames.into_iter()) {
+        for alias in entry.aliases.into_iter().chain(entry.oldnames) {
             aliases.entry(alias).or_insert_with(|| entry.name.clone());
         }
     }
@@ -7760,35 +7783,35 @@ fn archive_keg_dir_name(archive_path: &Path, formula: &str) -> Result<String, St
         .map_err(|err| format!("failed to open {}: {err}", archive_path.display()))?;
     let decoder = GzDecoder::new(BufReader::new(file));
     let mut archive = Archive::new(decoder);
-    let entries = archive
+    let mut entries = archive
         .entries()
         .map_err(|err| format!("failed to read {}: {err}", archive_path.display()))?;
 
-    for entry in entries {
-        let entry =
-            entry.map_err(|err| format!("failed to inspect {}: {err}", archive_path.display()))?;
-        let path = entry
-            .path()
-            .map_err(|err| format!("invalid archive path in {}: {err}", archive_path.display()))?;
-        let mut components = path.components();
-        let first = components
-            .next()
-            .and_then(|component| component.as_os_str().to_str())
-            .ok_or_else(|| format!("invalid top-level path in {}", archive_path.display()))?;
-        let second = components
-            .next()
-            .and_then(|component| component.as_os_str().to_str())
-            .ok_or_else(|| format!("missing keg directory in {}", archive_path.display()))?;
-        if first != formula {
-            return Err(format!(
-                "unexpected bottle layout in {}: expected {formula}/..., found {first}/...",
-                archive_path.display()
-            ));
-        }
-        return Ok(second.to_string());
+    let Some(entry) = entries.next() else {
+        return Err(format!("empty bottle archive: {}", archive_path.display()));
+    };
+    let entry =
+        entry.map_err(|err| format!("failed to inspect {}: {err}", archive_path.display()))?;
+    let path = entry
+        .path()
+        .map_err(|err| format!("invalid archive path in {}: {err}", archive_path.display()))?;
+    let mut components = path.components();
+    let first = components
+        .next()
+        .and_then(|component| component.as_os_str().to_str())
+        .ok_or_else(|| format!("invalid top-level path in {}", archive_path.display()))?;
+    let second = components
+        .next()
+        .and_then(|component| component.as_os_str().to_str())
+        .ok_or_else(|| format!("missing keg directory in {}", archive_path.display()))?;
+    if first != formula {
+        return Err(format!(
+            "unexpected bottle layout in {}: expected {formula}/..., found {first}/...",
+            archive_path.display()
+        ));
     }
 
-    Err(format!("empty bottle archive: {}", archive_path.display()))
+    Ok(second.to_string())
 }
 
 fn build_rewrite_rules(plan: &InstallPlan, installs: &[InstalledFormula]) -> Vec<RewriteRule> {
@@ -7927,7 +7950,7 @@ fn build_rewrite_rules(plan: &InstallPlan, installs: &[InstalledFormula]) -> Vec
         source: HOMEBREW_PREFIX_PLACEHOLDER.to_string(),
         destination: stable_root,
     });
-    rules.sort_by(|left, right| right.source.len().cmp(&left.source.len()));
+    rules.sort_by_key(|rule| std::cmp::Reverse(rule.source.len()));
     rules
 }
 
@@ -8295,11 +8318,10 @@ fn remove_empty_dirs_under(root: &Path, path: &Path) -> Result<bool, String> {
 }
 
 fn prepare_root_payload_install(plan: &InstallPlan) -> Result<HashSet<String>, String> {
-    if incremental_root_is_seeded(plan) {
-        if let Some(manifest) = load_root_ownership_manifest(&plan.root_ownership_manifest_path())?
-        {
-            remove_owned_paths(&plan.install_root, &manifest.stubs)?;
-        }
+    if incremental_root_is_seeded(plan)
+        && let Some(manifest) = load_root_ownership_manifest(&plan.root_ownership_manifest_path())?
+    {
+        remove_owned_paths(&plan.install_root, &manifest.stubs)?;
     }
     collect_owned_paths(&plan.install_root)
 }
@@ -9246,16 +9268,16 @@ fn current_user_identity() -> Result<UserIdentity, String> {
         });
     }
 
-    if let (Ok(uid), Ok(gid)) = (env::var("SUDO_UID"), env::var("SUDO_GID")) {
-        if let (Ok(uid), Ok(gid)) = (uid.parse::<u32>(), gid.parse::<u32>()) {
-            let (home, name) = passwd_entry(uid);
-            return Ok(UserIdentity {
-                uid,
-                gid,
-                home,
-                name,
-            });
-        }
+    if let (Ok(uid), Ok(gid)) = (env::var("SUDO_UID"), env::var("SUDO_GID"))
+        && let (Ok(uid), Ok(gid)) = (uid.parse::<u32>(), gid.parse::<u32>())
+    {
+        let (home, name) = passwd_entry(uid);
+        return Ok(UserIdentity {
+            uid,
+            gid,
+            home,
+            name,
+        });
     }
 
     let metadata = fs::metadata("/dev/console")
@@ -9413,7 +9435,7 @@ fn contains_relocatable_homebrew_reference_bytes(bytes: &[u8], rules: &[RewriteR
     rules
         .iter()
         .map(|rule| rule.source.as_bytes())
-        .chain(HOMEBREW_NEEDLES.into_iter())
+        .chain(HOMEBREW_NEEDLES)
         .any(|needle| find_subslice(bytes, needle).is_some())
 }
 
@@ -9815,6 +9837,29 @@ mod tests {
             serde_json::from_str(r#"{"name":"uv","repo":"https://github.com/astral-sh/uv"}"#)
                 .unwrap();
         assert_eq!(entry.repository, "https://github.com/astral-sh/uv");
+    }
+
+    #[test]
+    fn cask_metadata_tolerates_listing_only_rows() {
+        let metadata: EmbeddedCaskMetadata = serde_json::from_str(
+            r#"{
+              "aliases": ["op"],
+              "binaries": [{"source": "op", "target": "op"}],
+              "homepage": "https://developer.1password.com/docs/cli",
+              "summary": "Command-line interface for 1Password"
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(metadata.summary, "Command-line interface for 1Password");
+        assert!(metadata.url.is_empty());
+        assert!(metadata.sha256.is_empty());
+        assert!(metadata.version.is_empty());
+        assert!(
+            ensure_cask_install_metadata("1password-cli", &metadata)
+                .unwrap_err()
+                .contains("missing version metadata")
+        );
     }
 
     #[test]
@@ -11172,7 +11217,7 @@ package or `npm:tsx` for the package that provides the `tsx` executable"
                 version: None,
             }
         );
-        assert!(status.is_outdated() == false);
+        assert!(!status.is_outdated());
         assert_eq!(
             compare_package_names_for_search_order("npm:@scope/zeta", "brew:alpha"),
             std::cmp::Ordering::Greater
@@ -13091,8 +13136,8 @@ managed_secrets = ["dep:managed-secrets"]"#,
         fs::create_dir_all(root.join(".next")).unwrap();
         fs::create_dir_all(root.join("cache")).unwrap();
         fs::create_dir_all(root.join("Vendor")).unwrap();
-        fs::create_dir_all(root.join("data/isotopes/example")).unwrap();
-        fs::create_dir_all(root.join("data/radioisotopes/example")).unwrap();
+        fs::create_dir_all(root.join("isotopes/example")).unwrap();
+        fs::create_dir_all(root.join("radioisotopes/example")).unwrap();
         fs::write(root.join("artifacts/.env"), "TOKEN=secret_secret\n").unwrap();
         fs::write(root.join("DerivedData/.env"), "TOKEN=secret_secret\n").unwrap();
         fs::write(root.join(".codex-worktrees/.env"), "TOKEN=secret_secret\n").unwrap();
@@ -13101,12 +13146,12 @@ managed_secrets = ["dep:managed-secrets"]"#,
         fs::write(root.join("cache/.env"), "TOKEN=secret_secret\n").unwrap();
         fs::write(root.join("Vendor/.env"), "TOKEN=secret_secret\n").unwrap();
         fs::write(
-            root.join("data/isotopes/example/.env"),
+            root.join("isotopes/example/.env"),
             "TOKEN=secret_secret\n",
         )
         .unwrap();
         fs::write(
-            root.join("data/radioisotopes/example/.env"),
+            root.join("radioisotopes/example/.env"),
             "TOKEN=secret_secret\n",
         )
         .unwrap();
@@ -13279,7 +13324,7 @@ managed_secrets = ["dep:managed-secrets"]"#,
         let skipped_file = root.join("skip.env");
         let kept_file = root.join("keep.env");
         fs::create_dir_all(&ignored_dir).unwrap();
-        fs::write(&ignored_dir.join(".env"), "IGNORED_TOKEN=secret_secret\n").unwrap();
+        fs::write(ignored_dir.join(".env"), "IGNORED_TOKEN=secret_secret\n").unwrap();
         fs::write(&skipped_file, "SKIPPED_TOKEN=secret_secret\n").unwrap();
         fs::write(&kept_file, "KEPT_TOKEN=secret_secret\n").unwrap();
 
@@ -13317,7 +13362,7 @@ managed_secrets = ["dep:managed-secrets"]"#,
         let mut seen_errors = HashSet::new();
         let (scanned_files, file_probes) = scan_secret_file_probes(
             Some(&env_path),
-            &[env_path.clone()],
+            std::slice::from_ref(&env_path),
             &mut findings,
             &mut errors,
             &mut seen_findings,
@@ -15837,7 +15882,9 @@ machine example.com login user password netrc-token
             }
         }
 
-        let cases: &[(&str, fn(&Path, &Path, &Path, &Path, &Path, &Path))] = &[
+        type MigrationFixtureWriter = fn(&Path, &Path, &Path, &Path, &Path, &Path);
+
+        let cases: &[(&str, MigrationFixtureWriter)] = &[
             ("astra", |_, xdg_config, _, _, _, _| {
                 write_fixture(
                     &xdg_config.join("astra/.astrarc"),
@@ -17938,7 +17985,7 @@ long_prefix = re.compile(r'/opt/python@3.12/[0-9\\._abrc]+')\n"
         fs::set_permissions(&foo, permissions.clone()).unwrap();
         fs::set_permissions(&bar, permissions).unwrap();
 
-        let found = collect_declared_root_executables(temp.path(), &["foo", "bar"]).unwrap();
+        let found = collect_declared_root_executables(temp.path(), ["foo", "bar"]).unwrap();
         assert_eq!(
             found,
             vec![("bar".to_string(), bar), ("foo".to_string(), foo)]
@@ -20820,7 +20867,7 @@ info: requested `imagemagick`; `brew:imagemagick-full` is recommended instead\n"
             "3.12.10_1"
         );
         let specs = resolve_formula_specs(
-            &[formula_alias.clone()],
+            std::slice::from_ref(&formula_alias),
             &Config {
                 bottle_tag: "arm64_tahoe".to_string(),
             },
@@ -20916,7 +20963,7 @@ info: requested `imagemagick`; `brew:imagemagick-full` is recommended instead\n"
 
     #[test]
     fn package_search_relevance_prefers_exact_name_over_scoped_and_summary_matches() {
-        let mut results = vec![
+        let mut results = [
             package_search_result(
                 "npm:@askjo/camofox-browser",
                 PackageReceiptSource::Npm {
@@ -21179,7 +21226,7 @@ info: requested `imagemagick`; `brew:imagemagick-full` is recommended instead\n"
         let ranked_page = ops::list_available_packages_matching_category(0, 1, None, None).unwrap();
         assert_eq!(ranked_page.packages.len(), 1);
         assert!(
-            ranked_page.category_counts.is_empty() == false,
+            !ranked_page.category_counts.is_empty(),
             "ranked catalog response should include category counts"
         );
 

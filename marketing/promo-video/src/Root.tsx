@@ -10,6 +10,10 @@ import {
   dontGetOwnedDurationInFrames,
 } from "./DontGetOwned";
 import {
+  ReadmeLoopComposition,
+  readmeLoopDurationInFrames,
+} from "./ReadmeLoop";
+import {
   ScannerOneLinerComposition,
   scannerOneLinerDurationInFrames,
 } from "./ScannerOneLiner";
@@ -57,6 +61,14 @@ export const RemotionRoot: React.FC = () => {
         fps={30}
         width={1920}
         height={1080}
+      />
+      <Composition
+        id="AutomicVaultReadmeLoop"
+        component={ReadmeLoopComposition}
+        durationInFrames={readmeLoopDurationInFrames}
+        fps={30}
+        width={1200}
+        height={680}
       />
     </>
   );

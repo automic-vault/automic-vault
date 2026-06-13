@@ -112,6 +112,7 @@ final class VaultApprovalStoreTests: XCTestCase {
         let approval = try JSONDecoder().decode(DotenvApprovalRequestSnapshot.self, from: data)
 
         XCTAssertEqual(approval.id, "request-1")
+        XCTAssertEqual(approval.approvalToken, "")
         XCTAssertEqual(approval.mode, .export)
         XCTAssertEqual(approval.processAncestry, [])
         XCTAssertEqual(approval.command, [])
@@ -121,6 +122,7 @@ final class VaultApprovalStoreTests: XCTestCase {
         let data = Data("""
         {
           "id": "request-2",
+          "approval_token": "token-123",
           "mode": "run",
           "env_file_path": "/tmp/project/.env",
           "project_root": "/tmp/project",
@@ -140,6 +142,7 @@ final class VaultApprovalStoreTests: XCTestCase {
         let approval = try JSONDecoder().decode(DotenvApprovalRequestSnapshot.self, from: data)
 
         XCTAssertEqual(approval.mode, .run)
+        XCTAssertEqual(approval.approvalToken, "token-123")
         XCTAssertEqual(approval.command, ["/usr/bin/env"])
     }
 

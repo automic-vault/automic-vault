@@ -2,6 +2,7 @@ import Foundation
 import LocalAuthentication
 import Security
 import ServiceManagement
+import ServiceManagementShim
 
 enum NukeHelperBridgeError: Error, LocalizedError {
     case unsignedBuild(String)
@@ -1303,14 +1304,15 @@ final class NukeHelperBridge {
             )
         }
 
-        var cfError: Unmanaged<CFError>?
-        let blessed = SMJobBless(kSMDomainSystemLaunchd, Self.serviceName as CFString, authRef, &cfError)
-        if blessed {
+        let errorMessage = AVBlessPrivilegedHelper(Self.serviceName as CFString, authRef)
+        if errorMessage == nil {
             return
         }
 
-        let message = (cfError?.takeRetainedValue() as Error?)?.localizedDescription
-            ?? "SMJobBless failed."
+        defer {
+            free(errorMessage)
+        }
+        let message = errorMessage.map { String(cString: $0) } ?? "SMJobBless failed."
         throw NukeHelperBridgeError.blessingFailed(message)
     }
 

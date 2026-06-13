@@ -164,12 +164,12 @@ where
             keys,
         ),
     };
-    if let Err(err) = &result {
-        if let Ok(mut callback) = progress_callback.lock() {
-            callback(ProgressEvent::Error {
-                message: err.clone(),
-            });
-        }
+    if let Err(err) = &result
+        && let Ok(mut callback) = progress_callback.lock()
+    {
+        callback(ProgressEvent::Error {
+            message: err.clone(),
+        });
     }
     result
 }
@@ -1133,6 +1133,9 @@ fn get_dotenv_approval_policy() -> HelperCommandResult {
 
 fn set_dotenv_approval_policy(policy: dotenv::DotenvApprovalPolicy) -> HelperCommandResult {
     require_root()?;
+    if policy == dotenv::DotenvApprovalPolicy::ApproveEveryTime {
+        dotenv::clear_dotenv_remembered_approvals()?;
+    }
     dotenv::write_dotenv_approval_policy(policy)?;
     Ok(HelperCommandSuccess {
         message: "Dotenv approval policy updated".to_string(),
@@ -1443,6 +1446,167 @@ fn is_root_controlled_isotope_store_directory(path: &Path) -> Result<bool, Strin
     let metadata = fs::symlink_metadata(path)
         .map_err(|err| format!("failed to stat {}: {err}", path.display()))?;
     Ok(metadata.is_dir() && metadata.uid() == 0 && metadata.mode() & 0o022 == 0)
+}
+
+fn require_root() -> Result<(), String> {
+    #[cfg(test)]
+    if TEST_ASSUME_HELPER_ROOT.load(std::sync::atomic::Ordering::SeqCst) {
+        return Ok(());
+    }
+
+    if is_root() {
+        return Ok(());
+    }
+    Err("must be run as root".to_string())
+}
+
+fn validate_install_specs(packages: Vec<PackageSpec>) -> Result<Vec<RequestedPackage>, String> {
+    validate_request_count(&packages)?;
+    let mut requested = Vec::with_capacity(packages.len());
+    for package in packages {
+        requested.push(requested_package_from_spec(&package)?);
+    }
+    Ok(requested)
+}
+
+fn validate_uninstall_specs(packages: Vec<PackageSpec>) -> Result<Vec<String>, String> {
+    validate_request_count(&packages)?;
+    let mut package_names = Vec::with_capacity(packages.len());
+    for package in packages {
+        if package.version.is_some() {
+            return Err(format!(
+                "package {} cannot specify a version for uninstall",
+                package.name
+            ));
+        }
+        package_names.push(cli::parse_uninstall_package_name(&OsString::from(
+            package.name,
+        ))?);
+    }
+    Ok(package_names)
+}
+
+fn make_default_packages(
+    packages: Vec<PackageSpec>,
+    progress_callback: Arc<Mutex<Box<ProgressCallback>>>,
+) -> HelperCommandResult {
+    require_root()?;
+    let package_names = validate_uninstall_specs(packages)?;
+    let mut processed_packages = Vec::new();
+    for package_name in package_names {
+        make_package_default_root(&package_name, Some(progress_callback.clone()))?;
+        processed_packages.push(package_name);
+    }
+    Ok(HelperCommandSuccess {
+        message: "Package default updated".to_string(),
+        processed_packages,
+        value: None,
+    })
+}
+
+pub(crate) fn make_package_default(package: &str) -> Result<HelperCommandSuccess, String> {
+    require_root()?;
+    let package_name = crate::cli::parse_uninstall_package_name(&OsString::from(package))?;
+    make_package_default_root(&package_name, None)?;
+    Ok(HelperCommandSuccess {
+        message: "Package default updated".to_string(),
+        processed_packages: vec![package_name],
+        value: None,
+    })
+}
+
+fn make_package_default_root(
+    package_name: &str,
+    progress_callback: Option<Arc<Mutex<Box<ProgressCallback>>>>,
+) -> Result<(), String> {
+    let install_root = package_install_root(&opt_pkg_root(), package_name)?;
+    ensure_package_installed(&opt_pkg_root(), package_name)?;
+    let receipt = load_or_resolve_package_receipt(package_name, &install_root)?;
+    let PackageReceiptSource::Formula { root_formula } = receipt.source else {
+        return Err(format!("package {package_name} is not a Homebrew formula"));
+    };
+    if root_formula.starts_with("python@") || package_name.starts_with("python@") {
+        return Err(
+            "Python uses side-by-side stubs and cannot be made default this way".to_string(),
+        );
+    }
+    if let Some(mut callback) = progress_callback
+        .as_ref()
+        .and_then(|callback| callback.lock().ok())
+    {
+        callback(ProgressEvent::Installing {
+            package: package_name.to_string(),
+        });
+    }
+    let config = load_config()?;
+    let graph = resolve_formula_specs(std::slice::from_ref(&root_formula), &config, true)?;
+    let plan = InstallPlan::for_i(package_name.to_string(), root_formula);
+    sync_stubs(&plan, &graph, &[])?;
+    if let Some(mut callback) = progress_callback
+        .as_ref()
+        .and_then(|callback| callback.lock().ok())
+    {
+        callback(ProgressEvent::Completed {
+            package: package_name.to_string(),
+        });
+    }
+    Ok(())
+}
+
+fn validate_request_count(packages: &[PackageSpec]) -> Result<(), String> {
+    if packages.is_empty() {
+        return Err("at least one package is required".to_string());
+    }
+    if packages.len() > MAX_HELPER_PACKAGES {
+        return Err(format!(
+            "at most {MAX_HELPER_PACKAGES} packages are allowed per request"
+        ));
+    }
+    Ok(())
+}
+
+fn requested_package_from_spec(package: &PackageSpec) -> Result<RequestedPackage, String> {
+    let requested = cli::parse_package_name(&OsString::from(package.name.clone()))?;
+    match requested {
+        RequestedPackage::NpmPackage {
+            package: npm_package,
+            version: _,
+        } => Ok(RequestedPackage::NpmPackage {
+            package: npm_package,
+            version: validate_optional_version(package.version.as_deref())?,
+        }),
+        RequestedPackage::Auto(_)
+        | RequestedPackage::HomebrewFormula(_)
+        | RequestedPackage::HomebrewCask(_)
+        | RequestedPackage::VendorPackage(_)
+        | RequestedPackage::Isotope(_)
+        | RequestedPackage::PipPackage(_) => {
+            if package.version.is_some() {
+                return Err(format!(
+                    "package {} does not support explicit version selection",
+                    package.name
+                ));
+            }
+            Ok(requested)
+        }
+    }
+}
+
+fn validate_optional_version(version: Option<&str>) -> Result<Option<String>, String> {
+    let Some(version) = version else {
+        return Ok(None);
+    };
+    let trimmed = version.trim();
+    if trimmed.is_empty() {
+        return Err("version must not be empty".to_string());
+    }
+    if trimmed
+        .chars()
+        .any(|ch| ch.is_control() || ch.is_whitespace())
+    {
+        return Err("version must not contain whitespace or control characters".to_string());
+    }
+    Ok(Some(trimmed.to_string()))
 }
 
 #[cfg(test)]
@@ -2052,6 +2216,19 @@ mod tests {
             )
             .is_ok()
         );
+        let remembered: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&approvals_path).unwrap()).unwrap();
+        assert_eq!(remembered["entries"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            set_dotenv_approval_policy(dotenv::DotenvApprovalPolicy::ApproveEveryTime)
+                .unwrap()
+                .value
+                .as_deref(),
+            Some("approve_every_time")
+        );
+        let remembered: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&approvals_path).unwrap()).unwrap();
+        assert!(remembered["entries"].as_array().unwrap().is_empty());
         assert!(events.lock().unwrap().iter().any(
             |event| matches!(event, ProgressEvent::Installing { package } if package == "coverage-missing-package" || package == PKG_DISPLAY_NAME)
         ));
@@ -2820,165 +2997,4 @@ mod tests {
             IsotopeAlwaysAllowStore::default()
         );
     }
-}
-
-fn require_root() -> Result<(), String> {
-    #[cfg(test)]
-    if TEST_ASSUME_HELPER_ROOT.load(std::sync::atomic::Ordering::SeqCst) {
-        return Ok(());
-    }
-
-    if is_root() {
-        return Ok(());
-    }
-    Err("must be run as root".to_string())
-}
-
-fn validate_install_specs(packages: Vec<PackageSpec>) -> Result<Vec<RequestedPackage>, String> {
-    validate_request_count(&packages)?;
-    let mut requested = Vec::with_capacity(packages.len());
-    for package in packages {
-        requested.push(requested_package_from_spec(&package)?);
-    }
-    Ok(requested)
-}
-
-fn validate_uninstall_specs(packages: Vec<PackageSpec>) -> Result<Vec<String>, String> {
-    validate_request_count(&packages)?;
-    let mut package_names = Vec::with_capacity(packages.len());
-    for package in packages {
-        if package.version.is_some() {
-            return Err(format!(
-                "package {} cannot specify a version for uninstall",
-                package.name
-            ));
-        }
-        package_names.push(cli::parse_uninstall_package_name(&OsString::from(
-            package.name,
-        ))?);
-    }
-    Ok(package_names)
-}
-
-fn make_default_packages(
-    packages: Vec<PackageSpec>,
-    progress_callback: Arc<Mutex<Box<ProgressCallback>>>,
-) -> HelperCommandResult {
-    require_root()?;
-    let package_names = validate_uninstall_specs(packages)?;
-    let mut processed_packages = Vec::new();
-    for package_name in package_names {
-        make_package_default_root(&package_name, Some(progress_callback.clone()))?;
-        processed_packages.push(package_name);
-    }
-    Ok(HelperCommandSuccess {
-        message: "Package default updated".to_string(),
-        processed_packages,
-        value: None,
-    })
-}
-
-pub(crate) fn make_package_default(package: &str) -> Result<HelperCommandSuccess, String> {
-    require_root()?;
-    let package_name = crate::cli::parse_uninstall_package_name(&OsString::from(package))?;
-    make_package_default_root(&package_name, None)?;
-    Ok(HelperCommandSuccess {
-        message: "Package default updated".to_string(),
-        processed_packages: vec![package_name],
-        value: None,
-    })
-}
-
-fn make_package_default_root(
-    package_name: &str,
-    progress_callback: Option<Arc<Mutex<Box<ProgressCallback>>>>,
-) -> Result<(), String> {
-    let install_root = package_install_root(&opt_pkg_root(), package_name)?;
-    ensure_package_installed(&opt_pkg_root(), package_name)?;
-    let receipt = load_or_resolve_package_receipt(package_name, &install_root)?;
-    let PackageReceiptSource::Formula { root_formula } = receipt.source else {
-        return Err(format!("package {package_name} is not a Homebrew formula"));
-    };
-    if root_formula.starts_with("python@") || package_name.starts_with("python@") {
-        return Err(
-            "Python uses side-by-side stubs and cannot be made default this way".to_string(),
-        );
-    }
-    if let Some(mut callback) = progress_callback
-        .as_ref()
-        .and_then(|callback| callback.lock().ok())
-    {
-        callback(ProgressEvent::Installing {
-            package: package_name.to_string(),
-        });
-    }
-    let config = load_config()?;
-    let graph = resolve_formula_specs(std::slice::from_ref(&root_formula), &config, true)?;
-    let plan = InstallPlan::for_i(package_name.to_string(), root_formula);
-    sync_stubs(&plan, &graph, &[])?;
-    if let Some(mut callback) = progress_callback
-        .as_ref()
-        .and_then(|callback| callback.lock().ok())
-    {
-        callback(ProgressEvent::Completed {
-            package: package_name.to_string(),
-        });
-    }
-    Ok(())
-}
-
-fn validate_request_count(packages: &[PackageSpec]) -> Result<(), String> {
-    if packages.is_empty() {
-        return Err("at least one package is required".to_string());
-    }
-    if packages.len() > MAX_HELPER_PACKAGES {
-        return Err(format!(
-            "at most {MAX_HELPER_PACKAGES} packages are allowed per request"
-        ));
-    }
-    Ok(())
-}
-
-fn requested_package_from_spec(package: &PackageSpec) -> Result<RequestedPackage, String> {
-    let requested = cli::parse_package_name(&OsString::from(package.name.clone()))?;
-    match requested {
-        RequestedPackage::NpmPackage {
-            package: npm_package,
-            version: _,
-        } => Ok(RequestedPackage::NpmPackage {
-            package: npm_package,
-            version: validate_optional_version(package.version.as_deref())?,
-        }),
-        RequestedPackage::Auto(_)
-        | RequestedPackage::HomebrewFormula(_)
-        | RequestedPackage::HomebrewCask(_)
-        | RequestedPackage::VendorPackage(_)
-        | RequestedPackage::Isotope(_)
-        | RequestedPackage::PipPackage(_) => {
-            if package.version.is_some() {
-                return Err(format!(
-                    "package {} does not support explicit version selection",
-                    package.name
-                ));
-            }
-            Ok(requested)
-        }
-    }
-}
-
-fn validate_optional_version(version: Option<&str>) -> Result<Option<String>, String> {
-    let Some(version) = version else {
-        return Ok(None);
-    };
-    let trimmed = version.trim();
-    if trimmed.is_empty() {
-        return Err("version must not be empty".to_string());
-    }
-    if trimmed
-        .chars()
-        .any(|ch| ch.is_control() || ch.is_whitespace())
-    {
-        return Err("version must not contain whitespace or control characters".to_string());
-    }
-    Ok(Some(trimmed.to_string()))
 }

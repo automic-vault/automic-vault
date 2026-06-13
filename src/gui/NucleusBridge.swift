@@ -390,6 +390,12 @@ final class NucleusBridge {
     }
 
     private func startAndConnectToProtocolDaemon() throws -> ProtocolConnection {
+        let binaryURL = try resolveBinaryURL()
+        if try protocolSocketIsOwnedByDifferentBinary(expectedBinaryURL: binaryURL) {
+            try stopStaleProtocolDaemon()
+            daemonProcess = nil
+        }
+
         if let connected = try connectToProtocolSocket() {
             do {
                 try validateCompatibility(of: connected)
@@ -404,7 +410,7 @@ final class NucleusBridge {
             }
         }
 
-        try startProtocolDaemonIfNeeded()
+        try startProtocolDaemonIfNeeded(binaryURL: binaryURL)
         return try connectToProtocolDaemon()
     }
 
@@ -451,12 +457,12 @@ final class NucleusBridge {
         }
     }
 
-    private func startProtocolDaemonIfNeeded() throws {
+    private func startProtocolDaemonIfNeeded(binaryURL: URL? = nil) throws {
         if let daemonProcess, daemonProcess.isRunning {
             return
         }
 
-        let binaryURL = try resolveBinaryURL()
+        let binaryURL = try binaryURL ?? resolveBinaryURL()
         let process = Process()
         process.executableURL = binaryURL
         process.arguments = [ "serve" ]
@@ -471,6 +477,32 @@ final class NucleusBridge {
         }
         try process.run()
         daemonProcess = process
+    }
+
+    private func protocolSocketIsOwnedByDifferentBinary(expectedBinaryURL: URL) throws -> Bool {
+        let socketPath = protocolSocketURL().path
+        guard FileManager.default.fileExists(atPath: socketPath) else {
+            return false
+        }
+
+        let expectedPath = canonicalExecutablePath(expectedBinaryURL.path)
+        let ownerPIDs = try processIDsUsingSocket(at: socketPath)
+        for pid in ownerPIDs {
+            guard let ownerPath = executablePath(for: pid) else {
+                continue
+            }
+            if canonicalExecutablePath(ownerPath) != expectedPath {
+                return true
+            }
+        }
+        return false
+    }
+
+    private func canonicalExecutablePath(_ path: String) -> String {
+        URL(fileURLWithPath: path)
+            .resolvingSymlinksInPath()
+            .standardizedFileURL
+            .path
     }
 
     private func terminateDaemonIfNeeded() {
@@ -613,6 +645,15 @@ final class NucleusBridge {
         return output
             .split(whereSeparator: \.isNewline)
             .compactMap { Int32($0) }
+    }
+
+    private func executablePath(for pid: Int32) -> String? {
+        var buffer = [CChar](repeating: 0, count: 4096)
+        let count = proc_pidpath(pid, &buffer, UInt32(buffer.count))
+        guard count > 0 else {
+            return nil
+        }
+        return String(cString: buffer)
     }
 
     private func writeAll(_ data: Data, to descriptor: Int32) throws {

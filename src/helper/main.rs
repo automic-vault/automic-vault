@@ -263,8 +263,12 @@ pub extern "C" fn nuke_helper_refresh_remote_database() -> bool {
     refresh_remote_combined_data().unwrap_or(false)
 }
 
+/// # Safety
+///
+/// `value` must be null or a pointer returned by this helper's string allocation
+/// functions, and it must not have been freed already.
 #[unsafe(no_mangle)]
-pub extern "C" fn nuke_helper_free_string(value: *mut c_char) {
+pub unsafe extern "C" fn nuke_helper_free_string(value: *mut c_char) {
     if value.is_null() {
         return;
     }
@@ -377,7 +381,9 @@ mod tests {
     fn raw_to_string(value: *mut c_char) -> String {
         assert!(!value.is_null());
         let string = c_string(value).unwrap();
-        nuke_helper_free_string(value);
+        unsafe {
+            nuke_helper_free_string(value);
+        }
         string
     }
 
@@ -426,7 +432,9 @@ mod tests {
 
         let raw = string_into_raw("hello".to_string());
         assert_eq!(raw_to_string(raw), "hello");
-        nuke_helper_free_string(ptr::null_mut());
+        unsafe {
+            nuke_helper_free_string(ptr::null_mut());
+        }
     }
 
     #[test]

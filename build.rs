@@ -1,11 +1,17 @@
 fn main() {
     println!("cargo:rustc-check-cfg=cfg(coverage)");
     println!("cargo:rerun-if-env-changed=NUKE_BUILD_ID");
+    println!("cargo:rerun-if-env-changed=AV_DOTENV_KEYCHAIN_ACCESS_GROUP");
+    prepare_packaged_combined_db();
     let build_id = build_id();
     println!("cargo:rustc-env=NUKE_BUILD_ID={build_id}");
     println!(
         "cargo:rustc-env=NUKE_CODESIGN_IDENTITY={}",
         codesign_identity().unwrap_or_default()
+    );
+    println!(
+        "cargo:rustc-env=AV_DOTENV_KEYCHAIN_ACCESS_GROUP={}",
+        dotenv_keychain_access_group()
     );
     generate_isotope_integrations();
 
@@ -19,6 +25,7 @@ fn main() {
     println!("cargo:rerun-if-changed=src/helper/launchd.plist");
     println!("cargo:rerun-if-changed=.env");
     println!("cargo:rerun-if-env-changed=APPLE_TEAM_ID");
+    println!("cargo:rerun-if-env-changed=AV_DOTENV_KEYCHAIN_ACCESS_GROUP");
     println!("cargo:rerun-if-env-changed=CODESIGN_IDENTITY");
     println!("cargo:rerun-if-env-changed=TEAM_COMMON_NAME");
     println!("cargo:rerun-if-env-changed=TEAM_IDENTIFIER");
@@ -46,6 +53,69 @@ fn main() {
 
     for framework in ["Foundation", "ServiceManagement", "Security"] {
         println!("cargo:rustc-link-lib=framework={framework}");
+    }
+}
+
+fn dotenv_keychain_access_group() -> String {
+    if let Some(group) = non_empty_build_env_var("AV_DOTENV_KEYCHAIN_ACCESS_GROUP") {
+        return group;
+    }
+    let team_id = non_empty_build_env_var("APPLE_TEAM_ID")
+        .and_then(valid_team_identifier)
+        .or_else(|| non_empty_build_env_var("TEAM_IDENTIFIER").and_then(valid_team_identifier))
+        .or_else(|| {
+            codesign_identity().and_then(|identity| team_identifier_from_identity(&identity))
+        })
+        .unwrap_or_else(|| "ZU76A67LGU".to_string());
+    format!("{team_id}.com.automicvault.dotenv")
+}
+
+fn valid_team_identifier(value: String) -> Option<String> {
+    if value
+        .chars()
+        .all(|ch| ch.is_ascii_uppercase() || ch.is_ascii_digit())
+        && !value.is_empty()
+    {
+        Some(value)
+    } else {
+        None
+    }
+}
+
+fn team_identifier_from_identity(identity: &str) -> Option<String> {
+    let close = identity.rfind(')')?;
+    let open = identity[..close].rfind('(')?;
+    let candidate = &identity[open + 1..close];
+    if candidate
+        .chars()
+        .all(|ch| ch.is_ascii_uppercase() || ch.is_ascii_digit())
+        && !candidate.is_empty()
+    {
+        Some(candidate.to_string())
+    } else {
+        None
+    }
+}
+
+fn prepare_packaged_combined_db() {
+    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR not set");
+    let repo_root = std::path::Path::new(&manifest_dir);
+    println!("cargo:rerun-if-env-changed=AV_COMBINED_DB_PATH");
+    let source = path_env_or_default(
+        "AV_COMBINED_DB_PATH",
+        repo_root.join("../av.db/cache/automic-vault/combined.json"),
+    );
+    let fallback = repo_root.join("data/combined.json");
+    let selected = if source.exists() { source } else { fallback };
+    println!("cargo:rerun-if-changed={}", selected.display());
+
+    let out_dir = std::env::var("OUT_DIR").expect("OUT_DIR not set");
+    let output_path = std::path::Path::new(&out_dir).join("combined.json");
+    if let Err(err) = std::fs::copy(&selected, &output_path) {
+        panic!(
+            "failed to prepare packaged combined database from {}: {err}",
+            selected.display()
+        );
     }
 }
 
@@ -128,15 +198,16 @@ fn is_env_key(key: &str) -> bool {
 fn generate_isotope_integrations() {
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR not set");
     let repo_root = std::path::Path::new(&manifest_dir);
+    let av_db_root = repo_root.join("../av.db");
     println!("cargo:rerun-if-env-changed=AUTOMIC_VAULT_REPO_CACHE");
     println!("cargo:rerun-if-env-changed=AUTOMIC_VAULT_RADIOISOTOPES_REPO");
     println!("cargo:rerun-if-env-changed=AUTOMIC_VAULT_INCLUDE_ISOTOPE_TESTS");
     println!("cargo:rerun-if-env-changed=CARGO_CFG_COVERAGE");
     let isotope_root =
-        path_env_or_default("AUTOMIC_VAULT_REPO_CACHE", repo_root.join("data/isotopes"));
+        path_env_or_default("AUTOMIC_VAULT_REPO_CACHE", av_db_root.join("../isotopes"));
     let radioisotope_root = path_env_or_default(
         "AUTOMIC_VAULT_RADIOISOTOPES_REPO",
-        repo_root.join("data/radioisotopes"),
+        av_db_root.join("../radioisotopes"),
     );
     println!(
         "cargo:rustc-env=AUTOMIC_VAULT_GENERATED_RADIOISOTOPES_REPO={}",
@@ -185,7 +256,7 @@ fn generate_isotope_integrations() {
                 path,
             );
             output.push_str(&format!(
-                "  #[allow(dead_code)] pub(crate) mod detect {{ include!(r#\"{}\"#); }}\n",
+                "  #[allow(clippy::all, dead_code, unused_parens, unused_variables)] pub(crate) mod detect {{ include!(r#\"{}\"#); }}\n",
                 include_path.display()
             ));
         }
@@ -198,7 +269,7 @@ fn generate_isotope_integrations() {
                 path,
             );
             output.push_str(&format!(
-                "  #[allow(dead_code)] pub(crate) mod migrate {{ include!(r#\"{}\"#); }}\n",
+                "  #[allow(clippy::all, dead_code, unused_parens, unused_variables)] pub(crate) mod migrate {{ include!(r#\"{}\"#); }}\n",
                 include_path.display()
             ));
         }
@@ -211,7 +282,7 @@ fn generate_isotope_integrations() {
                 path,
             );
             output.push_str(&format!(
-                "  #[allow(dead_code)] pub(crate) mod post_install {{ include!(r#\"{}\"#); }}\n",
+                "  #[allow(clippy::all, dead_code, unused_parens, unused_variables)] pub(crate) mod post_install {{ include!(r#\"{}\"#); }}\n",
                 include_path.display()
             ));
         }
@@ -224,7 +295,7 @@ fn generate_isotope_integrations() {
                 path,
             );
             output.push_str(&format!(
-                "  #[allow(dead_code)] pub(crate) mod credential_helper {{ include!(r#\"{}\"#); }}\n",
+                "  #[allow(clippy::all, dead_code, unused_parens, unused_variables)] pub(crate) mod credential_helper {{ include!(r#\"{}\"#); }}\n",
                 include_path.display()
             ));
         }

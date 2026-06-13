@@ -368,16 +368,15 @@ fn package_info_install_root(
     requested: &RequestedPackage,
     package_name: &str,
 ) -> Result<PathBuf, String> {
-    if let RequestedPackage::Isotope(isotope_name) = requested {
-        if let Ok(record) = isotope_package_data(isotope_name) {
-            if let Some(modified_package) = isotope_modified_package_name(record)? {
-                let modified_root = package_install_root(&opt_pkg_root(), &modified_package)?;
-                if let Ok(Some(receipt)) = load_package_receipt(&modified_root.join(ROOT_RECEIPT)) {
-                    if receipt.package_name == package_name {
-                        return Ok(modified_root);
-                    }
-                }
-            }
+    if let RequestedPackage::Isotope(isotope_name) = requested
+        && let Ok(record) = isotope_package_data(isotope_name)
+        && let Some(modified_package) = isotope_modified_package_name(record)?
+    {
+        let modified_root = package_install_root(&opt_pkg_root(), &modified_package)?;
+        if let Ok(Some(receipt)) = load_package_receipt(&modified_root.join(ROOT_RECEIPT))
+            && receipt.package_name == package_name
+        {
+            return Ok(modified_root);
         }
     }
     package_install_root(&opt_pkg_root(), package_name)
@@ -854,7 +853,7 @@ fn resolve_security_recommendation_package_results_at(
                 return None;
             }
             let result =
-                security_recommendation_package_result(package_key, recommendation, &formulae)?;
+                security_recommendation_package_result(package_key, recommendation, formulae)?;
             Some((recommendation.priority, result))
         })
         .collect::<Vec<_>>();
@@ -1993,10 +1992,10 @@ pub(crate) fn resolve_aliases_for_source(
             Ok(mut brew_aliases) => aliases.append(&mut brew_aliases),
             Err(err) => alias_error = Some(err),
         }
-    } else if let PackageReceiptSource::Cask { cask_name } = source {
-        if let Ok(cask) = embedded_cask(cask_name) {
-            aliases.extend(cask.aliases.iter().cloned());
-        }
+    } else if let PackageReceiptSource::Cask { cask_name } = source
+        && let Ok(cask) = embedded_cask(cask_name)
+    {
+        aliases.extend(cask.aliases.iter().cloned());
     }
 
     aliases.sort();
@@ -2259,15 +2258,15 @@ pub(crate) fn format_package_info(info: &PackageInfo) -> String {
         lines.extend(metadata_lines);
     }
 
-    if let Some(homebrew_info) = info.homebrew_info.as_ref() {
-        if !homebrew_info.dependencies.is_empty() {
-            lines.push(String::new());
-            lines.push(section_top("Dependencies"));
-            for line in wrap_tokens(&homebrew_info.dependencies, 2, 3) {
-                lines.push(line);
-            }
-            lines.push(section_bottom());
+    if let Some(homebrew_info) = info.homebrew_info.as_ref()
+        && !homebrew_info.dependencies.is_empty()
+    {
+        lines.push(String::new());
+        lines.push(section_top("Dependencies"));
+        for line in wrap_tokens(&homebrew_info.dependencies, 2, 3) {
+            lines.push(line);
         }
+        lines.push(section_bottom());
     }
 
     if !info.executable_paths.is_empty() || info.executable_paths_error.is_some() {
@@ -3054,7 +3053,7 @@ mod tests {
 
     #[test]
     fn search_relevance_prioritizes_formula_family_for_base_query() {
-        let mut results = vec![
+        let mut results = [
             search_result(
                 "npm:@babel/node",
                 PackageReceiptSource::Npm {
@@ -3727,8 +3726,8 @@ mod tests {
 
         assert_eq!(string_or_none("  "), None);
         assert_eq!(string_or_none("  hello  "), Some("hello".to_string()));
-        assert!(vendor_entry_matches(&vendor::PACKAGES[0], "bun"));
-        assert!(vendor_entry_matches(&vendor::PACKAGES[0], "av:bun"));
+        assert!(vendor_entry_matches(vendor::PACKAGES[0], "bun"));
+        assert!(vendor_entry_matches(vendor::PACKAGES[0], "av:bun"));
         assert!(npm_entry_matches("coverage-npm", npm_metadata, "coverage"));
         assert!(npm_entry_matches(
             "coverage-npm",

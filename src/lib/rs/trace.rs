@@ -440,6 +440,7 @@ fn invoke_codex_trace(prompt: &str, schema: &str) -> Result<String, String> {
     let mut child = command
         .arg("exec")
         .arg("--ephemeral")
+        .arg("--skip-git-repo-check")
         .arg("--sandbox")
         .arg("read-only")
         .arg("--output-schema")
@@ -1527,7 +1528,6 @@ fn clean_trace_action_tense(description: &str) -> String {
         .replace(" and executed ", " and executes ")
         .replace(" and execute ", " and executes ")
         .replace(" and write ", " and writes ")
-        .replace(" and writes ", " and writes ")
         .replace(" and wrote ", " and writes ")
         .replace(" and mount ", " and mounts ")
         .replace(" and mounted ", " and mounts ")
@@ -1661,12 +1661,11 @@ fn trace_stdout_supports_markdown_rendering() -> bool {
 }
 
 fn trace_terminal_columns() -> usize {
-    if let Ok(columns) = env::var("COLUMNS") {
-        if let Ok(columns) = columns.parse::<usize>() {
-            if columns > 0 {
-                return columns;
-            }
-        }
+    if let Ok(columns) = env::var("COLUMNS")
+        && let Ok(columns) = columns.parse::<usize>()
+        && columns > 0
+    {
+        return columns;
     }
 
     let mut size = libc::winsize {

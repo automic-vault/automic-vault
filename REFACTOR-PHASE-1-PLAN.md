@@ -30,7 +30,7 @@ this pass.
 
 - No public protocol, helper, XPC, CLI output, receipt, manifest, or `/db.json`
   shape changes.
-- Do not bump `DB_SCHEMA_VERSION`, `scripts/build-db.py` `SCHEMA_VERSION`,
+- Do not bump `DB_SCHEMA_VERSION`, `../av.db/scripts/build-db.py` `SCHEMA_VERSION`,
   `PROTOCOL_VERSION`, `NUKE_PROTOCOL_VERSION`, or `NUKE_HELPER_VERSION`.
 - Keep existing crate public exports stable: `main_entry`,
   `scanner_main_entry`, dotenv policy/mode exports, helper command exports,

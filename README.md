@@ -1,5 +1,13 @@
 # Automic Vault
 
+<p align="center">
+  <img
+    src="assets/readme-loop.gif"
+    alt="Automic Vault CLI in three steps: av scan finds plaintext credentials in ~/.netrc and .env, av save stores the secret in the Automic Vault keychain, and av contain gates a risky npm publish for human approval."
+    width="900"
+  />
+</p>
+
 Secure the tools you `brew install`.
 
 Homebrew made installing developer tools effortless. AI agents changed who is
@@ -132,6 +140,20 @@ No, this is not a cloud policy engine.
 
 It is a local macOS runtime boundary beneath agent sessions. That is already a
 lot, and it is the part we can actually ship.
+
+## Security Guarantees
+
+Under the macOS security model, assuming the machine is not root-compromised,
+System Integrity Protection is enabled, the
+macOS Keychain is not compromised, and Automic Vault itself is not exploited,
+secrets remain protected from ordinary apps, shell tools, malware, and agent
+subprocesses. Hardened Runtime blocks normal debugger, injection, and
+memory-scraping paths against our signed app, and Keychain only releases secrets
+through the authorized Automic Vault code path.
+
+> We also assume quantum computers are not generally accessible and that whoever
+> currently has one poweful enough to break encryption does not have beef with
+> you.
 
 &nbsp;
 

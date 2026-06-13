@@ -555,15 +555,12 @@ fn run_isotope(options: &IsotopeOptions, store: &dyn CredentialStore) -> Result<
     }
 
     let automatically_approved = if !credential_keys.is_empty() && can_always_allow {
-        match always_allows_usage(
+        always_allows_usage(
             always_allow_scope
                 .as_ref()
                 .expect("validated always-allow scope"),
             &credential_keys,
-        ) {
-            Ok(value) => value,
-            Err(err) => return Err(err),
-        }
+        )?
     } else {
         false
     };
@@ -1126,6 +1123,7 @@ fn is_root_controlled_always_allow_file(path: &Path) -> Result<bool, String> {
         && parent_metadata.mode() & 0o022 == 0)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn request_isotope_approval(
     executable_path: &str,
     always_allow_scope: Option<&IsotopeAlwaysAllowScope>,

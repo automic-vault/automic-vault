@@ -3,12 +3,13 @@ use super::*;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use std::collections::BTreeMap;
-use std::io::{self, IsTerminal};
+use std::io::{self, IsTerminal, Read};
 
 #[cfg(target_os = "macos")]
 use std::ffi::{CString, c_char, c_int};
 
 const DOTENV_KEYCHAIN_SERVICE: &str = "com.automicvault.dotenv";
+const DOTENV_DEFAULT_KEYCHAIN_ACCESS_GROUP: &str = "ZU76A67LGU.com.automicvault.dotenv";
 const ENCRYPTED_PREFIX: &str = "encrypted:";
 const DOTENV_PUBLIC_KEY_PREFIX: &str = "DOTENV_PUBLIC_KEY";
 const DOTENV_PRIVATE_KEY_PREFIX: &str = "DOTENV_PRIVATE_KEY";
@@ -30,15 +31,23 @@ const AV_DOTENV_DIGEST_ENV: &str = "AV_DOTENV_DIGEST";
 const AV_DOTENV_KEYS_ENV: &str = "AV_DOTENV_KEYS";
 const DOTENV_EXPORT_DENIED_HINT: &str =
     "hint: use `av dotenv run` to run commands with this project's environment";
+const DOTENV_AGENT_EXPORT_ENV_MARKERS: &[(&str, &str)] = &[
+    ("CODEX_SHELL", "Codex"),
+    ("CODEX_THREAD_ID", "Codex"),
+    ("CODEX_INTERNAL_ORIGINATOR_OVERRIDE", "Codex"),
+    ("CODEX_SANDBOX", "Codex"),
+];
 
 #[cfg(target_os = "macos")]
 const ERR_SEC_ITEM_NOT_FOUND: c_int = -25300;
+#[cfg(target_os = "macos")]
+const ERR_SEC_MISSING_ENTITLEMENT: c_int = -34018;
 
 #[cfg(test)]
 thread_local! {
     static TEST_DOTENV_PROCESS_CONTEXT: std::cell::RefCell<
         Option<(DotenvParentProcessSnapshot, Vec<DotenvProcessSnapshot>)>
-    > = std::cell::RefCell::new(None);
+    > = const { std::cell::RefCell::new(None) };
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -47,9 +56,15 @@ enum DotenvCommand {
     Set(DotenvSetOptions),
     Encrypt(DotenvEncryptOptions),
     Import(DotenvImportOptions),
+    Keychain(DotenvKeychainCommand),
     Hook(DotenvShell),
     Export(DotenvExportOptions),
     Run(DotenvRunOptions),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum DotenvKeychainCommand {
+    Migrate(DotenvKeychainMigrateOptions),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -75,6 +90,12 @@ struct DotenvEncryptOptions {
 struct DotenvImportOptions {
     file: PathBuf,
     keys_file: PathBuf,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct DotenvKeychainMigrateOptions {
+    replace: bool,
+    delete_legacy: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -124,6 +145,7 @@ impl DotenvApprovalMode {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 struct DotenvApprovalRequestSnapshot {
     id: String,
+    approval_token: String,
     mode: DotenvApprovalMode,
     env_file_path: String,
     project_root: String,
@@ -156,6 +178,8 @@ struct DotenvProcessSnapshot {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 struct DotenvApprovalDecision {
     id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    approval_token: Option<String>,
     approved: bool,
     reason: Option<String>,
 }
@@ -306,6 +330,9 @@ fn dispatch_dotenv(
         }
         DotenvCommand::Encrypt(options) => run_dotenv_encrypt(&options, store),
         DotenvCommand::Import(options) => run_dotenv_import(&options, store),
+        DotenvCommand::Keychain(DotenvKeychainCommand::Migrate(options)) => {
+            run_dotenv_keychain_migrate(&options)
+        }
         DotenvCommand::Hook(shell) => {
             print_dotenv_hook(program_name, shell);
             Ok(())
@@ -344,6 +371,8 @@ fn parse_dotenv_command(
         "import" => {
             parse_dotenv_import(program_name, args).map(|value| value.map(DotenvCommand::Import))
         }
+        "keychain" => parse_dotenv_keychain(program_name, args)
+            .map(|value| value.map(DotenvCommand::Keychain)),
         "hook" => parse_dotenv_hook(program_name, args).map(|value| value.map(DotenvCommand::Hook)),
         "export" => {
             parse_dotenv_export(program_name, args).map(|value| value.map(DotenvCommand::Export))
@@ -483,6 +512,64 @@ fn parse_dotenv_import(
             .unwrap_or_else(|| PathBuf::from(".env.keys"))
     });
     Ok(Some(DotenvImportOptions { file, keys_file }))
+}
+
+fn parse_dotenv_keychain(
+    program_name: &str,
+    mut args: impl Iterator<Item = OsString>,
+) -> Result<Option<DotenvKeychainCommand>, String> {
+    let nested_program_name = format!("{program_name} keychain");
+    let Some(command) = args.next() else {
+        print_dotenv_keychain_usage(&nested_program_name);
+        return Err("missing dotenv keychain command".to_string());
+    };
+    if is_help_flag(&command) {
+        print_dotenv_keychain_usage(&nested_program_name);
+        return Ok(None);
+    }
+    if is_version_flag(&command) {
+        println!("{program_name} {}", env!("CARGO_PKG_VERSION"));
+        return Ok(None);
+    }
+
+    let command = command
+        .to_str()
+        .ok_or_else(|| "dotenv keychain command must be valid UTF-8".to_string())?;
+    match command {
+        "migrate" => parse_dotenv_keychain_migrate(&nested_program_name, args)
+            .map(|value| value.map(DotenvKeychainCommand::Migrate)),
+        other => Err(format!("unknown dotenv keychain command '{other}'")),
+    }
+}
+
+fn parse_dotenv_keychain_migrate(
+    program_name: &str,
+    args: impl Iterator<Item = OsString>,
+) -> Result<Option<DotenvKeychainMigrateOptions>, String> {
+    let mut options = DotenvKeychainMigrateOptions::default();
+    for arg in args {
+        if is_help_flag(&arg) {
+            print_dotenv_keychain_migrate_usage(program_name);
+            return Ok(None);
+        }
+        if is_version_flag(&arg) {
+            println!("{program_name} {}", env!("CARGO_PKG_VERSION"));
+            return Ok(None);
+        }
+        if arg == "--replace" {
+            options.replace = true;
+            continue;
+        }
+        if arg == "--delete-legacy" {
+            options.delete_legacy = true;
+            continue;
+        }
+        return Err(format!(
+            "unknown dotenv keychain migrate argument '{}'",
+            arg.to_string_lossy()
+        ));
+    }
+    Ok(Some(options))
 }
 
 fn parse_dotenv_hook(
@@ -990,11 +1077,9 @@ fn load_dotenv_secrets(
     let (_public_key_name, public_key) = document
         .public_key()
         .ok_or_else(|| format!("{} is missing DOTENV_PUBLIC_KEY", document.path.display()))?;
-    let private_key = store.load_private_key(&public_key)?;
-    validate_private_key_list(&private_key)?;
     let env_sha256 = sha256_file_hex(&document.path)?;
     let public_key_fingerprint = public_key_fingerprint(&public_key);
-    let mut values = BTreeMap::new();
+    let mut assignments = BTreeMap::new();
     for line in &document.lines {
         let Some(assignment) = &line.assignment else {
             continue;
@@ -1005,12 +1090,9 @@ fn load_dotenv_secrets(
         if env_key_is_preexisting(&assignment.key, previous_av_keys) {
             continue;
         }
-        values.insert(
-            assignment.key.clone(),
-            decrypt_dotenv_value(&assignment.key, &assignment.value, &private_key)?,
-        );
+        assignments.insert(assignment.key.clone(), assignment.value.clone());
     }
-    let keys = values.keys().cloned().collect::<Vec<_>>();
+    let keys = assignments.keys().cloned().collect::<Vec<_>>();
     let project_root = document
         .path
         .parent()
@@ -1025,6 +1107,15 @@ fn load_dotenv_secrets(
         &keys,
         command,
     )?;
+    let private_key = store.load_private_key(&public_key)?;
+    validate_private_key_list(&private_key)?;
+    let mut values = BTreeMap::new();
+    for (key, value) in assignments {
+        values.insert(
+            key.clone(),
+            decrypt_dotenv_value(&key, &value, &private_key)?,
+        );
+    }
     Ok(DotenvLoadedSecrets {
         env_path: document.path,
         project_root,
@@ -1038,10 +1129,9 @@ fn env_key_is_preexisting(key: &str, previous_av_keys: Option<&[String]>) -> boo
     if env::var_os(key).is_none() {
         return false;
     }
-    previous_av_keys
+    !previous_av_keys
         .map(|keys| keys.iter().any(|previous| previous == key))
         .unwrap_or(false)
-        == false
 }
 
 impl DotenvDocument {
@@ -1247,11 +1337,7 @@ fn parse_dotenv_assignment(raw: &str) -> Option<DotenvAssignment> {
     if key.is_empty() {
         return None;
     }
-    let value_start = if assignment.as_bytes()[sep] == b':' {
-        sep + 1
-    } else {
-        sep + 1
-    };
+    let value_start = sep + 1;
     let value = parse_dotenv_value(&assignment[value_start..]);
     Some(DotenvAssignment {
         key: key.to_string(),
@@ -1497,7 +1583,7 @@ fn dotenv_key_looks_secret(key: &str, value: &str) -> bool {
     {
         return true;
     }
-    if tokens.iter().any(|token| *token == "KEY")
+    if tokens.contains(&"KEY")
         && tokens.iter().any(|token| {
             matches!(
                 *token,
@@ -1699,7 +1785,7 @@ fn decode_hex(value: &str) -> Result<Vec<u8>, String> {
         .strip_prefix("0x")
         .or_else(|| value.strip_prefix("0X"))
         .unwrap_or(value);
-    if value.len() % 2 != 0 {
+    if !value.len().is_multiple_of(2) {
         return Err("hex value must have an even number of characters".to_string());
     }
     let mut bytes = Vec::with_capacity(value.len() / 2);
@@ -1907,8 +1993,8 @@ fn request_dotenv_approval_if_needed(
         keys: keys.to_vec(),
     };
     let (parent_process, process_ancestry) = dotenv_approval_process_context();
-    if let Some(source) =
-        dotenv_codex_export_rejection_source(mode, &parent_process, &process_ancestry)
+    if let Some(source) = dotenv_agent_export_rejection_source(mode)
+        .or_else(|| dotenv_codex_export_rejection_source(mode, &parent_process, &process_ancestry))
     {
         let _ = dotenv_post_distributed_notification_with_object(
             DOTENV_AUTOMATIC_EXPORT_REJECTION_NOTIFICATION,
@@ -1920,13 +2006,18 @@ fn request_dotenv_approval_if_needed(
         ));
     }
     let policy = load_dotenv_approval_policy().unwrap_or_default();
-    if policy == DotenvApprovalPolicy::RememberApproved
+    if dotenv_remembered_approval_applies_to_mode(mode)
+        && policy == DotenvApprovalPolicy::RememberApproved
         && load_dotenv_remembered_approvals()?.contains(&entry)
     {
         return Ok(());
     }
     request_dotenv_approval(&entry, command, parent_process, process_ancestry)?;
     Ok(())
+}
+
+fn dotenv_remembered_approval_applies_to_mode(mode: DotenvApprovalMode) -> bool {
+    mode == DotenvApprovalMode::Run
 }
 
 fn dotenv_approval_process_context() -> (DotenvParentProcessSnapshot, Vec<DotenvProcessSnapshot>) {
@@ -1952,16 +2043,11 @@ fn request_dotenv_approval(
     parent_process: DotenvParentProcessSnapshot,
     process_ancestry: Vec<DotenvProcessSnapshot>,
 ) -> Result<(), String> {
-    let request_id = format!(
-        "{}-{}",
-        process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_err(|err| format!("failed to compute request timestamp: {err}"))?
-            .as_millis()
-    );
+    let request_id = new_dotenv_approval_request_id()?;
+    let approval_token = new_dotenv_approval_token()?;
     let request = DotenvApprovalRequestSnapshot {
         id: request_id.clone(),
+        approval_token: approval_token.clone(),
         mode: entry.mode,
         env_file_path: entry.env_file_path.clone(),
         project_root: entry.project_root.clone(),
@@ -1976,16 +2062,75 @@ fn request_dotenv_approval(
         parent_process,
         command: command.to_vec(),
     };
-    let pending_url = dotenv_pending_approval_path()?;
+    let pending_url = prepare_dotenv_approval_request_files(&request_id)?;
     write_dotenv_json(&pending_url, &request)?;
     if let Err(err) = ping_dotenv_approval_app() {
         let _ = fs::remove_file(&pending_url);
         return Err(err);
     }
-    wait_for_dotenv_decision(&request_id, entry.mode)
+    wait_for_dotenv_decision(&request_id, &approval_token, entry.mode)
 }
 
-fn wait_for_dotenv_decision(id: &str, mode: DotenvApprovalMode) -> Result<(), String> {
+fn new_dotenv_approval_request_id() -> Result<String, String> {
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|err| format!("failed to compute request timestamp: {err}"))?
+        .as_nanos();
+    let mut random = [0_u8; 16];
+    fill_dotenv_random_bytes(&mut random)?;
+    Ok(format!(
+        "{}-{timestamp}-{}",
+        process::id(),
+        encode_hex(&random)
+    ))
+}
+
+fn new_dotenv_approval_token() -> Result<String, String> {
+    let mut random = [0_u8; 32];
+    fill_dotenv_random_bytes(&mut random)?;
+    Ok(encode_hex(&random))
+}
+
+#[cfg(unix)]
+fn fill_dotenv_random_bytes(bytes: &mut [u8]) -> Result<(), String> {
+    File::open("/dev/urandom")
+        .and_then(|mut file| file.read_exact(bytes))
+        .map_err(|err| format!("failed to read random bytes for dotenv approval: {err}"))
+}
+
+#[cfg(not(unix))]
+fn fill_dotenv_random_bytes(bytes: &mut [u8]) -> Result<(), String> {
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|err| format!("failed to compute request timestamp: {err}"))?
+        .as_nanos();
+    for (index, byte) in bytes.iter_mut().enumerate() {
+        *byte = (timestamp.rotate_left((index % 8) as u32) as u8)
+            ^ (process::id().rotate_left((index % 4) as u32) as u8);
+    }
+    Ok(())
+}
+
+fn prepare_dotenv_approval_request_files(id: &str) -> Result<PathBuf, String> {
+    let decision_url = dotenv_decision_path(id)?;
+    match fs::remove_file(&decision_url) {
+        Ok(()) => {}
+        Err(err) if err.kind() == ErrorKind::NotFound => {}
+        Err(err) => {
+            return Err(format!(
+                "failed to remove stale dotenv approval decision {}: {err}",
+                decision_url.display()
+            ));
+        }
+    }
+    dotenv_pending_approval_path()
+}
+
+fn wait_for_dotenv_decision(
+    id: &str,
+    approval_token: &str,
+    mode: DotenvApprovalMode,
+) -> Result<(), String> {
     let decision_url = dotenv_decision_path(id)?;
     let pending_url = dotenv_pending_approval_path()?;
     loop {
@@ -1994,6 +2139,16 @@ fn wait_for_dotenv_decision(id: &str, mode: DotenvApprovalMode) -> Result<(), St
                 .map_err(|err| format!("failed to decode dotenv approval decision: {err}"))?;
             if decision.id != id {
                 return Err("dotenv approval decision id mismatch".to_string());
+            }
+            match decision.approval_token.as_deref() {
+                Some(token) if token == approval_token => {}
+                Some(_) => return Err("dotenv approval token mismatch".to_string()),
+                None => {
+                    return Err(
+                        "dotenv approval decision missing token; update the approval client"
+                            .to_string(),
+                    );
+                }
             }
             let _ = fs::remove_file(&pending_url);
             let _ = fs::remove_file(&decision_url);
@@ -2007,6 +2162,19 @@ fn wait_for_dotenv_decision(id: &str, mode: DotenvApprovalMode) -> Result<(), St
         }
         thread::sleep(Duration::from_millis(250));
     }
+}
+
+fn dotenv_agent_export_rejection_source(mode: DotenvApprovalMode) -> Option<String> {
+    if mode != DotenvApprovalMode::Export {
+        return None;
+    }
+    DOTENV_AGENT_EXPORT_ENV_MARKERS
+        .iter()
+        .find_map(|(name, source)| {
+            env::var_os(name)
+                .filter(|value| !value.is_empty())
+                .map(|_| (*source).to_string())
+        })
 }
 
 fn dotenv_codex_export_rejection_source(
@@ -2104,7 +2272,7 @@ fn load_dotenv_remembered_approvals_at_path(
     if require_root_controlled && !dotenv_system_file_is_trusted(path)? {
         return Ok(DotenvRememberedApprovalStore::default());
     }
-    let contents = fs::read_to_string(&path)
+    let contents = fs::read_to_string(path)
         .map_err(|err| format!("failed to read {}: {err}", path.display()))?;
     serde_json::from_str(&contents)
         .map_err(|err| format!("failed to decode {}: {err}", path.display()))
@@ -2119,12 +2287,25 @@ fn remember_dotenv_approval(entry: DotenvRememberedApprovalEntry) -> Result<(), 
     )
 }
 
+pub(crate) fn clear_dotenv_remembered_approvals() -> Result<(), String> {
+    let path = dotenv_system_remembered_approvals_path();
+    clear_dotenv_remembered_approvals_at_path(
+        &path,
+        dotenv_system_remembered_approvals_requires_root_control(),
+    )
+}
+
 #[cfg(test)]
 fn remember_dotenv_approval_for_test(
     path: &Path,
     entry: DotenvRememberedApprovalEntry,
 ) -> Result<(), String> {
     remember_dotenv_approval_at_path(path, entry, false)
+}
+
+#[cfg(test)]
+fn clear_dotenv_remembered_approvals_for_test(path: &Path) -> Result<(), String> {
+    clear_dotenv_remembered_approvals_at_path(path, false)
 }
 
 fn remember_dotenv_approval_at_path(
@@ -2137,6 +2318,17 @@ fn remember_dotenv_approval_at_path(
     write_dotenv_system_json(path, &store, require_root_controlled_parent)
 }
 
+fn clear_dotenv_remembered_approvals_at_path(
+    path: &Path,
+    require_root_controlled_parent: bool,
+) -> Result<(), String> {
+    write_dotenv_system_json(
+        path,
+        &DotenvRememberedApprovalStore::default(),
+        require_root_controlled_parent,
+    )
+}
+
 pub(crate) fn remember_dotenv_approval_from_helper(
     mode: DotenvApprovalMode,
     env_file_path: &str,
@@ -2145,6 +2337,9 @@ pub(crate) fn remember_dotenv_approval_from_helper(
     public_key_fingerprint: &str,
     mut keys: Vec<String>,
 ) -> Result<(), String> {
+    if !dotenv_remembered_approval_applies_to_mode(mode) {
+        return Ok(());
+    }
     if load_dotenv_approval_policy()? != DotenvApprovalPolicy::RememberApproved {
         return Ok(());
     }
@@ -2496,9 +2691,32 @@ fn write_dotenv_json<T: Serialize>(path: &Path, value: &T) -> Result<(), String>
         .ok_or_else(|| format!("invalid dotenv approval path {}", path.display()))?;
     fs::create_dir_all(parent)
         .map_err(|err| format!("failed to create {}: {err}", parent.display()))?;
+    secure_dotenv_approval_directory(parent)?;
     let payload = serde_json::to_vec_pretty(value)
         .map_err(|err| format!("failed to encode dotenv approval JSON: {err}"))?;
-    fs::write(path, payload).map_err(|err| format!("failed to write {}: {err}", path.display()))
+    fs::write(path, payload).map_err(|err| format!("failed to write {}: {err}", path.display()))?;
+    secure_dotenv_approval_file(path)?;
+    Ok(())
+}
+
+fn secure_dotenv_approval_directory(path: &Path) -> Result<(), String> {
+    fs::set_permissions(path, fs::Permissions::from_mode(0o700))
+        .map_err(|err| format!("failed to chmod {}: {err}", path.display()))?;
+    if path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name == "decisions")
+        && let Some(parent) = path.parent()
+    {
+        fs::set_permissions(parent, fs::Permissions::from_mode(0o700))
+            .map_err(|err| format!("failed to chmod {}: {err}", parent.display()))?;
+    }
+    Ok(())
+}
+
+fn secure_dotenv_approval_file(path: &Path) -> Result<(), String> {
+    fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+        .map_err(|err| format!("failed to chmod {}: {err}", path.display()))
 }
 
 #[cfg(target_os = "macos")]
@@ -2720,7 +2938,7 @@ __av_dotenv_hook;"#
 pub(crate) fn print_dotenv_usage(program_name: &str) {
     println!(
         "\
-Usage: {program_name} <init|set|encrypt|import|hook|export|run> [options]
+Usage: {program_name} <init|set|encrypt|import|keychain|hook|export|run> [options]
 
 Loads encrypted dotenvx-compatible .env files with Automic Vault approval."
     );
@@ -2742,6 +2960,14 @@ fn print_dotenv_encrypt_usage(program_name: &str) {
 
 fn print_dotenv_import_usage(program_name: &str) {
     println!("Usage: {program_name} import [--file .env] [--keys-file .env.keys]");
+}
+
+fn print_dotenv_keychain_usage(program_name: &str) {
+    println!("Usage: {program_name} migrate [--replace] [--delete-legacy]");
+}
+
+fn print_dotenv_keychain_migrate_usage(program_name: &str) {
+    println!("Usage: {program_name} migrate [--replace] [--delete-legacy]");
 }
 
 fn print_dotenv_hook_usage(program_name: &str) {
@@ -2768,6 +2994,123 @@ impl DotenvPrivateKeyStore for KeychainDotenvPrivateKeyStore {
     }
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct DotenvKeychainMigrationReport {
+    discovered: usize,
+    migrated: usize,
+    skipped_existing: usize,
+    missing_legacy: usize,
+    deleted_legacy: usize,
+}
+
+trait DotenvKeychainBackend {
+    fn read_new_if_present(
+        &self,
+        service: &str,
+        account: &str,
+        access_group: &str,
+    ) -> Result<Option<String>, String>;
+    fn write_new(
+        &self,
+        service: &str,
+        account: &str,
+        access_group: &str,
+        value: &str,
+    ) -> Result<(), String>;
+    #[allow(dead_code)]
+    fn delete_new(&self, service: &str, account: &str, access_group: &str) -> Result<bool, String>;
+    fn read_legacy_if_present(
+        &self,
+        service: &str,
+        account: &str,
+    ) -> Result<Option<String>, String>;
+    fn enumerate_legacy_accounts(&self, service: &str) -> Result<Vec<String>, String>;
+    fn delete_legacy(&self, service: &str, account: &str) -> Result<bool, String>;
+}
+
+struct SystemDotenvKeychainBackend;
+
+fn dotenv_keychain_access_group() -> &'static str {
+    option_env!("AV_DOTENV_KEYCHAIN_ACCESS_GROUP")
+        .filter(|value| !value.is_empty())
+        .unwrap_or(DOTENV_DEFAULT_KEYCHAIN_ACCESS_GROUP)
+}
+
+fn run_dotenv_keychain_migrate(options: &DotenvKeychainMigrateOptions) -> Result<(), String> {
+    let report = migrate_dotenv_keychain(
+        &SystemDotenvKeychainBackend,
+        DOTENV_KEYCHAIN_SERVICE,
+        dotenv_keychain_access_group(),
+        options,
+    )?;
+    println!(
+        "av dotenv keychain migrate: discovered {} legacy dotenv private keys; migrated {}; skipped existing {}; missing legacy {}; deleted legacy {}",
+        report.discovered,
+        report.migrated,
+        report.skipped_existing,
+        report.missing_legacy,
+        report.deleted_legacy
+    );
+    Ok(())
+}
+
+fn migrate_dotenv_keychain(
+    backend: &dyn DotenvKeychainBackend,
+    service: &str,
+    access_group: &str,
+    options: &DotenvKeychainMigrateOptions,
+) -> Result<DotenvKeychainMigrationReport, String> {
+    let mut accounts = backend.enumerate_legacy_accounts(service)?;
+    accounts.retain(|account| account.starts_with("DOTENV_PRIVATE_KEY:"));
+    accounts.sort();
+    accounts.dedup();
+
+    let mut report = DotenvKeychainMigrationReport {
+        discovered: accounts.len(),
+        ..DotenvKeychainMigrationReport::default()
+    };
+
+    for account in accounts {
+        if !options.replace
+            && backend
+                .read_new_if_present(service, &account, access_group)?
+                .is_some()
+        {
+            report.skipped_existing += 1;
+            continue;
+        }
+
+        let Some(legacy_value) = backend.read_legacy_if_present(service, &account)? else {
+            report.missing_legacy += 1;
+            continue;
+        };
+        validate_private_key_list(&legacy_value)
+            .map_err(|err| format!("legacy dotenv private key {account} is invalid: {err}"))?;
+
+        backend.write_new(service, &account, access_group, &legacy_value)?;
+        match backend.read_new_if_present(service, &account, access_group)? {
+            Some(value) if value == legacy_value => {}
+            Some(_) => {
+                return Err(format!(
+                    "failed to verify migrated dotenv private key {account}: new keychain value differed"
+                ));
+            }
+            None => {
+                return Err(format!(
+                    "failed to verify migrated dotenv private key {account}: new keychain item was not found"
+                ));
+            }
+        }
+        report.migrated += 1;
+
+        if options.delete_legacy && backend.delete_legacy(service, &account)? {
+            report.deleted_legacy += 1;
+        }
+    }
+
+    Ok(report)
+}
+
 #[cfg(target_os = "macos")]
 fn keychain_read_dotenv_private_key(service: &str, account: &str) -> Result<String, String> {
     keychain_read_dotenv_private_key_if_present(service, account)?.ok_or_else(|| {
@@ -2777,6 +3120,180 @@ fn keychain_read_dotenv_private_key(service: &str, account: &str) -> Result<Stri
 
 #[cfg(target_os = "macos")]
 fn keychain_read_dotenv_private_key_if_present(
+    service: &str,
+    account: &str,
+) -> Result<Option<String>, String> {
+    keychain_read_dotenv_private_key_if_present_with_backend(
+        &SystemDotenvKeychainBackend,
+        service,
+        account,
+        dotenv_keychain_access_group(),
+    )
+}
+
+fn keychain_read_dotenv_private_key_if_present_with_backend(
+    backend: &dyn DotenvKeychainBackend,
+    service: &str,
+    account: &str,
+    access_group: &str,
+) -> Result<Option<String>, String> {
+    match backend.read_new_if_present(service, account, access_group) {
+        Ok(Some(value)) => Ok(Some(value)),
+        Ok(None) => backend.read_legacy_if_present(service, account),
+        Err(new_error) => match backend.read_legacy_if_present(service, account) {
+            Ok(Some(value)) => Ok(Some(value)),
+            Ok(None) | Err(_) => Err(new_error),
+        },
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl DotenvKeychainBackend for SystemDotenvKeychainBackend {
+    fn read_new_if_present(
+        &self,
+        _service: &str,
+        account: &str,
+        _access_group: &str,
+    ) -> Result<Option<String>, String> {
+        crate::vault::request_dotenv_keychain_load(account)
+    }
+
+    fn write_new(
+        &self,
+        _service: &str,
+        account: &str,
+        _access_group: &str,
+        value: &str,
+    ) -> Result<(), String> {
+        crate::vault::request_dotenv_keychain_store(account, value)
+    }
+
+    fn delete_new(
+        &self,
+        _service: &str,
+        account: &str,
+        _access_group: &str,
+    ) -> Result<bool, String> {
+        crate::vault::request_dotenv_keychain_delete(account)
+    }
+
+    fn read_legacy_if_present(
+        &self,
+        service: &str,
+        account: &str,
+    ) -> Result<Option<String>, String> {
+        bridge_read_legacy_dotenv_private_key_if_present(service, account)
+    }
+
+    fn enumerate_legacy_accounts(&self, service: &str) -> Result<Vec<String>, String> {
+        bridge_enumerate_legacy_dotenv_private_key_accounts(service)
+    }
+
+    fn delete_legacy(&self, service: &str, account: &str) -> Result<bool, String> {
+        bridge_delete_legacy_dotenv_private_key(service, account)
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+impl DotenvKeychainBackend for SystemDotenvKeychainBackend {
+    fn read_new_if_present(
+        &self,
+        _service: &str,
+        _account: &str,
+        _access_group: &str,
+    ) -> Result<Option<String>, String> {
+        Err("dotenv keychain integration is only available on macOS".to_string())
+    }
+
+    fn write_new(
+        &self,
+        _service: &str,
+        _account: &str,
+        _access_group: &str,
+        _value: &str,
+    ) -> Result<(), String> {
+        Err("dotenv keychain integration is only available on macOS".to_string())
+    }
+
+    fn delete_new(
+        &self,
+        _service: &str,
+        _account: &str,
+        _access_group: &str,
+    ) -> Result<bool, String> {
+        Err("dotenv keychain integration is only available on macOS".to_string())
+    }
+
+    fn read_legacy_if_present(
+        &self,
+        _service: &str,
+        _account: &str,
+    ) -> Result<Option<String>, String> {
+        Err("dotenv keychain integration is only available on macOS".to_string())
+    }
+
+    fn enumerate_legacy_accounts(&self, _service: &str) -> Result<Vec<String>, String> {
+        Err("dotenv keychain integration is only available on macOS".to_string())
+    }
+
+    fn delete_legacy(&self, _service: &str, _account: &str) -> Result<bool, String> {
+        Err("dotenv keychain integration is only available on macOS".to_string())
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[allow(dead_code)]
+fn bridge_read_dotenv_private_key_from_new_store_if_present(
+    service: &str,
+    account: &str,
+    access_group: &str,
+) -> Result<Option<String>, String> {
+    unsafe extern "C" {
+        fn isotope_copy_dotenv_private_key_with_status(
+            service_cstr: *const c_char,
+            account_cstr: *const c_char,
+            access_group_cstr: *const c_char,
+            error_cstr: *mut *mut c_char,
+            status_out: *mut c_int,
+        ) -> *mut c_char;
+    }
+    let service_cstr =
+        CString::new(service).map_err(|_| "invalid keychain service name".to_string())?;
+    let account_cstr =
+        CString::new(account).map_err(|_| "invalid keychain account name".to_string())?;
+    let access_group_cstr =
+        CString::new(access_group).map_err(|_| "invalid keychain access group".to_string())?;
+    let mut error = std::ptr::null_mut();
+    let mut status = 0;
+    let value = unsafe {
+        isotope_copy_dotenv_private_key_with_status(
+            service_cstr.as_ptr(),
+            account_cstr.as_ptr(),
+            access_group_cstr.as_ptr(),
+            &mut error,
+            &mut status,
+        )
+    };
+    if value.is_null() {
+        let message = unsafe { take_dotenv_bridge_string(error) }
+            .unwrap_or_else(|| "keychain lookup failed".to_string());
+        if status == ERR_SEC_ITEM_NOT_FOUND {
+            return Ok(None);
+        }
+        return Err(dotenv_data_protection_keychain_error(
+            "load",
+            access_group,
+            status,
+            &message,
+        ));
+    }
+    unsafe { take_dotenv_bridge_string(value) }
+        .map(Some)
+        .ok_or_else(|| "keychain returned invalid UTF-8".to_string())
+}
+
+#[cfg(target_os = "macos")]
+fn bridge_read_legacy_dotenv_private_key_if_present(
     service: &str,
     account: &str,
 ) -> Result<Option<String>, String> {
@@ -2834,33 +3351,208 @@ fn keychain_write_dotenv_private_key(
     account: &str,
     value: &str,
 ) -> Result<(), String> {
+    keychain_write_dotenv_private_key_with_backend(
+        &SystemDotenvKeychainBackend,
+        service,
+        account,
+        dotenv_keychain_access_group(),
+        value,
+    )
+}
+
+fn keychain_write_dotenv_private_key_with_backend(
+    backend: &dyn DotenvKeychainBackend,
+    service: &str,
+    account: &str,
+    access_group: &str,
+    value: &str,
+) -> Result<(), String> {
+    backend.write_new(service, account, access_group, value)
+}
+
+#[cfg(target_os = "macos")]
+#[allow(dead_code)]
+fn bridge_write_dotenv_private_key_to_new_store(
+    service: &str,
+    account: &str,
+    access_group: &str,
+    value: &str,
+) -> Result<(), String> {
     unsafe extern "C" {
-        fn isotope_store_generic_password_json(
+        fn isotope_store_dotenv_private_key(
             service_cstr: *const c_char,
             account_cstr: *const c_char,
+            access_group_cstr: *const c_char,
             value_cstr: *const c_char,
             error_cstr: *mut *mut c_char,
+            status_out: *mut c_int,
         ) -> bool;
     }
     let service_cstr =
         CString::new(service).map_err(|_| "invalid keychain service name".to_string())?;
     let account_cstr =
         CString::new(account).map_err(|_| "invalid keychain account name".to_string())?;
+    let access_group_cstr =
+        CString::new(access_group).map_err(|_| "invalid keychain access group".to_string())?;
     let value_cstr = CString::new(value).map_err(|_| "invalid keychain private key".to_string())?;
     let mut error = std::ptr::null_mut();
+    let mut status = 0;
     if unsafe {
-        isotope_store_generic_password_json(
+        isotope_store_dotenv_private_key(
             service_cstr.as_ptr(),
             account_cstr.as_ptr(),
+            access_group_cstr.as_ptr(),
             value_cstr.as_ptr(),
             &mut error,
+            &mut status,
         )
     } {
         return Ok(());
     }
     let message = unsafe { take_dotenv_bridge_string(error) }
         .unwrap_or_else(|| "keychain write failed".to_string());
-    Err(format!("failed to store dotenv private key: {message}"))
+    Err(dotenv_data_protection_keychain_error(
+        "store",
+        access_group,
+        status,
+        &message,
+    ))
+}
+
+#[cfg(target_os = "macos")]
+#[allow(dead_code)]
+fn bridge_delete_dotenv_private_key_from_new_store(
+    service: &str,
+    account: &str,
+    access_group: &str,
+) -> Result<bool, String> {
+    unsafe extern "C" {
+        fn isotope_delete_dotenv_private_key_with_status(
+            service_cstr: *const c_char,
+            account_cstr: *const c_char,
+            access_group_cstr: *const c_char,
+            error_cstr: *mut *mut c_char,
+            status_out: *mut c_int,
+        ) -> bool;
+    }
+    let service_cstr =
+        CString::new(service).map_err(|_| "invalid keychain service name".to_string())?;
+    let account_cstr =
+        CString::new(account).map_err(|_| "invalid keychain account name".to_string())?;
+    let access_group_cstr =
+        CString::new(access_group).map_err(|_| "invalid keychain access group".to_string())?;
+    let mut error = std::ptr::null_mut();
+    let mut status = 0;
+    if unsafe {
+        isotope_delete_dotenv_private_key_with_status(
+            service_cstr.as_ptr(),
+            account_cstr.as_ptr(),
+            access_group_cstr.as_ptr(),
+            &mut error,
+            &mut status,
+        )
+    } {
+        return Ok(status != ERR_SEC_ITEM_NOT_FOUND);
+    }
+    let message = unsafe { take_dotenv_bridge_string(error) }
+        .unwrap_or_else(|| "keychain delete failed".to_string());
+    Err(dotenv_data_protection_keychain_error(
+        "delete",
+        access_group,
+        status,
+        &message,
+    ))
+}
+
+#[cfg(target_os = "macos")]
+fn bridge_enumerate_legacy_dotenv_private_key_accounts(
+    service: &str,
+) -> Result<Vec<String>, String> {
+    unsafe extern "C" {
+        fn isotope_copy_legacy_dotenv_private_key_accounts_json_with_status(
+            service_cstr: *const c_char,
+            error_cstr: *mut *mut c_char,
+            status_out: *mut c_int,
+        ) -> *mut c_char;
+    }
+    let service_cstr =
+        CString::new(service).map_err(|_| "invalid keychain service name".to_string())?;
+    let mut error = std::ptr::null_mut();
+    let mut status = 0;
+    let value = unsafe {
+        isotope_copy_legacy_dotenv_private_key_accounts_json_with_status(
+            service_cstr.as_ptr(),
+            &mut error,
+            &mut status,
+        )
+    };
+    if value.is_null() {
+        let message = unsafe { take_dotenv_bridge_string(error) }
+            .unwrap_or_else(|| "keychain enumeration failed".to_string());
+        return Err(format!(
+            "failed to enumerate legacy dotenv private keys: {message}"
+        ));
+    }
+    let json = unsafe { take_dotenv_bridge_string(value) }
+        .ok_or_else(|| "legacy keychain account list returned invalid UTF-8".to_string())?;
+    serde_json::from_str::<Vec<String>>(&json)
+        .map_err(|err| format!("failed to parse legacy keychain account list: {err}"))
+}
+
+#[cfg(target_os = "macos")]
+fn bridge_delete_legacy_dotenv_private_key(service: &str, account: &str) -> Result<bool, String> {
+    unsafe extern "C" {
+        fn isotope_delete_legacy_generic_password_with_status(
+            service_cstr: *const c_char,
+            account_cstr: *const c_char,
+            error_cstr: *mut *mut c_char,
+            status_out: *mut c_int,
+        ) -> bool;
+    }
+    let service_cstr =
+        CString::new(service).map_err(|_| "invalid keychain service name".to_string())?;
+    let account_cstr =
+        CString::new(account).map_err(|_| "invalid keychain account name".to_string())?;
+    let mut error = std::ptr::null_mut();
+    let mut status = 0;
+    if unsafe {
+        isotope_delete_legacy_generic_password_with_status(
+            service_cstr.as_ptr(),
+            account_cstr.as_ptr(),
+            &mut error,
+            &mut status,
+        )
+    } {
+        return Ok(status != ERR_SEC_ITEM_NOT_FOUND);
+    }
+    let message = unsafe { take_dotenv_bridge_string(error) }
+        .unwrap_or_else(|| "keychain delete failed".to_string());
+    Err(format!(
+        "failed to delete legacy dotenv private key {account}: {message}"
+    ))
+}
+
+#[cfg(target_os = "macos")]
+fn dotenv_data_protection_keychain_error(
+    action: &str,
+    access_group: &str,
+    status: c_int,
+    message: &str,
+) -> String {
+    let mut error = format!(
+        "failed to {action} dotenv private key in Data Protection keychain access group {access_group}: {message}"
+    );
+    if status == ERR_SEC_MISSING_ENTITLEMENT
+        || message.to_ascii_lowercase().contains("entitlement")
+        || message.to_ascii_lowercase().contains("access group")
+    {
+        error.push_str(
+            "; ensure this binary is signed with a keychain-access-groups entitlement containing ",
+        );
+        error.push_str(access_group);
+        error.push_str("; verify with `codesign -d --entitlements - <path>`");
+    }
+    error
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -2975,6 +3667,180 @@ mod tests {
         }
     }
 
+    #[derive(Default)]
+    struct StubDotenvKeychainBackend {
+        new_values: Mutex<BTreeMap<String, String>>,
+        legacy_values: Mutex<BTreeMap<String, String>>,
+        legacy_accounts: Mutex<Vec<String>>,
+        new_writes: Mutex<Vec<String>>,
+        legacy_deletes: Mutex<Vec<String>>,
+        new_read_error: Mutex<Option<String>>,
+    }
+
+    impl StubDotenvKeychainBackend {
+        fn with_legacy(account: &str, value: &str) -> Self {
+            let backend = Self::default();
+            backend
+                .legacy_values
+                .lock()
+                .unwrap()
+                .insert(account.to_string(), value.to_string());
+            backend
+                .legacy_accounts
+                .lock()
+                .unwrap()
+                .push(account.to_string());
+            backend
+        }
+
+        fn insert_new(&self, account: &str, value: &str) {
+            self.new_values
+                .lock()
+                .unwrap()
+                .insert(account.to_string(), value.to_string());
+        }
+
+        fn set_legacy_accounts(&self, accounts: Vec<&str>) {
+            *self.legacy_accounts.lock().unwrap() =
+                accounts.into_iter().map(str::to_string).collect();
+        }
+
+        fn set_new_read_error(&self, message: &str) {
+            *self.new_read_error.lock().unwrap() = Some(message.to_string());
+        }
+    }
+
+    impl DotenvKeychainBackend for StubDotenvKeychainBackend {
+        fn read_new_if_present(
+            &self,
+            _service: &str,
+            account: &str,
+            _access_group: &str,
+        ) -> Result<Option<String>, String> {
+            if let Some(message) = self.new_read_error.lock().unwrap().clone() {
+                return Err(message);
+            }
+            Ok(self.new_values.lock().unwrap().get(account).cloned())
+        }
+
+        fn write_new(
+            &self,
+            _service: &str,
+            account: &str,
+            _access_group: &str,
+            value: &str,
+        ) -> Result<(), String> {
+            self.new_values
+                .lock()
+                .unwrap()
+                .insert(account.to_string(), value.to_string());
+            self.new_writes.lock().unwrap().push(account.to_string());
+            Ok(())
+        }
+
+        fn delete_new(
+            &self,
+            _service: &str,
+            account: &str,
+            _access_group: &str,
+        ) -> Result<bool, String> {
+            Ok(self.new_values.lock().unwrap().remove(account).is_some())
+        }
+
+        fn read_legacy_if_present(
+            &self,
+            _service: &str,
+            account: &str,
+        ) -> Result<Option<String>, String> {
+            Ok(self.legacy_values.lock().unwrap().get(account).cloned())
+        }
+
+        fn enumerate_legacy_accounts(&self, _service: &str) -> Result<Vec<String>, String> {
+            Ok(self.legacy_accounts.lock().unwrap().clone())
+        }
+
+        fn delete_legacy(&self, _service: &str, account: &str) -> Result<bool, String> {
+            self.legacy_deletes
+                .lock()
+                .unwrap()
+                .push(account.to_string());
+            Ok(self.legacy_values.lock().unwrap().remove(account).is_some())
+        }
+    }
+
+    struct VerifyFailingDotenvKeychainBackend {
+        account: String,
+        legacy_value: String,
+        new_value_after_write: Option<String>,
+        wrote: Mutex<bool>,
+    }
+
+    impl VerifyFailingDotenvKeychainBackend {
+        fn new(account: &str, legacy_value: &str, new_value_after_write: Option<String>) -> Self {
+            Self {
+                account: account.to_string(),
+                legacy_value: legacy_value.to_string(),
+                new_value_after_write,
+                wrote: Mutex::new(false),
+            }
+        }
+    }
+
+    impl DotenvKeychainBackend for VerifyFailingDotenvKeychainBackend {
+        fn read_new_if_present(
+            &self,
+            _service: &str,
+            _account: &str,
+            _access_group: &str,
+        ) -> Result<Option<String>, String> {
+            if *self.wrote.lock().unwrap() {
+                Ok(self.new_value_after_write.clone())
+            } else {
+                Ok(None)
+            }
+        }
+
+        fn write_new(
+            &self,
+            _service: &str,
+            _account: &str,
+            _access_group: &str,
+            _value: &str,
+        ) -> Result<(), String> {
+            *self.wrote.lock().unwrap() = true;
+            Ok(())
+        }
+
+        fn delete_new(
+            &self,
+            _service: &str,
+            _account: &str,
+            _access_group: &str,
+        ) -> Result<bool, String> {
+            Ok(false)
+        }
+
+        fn read_legacy_if_present(
+            &self,
+            _service: &str,
+            account: &str,
+        ) -> Result<Option<String>, String> {
+            Ok((account == self.account).then(|| self.legacy_value.clone()))
+        }
+
+        fn enumerate_legacy_accounts(&self, _service: &str) -> Result<Vec<String>, String> {
+            Ok(vec![self.account.clone()])
+        }
+
+        fn delete_legacy(&self, _service: &str, _account: &str) -> Result<bool, String> {
+            Ok(false)
+        }
+    }
+
+    fn dotenv_test_private_key(byte: u8) -> String {
+        format!("{byte:064x}")
+    }
+
     struct DotenvEnvGuard {
         previous: Vec<(String, Option<OsString>)>,
     }
@@ -3012,27 +3878,341 @@ mod tests {
         drop(core_dump_limit);
     }
 
+    #[test]
+    fn dotenv_keychain_read_prefers_new_store_and_falls_back_to_legacy() {
+        let account =
+            "DOTENV_PRIVATE_KEY:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let legacy_value = dotenv_test_private_key(1);
+        let new_value = dotenv_test_private_key(2);
+        let backend = StubDotenvKeychainBackend::with_legacy(account, &legacy_value);
+
+        assert_eq!(
+            keychain_read_dotenv_private_key_if_present_with_backend(
+                &backend,
+                "service",
+                account,
+                "TEAM.group"
+            )
+            .unwrap(),
+            Some(legacy_value.clone())
+        );
+
+        backend.insert_new(account, &new_value);
+        assert_eq!(
+            keychain_read_dotenv_private_key_if_present_with_backend(
+                &backend,
+                "service",
+                account,
+                "TEAM.group"
+            )
+            .unwrap(),
+            Some(new_value)
+        );
+    }
+
+    #[test]
+    fn dotenv_keychain_read_falls_back_to_legacy_when_new_store_errors() {
+        let account =
+            "DOTENV_PRIVATE_KEY:abababababababababababababababababababababababababababababababab";
+        let legacy_value = dotenv_test_private_key(9);
+        let backend = StubDotenvKeychainBackend::with_legacy(account, &legacy_value);
+        backend.set_new_read_error("broker unavailable");
+
+        assert_eq!(
+            keychain_read_dotenv_private_key_if_present_with_backend(
+                &backend,
+                "service",
+                account,
+                "TEAM.group"
+            )
+            .unwrap(),
+            Some(legacy_value)
+        );
+
+        let missing_account =
+            "DOTENV_PRIVATE_KEY:acacacacacacacacacacacacacacacacacacacacacacacacacacacacacacacac";
+        assert_eq!(
+            keychain_read_dotenv_private_key_if_present_with_backend(
+                &backend,
+                "service",
+                missing_account,
+                "TEAM.group"
+            )
+            .unwrap_err(),
+            "broker unavailable"
+        );
+    }
+
+    #[test]
+    fn dotenv_keychain_write_uses_new_store_only() {
+        let account =
+            "DOTENV_PRIVATE_KEY:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        let value = dotenv_test_private_key(3);
+        let backend = StubDotenvKeychainBackend::default();
+
+        keychain_write_dotenv_private_key_with_backend(
+            &backend,
+            "service",
+            account,
+            "TEAM.group",
+            &value,
+        )
+        .unwrap();
+
+        assert_eq!(
+            backend.new_values.lock().unwrap().get(account),
+            Some(&value)
+        );
+        assert!(backend.legacy_values.lock().unwrap().is_empty());
+        assert_eq!(backend.new_writes.lock().unwrap().as_slice(), [account]);
+    }
+
+    #[test]
+    fn dotenv_keychain_migration_counts_and_skips_existing_without_secrets() {
+        let migrate_account =
+            "DOTENV_PRIVATE_KEY:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+        let existing_account =
+            "DOTENV_PRIVATE_KEY:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
+        let missing_account =
+            "DOTENV_PRIVATE_KEY:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+        let ignored_account =
+            "OTHER:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
+        let migrated_value = dotenv_test_private_key(4);
+        let existing_value = dotenv_test_private_key(5);
+        let backend = StubDotenvKeychainBackend::default();
+        backend.set_legacy_accounts(vec![
+            migrate_account,
+            existing_account,
+            missing_account,
+            ignored_account,
+            migrate_account,
+        ]);
+        backend
+            .legacy_values
+            .lock()
+            .unwrap()
+            .insert(migrate_account.to_string(), migrated_value.clone());
+        backend
+            .legacy_values
+            .lock()
+            .unwrap()
+            .insert(existing_account.to_string(), existing_value.clone());
+        backend.insert_new(existing_account, &existing_value);
+
+        let report = migrate_dotenv_keychain(
+            &backend,
+            "service",
+            "TEAM.group",
+            &DotenvKeychainMigrateOptions::default(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            report,
+            DotenvKeychainMigrationReport {
+                discovered: 3,
+                migrated: 1,
+                skipped_existing: 1,
+                missing_legacy: 1,
+                deleted_legacy: 0,
+            }
+        );
+        assert_eq!(
+            backend.new_values.lock().unwrap().get(migrate_account),
+            Some(&migrated_value)
+        );
+        let report_debug = format!("{report:?}");
+        assert!(!report_debug.contains(&migrated_value));
+        assert!(!report_debug.contains(&existing_value));
+    }
+
+    #[test]
+    fn dotenv_keychain_migration_replace_and_delete_legacy_after_verify() {
+        let account =
+            "DOTENV_PRIVATE_KEY:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
+        let legacy_value = dotenv_test_private_key(6);
+        let backend = StubDotenvKeychainBackend::with_legacy(account, &legacy_value);
+        backend.insert_new(account, &dotenv_test_private_key(7));
+
+        let report = migrate_dotenv_keychain(
+            &backend,
+            "service",
+            "TEAM.group",
+            &DotenvKeychainMigrateOptions {
+                replace: true,
+                delete_legacy: true,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            report,
+            DotenvKeychainMigrationReport {
+                discovered: 1,
+                migrated: 1,
+                skipped_existing: 0,
+                missing_legacy: 0,
+                deleted_legacy: 1,
+            }
+        );
+        assert_eq!(
+            backend.new_values.lock().unwrap().get(account),
+            Some(&legacy_value)
+        );
+        assert!(!backend.legacy_values.lock().unwrap().contains_key(account));
+        assert_eq!(backend.legacy_deletes.lock().unwrap().as_slice(), [account]);
+    }
+
+    #[test]
+    fn dotenv_keychain_migration_reports_verify_failures() {
+        assert_eq!(
+            dotenv_keychain_access_group(),
+            DOTENV_DEFAULT_KEYCHAIN_ACCESS_GROUP
+        );
+        let account =
+            "DOTENV_PRIVATE_KEY:1111111111111111111111111111111111111111111111111111111111111111";
+        let legacy_value = dotenv_test_private_key(10);
+        let mismatch_backend = VerifyFailingDotenvKeychainBackend::new(
+            account,
+            &legacy_value,
+            Some(dotenv_test_private_key(11)),
+        );
+        assert!(
+            migrate_dotenv_keychain(
+                &mismatch_backend,
+                "service",
+                "TEAM.group",
+                &DotenvKeychainMigrateOptions::default(),
+            )
+            .unwrap_err()
+            .contains("new keychain value differed")
+        );
+
+        let missing_backend = VerifyFailingDotenvKeychainBackend::new(account, &legacy_value, None);
+        assert!(
+            migrate_dotenv_keychain(
+                &missing_backend,
+                "service",
+                "TEAM.group",
+                &DotenvKeychainMigrateOptions::default(),
+            )
+            .unwrap_err()
+            .contains("new keychain item was not found")
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn dotenv_data_protection_keychain_bridge_roundtrips_when_opted_in_and_entitled() {
+        if std::env::var_os("AV_TEST_DOTENV_DP_KEYCHAIN").is_none() {
+            eprintln!(
+                "skipping dotenv DP keychain integration test; set AV_TEST_DOTENV_DP_KEYCHAIN=1 to run"
+            );
+            return;
+        }
+
+        let access_group = dotenv_keychain_access_group();
+        let current_exe = std::env::current_exe().expect("current test executable");
+        let entitlements = std::process::Command::new("/usr/bin/codesign")
+            .args(["-d", "--entitlements", "-"])
+            .arg(&current_exe)
+            .output();
+        let Ok(entitlements) = entitlements else {
+            eprintln!("skipping dotenv DP keychain integration test; codesign is unavailable");
+            return;
+        };
+        let entitlement_text = String::from_utf8_lossy(&entitlements.stdout);
+        if !entitlement_text.contains(access_group) {
+            eprintln!(
+                "skipping dotenv DP keychain integration test; {} lacks keychain group {}",
+                current_exe.display(),
+                access_group
+            );
+            return;
+        }
+
+        let account = format!("DOTENV_PRIVATE_KEY:{:064x}", std::process::id());
+        let value = dotenv_test_private_key(8);
+        let _ = bridge_delete_dotenv_private_key_from_new_store(
+            DOTENV_KEYCHAIN_SERVICE,
+            &account,
+            access_group,
+        );
+        bridge_write_dotenv_private_key_to_new_store(
+            DOTENV_KEYCHAIN_SERVICE,
+            &account,
+            access_group,
+            &value,
+        )
+        .unwrap();
+        assert_eq!(
+            bridge_read_dotenv_private_key_from_new_store_if_present(
+                DOTENV_KEYCHAIN_SERVICE,
+                &account,
+                access_group
+            )
+            .unwrap(),
+            Some(value)
+        );
+        assert!(
+            bridge_delete_dotenv_private_key_from_new_store(
+                DOTENV_KEYCHAIN_SERVICE,
+                &account,
+                access_group
+            )
+            .unwrap()
+        );
+    }
+
     #[cfg(target_os = "macos")]
     #[test]
     fn dotenv_keychain_and_notification_bridges_reject_invalid_c_strings_before_ffi() {
         assert_eq!(
-            keychain_read_dotenv_private_key("bad\0service", "account").unwrap_err(),
+            bridge_read_dotenv_private_key_from_new_store_if_present(
+                "bad\0service",
+                "account",
+                "TEAM.group"
+            )
+            .unwrap_err(),
             "invalid keychain service name"
         );
         assert_eq!(
-            keychain_read_dotenv_private_key("service", "bad\0account").unwrap_err(),
+            bridge_read_dotenv_private_key_from_new_store_if_present(
+                "service",
+                "bad\0account",
+                "TEAM.group"
+            )
+            .unwrap_err(),
             "invalid keychain account name"
         );
         assert_eq!(
-            keychain_write_dotenv_private_key("bad\0service", "account", "value").unwrap_err(),
+            bridge_write_dotenv_private_key_to_new_store(
+                "bad\0service",
+                "account",
+                "TEAM.group",
+                "value"
+            )
+            .unwrap_err(),
             "invalid keychain service name"
         );
         assert_eq!(
-            keychain_write_dotenv_private_key("service", "bad\0account", "value").unwrap_err(),
+            bridge_write_dotenv_private_key_to_new_store(
+                "service",
+                "bad\0account",
+                "TEAM.group",
+                "value"
+            )
+            .unwrap_err(),
             "invalid keychain account name"
         );
         assert_eq!(
-            keychain_write_dotenv_private_key("service", "account", "bad\0value").unwrap_err(),
+            bridge_write_dotenv_private_key_to_new_store(
+                "service",
+                "account",
+                "TEAM.group",
+                "bad\0value"
+            )
+            .unwrap_err(),
             "invalid keychain private key"
         );
         assert_eq!(
@@ -3176,6 +4356,13 @@ mod tests {
         }
     }
 
+    fn dotenv_agent_export_env_marker_names() -> Vec<&'static str> {
+        DOTENV_AGENT_EXPORT_ENV_MARKERS
+            .iter()
+            .map(|(name, _source)| *name)
+            .collect()
+    }
+
     #[test]
     fn dotenv_parse_handles_comments_quotes_and_public_key() {
         let doc = DotenvDocument::parse(
@@ -3303,6 +4490,12 @@ mod tests {
             DotenvApprovalMode::from_raw_value("bogus").unwrap_err(),
             "unknown dotenv approval mode: bogus"
         );
+        assert!(!dotenv_remembered_approval_applies_to_mode(
+            DotenvApprovalMode::Export
+        ));
+        assert!(dotenv_remembered_approval_applies_to_mode(
+            DotenvApprovalMode::Run
+        ));
         assert_eq!(
             DotenvApprovalPolicy::ApproveEveryTime.raw_value(),
             "approve_every_time"
@@ -3596,6 +4789,8 @@ mod tests {
     #[test]
     fn dotenv_codex_export_auto_rejection_preempts_remembered_approval() {
         let _lock = global_test_env_lock().lock().unwrap();
+        let agent_env_markers = dotenv_agent_export_env_marker_names();
+        let _agent_env = DotenvEnvGuard::unset(&agent_env_markers);
         let _process_context = DotenvProcessContextGuard::codex_shell();
         let temp = TempDir::new().unwrap();
         let policy_path = temp.path().join("policy.json");
@@ -3634,6 +4829,72 @@ mod tests {
         assert!(error.contains("auto-rejected"), "{error}");
         assert!(error.contains("Codex.app"), "{error}");
         assert!(error.contains("hint: use `av dotenv run`"), "{error}");
+    }
+
+    #[test]
+    fn dotenv_agent_env_export_auto_rejection_preempts_remembered_approval() {
+        let _lock = global_test_env_lock().lock().unwrap();
+        let _process_context = DotenvProcessContextGuard::non_codex_shell();
+        let temp = TempDir::new().unwrap();
+        let policy_path = temp.path().join("policy.json");
+        let remembered_path = temp.path().join("remembered-approvals.json");
+        let policy_path_str = policy_path.to_str().unwrap();
+        let remembered_path_str = remembered_path.to_str().unwrap();
+        let _env = DotenvEnvGuard::set(&[
+            (AV_TEST_DOTENV_POLICY_PATH_ENV, policy_path_str),
+            (
+                AV_TEST_DOTENV_REMEMBERED_APPROVALS_PATH_ENV,
+                remembered_path_str,
+            ),
+            ("CODEX_SHELL", "1"),
+        ]);
+        write_dotenv_approval_policy(DotenvApprovalPolicy::RememberApproved).unwrap();
+        let entry = DotenvRememberedApprovalEntry {
+            mode: DotenvApprovalMode::Export,
+            env_file_path: "/tmp/project/.env".to_string(),
+            project_root: "/tmp/project".to_string(),
+            env_sha256: "sha".to_string(),
+            public_key_fingerprint: "fingerprint".to_string(),
+            keys: vec!["FOO".to_string()],
+        };
+        remember_dotenv_approval(entry.clone()).unwrap();
+
+        let error = request_dotenv_approval_if_needed(
+            entry.mode,
+            Path::new(&entry.env_file_path),
+            Path::new(&entry.project_root),
+            &entry.env_sha256,
+            &entry.public_key_fingerprint,
+            &entry.keys,
+            &[],
+        )
+        .unwrap_err();
+
+        assert!(error.contains("auto-rejected"), "{error}");
+        assert!(error.contains("Codex"), "{error}");
+        assert!(error.contains("hint: use `av dotenv run`"), "{error}");
+    }
+
+    #[test]
+    fn dotenv_agent_export_rejects_before_private_key_lookup() {
+        let _lock = global_test_env_lock().lock().unwrap();
+        let _process_context = DotenvProcessContextGuard::non_codex_shell();
+        let temp = TempDir::new().unwrap();
+        let env_path = temp.path().join(".env");
+        let keypair = generate_dotenv_keypair(&env_path);
+        fs::write(
+            &env_path,
+            format!("DOTENV_PUBLIC_KEY={}\nFOO=plain\n", keypair.public_key),
+        )
+        .unwrap();
+        let _env = DotenvEnvGuard::set(&[("CODEX_SHELL", "1")]);
+        let store = StubDotenvPrivateKeyStore::default();
+
+        let error = load_dotenv_secrets(&env_path, DotenvApprovalMode::Export, &[], &store, None)
+            .unwrap_err();
+
+        assert!(error.contains("auto-rejected"), "{error}");
+        assert!(!error.contains("stub private key"), "{error}");
     }
 
     #[test]
@@ -3764,6 +5025,8 @@ mod tests {
     #[test]
     fn dotenv_system_policy_trust_and_approval_helpers_cover_edges() {
         let _lock = global_test_env_lock().lock().unwrap();
+        let agent_env_markers = dotenv_agent_export_env_marker_names();
+        let _agent_env = DotenvEnvGuard::unset(&agent_env_markers);
         let _process_context = DotenvProcessContextGuard::non_codex_shell();
         let temp = TempDir::new().unwrap();
         let policy_path = temp.path().join("policy.json");
@@ -3946,6 +5209,93 @@ mod tests {
         assert_eq!(
             parse_dotenv_command("av dotenv", [OsString::from("bogus")].into_iter()).unwrap_err(),
             "unknown dotenv command 'bogus'"
+        );
+        assert_eq!(
+            parse_dotenv_command(
+                "av dotenv",
+                [
+                    OsString::from("keychain"),
+                    OsString::from("migrate"),
+                    OsString::from("--replace"),
+                    OsString::from("--delete-legacy"),
+                ]
+                .into_iter()
+            )
+            .unwrap(),
+            Some(DotenvCommand::Keychain(DotenvKeychainCommand::Migrate(
+                DotenvKeychainMigrateOptions {
+                    replace: true,
+                    delete_legacy: true,
+                }
+            )))
+        );
+        assert_eq!(
+            parse_dotenv_command("av dotenv", [OsString::from("keychain")].into_iter())
+                .unwrap_err(),
+            "missing dotenv keychain command"
+        );
+        assert!(
+            parse_dotenv_command(
+                "av dotenv",
+                [OsString::from("keychain"), OsString::from("--help")].into_iter()
+            )
+            .unwrap()
+            .is_none()
+        );
+        assert!(
+            parse_dotenv_command(
+                "av dotenv",
+                [OsString::from("keychain"), OsString::from("--version")].into_iter()
+            )
+            .unwrap()
+            .is_none()
+        );
+        assert_eq!(
+            parse_dotenv_command(
+                "av dotenv",
+                [OsString::from("keychain"), OsString::from("bogus")].into_iter()
+            )
+            .unwrap_err(),
+            "unknown dotenv keychain command 'bogus'"
+        );
+        assert_eq!(
+            parse_dotenv_command(
+                "av dotenv",
+                [
+                    OsString::from("keychain"),
+                    OsString::from("migrate"),
+                    OsString::from("--bogus"),
+                ]
+                .into_iter()
+            )
+            .unwrap_err(),
+            "unknown dotenv keychain migrate argument '--bogus'"
+        );
+        assert!(
+            parse_dotenv_command(
+                "av dotenv",
+                [
+                    OsString::from("keychain"),
+                    OsString::from("migrate"),
+                    OsString::from("--help"),
+                ]
+                .into_iter()
+            )
+            .unwrap()
+            .is_none()
+        );
+        assert!(
+            parse_dotenv_command(
+                "av dotenv",
+                [
+                    OsString::from("keychain"),
+                    OsString::from("migrate"),
+                    OsString::from("--version"),
+                ]
+                .into_iter()
+            )
+            .unwrap()
+            .is_none()
         );
 
         assert!(
@@ -4297,15 +5647,31 @@ mod tests {
     #[test]
     fn dotenv_keychain_bridges_reject_invalid_c_strings() {
         assert_eq!(
-            keychain_read_dotenv_private_key("bad\0service", "account").unwrap_err(),
+            bridge_read_dotenv_private_key_from_new_store_if_present(
+                "bad\0service",
+                "account",
+                "TEAM.group"
+            )
+            .unwrap_err(),
             "invalid keychain service name"
         );
         assert_eq!(
-            keychain_read_dotenv_private_key("service", "bad\0account").unwrap_err(),
+            bridge_read_dotenv_private_key_from_new_store_if_present(
+                "service",
+                "bad\0account",
+                "TEAM.group"
+            )
+            .unwrap_err(),
             "invalid keychain account name"
         );
         assert_eq!(
-            keychain_write_dotenv_private_key("service", "account", "bad\0value").unwrap_err(),
+            bridge_write_dotenv_private_key_to_new_store(
+                "service",
+                "account",
+                "TEAM.group",
+                "bad\0value"
+            )
+            .unwrap_err(),
             "invalid keychain private key"
         );
         assert_eq!(
@@ -4322,6 +5688,8 @@ mod tests {
     #[test]
     fn dotenv_approval_store_paths_and_decisions_cover_json_edges() {
         let _lock = global_test_env_lock().lock().unwrap();
+        let agent_env_markers = dotenv_agent_export_env_marker_names();
+        let _agent_env = DotenvEnvGuard::unset(&agent_env_markers);
         let temp = TempDir::new().unwrap();
         let home = temp.path().join("home");
         fs::create_dir_all(&home).unwrap();
@@ -4399,22 +5767,76 @@ mod tests {
                 .entries,
             vec![entry.clone()]
         );
+        clear_dotenv_remembered_approvals_for_test(&direct_remembered_path).unwrap();
+        assert!(
+            load_dotenv_remembered_approvals_for_test(&direct_remembered_path)
+                .unwrap()
+                .entries
+                .is_empty()
+        );
 
-        let pending = dotenv_pending_approval_path().unwrap();
-        write_dotenv_json(&pending, &entry).unwrap();
-        assert!(pending.is_file());
+        let generated_id = new_dotenv_approval_request_id().unwrap();
+        let id_parts = generated_id.split('-').collect::<Vec<_>>();
+        assert_eq!(id_parts.len(), 3);
+        assert_eq!(id_parts[0], process::id().to_string());
+        assert_eq!(id_parts[2].len(), 32);
+        assert!(id_parts[2].chars().all(|ch| ch.is_ascii_hexdigit()));
 
-        let decision_path = dotenv_decision_path("approved").unwrap();
+        let stale_decision_path = dotenv_decision_path("stale").unwrap();
         write_dotenv_json(
-            &decision_path,
+            &stale_decision_path,
             &DotenvApprovalDecision {
-                id: "approved".to_string(),
+                id: "stale".to_string(),
+                approval_token: Some("stale-token".to_string()),
                 approved: true,
                 reason: None,
             },
         )
         .unwrap();
-        wait_for_dotenv_decision("approved", DotenvApprovalMode::Export).unwrap();
+        assert!(stale_decision_path.is_file());
+        assert_eq!(
+            prepare_dotenv_approval_request_files("stale").unwrap(),
+            dotenv_pending_approval_path().unwrap()
+        );
+        assert!(!stale_decision_path.exists());
+
+        let pending = dotenv_pending_approval_path().unwrap();
+        write_dotenv_json(&pending, &entry).unwrap();
+        assert!(pending.is_file());
+        assert_eq!(
+            fs::metadata(&pending).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        assert_eq!(
+            fs::metadata(pending.parent().unwrap())
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700
+        );
+
+        let approval_token = "approval-token";
+        let decision_path = dotenv_decision_path("approved").unwrap();
+        write_dotenv_json(
+            &decision_path,
+            &DotenvApprovalDecision {
+                id: "approved".to_string(),
+                approval_token: Some(approval_token.to_string()),
+                approved: true,
+                reason: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            fs::metadata(decision_path.parent().unwrap())
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700
+        );
+        wait_for_dotenv_decision("approved", approval_token, DotenvApprovalMode::Export).unwrap();
         assert!(!pending.exists());
         assert!(!decision_path.exists());
 
@@ -4423,13 +5845,15 @@ mod tests {
             &dotenv_decision_path("denied").unwrap(),
             &DotenvApprovalDecision {
                 id: "denied".to_string(),
+                approval_token: Some(approval_token.to_string()),
                 approved: false,
                 reason: None,
             },
         )
         .unwrap();
         assert_eq!(
-            wait_for_dotenv_decision("denied", DotenvApprovalMode::Export).unwrap_err(),
+            wait_for_dotenv_decision("denied", approval_token, DotenvApprovalMode::Export)
+                .unwrap_err(),
             "dotenv approval denied\nhint: use `av dotenv run` to run commands with this project's environment"
         );
 
@@ -4438,13 +5862,15 @@ mod tests {
             &dotenv_decision_path("run-denied").unwrap(),
             &DotenvApprovalDecision {
                 id: "run-denied".to_string(),
+                approval_token: Some(approval_token.to_string()),
                 approved: false,
                 reason: Some("Denied by operator".to_string()),
             },
         )
         .unwrap();
         assert_eq!(
-            wait_for_dotenv_decision("run-denied", DotenvApprovalMode::Run).unwrap_err(),
+            wait_for_dotenv_decision("run-denied", approval_token, DotenvApprovalMode::Run)
+                .unwrap_err(),
             "Denied by operator"
         );
 
@@ -4453,14 +5879,50 @@ mod tests {
             &dotenv_decision_path("mismatch").unwrap(),
             &DotenvApprovalDecision {
                 id: "other".to_string(),
+                approval_token: Some(approval_token.to_string()),
                 approved: true,
                 reason: None,
             },
         )
         .unwrap();
         assert_eq!(
-            wait_for_dotenv_decision("mismatch", DotenvApprovalMode::Export).unwrap_err(),
+            wait_for_dotenv_decision("mismatch", approval_token, DotenvApprovalMode::Export)
+                .unwrap_err(),
             "dotenv approval decision id mismatch"
+        );
+
+        write_dotenv_json(&dotenv_pending_approval_path().unwrap(), &entry).unwrap();
+        write_dotenv_json(
+            &dotenv_decision_path("token-mismatch").unwrap(),
+            &DotenvApprovalDecision {
+                id: "token-mismatch".to_string(),
+                approval_token: Some("wrong-token".to_string()),
+                approved: true,
+                reason: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            wait_for_dotenv_decision("token-mismatch", approval_token, DotenvApprovalMode::Export)
+                .unwrap_err(),
+            "dotenv approval token mismatch"
+        );
+
+        write_dotenv_json(&dotenv_pending_approval_path().unwrap(), &entry).unwrap();
+        write_dotenv_json(
+            &dotenv_decision_path("missing-token").unwrap(),
+            &DotenvApprovalDecision {
+                id: "missing-token".to_string(),
+                approval_token: None,
+                approved: true,
+                reason: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            wait_for_dotenv_decision("missing-token", approval_token, DotenvApprovalMode::Export)
+                .unwrap_err(),
+            "dotenv approval decision missing token; update the approval client"
         );
 
         fs::write(&remembered_path, "not json").unwrap();
@@ -4551,9 +6013,24 @@ mod tests {
         );
 
         write_dotenv_approval_policy(DotenvApprovalPolicy::RememberApproved).unwrap();
+        remember_dotenv_approval_from_helper(
+            DotenvApprovalMode::Export,
+            env_path_str,
+            temp.path().to_str().unwrap(),
+            &digest,
+            &fingerprint,
+            vec!["FOO".to_string()],
+        )
+        .unwrap();
+        assert!(
+            load_dotenv_remembered_approvals()
+                .unwrap()
+                .entries
+                .is_empty()
+        );
         assert_eq!(
             remember_dotenv_approval_from_helper(
-                DotenvApprovalMode::Export,
+                DotenvApprovalMode::Run,
                 env_path_str,
                 temp.path().to_str().unwrap(),
                 &digest,
@@ -4565,7 +6042,7 @@ mod tests {
         );
         assert_eq!(
             remember_dotenv_approval_from_helper(
-                DotenvApprovalMode::Export,
+                DotenvApprovalMode::Run,
                 env_path_str,
                 project_str,
                 &"0".repeat(64),
@@ -4577,7 +6054,7 @@ mod tests {
         );
         assert_eq!(
             remember_dotenv_approval_from_helper(
-                DotenvApprovalMode::Export,
+                DotenvApprovalMode::Run,
                 env_path_str,
                 project_str,
                 &digest,
@@ -4589,7 +6066,7 @@ mod tests {
         );
 
         remember_dotenv_approval_from_helper(
-            DotenvApprovalMode::Export,
+            DotenvApprovalMode::Run,
             env_path_str,
             project_str,
             &digest,
@@ -4609,6 +6086,8 @@ mod tests {
     #[test]
     fn dotenv_load_export_and_run_cover_approval_bypass_paths() {
         let _lock = global_test_env_lock().lock().unwrap();
+        let agent_env_markers = dotenv_agent_export_env_marker_names();
+        let _agent_env = DotenvEnvGuard::unset(&agent_env_markers);
         let _process_context = DotenvProcessContextGuard::non_codex_shell();
         let temp = TempDir::new().unwrap();
         let home = temp.path().join("home");
@@ -4650,15 +6129,15 @@ mod tests {
 
         remember_dotenv_approval(remembered_entry_for(
             &env_path,
-            DotenvApprovalMode::Export,
+            DotenvApprovalMode::Run,
             &keypair.public_key,
             &["BAR", "FOO"],
         ))
         .unwrap();
         let loaded = load_dotenv_secrets(
             &env_path,
-            DotenvApprovalMode::Export,
-            &[],
+            DotenvApprovalMode::Run,
+            &["/bin/echo".to_string()],
             &store,
             Some(&["FOO".to_string()]),
         )
@@ -4692,8 +6171,9 @@ mod tests {
         .unwrap();
 
         let digest = sha256_file_hex(&env_path).unwrap();
+        let loaded_env_path = loaded.env_path.to_string_lossy().into_owned();
         let _current = DotenvEnvGuard::set(&[
-            (AV_DOTENV_FILE_ENV, env_path.to_str().unwrap()),
+            (AV_DOTENV_FILE_ENV, &loaded_env_path),
             (AV_DOTENV_DIGEST_ENV, &digest),
         ]);
         run_dotenv_export(
@@ -4713,6 +6193,19 @@ mod tests {
             &["BAR", "FOO"],
         ))
         .unwrap();
+        assert!(
+            run_dotenv_run(
+                &DotenvRunOptions {
+                    file: env_path.clone(),
+                    command: OsString::from("/definitely/missing-av-dotenv-command"),
+                    args: Vec::new(),
+                },
+                &store,
+            )
+            .unwrap_err()
+            .contains("failed to execute")
+        );
+
         run_dotenv_run(
             &DotenvRunOptions {
                 file: env_path,
@@ -4905,11 +6398,66 @@ mod tests {
     }
 
     #[test]
+    fn dotenv_transfer_helpers_validate_error_edges() {
+        let temp = TempDir::new().unwrap();
+        let missing_public = temp.path().join("missing-public.env");
+        fs::write(&missing_public, "FOO=bar\n").unwrap();
+        assert!(
+            load_dotenv_private_key_for_transfer(&missing_public)
+                .unwrap_err()
+                .contains("is missing DOTENV_PUBLIC_KEY")
+        );
+
+        let invalid_public = temp.path().join("invalid-public.env");
+        fs::write(&invalid_public, "DOTENV_PUBLIC_KEY=abc\n").unwrap();
+        assert!(
+            load_dotenv_private_key_for_transfer(&invalid_public)
+                .unwrap_err()
+                .contains("hex value")
+        );
+
+        assert_eq!(
+            validate_dotenv_public_key_name_for_transfer("PRIVATE_KEY").unwrap_err(),
+            "invalid dotenv public key name: PRIVATE_KEY"
+        );
+        assert_eq!(
+            validate_dotenv_public_key_for_transfer("aa").unwrap_err(),
+            "dotenv public key must be 33 bytes"
+        );
+        assert_eq!(
+            validate_dotenv_private_key_for_transfer("abc").unwrap_err(),
+            "hex value must have an even number of characters"
+        );
+        let public_key = format!("02{}", "11".repeat(32));
+        assert_eq!(
+            dotenv_public_key_fingerprint_for_transfer(&public_key).len(),
+            64
+        );
+        assert!(
+            load_existing_dotenv_private_key_for_transfer("abc")
+                .unwrap_err()
+                .contains("hex value")
+        );
+        assert!(
+            store_dotenv_private_key_for_transfer("abc", &dotenv_test_private_key(12))
+                .unwrap_err()
+                .contains("hex value")
+        );
+        assert_eq!(
+            store_dotenv_private_key_for_transfer(&public_key, "abc").unwrap_err(),
+            "hex value must have an even number of characters"
+        );
+    }
+
+    #[test]
     fn dotenv_renderers_and_default_paths_cover_remaining_branches() {
-        let _guard = DotenvEnvGuard::unset(&[
+        let _lock = global_test_env_lock().lock().unwrap();
+        let mut env_names = vec![
             AV_TEST_DOTENV_POLICY_PATH_ENV,
             AV_TEST_DOTENV_REMEMBERED_APPROVALS_PATH_ENV,
-        ]);
+        ];
+        env_names.extend(dotenv_agent_export_env_marker_names());
+        let _guard = DotenvEnvGuard::unset(&env_names);
 
         print_dotenv_hook("av", DotenvShell::Bash);
         print_dotenv_hook("av", DotenvShell::Zsh);

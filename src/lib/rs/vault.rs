@@ -123,6 +123,43 @@ pub struct KeyTransferImportResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DotenvKeychainLoadRequest {
+    pub id: String,
+    pub account: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DotenvKeychainStoreRequest {
+    pub id: String,
+    pub account: String,
+    pub private_key: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DotenvKeychainDeleteRequest {
+    pub id: String,
+    pub account: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DotenvKeychainLoadResponse {
+    pub id: String,
+    pub private_key: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DotenvKeychainStoreResponse {
+    pub id: String,
+    pub stored: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DotenvKeychainDeleteResponse {
+    pub id: String,
+    pub deleted: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct VaultApprovalResponse {
     pub id: String,
     pub approved: bool,
@@ -160,10 +197,28 @@ pub struct VaultExecCompletion {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum VaultClientRequest {
-    ContainmentStarted { session: VaultContainmentSession },
-    ApprovalRequest { id: String, intent: ExecutionIntent },
-    KeyTransferApprovalRequest { request: KeyTransferApprovalRequest },
-    KeyTransferImportRequest { request: KeyTransferImportRequest },
+    ContainmentStarted {
+        session: VaultContainmentSession,
+    },
+    ApprovalRequest {
+        id: String,
+        intent: ExecutionIntent,
+    },
+    KeyTransferApprovalRequest {
+        request: KeyTransferApprovalRequest,
+    },
+    KeyTransferImportRequest {
+        request: KeyTransferImportRequest,
+    },
+    DotenvKeychainLoadRequest {
+        request: DotenvKeychainLoadRequest,
+    },
+    DotenvKeychainStoreRequest {
+        request: DotenvKeychainStoreRequest,
+    },
+    DotenvKeychainDeleteRequest {
+        request: DotenvKeychainDeleteRequest,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -187,6 +242,18 @@ pub enum VaultDaemonEvent {
         id: String,
         imported: usize,
         already_present: usize,
+    },
+    DotenvKeychainLoadResponse {
+        id: String,
+        private_key: Option<String>,
+    },
+    DotenvKeychainStoreResponse {
+        id: String,
+        stored: bool,
+    },
+    DotenvKeychainDeleteResponse {
+        id: String,
+        deleted: bool,
     },
     Error {
         id: Option<String>,
@@ -583,6 +650,11 @@ fn request_vault_execution(intent: ExecutionIntent) -> Result<(), String> {
             VaultDaemonEvent::KeyTransferImportResponse { .. } => {
                 return Err("vaultd returned an unexpected key transfer import event".to_string());
             }
+            VaultDaemonEvent::DotenvKeychainLoadResponse { .. }
+            | VaultDaemonEvent::DotenvKeychainStoreResponse { .. }
+            | VaultDaemonEvent::DotenvKeychainDeleteResponse { .. } => {
+                return Err("vaultd returned an unexpected dotenv keychain event".to_string());
+            }
         }
     }
 }
@@ -649,7 +721,10 @@ pub(crate) fn request_key_transfer_approval(
             }
             VaultDaemonEvent::ExecChunk { .. }
             | VaultDaemonEvent::ExecComplete { .. }
-            | VaultDaemonEvent::KeyTransferImportResponse { .. } => {
+            | VaultDaemonEvent::KeyTransferImportResponse { .. }
+            | VaultDaemonEvent::DotenvKeychainLoadResponse { .. }
+            | VaultDaemonEvent::DotenvKeychainStoreResponse { .. }
+            | VaultDaemonEvent::DotenvKeychainDeleteResponse { .. } => {
                 return Err("vaultd returned an unexpected execution event".to_string());
             }
         }
@@ -730,8 +805,179 @@ pub(crate) fn request_key_transfer_import(
                 }
                 return Err(format!("vaultd error {code}: {message}"));
             }
-            _ => return Err("vaultd returned an unexpected key transfer import event".to_string()),
+            VaultDaemonEvent::DotenvKeychainLoadResponse { .. }
+            | VaultDaemonEvent::DotenvKeychainStoreResponse { .. }
+            | VaultDaemonEvent::DotenvKeychainDeleteResponse { .. }
+            | VaultDaemonEvent::ApprovalResponse { .. }
+            | VaultDaemonEvent::ExecChunk { .. }
+            | VaultDaemonEvent::ExecComplete { .. } => {
+                return Err("vaultd returned an unexpected key transfer import event".to_string());
+            }
         }
+    }
+}
+
+pub(crate) fn ensure_vaultd_available() -> Result<(), String> {
+    let socket_path = resolve_vault_socket_path()?;
+    UnixStream::connect(&socket_path)
+        .map(|_| ())
+        .map_err(|err| format!("vaultd unavailable at {}: {err}", socket_path.display()))
+}
+
+pub(crate) fn request_dotenv_keychain_load(account: &str) -> Result<Option<String>, String> {
+    let request_id = new_vault_request_id()?;
+    let request = VaultClientRequest::DotenvKeychainLoadRequest {
+        request: DotenvKeychainLoadRequest {
+            id: request_id.clone(),
+            account: account.to_string(),
+        },
+    };
+    let event = request_single_vault_event(request)?;
+    match event {
+        VaultDaemonEvent::DotenvKeychainLoadResponse { id, private_key } => {
+            if id != request_id {
+                return Err(
+                    "vaultd returned a mismatched dotenv keychain load response".to_string()
+                );
+            }
+            Ok(private_key)
+        }
+        VaultDaemonEvent::Error { id, code, message } => {
+            validate_vault_error_id(id, &request_id)?;
+            Err(format_vault_error(code, message))
+        }
+        _ => Err("vaultd returned an unexpected dotenv keychain load event".to_string()),
+    }
+}
+
+pub(crate) fn request_dotenv_keychain_store(
+    account: &str,
+    private_key: &str,
+) -> Result<(), String> {
+    let request_id = new_vault_request_id()?;
+    let request = VaultClientRequest::DotenvKeychainStoreRequest {
+        request: DotenvKeychainStoreRequest {
+            id: request_id.clone(),
+            account: account.to_string(),
+            private_key: private_key.to_string(),
+        },
+    };
+    let event = request_single_vault_event_with_secret(request)?;
+    match event {
+        VaultDaemonEvent::DotenvKeychainStoreResponse { id, stored } => {
+            if id != request_id {
+                return Err(
+                    "vaultd returned a mismatched dotenv keychain store response".to_string(),
+                );
+            }
+            if stored {
+                Ok(())
+            } else {
+                Err("vaultd did not store the dotenv private key".to_string())
+            }
+        }
+        VaultDaemonEvent::Error { id, code, message } => {
+            validate_vault_error_id(id, &request_id)?;
+            Err(format_vault_error(code, message))
+        }
+        _ => Err("vaultd returned an unexpected dotenv keychain store event".to_string()),
+    }
+}
+
+pub(crate) fn request_dotenv_keychain_delete(account: &str) -> Result<bool, String> {
+    let request_id = new_vault_request_id()?;
+    let request = VaultClientRequest::DotenvKeychainDeleteRequest {
+        request: DotenvKeychainDeleteRequest {
+            id: request_id.clone(),
+            account: account.to_string(),
+        },
+    };
+    let event = request_single_vault_event(request)?;
+    match event {
+        VaultDaemonEvent::DotenvKeychainDeleteResponse { id, deleted } => {
+            if id != request_id {
+                return Err(
+                    "vaultd returned a mismatched dotenv keychain delete response".to_string(),
+                );
+            }
+            Ok(deleted)
+        }
+        VaultDaemonEvent::Error { id, code, message } => {
+            validate_vault_error_id(id, &request_id)?;
+            Err(format_vault_error(code, message))
+        }
+        _ => Err("vaultd returned an unexpected dotenv keychain delete event".to_string()),
+    }
+}
+
+fn request_single_vault_event(request: VaultClientRequest) -> Result<VaultDaemonEvent, String> {
+    request_single_vault_event_encoded(
+        serde_json::to_string(&request)
+            .map_err(|err| format!("failed to encode vault request: {err}"))?,
+    )
+}
+
+fn request_single_vault_event_with_secret(
+    mut request: VaultClientRequest,
+) -> Result<VaultDaemonEvent, String> {
+    let encoded = serde_json::to_string(&request)
+        .map_err(|err| format!("failed to encode vault request: {err}"));
+    zeroize_dotenv_keychain_store_request(&mut request);
+    request_single_vault_event_encoded(encoded?)
+}
+
+fn request_single_vault_event_encoded(mut encoded: String) -> Result<VaultDaemonEvent, String> {
+    let socket_path = resolve_vault_socket_path()?;
+    let mut stream = UnixStream::connect(&socket_path).map_err(|err| {
+        format!(
+            "Automic Vault keychain broker is unavailable at {}: {err}. Run `av open` once, then retry.",
+            socket_path.display()
+        )
+    })?;
+    let write_result = stream
+        .write_all(encoded.as_bytes())
+        .and_then(|_| stream.write_all(b"\n"))
+        .and_then(|_| stream.flush())
+        .map_err(|err| format!("failed to send vault request: {err}"));
+    zeroize_string(&mut encoded);
+    write_result?;
+
+    let mut reader = BufReader::new(stream);
+    let mut line = String::new();
+    loop {
+        line.clear();
+        let bytes = reader
+            .read_line(&mut line)
+            .map_err(|err| format!("failed to read vault response: {err}"))?;
+        if bytes == 0 {
+            return Err("vaultd closed the connection before returning a response".to_string());
+        }
+
+        let trimmed = line.trim_end_matches(['\r', '\n']);
+        if trimmed.is_empty() {
+            continue;
+        }
+        let event = serde_json::from_str(trimmed)
+            .map_err(|err| format!("failed to decode vault response: {err}"));
+        zeroize_string(&mut line);
+        return event;
+    }
+}
+
+fn validate_vault_error_id(id: Option<String>, request_id: &str) -> Result<(), String> {
+    if let Some(id) = id
+        && id != request_id
+    {
+        return Err("vaultd returned a mismatched error".to_string());
+    }
+    Ok(())
+}
+
+fn format_vault_error(code: i32, message: String) -> String {
+    if code == DEFAULT_VAULT_APPROVAL_ERROR_CODE {
+        message
+    } else {
+        format!("vaultd error {code}: {message}")
     }
 }
 
@@ -745,6 +991,12 @@ fn zeroize_key_transfer_import_request(request: &mut KeyTransferImportRequest) {
                 zeroize_string(value);
             }
         }
+    }
+}
+
+fn zeroize_dotenv_keychain_store_request(request: &mut VaultClientRequest) {
+    if let VaultClientRequest::DotenvKeychainStoreRequest { request } = request {
+        zeroize_string(&mut request.private_key);
     }
 }
 
@@ -1117,18 +1369,15 @@ fn collect_vault_aliases() -> Vec<(String, PathBuf)> {
     if let Some(paths) = env::var_os("PATH") {
         roots.extend(env::split_paths(&paths));
     }
-    roots.extend(
-        [
-            managed_bin_root(),
-            PathBuf::from("/bin"),
-            PathBuf::from("/usr/bin"),
-            PathBuf::from("/sbin"),
-            PathBuf::from("/usr/sbin"),
-            PathBuf::from("/usr/local/bin"),
-            PathBuf::from("/opt/homebrew/bin"),
-        ]
-        .into_iter(),
-    );
+    roots.extend([
+        managed_bin_root(),
+        PathBuf::from("/bin"),
+        PathBuf::from("/usr/bin"),
+        PathBuf::from("/sbin"),
+        PathBuf::from("/usr/sbin"),
+        PathBuf::from("/usr/local/bin"),
+        PathBuf::from("/opt/homebrew/bin"),
+    ]);
 
     for root in roots {
         let Ok(entries) = fs::read_dir(&root) else {
@@ -1732,6 +1981,100 @@ mod tests {
                     imported: 1,
                     already_present: 0,
                 }
+            );
+            handle.join().unwrap();
+        }
+
+        {
+            let socket = temp.path().join("dotenv-load.sock");
+            let _env = EnvGuard::set(&[(VAULT_SOCKET_PATH_ENV, socket.to_str().unwrap())]);
+            let handle = serve_once(&socket, |request, stream| {
+                let VaultClientRequest::DotenvKeychainLoadRequest { request } = request else {
+                    panic!("expected dotenv keychain load request");
+                };
+                assert_eq!(
+                    request.account,
+                    "DOTENV_PRIVATE_KEY:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                );
+                writeln!(
+                    stream,
+                    "{}",
+                    serde_json::to_string(&VaultDaemonEvent::DotenvKeychainLoadResponse {
+                        id: request.id,
+                        private_key: Some("secret".to_string()),
+                    })
+                    .unwrap()
+                )
+                .unwrap();
+            });
+            assert_eq!(
+                request_dotenv_keychain_load(
+                    "DOTENV_PRIVATE_KEY:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                )
+                .unwrap(),
+                Some("secret".to_string())
+            );
+            handle.join().unwrap();
+        }
+
+        {
+            let socket = temp.path().join("dotenv-store.sock");
+            let _env = EnvGuard::set(&[(VAULT_SOCKET_PATH_ENV, socket.to_str().unwrap())]);
+            let handle = serve_once(&socket, |request, stream| {
+                let VaultClientRequest::DotenvKeychainStoreRequest { request } = request else {
+                    panic!("expected dotenv keychain store request");
+                };
+                assert_eq!(
+                    request.account,
+                    "DOTENV_PRIVATE_KEY:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                );
+                assert_eq!(request.private_key, "secret");
+                writeln!(
+                    stream,
+                    "{}",
+                    serde_json::to_string(&VaultDaemonEvent::DotenvKeychainStoreResponse {
+                        id: request.id,
+                        stored: true,
+                    })
+                    .unwrap()
+                )
+                .unwrap();
+            });
+            request_dotenv_keychain_store(
+                "DOTENV_PRIVATE_KEY:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                "secret",
+            )
+            .unwrap();
+            handle.join().unwrap();
+        }
+
+        {
+            let socket = temp.path().join("dotenv-delete.sock");
+            let _env = EnvGuard::set(&[(VAULT_SOCKET_PATH_ENV, socket.to_str().unwrap())]);
+            let handle = serve_once(&socket, |request, stream| {
+                let VaultClientRequest::DotenvKeychainDeleteRequest { request } = request else {
+                    panic!("expected dotenv keychain delete request");
+                };
+                assert_eq!(
+                    request.account,
+                    "DOTENV_PRIVATE_KEY:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+                );
+                writeln!(
+                    stream,
+                    "{}",
+                    serde_json::to_string(&VaultDaemonEvent::DotenvKeychainDeleteResponse {
+                        id: request.id,
+                        deleted: true,
+                    })
+                    .unwrap()
+                )
+                .unwrap();
+            });
+            assert!(
+                request_dotenv_keychain_delete(
+                    "DOTENV_PRIVATE_KEY:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+                )
+                .unwrap()
             );
             handle.join().unwrap();
         }
