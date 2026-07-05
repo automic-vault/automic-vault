@@ -41,6 +41,9 @@ jobs:
           sudo mkdir -p /var/db/automic-vault
           sudo cp data/combined.json /var/db/automic-vault/db.json
 
+      - name: Sync isotope checkouts
+        run: scripts/sync-isotope-checkouts.sh
+
       - name: Generate Rust coverage
         run: >
           cargo llvm-cov --workspace --no-cfg-coverage --lcov --output-path lcov.info

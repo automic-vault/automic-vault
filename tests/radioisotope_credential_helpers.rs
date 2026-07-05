@@ -1,4 +1,3 @@
-#![cfg(coverage)]
 #![allow(dead_code)]
 
 use std::cell::RefCell;

@@ -1,4 +1,3 @@
-#![cfg(coverage)]
 #![allow(dead_code)]
 
 macro_rules! radioisotope_source {
