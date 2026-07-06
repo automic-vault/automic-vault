@@ -42,6 +42,8 @@ jobs:
           sudo cp data/combined.json /var/db/automic-vault/db.json
 
       - name: Sync isotope checkouts
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: scripts/sync-isotope-checkouts.sh
 
       - name: Generate Rust coverage
