@@ -61,6 +61,25 @@ you approved. If we cannot verify that identity, automatic approval fails closed
 Code signing proves identity and integrity—not good intentions. You still choose
 which apps to trust.
 
+### Blessed scripts
+
+A script can declare the tool access it needs next to its `av inject` shebang:
+
+```sh
+#!/usr/local/bin/av inject +TOKEN /bin/sh
+# --- automic-vault
+# capabilities:
+#   gh: read-only
+#   aws: trusted
+# ---
+```
+
+Run `av bless PATH` to review it in the Automic Vault app. Approval is bound to
+that canonical path, exact file contents, injection declaration, and the selected
+signed launcher apps. While that exact script runs, declared tool requests are
+approved up to their listed level; undeclared or broader requests are denied.
+Editing the script requires an explicit re-bless.
+
 &nbsp;
 
 
