@@ -1106,13 +1106,13 @@ private func loadKeychainData(service: String, account: String) -> Data? {
     return data
 }
 
-private enum KeychainDataLoad {
+enum KeychainDataLoad {
     case success(Data)
     case notFound
     case failure(OSStatus)
 }
 
-private func loadKeychainDataResult(service: String, account: String) -> KeychainDataLoad {
+func loadKeychainDataResult(service: String, account: String) -> KeychainDataLoad {
     var query: [String: Any] = [
         kSecClass as String: kSecClassGenericPassword,
         kSecAttrService as String: service,
@@ -1165,7 +1165,7 @@ private func setKeychainAccessibility(
     )
 }
 
-private func saveKeychainData(
+func saveKeychainData(
     _ data: Data,
     service: String,
     account: String,
