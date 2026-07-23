@@ -17,6 +17,7 @@ public struct DashboardSnapshot: Equatable, Sendable {
     public var hardenedTools: [HardenedTool]
     public var hardeners: [HardenerMetadata]
     public var secretGates: [SecretGate]
+    public var blessedScripts: [BlessedScript]
     public var secrets: [StoredSecret]
     public var accessRequests: [AccessRequestRecord]
     public var doctorIssues: [DoctorIssue]
@@ -27,6 +28,7 @@ public struct DashboardSnapshot: Equatable, Sendable {
         hardenedTools: [HardenedTool],
         hardeners: [HardenerMetadata] = [],
         secretGates: [SecretGate],
+        blessedScripts: [BlessedScript] = [],
         secrets: [StoredSecret],
         accessRequests: [AccessRequestRecord] = [],
         doctorIssues: [DoctorIssue] = []
@@ -36,6 +38,7 @@ public struct DashboardSnapshot: Equatable, Sendable {
         self.hardenedTools = hardenedTools
         self.hardeners = hardeners
         self.secretGates = secretGates
+        self.blessedScripts = blessedScripts
         self.secrets = secrets
         self.accessRequests = accessRequests
         self.doctorIssues = doctorIssues
@@ -47,6 +50,7 @@ public struct DashboardSnapshot: Equatable, Sendable {
         hardenedTools: [],
         hardeners: [],
         secretGates: [],
+        blessedScripts: [],
         secrets: [],
         accessRequests: [],
         doctorIssues: []
@@ -80,6 +84,7 @@ public struct DashboardSnapshot: Equatable, Sendable {
             hardenedTools: hardenedTools,
             hardeners: hardenerMetadata,
             secretGates: loadSecretGates(hardeners: hardenerMetadata, service: policyService),
+            blessedScripts: loadBlessedScripts(),
             secrets: secrets,
             accessRequests: loadAccessRequestRecords(),
             doctorIssues: loadDoctorIssues(avExecutableURL: avExecutableURL)

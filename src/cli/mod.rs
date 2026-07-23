@@ -1,6 +1,7 @@
 use std::ffi::OsString;
 use std::io::{IsTerminal, Write};
 
+mod bless;
 mod doctor;
 mod inject;
 mod open;
@@ -16,6 +17,7 @@ Usage:
   av doctor [COMMAND] [--json]
   av detectors --json
   av hardeners --json
+  av bless PATH
   av inject +KEY [--] COMMAND
   av save KEY
   av harden
@@ -167,6 +169,7 @@ where
             2
         }
         Some("inject") => inject::run(rest, stdout, stderr, shebang_script),
+        Some("bless") => bless::run(rest, stderr),
         Some("open") => {
             let Some(secret_gate) = parse_open_args(&rest) else {
                 let _ = writeln!(stderr, "{USAGE}");

@@ -5,6 +5,12 @@ import Security
 import SwiftUI
 import UniformTypeIdentifiers
 
+struct BlessedScriptReviewRequest: Sendable {
+    let path: String
+    let declaration: BlessedScriptDeclaration
+    let launcher: BlessedScriptLauncher
+}
+
 @MainActor
 final class AutomicVaultMainWindowController: NSHostingController<DashboardRootView> {
     private let model = DashboardModel()
@@ -36,6 +42,18 @@ final class AutomicVaultMainWindowController: NSHostingController<DashboardRootV
 
     func showSecretGate(id: String) {
         model.showSecretGate(id: id)
+    }
+
+    func reviewBlessing(
+        _ request: BlessedScriptReviewRequest,
+        completion: @escaping (String?) -> Void
+    ) {
+        model.reviewBlessing(request, completion: completion)
+    }
+
+    override func viewDidDisappear() {
+        super.viewDidDisappear()
+        model.cancelPendingBlessing()
     }
 }
 
@@ -82,9 +100,12 @@ final class DashboardModel: ObservableObject {
     @Published var selectedItemID: String?
     @Published var searchText = ""
     @Published private(set) var cliInstallState: CLIInstallState?
+    @Published private(set) var pendingBlessing: BlessedScriptReviewRequest?
+    @Published private(set) var pendingBlessingLaunchers: [BlessedScriptLauncher] = []
 
     private var reloadTask: Task<Void, Never>?
     private var detectorFindingsGeneration = 0
+    private var blessingCompletion: ((String?) -> Void)?
 
     init(snapshot: DashboardSnapshot = .empty, cliInstallState: CLIInstallState? = nil) {
         self.snapshot = snapshot
@@ -148,6 +169,8 @@ final class DashboardModel: ObservableObject {
                     ].joined(separator: "\n")
                 )
             }
+        case .blessedScripts:
+            blessedScriptItems(snapshot.blessedScripts, pending: pendingBlessing)
         case .allSecrets:
             snapshot.secrets.map {
                 DashboardItem(id: $0.account, title: $0.account, subtitle: $0.subtitle, detail: "Secret value is hidden.\n\($0.subtitle)")
@@ -187,6 +210,19 @@ final class DashboardModel: ObservableObject {
         return snapshot.secretGates.first
     }
 
+    var selectedBlessedScript: BlessedScript? {
+        if let selectedItemID,
+           let script = snapshot.blessedScripts.first(where: { $0.path == selectedItemID }) {
+            return script
+        }
+        return snapshot.blessedScripts.first
+    }
+
+    var selectedPendingBlessing: BlessedScriptReviewRequest? {
+        guard pendingBlessing?.path == selectedItem?.id else { return nil }
+        return pendingBlessing
+    }
+
     var selectedStoredSecret: StoredSecret? {
         if let selectedItemID,
            let secret = snapshot.secrets.first(where: { $0.account == selectedItemID }) {
@@ -210,6 +246,7 @@ final class DashboardModel: ObservableObject {
         case .doctor: snapshot.doctorIssues.count
         case .hardenedTools: snapshot.hardenedTools.count
         case .secretGates: snapshot.secretGates.count
+        case .blessedScripts: snapshot.blessedScripts.count + (pendingBlessing == nil ? 0 : 1)
         case .allSecrets: snapshot.secrets.count
         case .secretUsage: snapshot.accessRequests.count
         }
@@ -234,6 +271,136 @@ final class DashboardModel: ObservableObject {
     func showSecretGate(id: String) {
         selectedSection = .secretGates
         selectedItemID = id
+    }
+
+    func reviewBlessing(
+        _ request: BlessedScriptReviewRequest,
+        completion: @escaping (String?) -> Void
+    ) {
+        guard pendingBlessing == nil else {
+            completion("another script blessing is already awaiting review")
+            return
+        }
+        pendingBlessing = request
+        pendingBlessingLaunchers = [request.launcher]
+        blessingCompletion = completion
+        selectedSection = .blessedScripts
+        selectedItemID = request.path
+    }
+
+    func approvePendingBlessing() {
+        guard let request = pendingBlessing, !pendingBlessingLaunchers.isEmpty else { return }
+        let declaration = request.declaration
+        let script = BlessedScript(
+            path: request.path,
+            checksum: declaration.checksum,
+            keys: declaration.keys,
+            target: declaration.target,
+            replaceExistingEnv: declaration.replaceExistingEnv,
+            allowMissingKeys: declaration.allowMissingKeys,
+            capabilities: declaration.manifest.capabilities,
+            launchers: pendingBlessingLaunchers
+        )
+        let status = saveBlessedScript(script)
+        guard status == errSecSuccess else {
+            errorMessage = "Could not bless script: \(status)"
+            return
+        }
+        finishPendingBlessing(nil)
+        selectedItemID = script.path
+        reload()
+    }
+
+    func cancelPendingBlessing() {
+        guard pendingBlessing != nil else { return }
+        finishPendingBlessing("script blessing was cancelled")
+    }
+
+    func addAppToPendingBlessing() {
+        guard let launcher = chooseLauncherApp(),
+              !pendingBlessingLaunchers.contains(where: { $0.requirement == launcher.requirement })
+        else { return }
+        pendingBlessingLaunchers.append(launcher)
+    }
+
+    func removePendingBlessingLauncher(_ launcher: BlessedScriptLauncher) {
+        pendingBlessingLaunchers.removeAll { $0.requirement == launcher.requirement }
+    }
+
+    func addApp(to script: BlessedScript) {
+        guard let launcher = chooseLauncherApp(),
+              !script.launchers.contains(where: { $0.requirement == launcher.requirement })
+        else { return }
+        let updated = BlessedScript(
+            path: script.path,
+            checksum: script.checksum,
+            keys: script.keys,
+            target: script.target,
+            replaceExistingEnv: script.replaceExistingEnv,
+            allowMissingKeys: script.allowMissingKeys,
+            capabilities: script.capabilities,
+            launchers: script.launchers + [launcher],
+            blessedAt: script.blessedAt
+        )
+        finishPolicyUpdate(saveBlessedScript(updated), error: "Could not add calling app")
+    }
+
+    func removeLauncher(_ launcher: BlessedScriptLauncher, from script: BlessedScript) {
+        let launchers = script.launchers.filter { $0.requirement != launcher.requirement }
+        guard !launchers.isEmpty else {
+            errorMessage = "A blessed script must allow at least one calling app."
+            return
+        }
+        let updated = BlessedScript(
+            path: script.path,
+            checksum: script.checksum,
+            keys: script.keys,
+            target: script.target,
+            replaceExistingEnv: script.replaceExistingEnv,
+            allowMissingKeys: script.allowMissingKeys,
+            capabilities: script.capabilities,
+            launchers: launchers,
+            blessedAt: script.blessedAt
+        )
+        finishPolicyUpdate(saveBlessedScript(updated), error: "Could not remove calling app")
+    }
+
+    func revoke(_ script: BlessedScript) {
+        let status = removeBlessedScript(path: script.path)
+        if status == errSecSuccess {
+            selectedItemID = nil
+            reload()
+        } else {
+            errorMessage = "Could not revoke blessing: \(status)"
+        }
+    }
+
+    private func finishPendingBlessing(_ error: String?) {
+        let completion = blessingCompletion
+        blessingCompletion = nil
+        pendingBlessing = nil
+        pendingBlessingLaunchers = []
+        completion?(error)
+    }
+
+    private func chooseLauncherApp() -> BlessedScriptLauncher? {
+        let panel = NSOpenPanel()
+        panel.title = "Allow Calling App"
+        panel.prompt = "Allow"
+        panel.directoryURL = URL(fileURLWithPath: "/Applications", isDirectory: true)
+        panel.allowedContentTypes = [.applicationBundle]
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        guard panel.runModal() == .OK, let url = panel.url, url.pathExtension == "app",
+              let signing = appBundleSigning(url)
+        else {
+            return nil
+        }
+        return BlessedScriptLauncher(
+            bundleIdentifier: Bundle(url: url)?.bundleIdentifier ?? url.lastPathComponent,
+            requirement: signing.requirement
+        )
     }
 
     func accessRequests(for item: DashboardItem) -> [AccessRequestRecord] {
@@ -476,6 +643,35 @@ private func detectorItemPrecedes(_ lhs: DashboardItem, _ rhs: DashboardItem) ->
         return lhs.title.localizedStandardCompare(rhs.title) == .orderedAscending
     }
     return (lhs.kind ?? "").localizedStandardCompare(rhs.kind ?? "") == .orderedAscending
+}
+
+private func blessedScriptItem(_ script: BlessedScript) -> DashboardItem {
+    let currentChecksum = try? blessedScriptDeclaration(
+        data: Data(contentsOf: URL(fileURLWithPath: script.path))
+    ).checksum
+    let status = currentChecksum == script.checksum ? "Blessed" : "Changed"
+    return DashboardItem(
+        id: script.path,
+        title: URL(fileURLWithPath: script.path).lastPathComponent,
+        subtitle: status,
+        detail: script.path
+    )
+}
+
+private func blessedScriptItems(
+    _ blessed: [BlessedScript],
+    pending: BlessedScriptReviewRequest?
+) -> [DashboardItem] {
+    let scripts = blessed.map(blessedScriptItem)
+    guard let pending, !scripts.contains(where: { $0.id == pending.path }) else { return scripts }
+    return [
+        DashboardItem(
+            id: pending.path,
+            title: URL(fileURLWithPath: pending.path).lastPathComponent,
+            subtitle: "Pending review",
+            detail: pending.path
+        )
+    ] + scripts
 }
 
 private func detectorSeveritySortPriority(_ severity: String?) -> Int {
@@ -778,6 +974,7 @@ enum DashboardSection: String, CaseIterable, Identifiable {
     case detectors
     case hardenedTools
     case secretGates
+    case blessedScripts
     case allSecrets
     case secretUsage
     case doctor
@@ -790,6 +987,7 @@ enum DashboardSection: String, CaseIterable, Identifiable {
         case .doctor: "Doctor"
         case .hardenedTools: "Hardened Tools"
         case .secretGates: "Secret Gates"
+        case .blessedScripts: "Blessed Scripts"
         case .allSecrets: "Secrets"
         case .secretUsage: "Secret Usage"
         }
@@ -801,6 +999,7 @@ enum DashboardSection: String, CaseIterable, Identifiable {
         case .doctor: "stethoscope"
         case .hardenedTools: "hammer"
         case .secretGates: "lock.shield"
+        case .blessedScripts: "checkmark.seal"
         case .allSecrets: "key"
         case .secretUsage: "clock.arrow.circlepath"
         }
@@ -875,6 +1074,18 @@ struct DashboardRootView: View {
                     if model.selectedSection == .secretGates, let gate = model.selectedSecretGate {
                         Button {
                             model.addApp(to: gate)
+                        } label: {
+                            Image(systemName: "plus")
+                        }
+                        .help("Add Calling App")
+                    }
+                    if model.selectedSection == .blessedScripts {
+                        Button {
+                            if model.selectedPendingBlessing != nil {
+                                model.addAppToPendingBlessing()
+                            } else if let script = model.selectedBlessedScript {
+                                model.addApp(to: script)
+                            }
                         } label: {
                             Image(systemName: "plus")
                         }
@@ -1006,6 +1217,20 @@ private struct DashboardDetailView: View {
         ScrollView {
             if model.selectedSection == .secretGates, let gate = model.selectedSecretGate {
                 SecretGateDetailView(model: model, gate: gate)
+                    .padding(.horizontal, 22)
+                    .padding(.top, 32)
+                    .padding(.bottom, 28)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else if model.selectedSection == .blessedScripts,
+                      let pending = model.selectedPendingBlessing {
+                BlessedScriptReviewView(model: model, request: pending)
+                    .padding(.horizontal, 22)
+                    .padding(.top, 32)
+                    .padding(.bottom, 28)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else if model.selectedSection == .blessedScripts,
+                      let script = model.selectedBlessedScript {
+                BlessedScriptDetailView(model: model, script: script)
                     .padding(.horizontal, 22)
                     .padding(.top, 32)
                     .padding(.bottom, 28)
@@ -1153,6 +1378,7 @@ private struct EmptyListView: View {
         case .doctor: "No doctor issues"
         case .hardenedTools: "No hardened tools"
         case .secretGates: "No configured gates"
+        case .blessedScripts: "No blessed scripts"
         case .allSecrets: "No stored secrets"
         case .secretUsage: "No secret usage logged"
         }
@@ -1453,7 +1679,7 @@ private struct InfoBlock: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(title.uppercased())
-                .font(.system(size: 11, weight: .bold))
+                .font(.system(size: 10, weight: .semibold))
                 .foregroundStyle(.secondary)
                 .tracking(0.7)
             Text(text)
@@ -1740,6 +1966,138 @@ private struct AccessMetaLine: View {
             .font(.system(size: 11))
             .foregroundStyle(.secondary)
             .textSelection(.enabled)
+    }
+}
+
+private struct BlessedScriptReviewView: View {
+    @ObservedObject var model: DashboardModel
+    let request: BlessedScriptReviewRequest
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(URL(fileURLWithPath: request.path).lastPathComponent)
+                    .font(.system(size: 24, weight: .semibold))
+                Text("Review before granting durable script authority.")
+                    .font(.system(size: 13))
+                    .foregroundStyle(.secondary)
+            }
+            BlessedScriptFields(
+                path: request.path,
+                checksum: request.declaration.checksum,
+                keys: request.declaration.keys,
+                capabilities: request.declaration.manifest.capabilities
+            )
+            launcherList(model.pendingBlessingLaunchers) {
+                model.removePendingBlessingLauncher($0)
+            }
+            if request.declaration.manifest.capabilities.values.contains(.fullIncludingSecretDumps) {
+                InfoBlock(
+                    title: "Full Access",
+                    text: "This script requests access to operations that may reveal protected secret values."
+                )
+            }
+            HStack {
+                Button("Cancel", role: .cancel) { model.cancelPendingBlessing() }
+                Spacer()
+                Button("Bless Script") { model.approvePendingBlessing() }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(model.pendingBlessingLaunchers.isEmpty)
+            }
+            if let error = model.errorMessage {
+                InfoBlock(title: "Error", text: error)
+            }
+        }
+    }
+}
+
+private struct BlessedScriptDetailView: View {
+    @ObservedObject var model: DashboardModel
+    let script: BlessedScript
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(URL(fileURLWithPath: script.path).lastPathComponent)
+                    .font(.system(size: 24, weight: .semibold))
+                Text(status)
+                    .font(.system(size: 13))
+                    .foregroundStyle(status == "Blessed" ? .green : .orange)
+            }
+            BlessedScriptFields(
+                path: script.path,
+                checksum: script.checksum,
+                keys: script.keys,
+                capabilities: script.capabilities
+            )
+            launcherList(script.launchers) {
+                model.removeLauncher($0, from: script)
+            }
+            HStack {
+                Spacer()
+                Button("Revoke Blessing", role: .destructive) { model.revoke(script) }
+            }
+            if let error = model.errorMessage {
+                InfoBlock(title: "Error", text: error)
+            }
+        }
+    }
+
+    private var status: String {
+        guard let data = try? Data(contentsOf: URL(fileURLWithPath: script.path)),
+              let checksum = try? blessedScriptDeclaration(data: data).checksum
+        else {
+            return "Changed"
+        }
+        return checksum == script.checksum ? "Blessed" : "Changed"
+    }
+}
+
+private struct BlessedScriptFields: View {
+    let path: String
+    let checksum: String
+    let keys: [String]
+    let capabilities: [String: SecretGateProtection]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            SecretGateField("Path", path)
+            SecretGateField("SHA-256", checksum, monospaced: true)
+            SecretGateField("Secrets", keys.joined(separator: ", "))
+            SecretGateField(
+                "Capabilities",
+                capabilities.sorted(by: { $0.key < $1.key })
+                    .map { "\($0.key): \($0.value.title)" }
+                    .joined(separator: ", ")
+            )
+        }
+    }
+}
+
+@MainActor
+private func launcherList(
+    _ launchers: [BlessedScriptLauncher],
+    remove: @escaping (BlessedScriptLauncher) -> Void
+) -> some View {
+    VStack(alignment: .leading, spacing: 10) {
+        Text("Calling Apps")
+            .font(.system(size: 13, weight: .semibold))
+        ForEach(launchers, id: \.requirement) { launcher in
+            HStack {
+                Text(launcher.bundleIdentifier)
+                    .textSelection(.enabled)
+                Spacer()
+                Button {
+                    remove(launcher)
+                } label: {
+                    Image(systemName: "minus.circle")
+                }
+                .buttonStyle(.plain)
+                .help("Remove Calling App")
+            }
+            .padding(10)
+            .background(.quaternary.opacity(0.45), in: RoundedRectangle(cornerRadius: 8))
+        }
     }
 }
 

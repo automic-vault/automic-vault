@@ -211,6 +211,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     Task { @MainActor in self?.didRecordAccessRequest(record) }
                 }
                 return recorded
+            } onBlessRequest: { [weak self] request, completion in
+                guard let self else {
+                    completion("Automic Vault is unavailable")
+                    return
+                }
+                self.showMainWindow(secretGateID: nil)
+                guard let controller = self.mainWindow?.contentViewController
+                    as? AutomicVaultMainWindowController
+                else {
+                    completion("Automic Vault could not open the blessing review")
+                    return
+                }
+                controller.reviewBlessing(request, completion: completion)
             } canRequestHumanApproval: { [weak self] in
                 self?.isUserSessionActive == true && self?.areScreensAwake == true
             }
@@ -1111,6 +1124,10 @@ private final class ApprovalServer: @unchecked Sendable {
     private let hardeners: [HardenerMetadata]?
     private let onAutoApproval: @MainActor (AutoApprovalRecord) -> Void
     private let onAccessRequest: @Sendable (AccessRequestRecord) -> Bool
+    private let onBlessRequest: @MainActor (
+        BlessedScriptReviewRequest,
+        @escaping (String?) -> Void
+    ) -> Void
     private let canRequestHumanApproval: @MainActor () -> Bool
     private var listener: xpc_connection_t?
     // ponytail: in-memory per-process cache; use persistent approvals for cross-process trust.
@@ -1121,6 +1138,10 @@ private final class ApprovalServer: @unchecked Sendable {
         hardeners: [HardenerMetadata]? = nil,
         onAutoApproval: @escaping @MainActor (AutoApprovalRecord) -> Void = { _ in },
         onAccessRequest: @escaping @Sendable (AccessRequestRecord) -> Bool = { appendAccessRequestRecord($0) },
+        onBlessRequest: @escaping @MainActor (
+            BlessedScriptReviewRequest,
+            @escaping (String?) -> Void
+        ) -> Void = { _, completion in completion("script blessing is unavailable") },
         canRequestHumanApproval: @escaping @MainActor () -> Bool = { true }
     ) throws {
         guard let teamIdentifier = selfTeamIdentifier() else {
@@ -1131,6 +1152,7 @@ private final class ApprovalServer: @unchecked Sendable {
         self.hardeners = hardeners
         self.onAutoApproval = onAutoApproval
         self.onAccessRequest = onAccessRequest
+        self.onBlessRequest = onBlessRequest
         self.canRequestHumanApproval = canRequestHumanApproval
     }
 
@@ -1216,6 +1238,8 @@ private final class ApprovalServer: @unchecked Sendable {
             handleSave(message, on: peer, caller: mutationCaller)
         case "load" where isTrustedAvCaller(path: callerPath, signing: signing):
             handleLoad(message, on: peer)
+        case "bless" where isTrustedAvCaller(path: callerPath, signing: signing):
+            handleBless(message, on: peer, identity: identity)
         case "delete" where isTrustedAvCaller(path: callerPath, signing: signing):
             handleDelete(message, on: peer, caller: mutationCaller)
         case "save" where isTrustedGhCaller(path: callerPath, signing: signing):
@@ -1500,6 +1524,74 @@ private final class ApprovalServer: @unchecked Sendable {
             return
         }
         reply(peer, to: message, ok: true, error: nil, value: value)
+    }
+
+    private func handleBless(
+        _ message: xpc_object_t,
+        on peer: xpc_connection_t,
+        identity: AVProcessIdentity
+    ) {
+        guard let pathPointer = xpc_dictionary_get_string(message, "path") else {
+            reply(peer, to: message, ok: false, error: "invalid bless request")
+            return
+        }
+        let path = String(cString: pathPointer)
+        guard path.hasPrefix("/"),
+              URL(fileURLWithPath: path).standardizedFileURL.path == path,
+              URL(fileURLWithPath: path).resolvingSymlinksInPath().path == path
+        else {
+            reply(peer, to: message, ok: false, error: "script path must be canonical")
+            return
+        }
+        var info = stat()
+        guard path.withCString({ lstat($0, &info) }) == 0,
+              info.st_mode & S_IFMT == S_IFREG,
+              info.st_size <= 1024 * 1024,
+              let data = try? Data(contentsOf: URL(fileURLWithPath: path)),
+              let declaration = try? blessedScriptDeclaration(data: data)
+        else {
+            reply(peer, to: message, ok: false, error: "script is not a valid blessable file")
+            return
+        }
+        let metadata = hardeners ?? loadHardenerMetadata(avExecutableURL: avExecutableURL())
+        for (id, protection) in declaration.manifest.capabilities {
+            guard let descriptor = metadata.lazy.compactMap(\.secretGate).first(where: { $0.id == id }) else {
+                reply(peer, to: message, ok: false, error: "unknown script capability: \(id)")
+                return
+            }
+            let gate = SecretGate(
+                id: descriptor.id,
+                keyPatterns: descriptor.keyPatterns,
+                routes: descriptor.routes,
+                defaultProtection: .noAccess,
+                appPolicies: []
+            )
+            guard gate.availableProtections.contains(protection) else {
+                reply(peer, to: message, ok: false, error: "unsupported access level for \(id)")
+                return
+            }
+        }
+        guard let launcher = launcherIdentities(for: identity).first else {
+            reply(peer, to: message, ok: false, error: "calling app identity is unavailable")
+            return
+        }
+        let request = BlessedScriptReviewRequest(
+            path: path,
+            declaration: declaration,
+            launcher: BlessedScriptLauncher(
+                bundleIdentifier: launcher.identifier,
+                requirement: launcher.designatedRequirement
+            )
+        )
+        DispatchQueue.main.async {
+            guard self.canRequestHumanApproval() else {
+                self.reply(peer, to: message, ok: false, error: "user approval is unavailable")
+                return
+            }
+            self.onBlessRequest(request) { error in
+                self.reply(peer, to: message, ok: error == nil, error: error)
+            }
+        }
     }
 
     private func handleGhSave(

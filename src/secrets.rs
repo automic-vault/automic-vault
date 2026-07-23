@@ -10,7 +10,7 @@ pub(crate) fn store_secret(account: &str, value: &str) -> Result<(), String> {
         return std::fs::write(&path, value)
             .map_err(|err| format!("failed to write {}: {err}", path.display()));
     }
-    xpc_secret_request("save", account, Some(value)).map(|_| ())
+    xpc_request("save", b"key\0", account, Some((b"value\0", value))).map(|_| ())
 }
 
 pub(crate) fn load_secret(account: &str) -> Result<String, String> {
@@ -19,15 +19,20 @@ pub(crate) fn load_secret(account: &str) -> Result<String, String> {
         return std::fs::read_to_string(&path)
             .map_err(|err| format!("failed to read {}: {err}", path.display()));
     }
-    xpc_secret_request("load", account, None)?
+    xpc_request("load", b"key\0", account, None)?
         .ok_or_else(|| format!("failed to load isotope key {account}"))
 }
 
+pub(crate) fn bless_script(path: &str) -> Result<(), String> {
+    xpc_request("bless", b"path\0", path, None).map(|_| ())
+}
+
 #[cfg(target_os = "macos")]
-fn xpc_secret_request(
+fn xpc_request(
     operation: &str,
-    account: &str,
-    value: Option<&str>,
+    field: &'static [u8],
+    field_value: &str,
+    extra: Option<(&'static [u8], &str)>,
 ) -> Result<Option<String>, String> {
     use std::ffi::CString;
     use std::os::raw::{c_char, c_int, c_void};
@@ -100,9 +105,9 @@ fn xpc_secret_request(
 
     unsafe {
         set_string(message, b"op\0", operation)?;
-        set_string(message, b"key\0", account)?;
-        if let Some(value) = value {
-            set_string(message, b"value\0", value)?;
+        set_string(message, field, field_value)?;
+        if let Some((field, value)) = extra {
+            set_string(message, field, value)?;
         }
         xpc_dictionary_set_bool(message, b"interactive\0".as_ptr().cast(), true);
     }
@@ -155,10 +160,11 @@ fn xpc_secret_request(
 }
 
 #[cfg(not(target_os = "macos"))]
-fn xpc_secret_request(
+fn xpc_request(
     _operation: &str,
-    _account: &str,
-    _value: Option<&str>,
+    _field: &'static [u8],
+    _field_value: &str,
+    _extra: Option<(&'static [u8], &str)>,
 ) -> Result<Option<String>, String> {
     Err("menu bar secret storage is only available on macOS".to_string())
 }
