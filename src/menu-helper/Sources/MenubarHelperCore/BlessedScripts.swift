@@ -126,7 +126,7 @@ private func parseInjectShebang(
         case "--allow-missing-keys":
             allowMissingKeys = true
         case "--":
-            guard let target = words.first, !keys.isEmpty else {
+            guard let target = words.first, target.hasPrefix("/"), !keys.isEmpty else {
                 throw BlessedScriptManifestError.invalidShebang
             }
             return (keys.sorted(), target, replaceExistingEnv, allowMissingKeys)
@@ -137,7 +137,9 @@ private func parseInjectShebang(
                     throw BlessedScriptManifestError.invalidShebang
                 }
             } else {
-                guard !keys.isEmpty else { throw BlessedScriptManifestError.invalidShebang }
+                guard !keys.isEmpty, word.hasPrefix("/") else {
+                    throw BlessedScriptManifestError.invalidShebang
+                }
                 return (keys.sorted(), word, replaceExistingEnv, allowMissingKeys)
             }
         }

@@ -58,7 +58,7 @@ fn av_inject_accepts_shebang_dispatch() {
     }
 
     assert!(output.status.success(), "{}", stderr(&output));
-    assert!(stdout(&output).contains(&script.to_string_lossy().into_owned()));
+    assert!(stdout(&output).contains("/dev/fd/"));
     let _ = fs::remove_dir_all(home);
 }
 

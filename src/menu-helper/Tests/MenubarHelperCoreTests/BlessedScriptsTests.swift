@@ -55,6 +55,13 @@ import Testing
     #   gh: anything
     # ---
     """,
+    """
+    #!/usr/local/bin/av inject +A sh
+    # --- automic-vault
+    # capabilities:
+    #   gh: read-only
+    # ---
+    """,
 ])
 func malformedBlessedScriptManifestsFailClosed(_ source: String) {
     #expect(throws: (any Error).self) {

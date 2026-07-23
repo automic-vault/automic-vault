@@ -1,6 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{CString, OsString};
-use std::io::Write;
+use std::fs::{File, OpenOptions};
+use std::io::{Read, Seek, Write};
+use std::os::fd::AsRawFd;
+use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -33,6 +36,7 @@ struct ApprovalRequest {
     allow_missing_keys: bool,
     env_conflicts: Vec<String>,
     shebang_script: Option<String>,
+    script_data: Option<Vec<u8>>,
 }
 
 unsafe extern "C" {
@@ -165,13 +169,38 @@ fn parse(args: Vec<OsString>) -> Result<Options, String> {
     }
 }
 
-fn exec(options: Options, stderr: &mut dyn Write) -> i32 {
+fn exec(mut options: Options, stderr: &mut dyn Write) -> i32 {
     if unsafe { geteuid() } == 0 {
         let _ = writeln!(stderr, "av inject: must not be run as root");
         return 1;
     }
 
-    let (target, env) = match prepare_injection(&options, stderr, approve_injection, build_env) {
+    let verified_script = match options
+        .shebang_script
+        .as_ref()
+        .map(VerifiedScript::open)
+        .transpose()
+    {
+        Ok(script) => script,
+        Err(err) => {
+            let _ = writeln!(stderr, "av inject: {err}");
+            return 1;
+        }
+    };
+    let original_script = options.shebang_script.clone();
+    if let Some(script) = &verified_script {
+        options.shebang_script = Some(script.path.clone().into_os_string());
+    }
+
+    let (target, mut env) = match prepare_injection(
+        &options,
+        stderr,
+        verified_script
+            .as_ref()
+            .map(|script| script.data.as_slice()),
+        approve_injection,
+        build_env,
+    ) {
         Ok(prepared) => prepared,
         Err(err) => {
             let _ = writeln!(stderr, "av inject: {err}");
@@ -179,8 +208,21 @@ fn exec(options: Options, stderr: &mut dyn Write) -> i32 {
         }
     };
 
+    let mut args = options.args.clone();
+    if let (Some(script), Some(original)) = (&verified_script, original_script) {
+        if let Some(index) = args.iter().position(|arg| {
+            arg == &original || std::fs::canonicalize(arg).is_ok_and(|path| path == script.path)
+        }) {
+            args[index] = OsString::from(format!("/dev/fd/{}", script.file.as_raw_fd()));
+        }
+        env.insert(
+            OsString::from("AV_SCRIPT_PATH"),
+            script.path.clone().into_os_string(),
+        );
+    }
+
     let err = Command::new(&target)
-        .args(&options.args)
+        .args(args)
         .env_clear()
         .envs(env)
         .exec();
@@ -195,6 +237,7 @@ fn exec(options: Options, stderr: &mut dyn Write) -> i32 {
 fn prepare_injection<A, B>(
     options: &Options,
     stderr: &mut dyn Write,
+    script_data: Option<&[u8]>,
     approve: A,
     build: B,
 ) -> Result<(PathBuf, BTreeMap<OsString, OsString>), String>
@@ -207,13 +250,17 @@ where
     ) -> Result<BTreeMap<OsString, OsString>, String>,
 {
     let target = resolve_target(&options.target)?;
-    let request = approval_request(options, &target)?;
+    let request = approval_request(options, &target, script_data)?;
     let secrets = approve(&request)?;
     let env = build(options, stderr, secrets)?;
     Ok((target, env))
 }
 
-fn approval_request(options: &Options, target: &Path) -> Result<ApprovalRequest, String> {
+fn approval_request(
+    options: &Options,
+    target: &Path,
+    script_data: Option<&[u8]>,
+) -> Result<ApprovalRequest, String> {
     let current_env = std::env::vars_os().collect::<BTreeMap<_, _>>();
     let env_conflicts = options
         .keys
@@ -233,7 +280,50 @@ fn approval_request(options: &Options, target: &Path) -> Result<ApprovalRequest,
         allow_missing_keys: options.allow_missing_keys,
         env_conflicts,
         shebang_script: options.shebang_script.as_ref().map(os_display),
+        script_data: script_data.map(<[u8]>::to_vec),
     })
+}
+
+struct VerifiedScript {
+    file: File,
+    path: PathBuf,
+    data: Vec<u8>,
+}
+
+impl VerifiedScript {
+    fn open(path: &OsString) -> Result<Self, String> {
+        let path = std::fs::canonicalize(path)
+            .map_err(|err| format!("failed to resolve script {}: {err}", path.to_string_lossy()))?;
+        let mut file = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(&path)
+            .map_err(|err| format!("failed to open script {}: {err}", path.display()))?;
+        if !file
+            .metadata()
+            .map_err(|err| format!("failed to inspect script {}: {err}", path.display()))?
+            .is_file()
+        {
+            return Err(format!("script is not a regular file: {}", path.display()));
+        }
+        let mut data = Vec::new();
+        Read::by_ref(&mut file)
+            .take(1024 * 1024 + 1)
+            .read_to_end(&mut data)
+            .map_err(|err| format!("failed to read script {}: {err}", path.display()))?;
+        if data.len() > 1024 * 1024 {
+            return Err("script exceeds the 1 MiB blessing limit".into());
+        }
+        file.rewind()
+            .map_err(|err| format!("failed to rewind script {}: {err}", path.display()))?;
+        if unsafe { libc::fcntl(file.as_raw_fd(), libc::F_SETFD, 0) } == -1 {
+            return Err(format!(
+                "failed to preserve verified script descriptor: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+        Ok(Self { file, path, data })
+    }
 }
 
 fn os_display(value: &OsString) -> String {
@@ -366,6 +456,12 @@ fn xpc_approve_injection(request: &ApprovalRequest) -> Result<SecretValues, Stri
         fn xpc_dictionary_set_bool(xdict: XpcObject, key: *const c_char, value: bool);
         fn xpc_dictionary_get_bool(xdict: XpcObject, key: *const c_char) -> bool;
         fn xpc_dictionary_set_string(xdict: XpcObject, key: *const c_char, value: *const c_char);
+        fn xpc_dictionary_set_data(
+            xdict: XpcObject,
+            key: *const c_char,
+            bytes: *const c_void,
+            length: usize,
+        );
         fn xpc_dictionary_get_string(xdict: XpcObject, key: *const c_char) -> *const c_char;
         fn xpc_dictionary_get_dictionary(xdict: XpcObject, key: *const c_char) -> XpcObject;
         fn xpc_dictionary_set_value(xdict: XpcObject, key: *const c_char, value: XpcObject);
@@ -436,6 +532,14 @@ fn xpc_approve_injection(request: &ApprovalRequest) -> Result<SecretValues, Stri
         set_string(message, b"cwd\0", &request.cwd)?;
         if let Some(script) = &request.shebang_script {
             set_string(message, b"shebang_script\0", script)?;
+        }
+        if let Some(data) = &request.script_data {
+            xpc_dictionary_set_data(
+                message,
+                b"script_data\0".as_ptr().cast(),
+                data.as_ptr().cast(),
+                data.len(),
+            );
         }
         xpc_dictionary_set_bool(
             message,
@@ -576,6 +680,7 @@ mod tests {
         let err = prepare_injection(
             &options,
             &mut stderr,
+            None,
             |_| Err("user denied injection".into()),
             |_, _, _| panic!("approval denial must happen before loading secrets"),
         )
@@ -594,7 +699,7 @@ mod tests {
             args: os(&["hi"]),
             shebang_script: Some("/tmp/tool".into()),
         };
-        let request = approval_request(&options, Path::new("/bin/echo")).unwrap();
+        let request = approval_request(&options, Path::new("/bin/echo"), Some(b"script")).unwrap();
 
         assert_eq!(request.keys, ["A", "B"]);
         assert_eq!(request.target, "/bin/echo");
@@ -602,6 +707,7 @@ mod tests {
         assert!(request.replace_existing_env);
         assert!(request.allow_missing_keys);
         assert_eq!(request.shebang_script.as_deref(), Some("/tmp/tool"));
+        assert_eq!(request.script_data.as_deref(), Some(b"script".as_slice()));
     }
 
     #[test]
