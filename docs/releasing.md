@@ -49,12 +49,7 @@ Add these secrets to the `release` environment:
 | --- | --- |
 | `MACOS_DEVELOPER_ID_P12_BASE64` | Base64 of the Developer ID Application certificate and private key exported as a password-protected `.p12` |
 | `MACOS_DEVELOPER_ID_P12_PASSWORD` | Password chosen while exporting that `.p12` |
-| `MACOS_PROVISIONING_PROFILE_BASE64` | Base64 of the Developer ID provisioning profile used by the menu bar app |
-| `APPLE_USERNAME` | Apple ID used for notarization |
 | `APPLE_PASSWORD` | App-specific password for that Apple ID, not the normal account password |
-| `APPLE_TEAM_ID` | Apple Developer team identifier |
-| `POSTHOG_API_KEY` | Production PostHog project key embedded in the distributed app |
-| `AWS_ROLE_ARN` | IAM role assumed through GitHub OIDC to publish the website DMG |
 
 Set them interactively so values do not enter shell history:
 
@@ -68,15 +63,47 @@ To prepare the binary values on macOS:
 
 ```sh
 base64 <DeveloperIDApplication.p12 | pbcopy
-base64 <Automic_Vault_Developer_ID.provisionprofile | pbcopy
 ```
 
-Paste the first value into `MACOS_DEVELOPER_ID_P12_BASE64` and the second into
-`MACOS_PROVISIONING_PROFILE_BASE64`.
+Paste that value into `MACOS_DEVELOPER_ID_P12_BASE64`.
 
 ### Environment variables
 
-Add these non-secret variables to the `release` environment:
+The provisioning profile, Apple account name and team identifier, PostHog
+project key, and AWS role ARN are not secrets. The profile is embedded in the
+distributed app, the PostHog key is embedded in its `Info.plist`, and the
+remaining values are identifiers.
+
+Add them as non-secret variables on the `release` environment:
+
+```sh
+base64 <Automic_Vault_Developer_ID.provisionprofile |
+  gh variable set MACOS_PROVISIONING_PROFILE_BASE64 \
+    --repo automic-vault/automic-vault \
+    --env release
+
+gh variable set APPLE_USERNAME \
+  --repo automic-vault/automic-vault \
+  --env release \
+  --body APPLE_ID_EMAIL
+
+gh variable set APPLE_TEAM_ID \
+  --repo automic-vault/automic-vault \
+  --env release \
+  --body TEAM_ID
+
+gh variable set POSTHOG_API_KEY \
+  --repo automic-vault/automic-vault \
+  --env release \
+  --body PROJECT_KEY
+
+gh variable set AWS_ROLE_ARN \
+  --repo automic-vault/automic-vault \
+  --env release \
+  --body arn:aws:iam::ACCOUNT_ID:role/ROLE_NAME
+```
+
+Then add the ordinary deployment configuration:
 
 ```sh
 gh variable set AWS_REGION \

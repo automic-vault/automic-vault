@@ -90,20 +90,20 @@ jobs:
         env:
           MACOS_DEVELOPER_ID_P12_BASE64: ${{ secrets.MACOS_DEVELOPER_ID_P12_BASE64 }}
           MACOS_DEVELOPER_ID_P12_PASSWORD: ${{ secrets.MACOS_DEVELOPER_ID_P12_PASSWORD }}
-          MACOS_PROVISIONING_PROFILE_BASE64: ${{ secrets.MACOS_PROVISIONING_PROFILE_BASE64 }}
-          APPLE_USERNAME: ${{ secrets.APPLE_USERNAME }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
+          MACOS_PROVISIONING_PROFILE_BASE64: ${{ vars.MACOS_PROVISIONING_PROFILE_BASE64 }}
+          APPLE_USERNAME: ${{ vars.APPLE_USERNAME }}
+          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+          POSTHOG_API_KEY: ${{ vars.POSTHOG_API_KEY }}
         run: |
           set -euo pipefail
           : "${MACOS_DEVELOPER_ID_P12_BASE64:?Add this secret to the release environment}"
           : "${MACOS_DEVELOPER_ID_P12_PASSWORD:?Add this secret to the release environment}"
-          : "${MACOS_PROVISIONING_PROFILE_BASE64:?Add this secret to the release environment}"
-          : "${APPLE_USERNAME:?Add this secret to the release environment}"
           : "${APPLE_PASSWORD:?Add this secret to the release environment}"
-          : "${APPLE_TEAM_ID:?Add this secret to the release environment}"
-          : "${POSTHOG_API_KEY:?Add this secret to the release environment}"
+          : "${MACOS_PROVISIONING_PROFILE_BASE64:?Add this variable to the release environment}"
+          : "${APPLE_USERNAME:?Add this variable to the release environment}"
+          : "${APPLE_TEAM_ID:?Add this variable to the release environment}"
+          : "${POSTHOG_API_KEY:?Add this variable to the release environment}"
 
       - name: Install pinned release tooling
         shell: bash
@@ -126,7 +126,7 @@ jobs:
         env:
           MACOS_DEVELOPER_ID_P12_BASE64: ${{ secrets.MACOS_DEVELOPER_ID_P12_BASE64 }}
           MACOS_DEVELOPER_ID_P12_PASSWORD: ${{ secrets.MACOS_DEVELOPER_ID_P12_PASSWORD }}
-          MACOS_PROVISIONING_PROFILE_BASE64: ${{ secrets.MACOS_PROVISIONING_PROFILE_BASE64 }}
+          MACOS_PROVISIONING_PROFILE_BASE64: ${{ vars.MACOS_PROVISIONING_PROFILE_BASE64 }}
         run: |
           set -euo pipefail
           umask 077
@@ -161,10 +161,10 @@ jobs:
       - name: Build, sign, notarize, and staple
         shell: bash
         env:
-          APPLE_USERNAME: ${{ secrets.APPLE_USERNAME }}
+          APPLE_USERNAME: ${{ vars.APPLE_USERNAME }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
+          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+          POSTHOG_API_KEY: ${{ vars.POSTHOG_API_KEY }}
         run: scripts/build.sh --release-artifact --version "$VERSION"
 
       - name: Verify signed release artifact
@@ -285,7 +285,7 @@ jobs:
       - name: Validate website publishing settings
         shell: bash
         env:
-          AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
+          AWS_ROLE_ARN: ${{ vars.AWS_ROLE_ARN }}
           AWS_REGION: ${{ vars.AWS_REGION }}
           AWS_S3_BUCKET: ${{ vars.AWS_S3_BUCKET }}
         run: |
@@ -329,7 +329,7 @@ jobs:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@61815dcd50bd041e203e49132bacad1fd04d2708 # v5
         with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
 
       - name: Publish the verified DMG

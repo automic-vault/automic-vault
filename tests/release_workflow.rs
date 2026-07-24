@@ -47,6 +47,23 @@ fn release_builds_are_actions_only_and_fail_closed() {
     for secret in ["APPLE_USERNAME", "APPLE_PASSWORD", "APPLE_TEAM_ID"] {
         assert!(NOTARIZE_SCRIPT.contains(secret));
     }
+    for secret in [
+        "MACOS_DEVELOPER_ID_P12_BASE64",
+        "MACOS_DEVELOPER_ID_P12_PASSWORD",
+        "APPLE_PASSWORD",
+    ] {
+        assert!(RELEASE_WORKFLOW.contains(&format!("secrets.{secret}")));
+    }
+    for public_value in [
+        "MACOS_PROVISIONING_PROFILE_BASE64",
+        "APPLE_USERNAME",
+        "APPLE_TEAM_ID",
+        "POSTHOG_API_KEY",
+        "AWS_ROLE_ARN",
+    ] {
+        assert!(RELEASE_WORKFLOW.contains(&format!("vars.{public_value}")));
+        assert!(!RELEASE_WORKFLOW.contains(&format!("secrets.{public_value}")));
+    }
 }
 
 #[test]
