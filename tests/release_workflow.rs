@@ -13,8 +13,6 @@ fn release_workflow_binds_the_dmg_to_reviewed_source() {
     assert_eq!(RELEASE_WORKFLOW.matches("uses: actions/attest@").count(), 2);
     assert!(RELEASE_WORKFLOW.contains("sbom-path:"));
     assert!(RELEASE_WORKFLOW.contains("SHA256SUMS"));
-    assert!(RELEASE_WORKFLOW.contains("--signer-workflow"));
-    assert!(RELEASE_WORKFLOW.contains("--source-digest \"$GITHUB_SHA\""));
     assert!(RELEASE_WORKFLOW.contains("RUST_TOOLCHAIN: 1.96.0"));
     assert!(
         RELEASE_WORKFLOW
@@ -59,7 +57,6 @@ fn release_builds_are_actions_only_and_fail_closed() {
         "APPLE_USERNAME",
         "APPLE_TEAM_ID",
         "POSTHOG_API_KEY",
-        "AWS_ROLE_ARN",
     ] {
         assert!(RELEASE_WORKFLOW.contains(&format!("vars.{public_value}")));
         assert!(!RELEASE_WORKFLOW.contains(&format!("secrets.{public_value}")));
@@ -67,12 +64,10 @@ fn release_builds_are_actions_only_and_fail_closed() {
 }
 
 #[test]
-fn website_receives_the_attested_release_bytes() {
-    assert!(RELEASE_WORKFLOW.contains("gh attestation verify"));
-    assert!(RELEASE_WORKFLOW.contains("Downloaded release asset digest does not match GitHub."));
-    assert!(RELEASE_WORKFLOW.contains("S3 checksum does not match the attested release asset."));
-    assert!(RELEASE_WORKFLOW.contains(
-        "aws-actions/configure-aws-credentials@61815dcd50bd041e203e49132bacad1fd04d2708"
-    ));
-    assert!(RELEASE_WORKFLOW.contains("--checksum-algorithm SHA256"));
+fn release_stays_on_github_under_a_stable_asset_name() {
+    assert!(RELEASE_WORKFLOW.contains("DMG_NAME: Automic-Vault.dmg"));
+    assert!(RELEASE_WORKFLOW.contains("BUILD_DMG_NAME: Automic-Vault-${{ inputs.version }}.dmg"));
+    assert!(!RELEASE_WORKFLOW.contains("AWS_"));
+    assert!(!RELEASE_WORKFLOW.contains("aws-actions/"));
+    assert!(!RELEASE_WORKFLOW.contains("aws s3"));
 }

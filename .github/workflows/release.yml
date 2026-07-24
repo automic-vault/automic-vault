@@ -27,7 +27,8 @@ jobs:
     env:
       VERSION: ${{ inputs.version }}
       ASSET_DIR: target/release-assets
-      DMG_NAME: Automic-Vault-${{ inputs.version }}.dmg
+      BUILD_DMG_NAME: Automic-Vault-${{ inputs.version }}.dmg
+      DMG_NAME: Automic-Vault.dmg
       SBOM_NAME: Automic-Vault-${{ inputs.version }}.spdx.json
       IMMUTABLE_RELEASES_ENABLED: ${{ vars.IMMUTABLE_RELEASES_ENABLED }}
       RUST_TOOLCHAIN: 1.96.0
@@ -171,7 +172,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          dmg="target/swift/$DMG_NAME"
+          dmg="target/swift/$BUILD_DMG_NAME"
           codesign --verify --deep --strict "target/swift/Automic Vault.app"
           codesign --verify "$dmg"
           xcrun stapler validate "$dmg"
@@ -181,7 +182,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$ASSET_DIR" target/sbom-input
-          cp "target/swift/$DMG_NAME" "$ASSET_DIR/$DMG_NAME"
+          cp "target/swift/$BUILD_DMG_NAME" "$ASSET_DIR/$DMG_NAME"
           cp Cargo.toml Cargo.lock target/sbom-input/
           cp src/menu-helper/Package.swift \
             src/menu-helper/Package.resolved \
@@ -265,112 +266,3 @@ jobs:
           security delete-keychain "$RUNNER_TEMP/release-signing.keychain-db" 2>/dev/null || true
           rm -f "$RUNNER_TEMP/developer-id.p12"
           rm -f "$HOME/Library/MobileDevice/Provisioning Profiles/Automic_Vault_Developer_ID.provisionprofile"
-
-  website:
-    name: Publish the attested DMG to the website
-    needs: release
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    environment: release
-    permissions:
-      contents: read
-      id-token: write
-      attestations: read
-    env:
-      VERSION: ${{ inputs.version }}
-      DMG_NAME: Automic-Vault-${{ inputs.version }}.dmg
-      GH_TOKEN: ${{ github.token }}
-
-    steps:
-      - name: Validate website publishing settings
-        shell: bash
-        env:
-          AWS_ROLE_ARN: ${{ vars.AWS_ROLE_ARN }}
-          AWS_REGION: ${{ vars.AWS_REGION }}
-          AWS_S3_BUCKET: ${{ vars.AWS_S3_BUCKET }}
-        run: |
-          set -euo pipefail
-          : "${AWS_ROLE_ARN:?Add this secret to the release environment}"
-          : "${AWS_REGION:?Add this variable to the release environment}"
-          : "${AWS_S3_BUCKET:?Add this variable to the release environment}"
-
-      - name: Download the immutable release asset
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p release-download
-          gh release download "$VERSION" \
-            --repo "$GITHUB_REPOSITORY" \
-            --pattern "$DMG_NAME" \
-            --dir release-download
-
-      - name: Verify digest and build provenance
-        shell: bash
-        run: |
-          set -euo pipefail
-          dmg="release-download/$DMG_NAME"
-          expected="$(
-            gh release view "$VERSION" \
-              --repo "$GITHUB_REPOSITORY" \
-              --json assets \
-              --jq ".assets[] | select(.name == \"$DMG_NAME\") | .digest"
-          )"
-          actual="sha256:$(sha256sum "$dmg" | awk '{print $1}')"
-          if [[ "$actual" != "$expected" ]]; then
-            echo "Downloaded release asset digest does not match GitHub." >&2
-            exit 1
-          fi
-          gh attestation verify "$dmg" \
-            --repo "$GITHUB_REPOSITORY" \
-            --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml" \
-            --source-ref refs/heads/main \
-            --source-digest "$GITHUB_SHA"
-
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@61815dcd50bd041e203e49132bacad1fd04d2708 # v5
-        with:
-          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
-          aws-region: ${{ vars.AWS_REGION }}
-
-      - name: Publish the verified DMG
-        shell: bash
-        env:
-          AWS_S3_BUCKET: ${{ vars.AWS_S3_BUCKET }}
-        run: |
-          set -euo pipefail
-          dmg="release-download/$DMG_NAME"
-          aws s3 cp "$dmg" "s3://$AWS_S3_BUCKET/Automic Vault.dmg" \
-            --content-type application/x-apple-diskimage \
-            --checksum-algorithm SHA256
-          expected_checksum="$(openssl dgst -sha256 -binary "$dmg" | openssl base64 -A)"
-          actual_checksum="$(
-            aws s3api head-object \
-              --bucket "$AWS_S3_BUCKET" \
-              --key "Automic Vault.dmg" \
-              --checksum-mode ENABLED \
-              --query ChecksumSHA256 \
-              --output text
-          )"
-          if [[ "$actual_checksum" != "$expected_checksum" ]]; then
-            echo "S3 checksum does not match the attested release asset." >&2
-            exit 1
-          fi
-          distribution_id="$(
-            aws cloudfront list-distributions \
-              --query "DistributionList.Items[?contains(Aliases.Items, \`$AWS_S3_BUCKET\`)].Id | [0]" \
-              --output text
-          )"
-          if [[ -z "$distribution_id" || "$distribution_id" == "None" ]]; then
-            echo "Could not resolve the website CloudFront distribution." >&2
-            exit 1
-          fi
-          invalidation_id="$(
-            aws cloudfront create-invalidation \
-              --distribution-id "$distribution_id" \
-              --paths "/Automic%20Vault.dmg" \
-              --query Invalidation.Id \
-              --output text
-          )"
-          aws cloudfront wait invalidation-completed \
-            --distribution-id "$distribution_id" \
-            --id "$invalidation_id"
