@@ -3898,6 +3898,7 @@ private func runApprovalSelfCheck() -> Int32 {
         allowMissingKeys: false,
         envConflicts: [],
         shebangScript: nil,
+        scriptData: nil,
         tool: "stripe",
         title: "Stripe credential requested",
         detail: nil
