@@ -35,6 +35,13 @@ import Testing
     # ---
     """,
     """
+    #!/bin/sh inject +A /bin/sh
+    # --- automic-vault
+    # capabilities:
+    #   gh: read-only
+    # ---
+    """,
+    """
     #!/usr/local/bin/av inject +A /bin/sh
     # capabilities:
     #   gh: read-only

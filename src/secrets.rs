@@ -106,8 +106,8 @@ fn xpc_request(
     unsafe {
         set_string(message, b"op\0", operation)?;
         set_string(message, field, field_value)?;
-        if let Some((field, value)) = extra {
-            set_string(message, field, value)?;
+        if let Some((extra_field, value)) = extra {
+            set_string(message, extra_field, value)?;
         }
         xpc_dictionary_set_bool(message, b"interactive\0".as_ptr().cast(), true);
     }

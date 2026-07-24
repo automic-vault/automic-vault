@@ -162,8 +162,13 @@ private func parseInjectShebang(
     _ line: String
 ) throws -> (keys: [String], target: String, replaceExistingEnv: Bool, allowMissingKeys: Bool) {
     var words = line.dropFirst(2).split(whereSeparator: \.isWhitespace).map(String.init)
-    guard !words.isEmpty else { throw BlessedScriptManifestError.invalidShebang }
-    _ = words.removeFirst()
+    guard let interpreter = words.first,
+          interpreter.hasPrefix("/"),
+          URL(fileURLWithPath: interpreter).lastPathComponent == "av"
+    else {
+        throw BlessedScriptManifestError.invalidShebang
+    }
+    words.removeFirst()
     guard words.first == "inject" else { throw BlessedScriptManifestError.invalidShebang }
     words.removeFirst()
 
