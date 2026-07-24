@@ -568,6 +568,7 @@ fn ownership_command(post_install: &CaskPostInstall) -> Command {
             "-h",
             "-x",
             "-n",
+            "--",
             &owner,
         ])
         .args(&post_install.apps)
@@ -1091,6 +1092,7 @@ mod tests {
                 "-h",
                 "-x",
                 "-n",
+                "--",
                 "501:20",
                 "/Applications/Spotify.app"
             ]
