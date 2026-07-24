@@ -1,6 +1,7 @@
 use std::ffi::{CStr, CString, OsString};
 use std::fs;
-use std::os::unix::fs::MetadataExt;
+use std::io::Read;
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -455,11 +456,11 @@ fn app_targets(name: &str, info: &serde_json::Value) -> Result<Vec<PathBuf>, Str
 fn caller() -> Result<Caller, String> {
     let uid = unsafe { libc::getuid() };
     let gid = unsafe { libc::getgid() };
-    let configured = fs::read_to_string(CASK_USER_UID)
-        .map_err(|err| format!("failed to read configured cask user: {err}"))?
-        .trim()
-        .parse::<u32>()
-        .map_err(|_| "configured cask user UID is invalid".to_string())?;
+    let configured = configured_cask_uid(
+        Path::new(CASK_USER_UID),
+        unsafe { libc::geteuid() },
+        unsafe { libc::getegid() },
+    )?;
     if uid == 0 || uid != configured || uid == unsafe { libc::geteuid() } {
         return Err(
             "casks must be invoked directly by the user configured by `sudo av harden brew`".into(),
@@ -481,6 +482,31 @@ fn caller() -> Result<Caller, String> {
         return Err("caller's account name is missing".into());
     }
     Ok(Caller { uid, gid })
+}
+
+fn configured_cask_uid(path: &Path, owner: u32, group: u32) -> Result<u32, String> {
+    let mut file = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(path)
+        .map_err(|err| format!("failed to read configured cask user: {err}"))?;
+    let metadata = file
+        .metadata()
+        .map_err(|err| format!("failed to inspect configured cask user: {err}"))?;
+    if !metadata.file_type().is_file()
+        || metadata.uid() != owner
+        || metadata.gid() != group
+        || metadata.mode() & 0o022 != 0
+    {
+        return Err("configured cask user file is not protected".into());
+    }
+    let mut configured = String::new();
+    file.read_to_string(&mut configured)
+        .map_err(|err| format!("failed to read configured cask user: {err}"))?;
+    configured
+        .trim()
+        .parse::<u32>()
+        .map_err(|_| "configured cask user UID is invalid".to_string())
 }
 
 fn transfer_app_ownership(post_install: &CaskPostInstall) -> Result<(), String> {
@@ -785,6 +811,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
     fn authorization_request_keeps_exact_args_and_cwd() {
@@ -908,6 +935,37 @@ mod tests {
         assert!(
             package_kind(&serde_json::json!({"formulae": [], "casks": []}), "missing").is_err()
         );
+    }
+
+    #[test]
+    fn configured_cask_user_must_come_from_a_protected_file() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = temp_path("cask-user");
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("uid");
+        fs::write(&path, "501\n").unwrap();
+        let metadata = fs::metadata(&path).unwrap();
+
+        assert_eq!(
+            configured_cask_uid(&path, metadata.uid(), metadata.gid()),
+            Ok(501)
+        );
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o666)).unwrap();
+        assert!(configured_cask_uid(&path, metadata.uid(), metadata.gid()).is_err());
+
+        let link = root.join("link");
+        std::os::unix::fs::symlink(&path, &link).unwrap();
+        assert!(configured_cask_uid(&link, metadata.uid(), metadata.gid()).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    fn temp_path(label: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!("av-brew-stub-{label}-{nanos}"))
     }
 
     #[test]

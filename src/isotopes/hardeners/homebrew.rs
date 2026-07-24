@@ -1,7 +1,7 @@
 use std::ffi::CString;
 use std::fs;
 use std::io::{self, IsTerminal, Write};
-use std::os::unix::fs::{MetadataExt, PermissionsExt, lchown};
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt, lchown};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -138,11 +138,7 @@ pub(crate) fn run(stdout: &mut dyn Write, yes: bool) -> Result<(), String> {
         }
         Ok::<_, String>(())
     })();
-    fs::write(
-        prefix.join(CASK_USER_UID_FILE),
-        format!("{}\n", source_user.uid),
-    )
-    .map_err(|err| format!("failed to record Homebrew cask user: {err}"))?;
+    write_cask_user_uid(&prefix.join(CASK_USER_UID_FILE), source_user.uid)?;
     remove_legacy_cask_access(&prefix, &source_user.name)?;
     chown_recursive(&prefix, uid, gid)?;
     migration?;
@@ -247,8 +243,9 @@ fn cask_access_diagnostics(
             path: Some(uid_file.display().to_string()),
         }];
     };
-    if let Ok(metadata) = fs::metadata(&uid_file)
-        && (automic_uid.is_some_and(|uid| metadata.uid() != uid)
+    if let Ok(metadata) = fs::symlink_metadata(&uid_file)
+        && (!metadata.file_type().is_file()
+            || automic_uid.is_some_and(|uid| metadata.uid() != uid)
             || vault_gid.is_some_and(|gid| metadata.gid() != gid)
             || metadata.mode() & 0o022 != 0)
     {
@@ -332,6 +329,20 @@ fn cask_access_diagnostics(
         }
     }
     diagnostics
+}
+
+fn write_cask_user_uid(path: &Path, uid: u32) -> Result<(), String> {
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o644)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(path)
+        .map_err(|err| format!("failed to record Homebrew cask user: {err}"))?;
+    file.set_permissions(fs::Permissions::from_mode(0o644))
+        .and_then(|()| writeln!(file, "{uid}"))
+        .map_err(|err| format!("failed to record Homebrew cask user: {err}"))
 }
 
 fn state_directory_diagnostics(prefix: &Path, uid: u32, gid: u32) -> Vec<HardenerDiagnostic> {
@@ -1241,6 +1252,29 @@ mod tests {
     }
 
     #[test]
+    fn cask_user_file_is_protected() {
+        let root = temp_path("brew-cask-user");
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("cask-user-uid");
+        fs::write(&path, "old").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o666)).unwrap();
+
+        write_cask_user_uid(&path, 501).unwrap();
+
+        assert_eq!(fs::read_to_string(&path).unwrap(), "501\n");
+        assert_eq!(fs::metadata(&path).unwrap().mode() & 0o777, 0o644);
+
+        let target = root.join("target");
+        fs::write(&target, "unchanged").unwrap();
+        let link = root.join("link");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        assert!(write_cask_user_uid(&link, 502).is_err());
+        assert_eq!(fs::read_to_string(&target).unwrap(), "unchanged");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
     fn obsolete_cask_acls_are_removed() {
         let _guard = crate::global_test_env_lock().lock().unwrap();
         let prefix = temp_path("brew-cask-acl");
