@@ -1,6 +1,6 @@
 use std::ffi::CString;
 use std::fs;
-use std::io::{self, IsTerminal, Write};
+use std::io::{self, IsTerminal, Read, Write};
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt, lchown};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -225,11 +225,59 @@ fn cask_access_diagnostics(
     vault_gid: Option<u32>,
 ) -> Vec<HardenerDiagnostic> {
     let uid_file = prefix.join(CASK_USER_UID_FILE);
-    let Ok(configured_uid) = fs::read_to_string(&uid_file) else {
+    let mut uid_file_handle = match fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(&uid_file)
+    {
+        Ok(file) => file,
+        Err(_) if fs::symlink_metadata(&uid_file).is_ok() => {
+            return vec![HardenerDiagnostic {
+                kind: "cask_user_file_permissions_invalid",
+                message: "Homebrew's configured cask user file is not protected".into(),
+                remediation: "Run `sudo av harden brew` to restore its ownership and permissions."
+                    .into(),
+                path: Some(uid_file.display().to_string()),
+            }];
+        }
+        Err(_) => {
+            return vec![HardenerDiagnostic {
+                kind: "cask_user_missing",
+                message: "Homebrew hardening has no configured cask user".into(),
+                remediation:
+                    "Run `sudo av harden brew` as the desktop user who should install casks.".into(),
+                path: Some(uid_file.display().to_string()),
+            }];
+        }
+    };
+    let Ok(metadata) = uid_file_handle.metadata() else {
         return vec![HardenerDiagnostic {
-            kind: "cask_user_missing",
-            message: "Homebrew hardening has no configured cask user".into(),
-            remediation: "Run `sudo av harden brew` as the desktop user who should install casks."
+            kind: "cask_user_file_permissions_invalid",
+            message: "Homebrew's configured cask user file is not protected".into(),
+            remediation: "Run `sudo av harden brew` to restore its ownership and permissions."
+                .into(),
+            path: Some(uid_file.display().to_string()),
+        }];
+    };
+    if !metadata.file_type().is_file()
+        || automic_uid.is_some_and(|uid| metadata.uid() != uid)
+        || vault_gid.is_some_and(|gid| metadata.gid() != gid)
+        || metadata.mode() & 0o022 != 0
+    {
+        return vec![HardenerDiagnostic {
+            kind: "cask_user_file_permissions_invalid",
+            message: "Homebrew's configured cask user file is not protected".into(),
+            remediation: "Run `sudo av harden brew` to restore its ownership and permissions."
+                .into(),
+            path: Some(uid_file.display().to_string()),
+        }];
+    }
+    let mut configured_uid = String::new();
+    let Ok(_) = uid_file_handle.read_to_string(&mut configured_uid) else {
+        return vec![HardenerDiagnostic {
+            kind: "cask_user_invalid",
+            message: "Homebrew's configured cask user UID is invalid".into(),
+            remediation: "Run `sudo av harden brew` to recreate the cask-user configuration."
                 .into(),
             path: Some(uid_file.display().to_string()),
         }];
@@ -243,20 +291,6 @@ fn cask_access_diagnostics(
             path: Some(uid_file.display().to_string()),
         }];
     };
-    if let Ok(metadata) = fs::symlink_metadata(&uid_file)
-        && (!metadata.file_type().is_file()
-            || automic_uid.is_some_and(|uid| metadata.uid() != uid)
-            || vault_gid.is_some_and(|gid| metadata.gid() != gid)
-            || metadata.mode() & 0o022 != 0)
-    {
-        return vec![HardenerDiagnostic {
-            kind: "cask_user_file_permissions_invalid",
-            message: "Homebrew's configured cask user file is not protected".into(),
-            remediation: "Run `sudo av harden brew` to restore its ownership and permissions."
-                .into(),
-            path: Some(uid_file.display().to_string()),
-        }];
-    }
     let Some(user) = user_name_for_uid(configured_uid) else {
         return vec![HardenerDiagnostic {
             kind: "cask_user_unresolvable",
@@ -268,9 +302,10 @@ fn cask_access_diagnostics(
 
     let mut diagnostics = Vec::new();
     let caskroom = prefix.join("Caskroom");
-    match fs::metadata(&caskroom) {
+    match fs::symlink_metadata(&caskroom) {
         Ok(metadata)
-            if automic_uid.is_some_and(|uid| metadata.uid() != uid)
+            if !metadata.file_type().is_dir()
+                || automic_uid.is_some_and(|uid| metadata.uid() != uid)
                 || vault_gid.is_some_and(|gid| metadata.gid() != gid) =>
         {
             diagnostics.push(HardenerDiagnostic {
@@ -1253,9 +1288,10 @@ mod tests {
 
     #[test]
     fn cask_user_file_is_protected() {
+        let _guard = crate::global_test_env_lock().lock().unwrap();
         let root = temp_path("brew-cask-user");
-        fs::create_dir_all(&root).unwrap();
-        let path = root.join("cask-user-uid");
+        fs::create_dir_all(root.join("var/automic")).unwrap();
+        let path = root.join(CASK_USER_UID_FILE);
         fs::write(&path, "old").unwrap();
         fs::set_permissions(&path, fs::Permissions::from_mode(0o666)).unwrap();
 
@@ -1266,10 +1302,31 @@ mod tests {
 
         let target = root.join("target");
         fs::write(&target, "unchanged").unwrap();
-        let link = root.join("link");
-        std::os::unix::fs::symlink(&target, &link).unwrap();
-        assert!(write_cask_user_uid(&link, 502).is_err());
+        fs::remove_file(&path).unwrap();
+        std::os::unix::fs::symlink(&target, &path).unwrap();
+        assert!(write_cask_user_uid(&path, 502).is_err());
         assert_eq!(fs::read_to_string(&target).unwrap(), "unchanged");
+        assert_eq!(
+            cask_access_diagnostics(&root, None, None)[0].kind,
+            "cask_user_file_permissions_invalid"
+        );
+
+        fs::remove_file(&path).unwrap();
+        write_cask_user_uid(&path, unsafe { libc::getuid() }).unwrap();
+        let caskroom = root.join("Caskroom");
+        fs::create_dir(root.join("real-caskroom")).unwrap();
+        std::os::unix::fs::symlink(root.join("real-caskroom"), &caskroom).unwrap();
+        unsafe {
+            std::env::set_var("AUTOMIC_VAULT_TEST_BREW_USER", "alice");
+        }
+        assert!(
+            cask_access_diagnostics(&root, None, None)
+                .iter()
+                .any(|diagnostic| diagnostic.kind == "caskroom_owner_invalid")
+        );
+        unsafe {
+            std::env::remove_var("AUTOMIC_VAULT_TEST_BREW_USER");
+        }
         fs::remove_dir_all(root).unwrap();
     }
 

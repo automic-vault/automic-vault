@@ -91,27 +91,25 @@ fn prepare_args(
     args: &[String],
     cwd: &Path,
 ) -> Result<(Vec<String>, Option<CaskPostInstall>), String> {
-    let Some(command) = args.first().map(String::as_str) else {
-        return Ok((Vec::new(), None));
-    };
-    if !matches!(
-        command,
-        "install" | "reinstall" | "upgrade" | "uninstall" | "remove" | "rm"
-    ) {
+    let Some((command_index, command)) = mutation_command(args) else {
         return Ok((args.to_vec(), None));
-    }
+    };
 
-    let cask_flag = args
+    let options = args[command_index + 1..]
+        .iter()
+        .take_while(|arg| arg.as_str() != "--")
+        .collect::<Vec<_>>();
+    let cask_flag = options
         .iter()
         .any(|arg| matches!(arg.as_str(), "--cask" | "--casks"));
-    let formula_flag = args
+    let formula_flag = options
         .iter()
         .any(|arg| matches!(arg.as_str(), "--formula" | "--formulae"));
     if cask_flag && formula_flag {
         return Err("brew command cannot select both formulae and casks".into());
     }
 
-    let mut operands = named_operands(args);
+    let mut operands = named_operands(args, command_index);
     if operands.is_empty() {
         if command == "upgrade" && cask_flag {
             operands = brew_lines(&["list", "--cask", "--full-name"], cwd)?;
@@ -146,7 +144,10 @@ fn prepare_args(
 
     let mut pinned = args.to_vec();
     if !cask_flag && !formula_flag {
-        pinned.insert(1, if is_cask { "--cask" } else { "--formula" }.into());
+        pinned.insert(
+            command_index + 1,
+            if is_cask { "--cask" } else { "--formula" }.into(),
+        );
     }
     if !is_cask {
         return Ok((pinned, None));
@@ -160,18 +161,18 @@ fn prepare_args(
         reject_unsafe_artifacts(operand, info)?;
     }
     let installs = matches!(command, "install" | "reinstall" | "upgrade")
-        && !args.iter().any(|arg| arg == "--dry-run");
+        && !options.iter().any(|arg| arg.as_str() == "--dry-run");
     if installs
-        && args
+        && options
             .iter()
-            .any(|arg| arg == "--appdir" || arg.starts_with("--appdir="))
+            .any(|arg| arg.as_str() == "--appdir" || arg.starts_with("--appdir="))
     {
         return Err(
             "custom cask app destinations are not supported by the hardened launcher".into(),
         );
     }
     if installs {
-        let mut dep_args = vec!["deps", "--cask", "--missing", "--union"];
+        let mut dep_args = vec!["deps", "--cask", "--missing", "--union", "--"];
         dep_args.extend(operands.iter().map(String::as_str));
         let missing = brew_lines(&dep_args, cwd)?;
         if !missing.is_empty() {
@@ -209,7 +210,19 @@ enum PackageKind {
     Cask,
 }
 
-fn named_operands(args: &[String]) -> Vec<String> {
+fn mutation_command(args: &[String]) -> Option<(usize, &str)> {
+    let index = args
+        .iter()
+        .position(|arg| arg == "--" || !arg.starts_with('-'))?;
+    let command = args[index].as_str();
+    matches!(
+        command,
+        "install" | "reinstall" | "upgrade" | "uninstall" | "remove" | "rm"
+    )
+    .then_some((index, command))
+}
+
+fn named_operands(args: &[String], command_index: usize) -> Vec<String> {
     const VALUE_FLAGS: &[&str] = &[
         "--appdir",
         "--appimagedir",
@@ -235,7 +248,7 @@ fn named_operands(args: &[String]) -> Vec<String> {
     let mut operands = Vec::new();
     let mut skip = false;
     let mut options_done = false;
-    for arg in args.iter().skip(1) {
+    for arg in args.iter().skip(command_index + 1) {
         if skip {
             skip = false;
             continue;
@@ -252,7 +265,7 @@ fn named_operands(args: &[String]) -> Vec<String> {
 }
 
 fn resolve_package(name: &str, cwd: &Path) -> Result<PackageKind, String> {
-    let info = brew_json(&["info", "--json=v2", name], cwd)?;
+    let info = brew_json(&["info", "--json=v2", "--", name], cwd)?;
     package_kind(&info, name)
 }
 
@@ -267,7 +280,7 @@ fn package_kind(info: &serde_json::Value, name: &str) -> Result<PackageKind, Str
 }
 
 fn cask_info(name: &str, cwd: &Path) -> Result<serde_json::Value, String> {
-    let mut info = brew_json(&["info", "--json=v2", "--cask", name], cwd)?;
+    let mut info = brew_json(&["info", "--json=v2", "--cask", "--", name], cwd)?;
     let casks = info["casks"]
         .as_array_mut()
         .ok_or_else(|| format!("Homebrew returned malformed cask metadata for `{name}`"))?;
@@ -888,24 +901,53 @@ mod tests {
     #[test]
     fn mutation_operands_skip_options_and_their_values() {
         assert_eq!(
-            named_operands(&[
-                "install".into(),
-                "--appdir".into(),
-                "/Applications".into(),
-                "--language=en".into(),
-                "--verbose".into(),
-                "firefox".into(),
-            ]),
+            named_operands(
+                &[
+                    "install".into(),
+                    "--appdir".into(),
+                    "/Applications".into(),
+                    "--language=en".into(),
+                    "--verbose".into(),
+                    "firefox".into(),
+                ],
+                0
+            ),
             ["firefox"]
         );
         assert_eq!(
-            named_operands(&[
-                "upgrade".into(),
-                "--cask".into(),
-                "--".into(),
-                "-odd-cask".into(),
-            ]),
+            named_operands(
+                &[
+                    "upgrade".into(),
+                    "--cask".into(),
+                    "--".into(),
+                    "-odd-cask".into(),
+                ],
+                0
+            ),
             ["-odd-cask"]
+        );
+        assert_eq!(
+            mutation_command(&[
+                "--verbose".into(),
+                "install".into(),
+                "--cask".into(),
+                "firefox".into(),
+            ]),
+            Some((1, "install"))
+        );
+        assert_eq!(mutation_command(&["info".into(), "install".into()]), None);
+        assert_eq!(mutation_command(&["--".into(), "install".into()]), None);
+        assert_eq!(
+            named_operands(
+                &[
+                    "--verbose".into(),
+                    "install".into(),
+                    "--cask".into(),
+                    "firefox".into(),
+                ],
+                1,
+            ),
+            ["firefox"]
         );
     }
 
