@@ -1,9 +1,61 @@
 import CryptoKit
+import Darwin
 import Foundation
 import Security
 
 public let blessedScriptsKeychainService = "com.automicvault.blessed-scripts"
 public let blessedScriptsKeychainAccount = "BlessedScriptsV1"
+private let blessedScriptMaximumBytes = 1024 * 1024
+
+private enum BlessedScriptFileError: Error {
+    case invalid
+}
+
+public func readBlessedScript(path: String) throws -> Data {
+    let descriptor = open(path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+    guard descriptor >= 0 else { throw BlessedScriptFileError.invalid }
+    defer { close(descriptor) }
+
+    var info = stat()
+    var resolvedPath = [CChar](repeating: 0, count: Int(MAXPATHLEN))
+    var canonicalPath = [CChar](repeating: 0, count: Int(MAXPATHLEN))
+    guard fcntl(descriptor, F_GETPATH, &resolvedPath) == 0,
+          path.withCString({ realpath($0, &canonicalPath) }) != nil
+    else {
+        throw BlessedScriptFileError.invalid
+    }
+    let openedPath = String(
+        decoding: resolvedPath.prefix(while: { $0 != 0 }).map { UInt8(bitPattern: $0) },
+        as: UTF8.self
+    )
+    let canonicalPathString = String(
+        decoding: canonicalPath.prefix(while: { $0 != 0 }).map { UInt8(bitPattern: $0) },
+        as: UTF8.self
+    )
+    guard fstat(descriptor, &info) == 0,
+          info.st_mode & S_IFMT == S_IFREG,
+          info.st_size <= blessedScriptMaximumBytes,
+          openedPath == canonicalPathString
+    else {
+        throw BlessedScriptFileError.invalid
+    }
+
+    var data = Data()
+    var buffer = [UInt8](repeating: 0, count: 64 * 1024)
+    while data.count <= blessedScriptMaximumBytes {
+        let limit = min(buffer.count, blessedScriptMaximumBytes + 1 - data.count)
+        let count = buffer.withUnsafeMutableBytes {
+            Darwin.read(descriptor, $0.baseAddress, limit)
+        }
+        if count == 0 { return data }
+        if count < 0 {
+            if errno == EINTR { continue }
+            throw BlessedScriptFileError.invalid
+        }
+        data.append(contentsOf: buffer.prefix(count))
+    }
+    throw BlessedScriptFileError.invalid
+}
 
 public struct BlessedScriptManifest: Equatable, Sendable {
     public let capabilities: [String: SecretGateProtection]

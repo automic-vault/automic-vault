@@ -646,9 +646,7 @@ private func detectorItemPrecedes(_ lhs: DashboardItem, _ rhs: DashboardItem) ->
 }
 
 private func blessedScriptItem(_ script: BlessedScript) -> DashboardItem {
-    let currentChecksum = try? blessedScriptDeclaration(
-        data: Data(contentsOf: URL(fileURLWithPath: script.path))
-    ).checksum
+    let currentChecksum = try? blessedScriptDeclaration(data: readBlessedScript(path: script.path)).checksum
     let status = currentChecksum == script.checksum ? "Blessed" : "Changed"
     return DashboardItem(
         id: script.path,
@@ -2044,7 +2042,7 @@ private struct BlessedScriptDetailView: View {
     }
 
     private var status: String {
-        guard let data = try? Data(contentsOf: URL(fileURLWithPath: script.path)),
+        guard let data = try? readBlessedScript(path: script.path),
               let checksum = try? blessedScriptDeclaration(data: data).checksum
         else {
             return "Changed"

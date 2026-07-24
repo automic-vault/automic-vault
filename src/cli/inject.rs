@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{CString, OsString};
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, Write};
-use std::os::fd::AsRawFd;
+use std::os::fd::{AsRawFd, FromRawFd};
 use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
@@ -314,8 +314,26 @@ impl VerifiedScript {
         if data.len() > 1024 * 1024 {
             return Err("script exceeds the 1 MiB blessing limit".into());
         }
-        file.rewind()
-            .map_err(|err| format!("failed to rewind script {}: {err}", path.display()))?;
+        let mut template = CString::new("/tmp/automic-vault-script.XXXXXX")
+            .unwrap()
+            .into_bytes_with_nul();
+        let descriptor = unsafe { libc::mkstemp(template.as_mut_ptr().cast()) };
+        if descriptor == -1 {
+            return Err(format!(
+                "failed to snapshot verified script: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+        let mut file = unsafe { File::from_raw_fd(descriptor) };
+        if unsafe { libc::unlink(template.as_ptr().cast()) } == -1 {
+            return Err(format!(
+                "failed to unlink verified script snapshot: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+        file.write_all(&data)
+            .and_then(|()| file.rewind())
+            .map_err(|err| format!("failed to snapshot verified script: {err}"))?;
         if unsafe { libc::fcntl(file.as_raw_fd(), libc::F_SETFD, 0) } == -1 {
             return Err(format!(
                 "failed to preserve verified script descriptor: {}",
@@ -708,6 +726,20 @@ mod tests {
         assert!(request.allow_missing_keys);
         assert_eq!(request.shebang_script.as_deref(), Some("/tmp/tool"));
         assert_eq!(request.script_data.as_deref(), Some(b"script".as_slice()));
+    }
+
+    #[test]
+    fn verified_script_executes_the_approved_snapshot() {
+        let path = temp_script("approved");
+        let mut script = VerifiedScript::open(&path.clone().into_os_string()).unwrap();
+        std::fs::write(&path, "changed").unwrap();
+        let mut executed = String::new();
+
+        script.file.read_to_string(&mut executed).unwrap();
+
+        assert_eq!(script.data, b"approved");
+        assert_eq!(executed, "approved");
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]

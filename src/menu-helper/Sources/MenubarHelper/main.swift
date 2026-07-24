@@ -1750,11 +1750,7 @@ private final class ApprovalServer: @unchecked Sendable {
             reply(peer, to: message, ok: false, error: "script path must be canonical")
             return
         }
-        var info = stat()
-        guard path.withCString({ lstat($0, &info) }) == 0,
-              info.st_mode & S_IFMT == S_IFREG,
-              info.st_size <= 1024 * 1024,
-              let data = try? Data(contentsOf: URL(fileURLWithPath: path)),
+        guard let data = try? readBlessedScript(path: path),
               let declaration = try? blessedScriptDeclaration(data: data)
         else {
             reply(peer, to: message, ok: false, error: "script is not a valid blessable file")
@@ -3026,7 +3022,7 @@ private func scriptApproval(for request: ApprovalRequest) -> ScriptApproval? {
         ? URL(fileURLWithPath: script)
         : URL(fileURLWithPath: request.cwd).appendingPathComponent(script)
     let path = url.standardizedFileURL.resolvingSymlinksInPath().path
-    guard let data = request.scriptData ?? (try? Data(contentsOf: URL(fileURLWithPath: path))) else {
+    guard let data = request.scriptData ?? (try? readBlessedScript(path: path)) else {
         return nil
     }
     let checksum = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()

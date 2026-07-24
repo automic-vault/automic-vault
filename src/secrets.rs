@@ -166,5 +166,5 @@ fn xpc_request(
     _field_value: &str,
     _extra: Option<(&'static [u8], &str)>,
 ) -> Result<Option<String>, String> {
-    Err("menu bar secret storage is only available on macOS".to_string())
+    Err("the Automic Vault menu bar approval service is only available on macOS".to_string())
 }

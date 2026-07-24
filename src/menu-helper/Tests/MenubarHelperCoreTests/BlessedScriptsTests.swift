@@ -68,3 +68,21 @@ func malformedBlessedScriptManifestsFailClosed(_ source: String) {
         try blessedScriptDeclaration(data: Data(source.utf8))
     }
 }
+
+@Test func blessedScriptReadsAreBoundedAndRejectSymlinks() throws {
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent("av-blessed-script-\(UUID().uuidString)", isDirectory: true)
+    let script = directory.appendingPathComponent("script")
+    let link = directory.appendingPathComponent("link")
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let canonicalPath = script.resolvingSymlinksInPath().path
+
+    try Data(repeating: 0, count: 1024 * 1024 + 1).write(to: script)
+    #expect(throws: (any Error).self) { try readBlessedScript(path: canonicalPath) }
+
+    try Data("ok".utf8).write(to: script)
+    try FileManager.default.createSymbolicLink(at: link, withDestinationURL: script)
+    #expect(throws: (any Error).self) { try readBlessedScript(path: link.path) }
+    #expect(try readBlessedScript(path: canonicalPath) == Data("ok".utf8))
+}
