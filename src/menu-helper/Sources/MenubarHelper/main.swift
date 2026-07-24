@@ -923,6 +923,7 @@ enum SecretMutation {
             allowMissingKeys: false,
             envConflicts: [],
             shebangScript: nil,
+            scriptData: nil,
             tool: URL(fileURLWithPath: callerPath).lastPathComponent,
             title: properties.title,
             detail: properties.detail
