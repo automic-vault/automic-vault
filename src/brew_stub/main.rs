@@ -469,12 +469,11 @@ fn app_targets(name: &str, info: &serde_json::Value) -> Result<Vec<PathBuf>, Str
 fn caller() -> Result<Caller, String> {
     let uid = unsafe { libc::getuid() };
     let gid = unsafe { libc::getgid() };
-    let configured = configured_cask_uid(
-        Path::new(CASK_USER_UID),
-        unsafe { libc::geteuid() },
-        unsafe { libc::getegid() },
-    )?;
-    if uid == 0 || uid != configured || uid == unsafe { libc::geteuid() } {
+    let euid = unsafe { libc::geteuid() };
+    validate_invoker(uid, euid)?;
+    let configured =
+        configured_cask_uid(Path::new(CASK_USER_UID), euid, unsafe { libc::getegid() })?;
+    if uid != configured {
         return Err(
             "casks must be invoked directly by the user configured by `sudo av harden brew`".into(),
         );
@@ -495,6 +494,16 @@ fn caller() -> Result<Caller, String> {
         return Err("caller's account name is missing".into());
     }
     Ok(Caller { uid, gid })
+}
+
+fn validate_invoker(uid: u32, euid: u32) -> Result<(), String> {
+    if uid == 0 {
+        return Err("casks cannot be invoked as root".into());
+    }
+    if uid == euid {
+        return Err("brew stub is not installed setuid; run `sudo av harden brew`".into());
+    }
+    Ok(())
 }
 
 fn configured_cask_uid(path: &Path, owner: u32, group: u32) -> Result<u32, String> {
@@ -1001,6 +1010,19 @@ mod tests {
         std::os::unix::fs::symlink(&path, &link).unwrap();
         assert!(configured_cask_uid(&link, metadata.uid(), metadata.gid()).is_err());
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn cask_invoker_errors_identify_root_and_missing_setuid() {
+        assert_eq!(
+            validate_invoker(0, 550).unwrap_err(),
+            "casks cannot be invoked as root"
+        );
+        assert_eq!(
+            validate_invoker(501, 501).unwrap_err(),
+            "brew stub is not installed setuid; run `sudo av harden brew`"
+        );
+        assert!(validate_invoker(501, 550).is_ok());
     }
 
     fn temp_path(label: &str) -> PathBuf {

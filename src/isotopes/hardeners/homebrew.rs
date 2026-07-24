@@ -275,10 +275,9 @@ fn cask_access_diagnostics(
     let mut configured_uid = String::new();
     let Ok(_) = uid_file_handle.read_to_string(&mut configured_uid) else {
         return vec![HardenerDiagnostic {
-            kind: "cask_user_invalid",
-            message: "Homebrew's configured cask user UID is invalid".into(),
-            remediation: "Run `sudo av harden brew` to recreate the cask-user configuration."
-                .into(),
+            kind: "cask_user_unreadable",
+            message: "Homebrew's configured cask user file could not be read".into(),
+            remediation: "Run `sudo av harden brew` to restore the cask-user configuration.".into(),
             path: Some(uid_file.display().to_string()),
         }];
     };
@@ -679,8 +678,11 @@ fn source_user() -> Result<SourceUser, String> {
     let user = crate::test_env_string("AUTOMIC_VAULT_TEST_BREW_USER")
         .or_else(|| std::env::var("SUDO_USER").ok())
         .ok_or_else(|| "run `sudo av harden brew` from the desktop account".to_string())?;
-    if user == "root" || user.is_empty() || user.contains('/') {
+    if user == "root" {
         return Err("cannot configure root as the Homebrew cask user".into());
+    }
+    if user.is_empty() || user.contains('/') {
+        return Err("Homebrew cask user account name is invalid".into());
     }
     let uid = test_u32("AUTOMIC_VAULT_TEST_BREW_USER_UID")
         .or_else(|| {
@@ -1278,7 +1280,17 @@ mod tests {
         unsafe {
             std::env::set_var("AUTOMIC_VAULT_TEST_BREW_USER", "root");
         }
-        assert!(source_user().is_err());
+        assert_eq!(
+            source_user().unwrap_err(),
+            "cannot configure root as the Homebrew cask user"
+        );
+        unsafe {
+            std::env::set_var("AUTOMIC_VAULT_TEST_BREW_USER", "not/a/user");
+        }
+        assert_eq!(
+            source_user().unwrap_err(),
+            "Homebrew cask user account name is invalid"
+        );
         unsafe {
             std::env::remove_var("AUTOMIC_VAULT_TEST_BREW_USER");
             std::env::remove_var("AUTOMIC_VAULT_TEST_BREW_USER_UID");
