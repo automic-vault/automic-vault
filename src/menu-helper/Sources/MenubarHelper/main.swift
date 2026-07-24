@@ -1952,6 +1952,13 @@ private final class ApprovalServer: @unchecked Sendable {
         }
         let op = String(cString: opPointer)
         guard op == "inject" || op == "keys" || op == "authorize" else { return nil }
+        let scriptData: Data?
+        if xpc_dictionary_get_value(message, "script_data") != nil {
+            guard let data = xpcData(message, key: "script_data") else { return nil }
+            scriptData = data
+        } else {
+            scriptData = nil
+        }
 
         return ApprovalRequest(
             op: op,
@@ -1963,7 +1970,7 @@ private final class ApprovalServer: @unchecked Sendable {
             allowMissingKeys: xpc_dictionary_get_bool(message, "allow_missing_keys"),
             envConflicts: envConflicts,
             shebangScript: xpc_dictionary_get_string(message, "shebang_script").map(String.init(cString:)),
-            scriptData: xpcData(message, key: "script_data"),
+            scriptData: scriptData,
             tool: xpc_dictionary_get_string(message, "tool").map(String.init(cString:)),
             title: xpc_dictionary_get_string(message, "title").map(String.init(cString:)),
             detail: xpc_dictionary_get_string(message, "detail").map(String.init(cString:))
@@ -1986,7 +1993,9 @@ private final class ApprovalServer: @unchecked Sendable {
 
     private func xpcData(_ message: xpc_object_t, key: String) -> Data? {
         var length = 0
-        guard let bytes = xpc_dictionary_get_data(message, key, &length) else { return nil }
+        guard let bytes = xpc_dictionary_get_data(message, key, &length),
+              length <= blessedScriptMaximumBytes
+        else { return nil }
         return Data(bytes: bytes, count: length)
     }
 

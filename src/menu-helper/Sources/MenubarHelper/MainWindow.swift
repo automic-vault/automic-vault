@@ -246,7 +246,11 @@ final class DashboardModel: ObservableObject {
         case .doctor: snapshot.doctorIssues.count
         case .hardenedTools: snapshot.hardenedTools.count
         case .secretGates: snapshot.secretGates.count
-        case .blessedScripts: snapshot.blessedScripts.count + (pendingBlessing == nil ? 0 : 1)
+        case .blessedScripts:
+            snapshot.blessedScripts.count
+                + (pendingBlessing.map { pending in
+                    snapshot.blessedScripts.contains { $0.path == pending.path } ? 0 : 1
+                } ?? 0)
         case .allSecrets: snapshot.secrets.count
         case .secretUsage: snapshot.accessRequests.count
         }

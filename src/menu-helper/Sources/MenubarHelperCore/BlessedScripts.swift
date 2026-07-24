@@ -5,7 +5,7 @@ import Security
 
 public let blessedScriptsKeychainService = "com.automicvault.blessed-scripts"
 public let blessedScriptsKeychainAccount = "BlessedScriptsV1"
-private let blessedScriptMaximumBytes = 1024 * 1024
+public let blessedScriptMaximumBytes = 1024 * 1024
 
 private enum BlessedScriptFileError: Error {
     case invalid
