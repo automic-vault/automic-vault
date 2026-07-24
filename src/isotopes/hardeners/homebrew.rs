@@ -1,9 +1,9 @@
 use std::ffi::CString;
 use std::fs;
 use std::io::{self, IsTerminal, Write};
-use std::os::unix::fs::{MetadataExt, PermissionsExt};
+use std::os::unix::fs::{MetadataExt, PermissionsExt, lchown};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use super::{
     HardenerDetection, HardenerDiagnostic, RequiredIdentity, SecretGateDescriptor, SecretGateRoute,
@@ -16,14 +16,22 @@ const BREW_PREFIX: &str = "/opt/homebrew";
 const BREW_TARGET: &str = "/opt/homebrew/bin/brew";
 const BREW_STUB: &str = "/usr/local/bin/brew";
 const APP_BREW_STUB: &str = "/Applications/Automic Vault.app/Contents/MacOS/av-brew-stub";
+const CASK_USER_UID_FILE: &str = "var/automic/cask-user-uid";
 const STUB_MARKER_PREFIX: &[u8] = b"AUTOMIC_VAULT_BREW_STUB_V";
 #[cfg(test)]
-const STUB_MARKER: &[u8] = b"AUTOMIC_VAULT_BREW_STUB_V1";
-const STUB_VERSION: u32 = 1;
+const STUB_MARKER: &[u8] = b"AUTOMIC_VAULT_BREW_STUB_V4";
+const STUB_VERSION: u32 = 4;
 const ID_RANGE: std::ops::RangeInclusive<u32> = 550..=599;
 
 unsafe extern "C" {
     fn geteuid() -> u32;
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct SourceUser {
+    name: String,
+    uid: u32,
+    home: PathBuf,
 }
 
 pub(crate) fn run(stdout: &mut dyn Write, yes: bool) -> Result<(), String> {
@@ -52,7 +60,7 @@ pub(crate) fn run(stdout: &mut dyn Write, yes: bool) -> Result<(), String> {
             source.display()
         ));
     }
-    let user_home = source_user_home()?;
+    let source_user = source_user()?;
 
     writeln!(stdout, "╭─ harden brew").ok();
     writeln!(stdout, "│").ok();
@@ -61,7 +69,8 @@ pub(crate) fn run(stdout: &mut dyn Write, yes: bool) -> Result<(), String> {
         "├─ ensure {AUTOMIC_USER} user and {VAULT_GROUP} group"
     )
     .ok();
-    if let Some(home) = &user_home {
+    {
+        let home = &source_user.home;
         let config = home.join(".homebrew");
         if config.is_dir() {
             writeln!(
@@ -86,8 +95,14 @@ pub(crate) fn run(stdout: &mut dyn Write, yes: bool) -> Result<(), String> {
     writeln!(stdout, "├─ prepare {}", automic_home.display()).ok();
     writeln!(
         stdout,
-        "├─ chown -R -h {AUTOMIC_USER}:{VAULT_GROUP} {}",
+        "├─ repair {AUTOMIC_USER}:{VAULT_GROUP} ownership under {}",
         prefix.display()
+    )
+    .ok();
+    writeln!(
+        stdout,
+        "├─ record {} for cask app ownership",
+        source_user.name
     )
     .ok();
     writeln!(stdout, "├─ install {}", stub.display()).ok();
@@ -104,7 +119,8 @@ pub(crate) fn run(stdout: &mut dyn Write, yes: bool) -> Result<(), String> {
     fs::create_dir_all(&automic_cache)
         .map_err(|err| format!("failed to create Homebrew automic cache dir: {err}"))?;
     let migration = (|| {
-        if let Some(home) = &user_home {
+        {
+            let home = &source_user.home;
             let config = home.join(".homebrew");
             if config.is_dir() {
                 let count = copy_missing_tree(&config, &automic_home.join(".homebrew"))?;
@@ -122,7 +138,13 @@ pub(crate) fn run(stdout: &mut dyn Write, yes: bool) -> Result<(), String> {
         }
         Ok::<_, String>(())
     })();
-    chown_recursive(&prefix)?;
+    fs::write(
+        prefix.join(CASK_USER_UID_FILE),
+        format!("{}\n", source_user.uid),
+    )
+    .map_err(|err| format!("failed to record Homebrew cask user: {err}"))?;
+    remove_legacy_cask_access(&prefix, &source_user.name)?;
+    chown_recursive(&prefix, uid, gid)?;
     migration?;
     install_stub(&source, &stub, uid, gid)?;
     writeln!(
@@ -196,6 +218,118 @@ fn doctor_diagnostics(
         && let Some(gid) = gid
     {
         diagnostics.extend(account_diagnostics(gid));
+    }
+    diagnostics.extend(cask_access_diagnostics(prefix, uid, gid));
+    diagnostics
+}
+
+fn cask_access_diagnostics(
+    prefix: &Path,
+    automic_uid: Option<u32>,
+    vault_gid: Option<u32>,
+) -> Vec<HardenerDiagnostic> {
+    let uid_file = prefix.join(CASK_USER_UID_FILE);
+    let Ok(configured_uid) = fs::read_to_string(&uid_file) else {
+        return vec![HardenerDiagnostic {
+            kind: "cask_user_missing",
+            message: "Homebrew hardening has no configured cask user".into(),
+            remediation: "Run `sudo av harden brew` as the desktop user who should install casks."
+                .into(),
+            path: Some(uid_file.display().to_string()),
+        }];
+    };
+    let Ok(configured_uid) = configured_uid.trim().parse::<u32>() else {
+        return vec![HardenerDiagnostic {
+            kind: "cask_user_invalid",
+            message: "Homebrew's configured cask user UID is invalid".into(),
+            remediation: "Run `sudo av harden brew` to recreate the cask-user configuration."
+                .into(),
+            path: Some(uid_file.display().to_string()),
+        }];
+    };
+    if let Ok(metadata) = fs::metadata(&uid_file)
+        && (automic_uid.is_some_and(|uid| metadata.uid() != uid)
+            || vault_gid.is_some_and(|gid| metadata.gid() != gid)
+            || metadata.mode() & 0o022 != 0)
+    {
+        return vec![HardenerDiagnostic {
+            kind: "cask_user_file_permissions_invalid",
+            message: "Homebrew's configured cask user file is not protected".into(),
+            remediation: "Run `sudo av harden brew` to restore its ownership and permissions."
+                .into(),
+            path: Some(uid_file.display().to_string()),
+        }];
+    }
+    let Some(user) = user_name_for_uid(configured_uid) else {
+        return vec![HardenerDiagnostic {
+            kind: "cask_user_unresolvable",
+            message: format!("configured cask user UID {configured_uid} cannot be resolved"),
+            remediation: "Run `sudo av harden brew` from the intended desktop account.".into(),
+            path: Some(uid_file.display().to_string()),
+        }];
+    };
+
+    let mut diagnostics = Vec::new();
+    let caskroom = prefix.join("Caskroom");
+    match fs::metadata(&caskroom) {
+        Ok(metadata)
+            if automic_uid.is_some_and(|uid| metadata.uid() != uid)
+                || vault_gid.is_some_and(|gid| metadata.gid() != gid) =>
+        {
+            diagnostics.push(HardenerDiagnostic {
+                kind: "caskroom_owner_invalid",
+                message: format!(
+                    "{} must remain owned by {AUTOMIC_USER}:{VAULT_GROUP}",
+                    caskroom.display()
+                ),
+                remediation: "Run `sudo av harden brew` to restore Caskroom ownership.".into(),
+                path: Some(caskroom.display().to_string()),
+            });
+        }
+        Err(_) => diagnostics.push(HardenerDiagnostic {
+            kind: "caskroom_missing",
+            message: format!("Homebrew Caskroom {} is missing", caskroom.display()),
+            remediation: "Run `sudo av harden brew` to recreate it.".into(),
+            path: Some(caskroom.display().to_string()),
+        }),
+        _ => {}
+    }
+    if acl_mentions(&caskroom, &user) {
+        diagnostics.push(HardenerDiagnostic {
+            kind: "legacy_caskroom_acl_present",
+            message: format!("Homebrew Caskroom still grants configured user `{user}` access"),
+            remediation: "Run `sudo av harden brew` to remove the obsolete Caskroom ACL.".into(),
+            path: Some(caskroom.display().to_string()),
+        });
+    }
+    let config = prefix.join("var/automic/.homebrew");
+    if acl_mentions(&config, &user) {
+        diagnostics.push(HardenerDiagnostic {
+            kind: "legacy_cask_trust_acl_present",
+            message: format!("Homebrew trust configuration still grants `{user}` direct access"),
+            remediation: "Run `sudo av harden brew` to remove the obsolete trust-store ACL.".into(),
+            path: Some(config.display().to_string()),
+        });
+    }
+    for path in [
+        prefix.to_path_buf(),
+        prefix.join("Cellar"),
+        prefix.join("bin"),
+    ] {
+        if acl_mentions(&path, &user) {
+            diagnostics.push(HardenerDiagnostic {
+                kind: "cask_user_acl_too_broad",
+                message: format!(
+                    "configured cask user `{user}` has an unexpected ACL on {}",
+                    path.display()
+                ),
+                remediation: format!(
+                    "Remove that ACL with `sudo chmod -a 'user:{user} allow ...' {}`, then rerun `sudo av harden brew`.",
+                    path.display()
+                ),
+                path: Some(path.display().to_string()),
+            });
+        }
     }
     diagnostics
 }
@@ -468,32 +602,161 @@ fn dscl_read(record: &str, attribute: &str) -> Result<Option<String>, String> {
         .filter(|value| !value.is_empty()))
 }
 
-fn chown_recursive(prefix: &Path) -> Result<(), String> {
-    let output = Command::new("/usr/sbin/chown")
-        .args(["-R", "-h", "automic:vault"])
-        .arg(prefix)
-        .output()
-        .map_err(|err| format!("failed to run chown: {err}"))?;
-    if output.status.success() {
-        return Ok(());
-    }
-    Err(format!(
-        "chown failed: {}",
-        String::from_utf8_lossy(&output.stderr).trim()
-    ))
+fn chown_recursive(prefix: &Path, uid: u32, gid: u32) -> Result<(), String> {
+    let skipped = prefix.join("var/automic/Library");
+    chown_tree(prefix, &skipped, uid, gid)
 }
 
-fn source_user_home() -> Result<Option<PathBuf>, String> {
-    if let Some(home) = crate::test_env_var("AUTOMIC_VAULT_TEST_BREW_USER_HOME") {
-        return Ok(Some(home.into()));
+fn chown_tree(path: &Path, skipped: &Path, uid: u32, gid: u32) -> Result<(), String> {
+    if path == skipped {
+        return Ok(());
     }
-    let Some(user) = std::env::var_os("SUDO_USER").and_then(|user| user.into_string().ok()) else {
-        return Ok(None);
-    };
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|err| format!("failed to inspect {}: {err}", path.display()))?;
+    if metadata.uid() != uid || metadata.gid() != gid {
+        lchown(path, Some(uid), Some(gid))
+            .map_err(|err| format!("failed to chown {}: {err}", path.display()))?;
+    }
+    if metadata.file_type().is_dir() {
+        for entry in
+            fs::read_dir(path).map_err(|err| format!("failed to read {}: {err}", path.display()))?
+        {
+            let entry = entry
+                .map_err(|err| format!("failed to read entry in {}: {err}", path.display()))?;
+            chown_tree(&entry.path(), skipped, uid, gid)?;
+        }
+    }
+    Ok(())
+}
+
+fn source_user() -> Result<SourceUser, String> {
+    let user = crate::test_env_string("AUTOMIC_VAULT_TEST_BREW_USER")
+        .or_else(|| std::env::var("SUDO_USER").ok())
+        .ok_or_else(|| "run `sudo av harden brew` from the desktop account".to_string())?;
     if user == "root" || user.is_empty() || user.contains('/') {
-        return Ok(None);
+        return Err("cannot configure root as the Homebrew cask user".into());
     }
-    Ok(dscl_read(&format!("/Users/{user}"), "NFSHomeDirectory")?.map(PathBuf::from))
+    let uid = test_u32("AUTOMIC_VAULT_TEST_BREW_USER_UID")
+        .or_else(|| {
+            dscl_read(&format!("/Users/{user}"), "UniqueID")
+                .ok()
+                .flatten()?
+                .parse()
+                .ok()
+        })
+        .ok_or_else(|| format!("cannot resolve UID for cask user `{user}`"))?;
+    let home = crate::test_env_var("AUTOMIC_VAULT_TEST_BREW_USER_HOME")
+        .map(PathBuf::from)
+        .or_else(|| {
+            dscl_read(&format!("/Users/{user}"), "NFSHomeDirectory")
+                .ok()
+                .flatten()
+                .map(PathBuf::from)
+        })
+        .ok_or_else(|| format!("cannot resolve home for cask user `{user}`"))?;
+    if uid == 0 || !home.is_absolute() {
+        return Err("cask user must be a non-root account with an absolute home".into());
+    }
+    Ok(SourceUser {
+        name: user,
+        uid,
+        home,
+    })
+}
+
+fn remove_legacy_cask_access(prefix: &Path, user: &str) -> Result<(), String> {
+    let caskroom = prefix.join("Caskroom");
+    fs::create_dir_all(&caskroom)
+        .map_err(|err| format!("failed to create {}: {err}", caskroom.display()))?;
+    let cask_acl = format!(
+        "{user} allow read,write,execute,delete,append,readattr,writeattr,readextattr,writeextattr,readsecurity,file_inherit,directory_inherit"
+    );
+    let config = prefix.join("var/automic/.homebrew");
+    fs::create_dir_all(&config)
+        .map_err(|err| format!("failed to create {}: {err}", config.display()))?;
+    let config_acl = format!(
+        "{user} allow read,execute,readattr,readextattr,readsecurity,file_inherit,directory_inherit"
+    );
+    for (path, acl) in [(&caskroom, &cask_acl), (&config, &config_acl)] {
+        let _ = acl_tree_command(path, "-a", acl)
+            .stderr(Stdio::null())
+            .status();
+        if acl_mentions(path, user) {
+            return Err(format!(
+                "failed to remove obsolete ACL from {}",
+                path.display()
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn acl_tree_command(path: &Path, operation: &str, acl: &str) -> Command {
+    const PROTECTED_BUNDLES: &[&str] = &[
+        "*.app",
+        "*.appex",
+        "*.bundle",
+        "*.component",
+        "*.driver",
+        "*.framework",
+        "*.kext",
+        "*.mdimporter",
+        "*.plugin",
+        "*.prefPane",
+        "*.qlgenerator",
+        "*.saver",
+        "*.systemextension",
+        "*.vst",
+        "*.vst3",
+        "*.xpc",
+    ];
+    let mut command = Command::new("/usr/bin/find");
+    command.arg("-x").arg(path).args(["(", "-type", "l"]);
+    for pattern in PROTECTED_BUNDLES {
+        command.args(["-o", "-name", pattern]);
+    }
+    command.args([
+        ")",
+        "-prune",
+        "-o",
+        "-exec",
+        "/bin/chmod",
+        "-h",
+        operation,
+        acl,
+        "{}",
+        "+",
+    ]);
+    command
+}
+
+fn acl_mentions(path: &Path, user: &str) -> bool {
+    Command::new("/bin/ls")
+        .args(["-lde"])
+        .arg(path)
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .is_some_and(|output| {
+            String::from_utf8_lossy(&output.stdout).contains(&format!("user:{user} allow"))
+        })
+}
+
+fn user_name_for_uid(uid: u32) -> Option<String> {
+    if let Some(user) = crate::test_env_string("AUTOMIC_VAULT_TEST_BREW_USER") {
+        return Some(user);
+    }
+    let output = Command::new("/usr/bin/dscl")
+        .args([".", "-search", "/Users", "UniqueID", &uid.to_string()])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .split_whitespace()
+        .next()
+        .map(str::to_string)
 }
 
 fn copy_missing_tree(source: &Path, destination: &Path) -> Result<usize, String> {
@@ -798,7 +1061,7 @@ mod tests {
         assert!(is_managed_stub_file(&path));
         assert!(!stub_is_current(&path));
 
-        fs::write(&path, b"AUTOMIC_VAULT_BREW_STUB_V2 future").unwrap();
+        fs::write(&path, b"AUTOMIC_VAULT_BREW_STUB_V4 future").unwrap();
         assert!(stub_is_current(&path));
 
         for invalid in [
@@ -946,6 +1209,131 @@ mod tests {
             std::env::remove_var("AUTOMIC_VAULT_TEST_BREW_STUB_SOURCE");
         }
         assert_eq!(got, source);
+    }
+
+    #[test]
+    fn source_user_requires_a_non_root_resolvable_account() {
+        let _guard = crate::global_test_env_lock().lock().unwrap();
+        unsafe {
+            std::env::set_var("AUTOMIC_VAULT_TEST_BREW_USER", "alice");
+            std::env::set_var("AUTOMIC_VAULT_TEST_BREW_USER_UID", "501");
+            std::env::set_var("AUTOMIC_VAULT_TEST_BREW_USER_HOME", "/Users/alice");
+        }
+
+        assert_eq!(
+            source_user().unwrap(),
+            SourceUser {
+                name: "alice".into(),
+                uid: 501,
+                home: "/Users/alice".into(),
+            }
+        );
+
+        unsafe {
+            std::env::set_var("AUTOMIC_VAULT_TEST_BREW_USER", "root");
+        }
+        assert!(source_user().is_err());
+        unsafe {
+            std::env::remove_var("AUTOMIC_VAULT_TEST_BREW_USER");
+            std::env::remove_var("AUTOMIC_VAULT_TEST_BREW_USER_UID");
+            std::env::remove_var("AUTOMIC_VAULT_TEST_BREW_USER_HOME");
+        }
+    }
+
+    #[test]
+    fn obsolete_cask_acls_are_removed() {
+        let _guard = crate::global_test_env_lock().lock().unwrap();
+        let prefix = temp_path("brew-cask-acl");
+        fs::create_dir_all(prefix.join("Cellar")).unwrap();
+        fs::create_dir_all(prefix.join("bin")).unwrap();
+        fs::create_dir_all(prefix.join("var/automic/.homebrew")).unwrap();
+        let protected_app = prefix.join("Caskroom/example/1/Protected.app");
+        fs::create_dir_all(&protected_app).unwrap();
+        std::os::unix::fs::symlink(
+            "missing",
+            prefix.join("Caskroom/example/1/Dangling.qlgenerator"),
+        )
+        .unwrap();
+        assert!(
+            Command::new("/usr/bin/chflags")
+                .arg("uchg")
+                .arg(&protected_app)
+                .status()
+                .unwrap()
+                .success()
+        );
+        fs::write(
+            prefix.join(CASK_USER_UID_FILE),
+            unsafe { libc::getuid() }.to_string(),
+        )
+        .unwrap();
+        let user = std::env::var("USER").unwrap();
+        unsafe {
+            std::env::set_var("AUTOMIC_VAULT_TEST_BREW_USER", &user);
+        }
+        let cask_acl = format!(
+            "{user} allow read,write,execute,delete,append,readattr,writeattr,readextattr,writeextattr,readsecurity,file_inherit,directory_inherit"
+        );
+        let config_acl = format!(
+            "{user} allow read,execute,readattr,readextattr,readsecurity,file_inherit,directory_inherit"
+        );
+        for (path, acl) in [
+            (prefix.join("Caskroom"), &cask_acl),
+            (prefix.join("Caskroom/example/1"), &cask_acl),
+            (prefix.join("var/automic/.homebrew"), &config_acl),
+        ] {
+            assert!(
+                Command::new("/bin/chmod")
+                    .args(["+a", acl])
+                    .arg(path)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+        }
+
+        remove_legacy_cask_access(&prefix, &user).unwrap();
+
+        assert!(!acl_mentions(&prefix.join("Caskroom"), &user));
+        assert!(!acl_mentions(&prefix.join("Caskroom/example/1"), &user));
+        assert!(!acl_mentions(&protected_app, &user));
+        assert!(!acl_mentions(&prefix.join("var/automic/.homebrew"), &user));
+        assert!(!acl_mentions(&prefix, &user));
+        assert!(!acl_mentions(&prefix.join("Cellar"), &user));
+        assert!(!acl_mentions(&prefix.join("bin"), &user));
+        let metadata = prefix.join(CASK_USER_UID_FILE).metadata().unwrap();
+        assert!(
+            cask_access_diagnostics(&prefix, Some(metadata.uid()), Some(metadata.gid())).is_empty()
+        );
+
+        unsafe {
+            std::env::remove_var("AUTOMIC_VAULT_TEST_BREW_USER");
+        }
+        assert!(
+            Command::new("/usr/bin/chflags")
+                .arg("nouchg")
+                .arg(&protected_app)
+                .status()
+                .unwrap()
+                .success()
+        );
+        fs::remove_dir_all(prefix).unwrap();
+    }
+
+    #[test]
+    fn ownership_repair_skips_macos_managed_automic_library() {
+        let prefix = temp_path("brew-protected-library");
+        let library = prefix.join("var/automic/Library");
+        fs::create_dir_all(library.join("Mail")).unwrap();
+        fs::set_permissions(&library, fs::Permissions::from_mode(0o000)).unwrap();
+
+        chown_recursive(&prefix, unsafe { libc::getuid() }, unsafe {
+            libc::getgid()
+        })
+        .unwrap();
+
+        fs::set_permissions(&library, fs::Permissions::from_mode(0o700)).unwrap();
+        fs::remove_dir_all(prefix).unwrap();
     }
 
     fn temp_path(label: &str) -> PathBuf {

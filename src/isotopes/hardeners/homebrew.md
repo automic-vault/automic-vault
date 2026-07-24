@@ -51,22 +51,26 @@ is that solution.
 - The stub clears the environment, restores only safe terminal/locale values,
   and executes `/opt/homebrew/bin/brew` directly.
 
-## Cask Caveats
+## Casks
 
-Cask support is best-effort because Homebrew runs as the `automic` account
-after hardening:
+The desktop account that runs `sudo av harden brew` is configured as the cask
+app owner. Homebrew still performs cask transactions as `automic:vault`, so its
+prefix checks and formula state remain protected. After a successful
+install, reinstall, or upgrade, the launcher verifies each declared
+`/Applications/*.app` with Gatekeeper and transfers that bundle to the
+configured account's UID and primary group. It verifies the bundle and
+resulting ownership again before returning success.
 
-- Apps installed in `/Applications` are owned by `automic:vault`. Most apps
-  run normally, but an in-app updater may request authentication or fail if it
-  expects the invoking user to own the app bundle.
-- Homebrew sees `HOME` as `/opt/homebrew/var/automic`. Cask artifacts that
-  default to `~/Library`, including preference panes, fonts, Quick Look
-  plugins, and services, are installed under that home instead of the invoking
-  user's home.
-- Non-sudo cask installer scripts run as `automic`. Package installers run as
-  root but receive `automic` as `USER`, `LOGNAME`, and `USERNAME`. Casks that
-  configure the current user's Keychain, LaunchAgents, login items, or
-  preferences may install into the wrong account or fail.
-- Artifact destinations can be overridden explicitly, for example with
-  `--prefpanedir=/Library/PreferencePanes`. This does not change the identity
-  or `HOME` seen by installer scripts, so it is not a general workaround.
+Caskroom receipts, caches, locks, and trust configuration remain
+`automic:vault`. Obsolete per-user Caskroom and trust-store ACLs from earlier
+launcher versions are removed during hardening.
+
+For commands without `--cask` or `--formula`, the launcher asks Homebrew to
+resolve each package and pins the result before execution. Mixed formula/cask
+commands must be split. Missing formula dependencies must be installed first so
+Cellar content always remains `automic:vault`.
+
+Casks that install packages, plugins, fonts, or other artifacts outside an app
+bundle are rejected because their ownership cannot be transferred safely.
+Caskroom-backed executables, services, shell completions, and links into signed
+app bundles remain `automic:vault`.

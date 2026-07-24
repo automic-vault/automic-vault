@@ -458,7 +458,7 @@ if [[ "$install" -eq 1 ]]; then
     trap - EXIT
     rm -rf "$DMG_MOUNT"
   fi
-  if [[ "$(/usr/local/bin/av __version 2>/dev/null || true)" != "$AV_CLI_REVISION" ]]; then
+  if ! cmp -s "$INSTALLED_APP/Contents/MacOS/av" /usr/local/bin/av; then
     sudo install -m 0755 "$INSTALLED_APP/Contents/MacOS/av" /usr/local/bin/av
   fi
   mkdir -p "$HOME/Library/LaunchAgents"

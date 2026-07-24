@@ -10,6 +10,6 @@ fn av_brew_stub_binary_is_built() {
     assert!(output.status.success());
     assert_eq!(
         String::from_utf8_lossy(&output.stdout).trim(),
-        "AUTOMIC_VAULT_BREW_STUB_V1"
+        "AUTOMIC_VAULT_BREW_STUB_V4"
     );
 }
