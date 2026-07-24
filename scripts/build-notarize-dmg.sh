@@ -1,5 +1,9 @@
-#!/usr/local/bin/av inject +APPLE_PASSWORD +APPLE_USERNAME /bin/sh
+#!/bin/sh
 set -eu
+
+: "${APPLE_USERNAME:?error: APPLE_USERNAME is required}"
+: "${APPLE_PASSWORD:?error: APPLE_PASSWORD is required}"
+: "${APPLE_TEAM_ID:?error: APPLE_TEAM_ID is required}"
 
 output="$(/usr/bin/xcrun notarytool submit \
   --apple-id "${APPLE_USERNAME}" \

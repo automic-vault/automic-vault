@@ -1,0 +1,376 @@
+name: Release
+
+run-name: Release ${{ inputs.version }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version already reviewed and merged in Cargo.toml
+        required: true
+        type: string
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build, attest, and publish
+    runs-on: macos-26
+    timeout-minutes: 45
+    environment: release
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    env:
+      VERSION: ${{ inputs.version }}
+      ASSET_DIR: target/release-assets
+      DMG_NAME: Automic-Vault-${{ inputs.version }}.dmg
+      SBOM_NAME: Automic-Vault-${{ inputs.version }}.spdx.json
+      IMMUTABLE_RELEASES_ENABLED: ${{ vars.IMMUTABLE_RELEASES_ENABLED }}
+      RUST_TOOLCHAIN: 1.96.0
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - name: Check out the reviewed commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate release authority
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
+            echo "Release runs must be dispatched from main." >&2
+            exit 64
+          fi
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Version must use MAJOR.MINOR.PATCH." >&2
+            exit 64
+          fi
+          manifest_version="$(
+            awk -F '"' '
+              /^\[package\]/ { package = 1; next }
+              /^\[/ { package = 0 }
+              package && /^[[:space:]]*version[[:space:]]*=/ { print $2; exit }
+            ' Cargo.toml
+          )"
+          if [[ "$manifest_version" != "$VERSION" ]]; then
+            echo "Cargo.toml is $manifest_version, not $VERSION." >&2
+            exit 64
+          fi
+          if [[ "$(git rev-parse HEAD)" != "$GITHUB_SHA" ]]; then
+            echo "Checkout does not match the workflow commit." >&2
+            exit 64
+          fi
+          if [[ -n "$(git status --porcelain --untracked-files=all)" ]]; then
+            echo "Release checkout is not clean." >&2
+            exit 64
+          fi
+          cargo metadata --locked --no-deps --format-version 1 >/dev/null
+          if [[ "$IMMUTABLE_RELEASES_ENABLED" != "true" ]]; then
+            echo "Set the protected release environment's IMMUTABLE_RELEASES_ENABLED variable after enabling the repository setting." >&2
+            exit 64
+          fi
+          if gh release view "$VERSION" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $VERSION already exists; publish a new version." >&2
+            exit 64
+          fi
+          if git ls-remote --exit-code --tags origin "refs/tags/$VERSION" >/dev/null 2>&1; then
+            echo "Tag $VERSION already exists; publish a new version." >&2
+            exit 64
+          fi
+
+      - name: Validate release secrets
+        shell: bash
+        env:
+          MACOS_DEVELOPER_ID_P12_BASE64: ${{ secrets.MACOS_DEVELOPER_ID_P12_BASE64 }}
+          MACOS_DEVELOPER_ID_P12_PASSWORD: ${{ secrets.MACOS_DEVELOPER_ID_P12_PASSWORD }}
+          MACOS_PROVISIONING_PROFILE_BASE64: ${{ secrets.MACOS_PROVISIONING_PROFILE_BASE64 }}
+          APPLE_USERNAME: ${{ secrets.APPLE_USERNAME }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
+        run: |
+          set -euo pipefail
+          : "${MACOS_DEVELOPER_ID_P12_BASE64:?Add this secret to the release environment}"
+          : "${MACOS_DEVELOPER_ID_P12_PASSWORD:?Add this secret to the release environment}"
+          : "${MACOS_PROVISIONING_PROFILE_BASE64:?Add this secret to the release environment}"
+          : "${APPLE_USERNAME:?Add this secret to the release environment}"
+          : "${APPLE_PASSWORD:?Add this secret to the release environment}"
+          : "${APPLE_TEAM_ID:?Add this secret to the release environment}"
+          : "${POSTHOG_API_KEY:?Add this secret to the release environment}"
+
+      - name: Install pinned release tooling
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal
+          rustup override set "$RUST_TOOLCHAIN"
+
+          create_dmg_archive="$RUNNER_TEMP/create-dmg-1.3.0.tar.gz"
+          curl --fail --location --silent --show-error \
+            https://github.com/create-dmg/create-dmg/archive/refs/tags/v1.3.0.tar.gz \
+            --output "$create_dmg_archive"
+          echo "c50d2bc97c3d6292642bac55f530d247eaf4bf65ee605f26b4caf339383e381c  $create_dmg_archive" |
+            shasum -a 256 --check
+          tar -xzf "$create_dmg_archive" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/create-dmg-1.3.0" >>"$GITHUB_PATH"
+
+      - name: Import Developer ID signing material
+        shell: bash
+        env:
+          MACOS_DEVELOPER_ID_P12_BASE64: ${{ secrets.MACOS_DEVELOPER_ID_P12_BASE64 }}
+          MACOS_DEVELOPER_ID_P12_PASSWORD: ${{ secrets.MACOS_DEVELOPER_ID_P12_PASSWORD }}
+          MACOS_PROVISIONING_PROFILE_BASE64: ${{ secrets.MACOS_PROVISIONING_PROFILE_BASE64 }}
+        run: |
+          set -euo pipefail
+          umask 077
+          certificate_path="$RUNNER_TEMP/developer-id.p12"
+          keychain_path="$RUNNER_TEMP/release-signing.keychain-db"
+          profile_dir="$HOME/Library/MobileDevice/Provisioning Profiles"
+          profile_path="$profile_dir/Automic_Vault_Developer_ID.provisionprofile"
+          keychain_password="$(openssl rand -hex 32)"
+
+          printf '%s' "$MACOS_DEVELOPER_ID_P12_BASE64" |
+            /usr/bin/base64 -D >"$certificate_path"
+          security create-keychain -p "$keychain_password" "$keychain_path"
+          security set-keychain-settings -lut 21600 "$keychain_path"
+          security unlock-keychain -p "$keychain_password" "$keychain_path"
+          security import "$certificate_path" \
+            -k "$keychain_path" \
+            -P "$MACOS_DEVELOPER_ID_P12_PASSWORD" \
+            -t cert \
+            -f pkcs12 \
+            -T /usr/bin/codesign
+          security set-key-partition-list \
+            -S apple-tool:,apple: \
+            -s \
+            -k "$keychain_password" \
+            "$keychain_path"
+          security default-keychain -s "$keychain_path"
+
+          mkdir -p "$profile_dir"
+          printf '%s' "$MACOS_PROVISIONING_PROFILE_BASE64" |
+            /usr/bin/base64 -D >"$profile_path"
+
+      - name: Build, sign, notarize, and staple
+        shell: bash
+        env:
+          APPLE_USERNAME: ${{ secrets.APPLE_USERNAME }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
+        run: scripts/build.sh --release-artifact --version "$VERSION"
+
+      - name: Verify signed release artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          dmg="target/swift/$DMG_NAME"
+          codesign --verify --deep --strict "target/swift/Automic Vault.app"
+          codesign --verify "$dmg"
+          xcrun stapler validate "$dmg"
+
+      - name: Stage release inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$ASSET_DIR" target/sbom-input
+          cp "target/swift/$DMG_NAME" "$ASSET_DIR/$DMG_NAME"
+          cp Cargo.toml Cargo.lock target/sbom-input/
+          cp src/menu-helper/Package.swift \
+            src/menu-helper/Package.resolved \
+            target/sbom-input/
+
+      - name: Generate SPDX SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        with:
+          path: target/sbom-input
+          format: spdx-json
+          output-file: ${{ env.ASSET_DIR }}/${{ env.SBOM_NAME }}
+          syft-version: 1.49.0
+          dependency-snapshot: false
+          upload-artifact: false
+          upload-release-assets: false
+
+      - name: Generate release checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          (
+            cd "$ASSET_DIR"
+            shasum -a 256 "$DMG_NAME" "$SBOM_NAME" >SHA256SUMS
+          )
+
+      - name: Attest build provenance
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4
+        with:
+          subject-path: ${{ env.ASSET_DIR }}/${{ env.DMG_NAME }}
+
+      - name: Attest the SBOM
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4
+        with:
+          subject-path: ${{ env.ASSET_DIR }}/${{ env.DMG_NAME }}
+          sbom-path: ${{ env.ASSET_DIR }}/${{ env.SBOM_NAME }}
+
+      - name: Publish immutable GitHub release
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release create "$VERSION" \
+            "$ASSET_DIR/$DMG_NAME" \
+            "$ASSET_DIR/$SBOM_NAME" \
+            "$ASSET_DIR/SHA256SUMS" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "$VERSION" \
+            --generate-notes \
+            --fail-on-no-commits \
+            --latest
+          expected="sha256:$(shasum -a 256 "$ASSET_DIR/$DMG_NAME" | awk '{print $1}')"
+          actual="$(
+            gh release view "$VERSION" \
+              --repo "$GITHUB_REPOSITORY" \
+              --json assets \
+              --jq ".assets[] | select(.name == \"$DMG_NAME\") | .digest"
+          )"
+          if [[ "$actual" != "$expected" ]]; then
+            echo "Published release digest does not match the built DMG." >&2
+            exit 1
+          fi
+          read -r immutable target_commitish < <(
+            gh api \
+              -H "X-GitHub-Api-Version: 2026-03-10" \
+              "repos/$GITHUB_REPOSITORY/releases/tags/$VERSION" \
+              --jq '[.immutable, .target_commitish] | @tsv'
+          )
+          if [[ "$immutable" != "true" ]]; then
+            echo "Published release is not immutable. Stop distribution and fix the repository setting." >&2
+            exit 1
+          fi
+          if [[ "$target_commitish" != "$GITHUB_SHA" ]]; then
+            echo "Published release does not target the reviewed workflow commit." >&2
+            exit 1
+          fi
+
+      - name: Remove signing material
+        if: always()
+        shell: bash
+        run: |
+          security delete-keychain "$RUNNER_TEMP/release-signing.keychain-db" 2>/dev/null || true
+          rm -f "$RUNNER_TEMP/developer-id.p12"
+          rm -f "$HOME/Library/MobileDevice/Provisioning Profiles/Automic_Vault_Developer_ID.provisionprofile"
+
+  website:
+    name: Publish the attested DMG to the website
+    needs: release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: release
+    permissions:
+      contents: read
+      id-token: write
+      attestations: read
+    env:
+      VERSION: ${{ inputs.version }}
+      DMG_NAME: Automic-Vault-${{ inputs.version }}.dmg
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - name: Validate website publishing settings
+        shell: bash
+        env:
+          AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
+          AWS_REGION: ${{ vars.AWS_REGION }}
+          AWS_S3_BUCKET: ${{ vars.AWS_S3_BUCKET }}
+        run: |
+          set -euo pipefail
+          : "${AWS_ROLE_ARN:?Add this secret to the release environment}"
+          : "${AWS_REGION:?Add this variable to the release environment}"
+          : "${AWS_S3_BUCKET:?Add this variable to the release environment}"
+
+      - name: Download the immutable release asset
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release-download
+          gh release download "$VERSION" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern "$DMG_NAME" \
+            --dir release-download
+
+      - name: Verify digest and build provenance
+        shell: bash
+        run: |
+          set -euo pipefail
+          dmg="release-download/$DMG_NAME"
+          expected="$(
+            gh release view "$VERSION" \
+              --repo "$GITHUB_REPOSITORY" \
+              --json assets \
+              --jq ".assets[] | select(.name == \"$DMG_NAME\") | .digest"
+          )"
+          actual="sha256:$(sha256sum "$dmg" | awk '{print $1}')"
+          if [[ "$actual" != "$expected" ]]; then
+            echo "Downloaded release asset digest does not match GitHub." >&2
+            exit 1
+          fi
+          gh attestation verify "$dmg" \
+            --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml" \
+            --source-ref refs/heads/main \
+            --source-digest "$GITHUB_SHA"
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@61815dcd50bd041e203e49132bacad1fd04d2708 # v5
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Publish the verified DMG
+        shell: bash
+        env:
+          AWS_S3_BUCKET: ${{ vars.AWS_S3_BUCKET }}
+        run: |
+          set -euo pipefail
+          dmg="release-download/$DMG_NAME"
+          aws s3 cp "$dmg" "s3://$AWS_S3_BUCKET/Automic Vault.dmg" \
+            --content-type application/x-apple-diskimage \
+            --checksum-algorithm SHA256
+          expected_checksum="$(openssl dgst -sha256 -binary "$dmg" | openssl base64 -A)"
+          actual_checksum="$(
+            aws s3api head-object \
+              --bucket "$AWS_S3_BUCKET" \
+              --key "Automic Vault.dmg" \
+              --checksum-mode ENABLED \
+              --query ChecksumSHA256 \
+              --output text
+          )"
+          if [[ "$actual_checksum" != "$expected_checksum" ]]; then
+            echo "S3 checksum does not match the attested release asset." >&2
+            exit 1
+          fi
+          distribution_id="$(
+            aws cloudfront list-distributions \
+              --query "DistributionList.Items[?contains(Aliases.Items, \`$AWS_S3_BUCKET\`)].Id | [0]" \
+              --output text
+          )"
+          if [[ -z "$distribution_id" || "$distribution_id" == "None" ]]; then
+            echo "Could not resolve the website CloudFront distribution." >&2
+            exit 1
+          fi
+          invalidation_id="$(
+            aws cloudfront create-invalidation \
+              --distribution-id "$distribution_id" \
+              --paths "/Automic%20Vault.dmg" \
+              --query Invalidation.Id \
+              --output text
+          )"
+          aws cloudfront wait invalidation-completed \
+            --distribution-id "$distribution_id" \
+            --id "$invalidation_id"
