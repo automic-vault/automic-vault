@@ -42,8 +42,10 @@ fn release_builds_are_actions_only_and_fail_closed() {
 #   gh: trusted\n\
 # ---\n"
     ));
-    assert!(RELEASE_WORKFLOW
-        .contains("run: /bin/bash scripts/build.sh --release-artifact --version \"$VERSION\""));
+    assert!(
+        RELEASE_WORKFLOW
+            .contains("run: /bin/bash scripts/build.sh --release-artifact --version \"$VERSION\"")
+    );
     assert!(BUILD_SCRIPT.contains("--release-artifact"));
     assert!(BUILD_SCRIPT.contains("release artifacts may only be built by GitHub Actions"));
     assert!(BUILD_SCRIPT.contains("release checkout does not match GITHUB_SHA"));
