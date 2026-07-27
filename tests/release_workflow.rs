@@ -9,7 +9,7 @@ fn release_workflow_binds_the_dmg_to_reviewed_source() {
     assert!(RELEASE_WORKFLOW.contains("refs/heads/main"));
     assert!(RELEASE_WORKFLOW.contains("IMMUTABLE_RELEASES_ENABLED"));
     assert!(RELEASE_WORKFLOW.contains("--target \"$GITHUB_SHA\""));
-    assert!(RELEASE_WORKFLOW.contains(".target_commitish"));
+    assert!(RELEASE_WORKFLOW.contains("targetCommitish"));
     assert!(RELEASE_WORKFLOW.contains("actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6"));
     assert_eq!(RELEASE_WORKFLOW.matches("uses: actions/attest@").count(), 2);
     assert!(RELEASE_WORKFLOW.contains("sbom-path:"));
@@ -24,7 +24,7 @@ fn release_workflow_binds_the_dmg_to_reviewed_source() {
 #[test]
 fn release_assets_are_immutable_and_never_replaced() {
     assert!(RELEASE_WORKFLOW.contains("--draft"));
-    assert!(RELEASE_WORKFLOW.contains(".immutable"));
+    assert!(BUILD_SCRIPT.contains(".immutable"));
     assert!(RELEASE_WORKFLOW.contains("Release $VERSION already exists; publish a new version."));
     assert!(!RELEASE_WORKFLOW.contains("--clobber"));
     assert!(BUILD_SCRIPT.contains("--publish"));
@@ -59,9 +59,6 @@ fn release_builds_are_actions_only_and_fail_closed() {
         "APPLE_USERNAME",
         "APPLE_TEAM_ID",
         "POSTHOG_API_KEY",
-        "AWS_ROLE_ARN",
-        "AWS_REGION",
-        "AWS_S3_BUCKET",
     ] {
         assert!(RELEASE_WORKFLOW.contains(&format!("vars.{public_value}")));
         assert!(!RELEASE_WORKFLOW.contains(&format!("secrets.{public_value}")));
@@ -69,14 +66,10 @@ fn release_builds_are_actions_only_and_fail_closed() {
 }
 
 #[test]
-fn approved_release_is_verified_before_distribution() {
-    assert!(RELEASE_WORKFLOW.contains("types: [published]"));
-    assert!(RELEASE_WORKFLOW.contains("gh attestation verify"));
-    assert!(RELEASE_WORKFLOW.contains("--source-digest \"$TARGET_COMMIT\""));
-    assert!(RELEASE_WORKFLOW.contains("S3 checksum does not match the attested release asset."));
-    assert!(RELEASE_WORKFLOW.contains(
-        "aws-actions/configure-aws-credentials@61815dcd50bd041e203e49132bacad1fd04d2708"
-    ));
+fn publication_is_local_and_release_actions_need_no_aws() {
+    assert!(!RELEASE_WORKFLOW.contains("aws-actions/"));
+    assert!(!RELEASE_WORKFLOW.contains("aws "));
+    assert!(!RELEASE_WORKFLOW.contains("AWS_"));
     assert!(!RELEASE_WORKFLOW.contains("homebrew-isotopes"));
     assert!(!RELEASE_WORKFLOW.contains("HOMEBREW_TAP_TOKEN"));
     assert!(BUILD_SCRIPT.contains("release y/n?"));
