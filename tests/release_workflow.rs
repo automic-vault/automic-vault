@@ -5,6 +5,7 @@ const NOTARIZE_SCRIPT: &str = include_str!("../scripts/build-notarize-dmg.sh");
 #[test]
 fn release_workflow_binds_the_dmg_to_reviewed_source() {
     assert!(RELEASE_WORKFLOW.contains("workflow_dispatch:"));
+    assert!(RELEASE_WORKFLOW.contains("commit:"));
     assert!(RELEASE_WORKFLOW.contains("refs/heads/main"));
     assert!(RELEASE_WORKFLOW.contains("IMMUTABLE_RELEASES_ENABLED"));
     assert!(RELEASE_WORKFLOW.contains("--target \"$GITHUB_SHA\""));
@@ -22,12 +23,13 @@ fn release_workflow_binds_the_dmg_to_reviewed_source() {
 
 #[test]
 fn release_assets_are_immutable_and_never_replaced() {
-    assert!(RELEASE_WORKFLOW.contains("Published release is not immutable."));
+    assert!(RELEASE_WORKFLOW.contains("--draft"));
+    assert!(RELEASE_WORKFLOW.contains(".immutable"));
     assert!(RELEASE_WORKFLOW.contains("Release $VERSION already exists; publish a new version."));
     assert!(!RELEASE_WORKFLOW.contains("--clobber"));
-    assert!(!BUILD_SCRIPT.contains("--publish"));
+    assert!(BUILD_SCRIPT.contains("--publish"));
     assert!(!BUILD_SCRIPT.contains("--clobber"));
-    assert!(!BUILD_SCRIPT.contains("gh release"));
+    assert!(!BUILD_SCRIPT.contains("gh release create"));
     assert!(!BUILD_SCRIPT.contains("aws s3"));
 }
 
@@ -49,6 +51,7 @@ fn release_builds_are_actions_only_and_fail_closed() {
         "MACOS_DEVELOPER_ID_P12_BASE64",
         "MACOS_DEVELOPER_ID_P12_PASSWORD",
         "APPLE_PASSWORD",
+        "HOMEBREW_TAP_TOKEN",
     ] {
         assert!(RELEASE_WORKFLOW.contains(&format!("secrets.{secret}")));
     }
@@ -57,6 +60,9 @@ fn release_builds_are_actions_only_and_fail_closed() {
         "APPLE_USERNAME",
         "APPLE_TEAM_ID",
         "POSTHOG_API_KEY",
+        "AWS_ROLE_ARN",
+        "AWS_REGION",
+        "AWS_S3_BUCKET",
     ] {
         assert!(RELEASE_WORKFLOW.contains(&format!("vars.{public_value}")));
         assert!(!RELEASE_WORKFLOW.contains(&format!("secrets.{public_value}")));
@@ -64,10 +70,15 @@ fn release_builds_are_actions_only_and_fail_closed() {
 }
 
 #[test]
-fn release_stays_on_github_under_a_stable_asset_name() {
-    assert!(RELEASE_WORKFLOW.contains("DMG_NAME: Automic-Vault.dmg"));
-    assert!(RELEASE_WORKFLOW.contains("BUILD_DMG_NAME: Automic-Vault-${{ inputs.version }}.dmg"));
-    assert!(!RELEASE_WORKFLOW.contains("AWS_"));
-    assert!(!RELEASE_WORKFLOW.contains("aws-actions/"));
-    assert!(!RELEASE_WORKFLOW.contains("aws s3"));
+fn approved_release_is_verified_before_distribution() {
+    assert!(RELEASE_WORKFLOW.contains("types: [published]"));
+    assert!(RELEASE_WORKFLOW.contains("gh attestation verify"));
+    assert!(RELEASE_WORKFLOW.contains("--source-digest \"$TARGET_COMMIT\""));
+    assert!(RELEASE_WORKFLOW.contains("S3 checksum does not match the attested release asset."));
+    assert!(RELEASE_WORKFLOW.contains(
+        "aws-actions/configure-aws-credentials@61815dcd50bd041e203e49132bacad1fd04d2708"
+    ));
+    assert!(RELEASE_WORKFLOW.contains("repository: automic-vault/homebrew-isotopes"));
+    assert!(RELEASE_WORKFLOW.contains("Update Automic Vault cask to $VERSION"));
+    assert!(RELEASE_WORKFLOW.contains("DMG_NAME: Automic-Vault-${{ inputs.version }}.dmg"));
 }

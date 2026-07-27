@@ -5,9 +5,11 @@ run=0
 install=0
 dmg=0
 notarize=0
+publish=0
 release_artifact=0
 version_supplied=0
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+REPOSITORY="automic-vault/automic-vault"
 CURRENT_VERSION="$(
   awk -F '"' '
     /^\[package\]/ { package = 1; next }
@@ -22,6 +24,7 @@ while [[ $# -gt 0 ]]; do
     --install) install=1 ;;
     --dmg) dmg=1 ;;
     --notarize) notarize=1 ;;
+    --publish) publish=1 ;;
     --release-artifact) release_artifact=1; dmg=1; notarize=1 ;;
     --version)
       if [[ $# -lt 2 || "$2" == --* ]]; then
@@ -33,7 +36,7 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     *)
-      echo "usage: $0 [--run] [--install] [--dmg] [--notarize] [--release-artifact] [--version VERSION]" >&2
+      echo "usage: $0 [--run] [--install] [--dmg] [--notarize] [--publish] [--release-artifact] [--version VERSION]" >&2
       exit 64
       ;;
   esac
@@ -50,6 +53,78 @@ fi
 if [[ "$notarize" -eq 1 && "$dmg" -ne 1 ]]; then
   echo "error: --notarize requires --dmg" >&2
   exit 64
+fi
+if [[ "$publish" -eq 1 ]]; then
+  if [[ "$run" -eq 1 || "$install" -eq 1 || "$dmg" -eq 1 || "$release_artifact" -eq 1 ]]; then
+    echo "error: --publish cannot be combined with build or install options" >&2
+    exit 64
+  fi
+  if [[ "${GITHUB_ACTIONS:-}" == "true" ]]; then
+    echo "error: --publish dispatches GitHub Actions and must run locally" >&2
+    exit 64
+  fi
+  if [[ "$version_supplied" -eq 1 && "$VERSION" != "$CURRENT_VERSION" ]]; then
+    echo "error: --publish version must match Cargo.toml ($CURRENT_VERSION)" >&2
+    exit 64
+  fi
+  if ! command -v gh >/dev/null 2>&1; then
+    echo "error: --publish requires gh" >&2
+    exit 64
+  fi
+  if [[ -n "$(git -C "$ROOT" status --porcelain --untracked-files=all)" ]]; then
+    echo "error: --publish requires a clean checkout" >&2
+    exit 64
+  fi
+  if [[ "$(git -C "$ROOT" branch --show-current)" != "main" ]]; then
+    echo "error: --publish requires the main branch" >&2
+    exit 64
+  fi
+  case "$(git -C "$ROOT" remote get-url origin)" in
+    git@github.com:automic-vault/automic-vault.git | https://github.com/automic-vault/automic-vault.git) ;;
+    *)
+      echo "error: --publish requires the automic-vault/automic-vault origin" >&2
+      exit 64
+      ;;
+  esac
+  git -C "$ROOT" fetch --quiet origin main
+  head="$(git -C "$ROOT" rev-parse HEAD)"
+  if [[ "$head" != "$(git -C "$ROOT" rev-parse origin/main)" ]]; then
+    echo "error: --publish requires main to match origin/main" >&2
+    exit 64
+  fi
+  if gh release view "$VERSION" --repo "$REPOSITORY" >/dev/null 2>&1 ||
+    git -C "$ROOT" ls-remote --exit-code --tags origin "refs/tags/$VERSION" >/dev/null 2>&1; then
+    echo "error: release or tag $VERSION already exists; publish a new version" >&2
+    exit 64
+  fi
+  run_url="$(
+    gh workflow run release.yml \
+      --repo "$REPOSITORY" \
+      --ref main \
+      -f version="$VERSION" \
+      -f commit="$head"
+  )"
+  run_url="${run_url##*$'\n'}"
+  if [[ ! "$run_url" =~ /actions/runs/([0-9]+)$ ]]; then
+    echo "error: could not determine dispatched workflow run from: $run_url" >&2
+    exit 1
+  fi
+  run_id="${BASH_REMATCH[1]}"
+  echo "Release workflow: $run_url"
+  gh run watch "$run_id" --repo "$REPOSITORY" --compact --exit-status
+  read -r is_draft target_commitish release_url < <(
+    gh release view "$VERSION" \
+      --repo "$REPOSITORY" \
+      --json isDraft,targetCommitish,url \
+      --jq '[.isDraft, .targetCommitish, .url] | @tsv'
+  )
+  if [[ "$is_draft" != "true" || "$target_commitish" != "$head" ]]; then
+    echo "error: workflow did not create the expected draft release" >&2
+    exit 1
+  fi
+  echo "Draft release ready for review and publication:"
+  echo "$release_url"
+  exit 0
 fi
 if [[ "$release_artifact" -eq 1 ]]; then
   if [[ "${GITHUB_ACTIONS:-}" != "true" ]]; then

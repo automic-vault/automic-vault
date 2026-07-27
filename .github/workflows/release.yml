@@ -1,6 +1,6 @@
 name: Release
 
-run-name: Release ${{ inputs.version }}
+run-name: Release ${{ inputs.version || github.event.release.tag_name }}
 
 on:
   workflow_dispatch:
@@ -9,6 +9,12 @@ on:
         description: Version already reviewed and merged in Cargo.toml
         required: true
         type: string
+      commit:
+        description: Exact reviewed main commit to build
+        required: true
+        type: string
+  release:
+    types: [published]
 
 concurrency:
   group: release
@@ -16,7 +22,8 @@ concurrency:
 
 jobs:
   release:
-    name: Build, attest, and publish
+    if: github.event_name == 'workflow_dispatch'
+    name: Build, attest, and draft
     runs-on: macos-26
     timeout-minutes: 45
     environment: release
@@ -26,9 +33,9 @@ jobs:
       attestations: write
     env:
       VERSION: ${{ inputs.version }}
+      COMMIT: ${{ inputs.commit }}
       ASSET_DIR: target/release-assets
-      BUILD_DMG_NAME: Automic-Vault-${{ inputs.version }}.dmg
-      DMG_NAME: Automic-Vault.dmg
+      DMG_NAME: Automic-Vault-${{ inputs.version }}.dmg
       SBOM_NAME: Automic-Vault-${{ inputs.version }}.spdx.json
       IMMUTABLE_RELEASES_ENABLED: ${{ vars.IMMUTABLE_RELEASES_ENABLED }}
       RUST_TOOLCHAIN: 1.96.0
@@ -40,6 +47,7 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+          ref: ${{ inputs.commit }}
 
       - name: Validate release authority
         shell: bash
@@ -53,6 +61,10 @@ jobs:
             echo "Version must use MAJOR.MINOR.PATCH." >&2
             exit 64
           fi
+          if [[ ! "$COMMIT" =~ ^[0-9a-f]{40}$ || "$COMMIT" != "$GITHUB_SHA" ]]; then
+            echo "The requested commit must be the dispatched main commit." >&2
+            exit 64
+          fi
           manifest_version="$(
             awk -F '"' '
               /^\[package\]/ { package = 1; next }
@@ -64,7 +76,7 @@ jobs:
             echo "Cargo.toml is $manifest_version, not $VERSION." >&2
             exit 64
           fi
-          if [[ "$(git rev-parse HEAD)" != "$GITHUB_SHA" ]]; then
+          if [[ "$(git rev-parse HEAD)" != "$COMMIT" ]]; then
             echo "Checkout does not match the workflow commit." >&2
             exit 64
           fi
@@ -172,7 +184,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          dmg="target/swift/$BUILD_DMG_NAME"
+          dmg="target/swift/$DMG_NAME"
           codesign --verify --deep --strict "target/swift/Automic Vault.app"
           codesign --verify "$dmg"
           xcrun stapler validate "$dmg"
@@ -182,7 +194,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$ASSET_DIR" target/sbom-input
-          cp "target/swift/$BUILD_DMG_NAME" "$ASSET_DIR/$DMG_NAME"
+          cp "target/swift/$DMG_NAME" "$ASSET_DIR/$DMG_NAME"
           cp Cargo.toml Cargo.lock target/sbom-input/
           cp src/menu-helper/Package.swift \
             src/menu-helper/Package.resolved \
@@ -219,7 +231,7 @@ jobs:
           subject-path: ${{ env.ASSET_DIR }}/${{ env.DMG_NAME }}
           sbom-path: ${{ env.ASSET_DIR }}/${{ env.SBOM_NAME }}
 
-      - name: Publish immutable GitHub release
+      - name: Create draft GitHub release
         shell: bash
         run: |
           set -euo pipefail
@@ -232,7 +244,7 @@ jobs:
             --title "$VERSION" \
             --generate-notes \
             --fail-on-no-commits \
-            --latest
+            --draft
           expected="sha256:$(shasum -a 256 "$ASSET_DIR/$DMG_NAME" | awk '{print $1}')"
           actual="$(
             gh release view "$VERSION" \
@@ -241,21 +253,21 @@ jobs:
               --jq ".assets[] | select(.name == \"$DMG_NAME\") | .digest"
           )"
           if [[ "$actual" != "$expected" ]]; then
-            echo "Published release digest does not match the built DMG." >&2
+            echo "Draft release digest does not match the built DMG." >&2
             exit 1
           fi
-          read -r immutable target_commitish < <(
-            gh api \
-              -H "X-GitHub-Api-Version: 2026-03-10" \
-              "repos/$GITHUB_REPOSITORY/releases/tags/$VERSION" \
-              --jq '[.immutable, .target_commitish] | @tsv'
+          read -r is_draft target_commitish < <(
+            gh release view "$VERSION" \
+              --repo "$GITHUB_REPOSITORY" \
+              --json isDraft,targetCommitish \
+              --jq '[.isDraft, .targetCommitish] | @tsv'
           )
-          if [[ "$immutable" != "true" ]]; then
-            echo "Published release is not immutable. Stop distribution and fix the repository setting." >&2
+          if [[ "$is_draft" != "true" ]]; then
+            echo "Release was published instead of saved as a draft." >&2
             exit 1
           fi
           if [[ "$target_commitish" != "$GITHUB_SHA" ]]; then
-            echo "Published release does not target the reviewed workflow commit." >&2
+            echo "Draft release does not target the reviewed workflow commit." >&2
             exit 1
           fi
 
@@ -266,3 +278,165 @@ jobs:
           security delete-keychain "$RUNNER_TEMP/release-signing.keychain-db" 2>/dev/null || true
           rm -f "$RUNNER_TEMP/developer-id.p12"
           rm -f "$HOME/Library/MobileDevice/Provisioning Profiles/Automic_Vault_Developer_ID.provisionprofile"
+
+  distribute:
+    if: github.event_name == 'release'
+    name: Distribute approved release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: release
+    permissions:
+      contents: read
+      id-token: write
+      attestations: read
+    env:
+      VERSION: ${{ github.event.release.tag_name }}
+      TARGET_COMMIT: ${{ github.sha }}
+      DMG_NAME: Automic-Vault-${{ github.event.release.tag_name }}.dmg
+      AWS_ROLE_ARN: ${{ vars.AWS_ROLE_ARN }}
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      AWS_S3_BUCKET: ${{ vars.AWS_S3_BUCKET }}
+      IMMUTABLE_RELEASES_ENABLED: ${{ vars.IMMUTABLE_RELEASES_ENABLED }}
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - name: Validate approved release
+        shell: bash
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          set -euo pipefail
+          : "${AWS_ROLE_ARN:?Add this variable to the release environment}"
+          : "${AWS_REGION:?Add this variable to the release environment}"
+          : "${AWS_S3_BUCKET:?Add this variable to the release environment}"
+          : "${HOMEBREW_TAP_TOKEN:?Add this secret to the release environment}"
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ||
+            ! "$TARGET_COMMIT" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Release version or target commit is invalid." >&2
+            exit 64
+          fi
+          if [[ "$IMMUTABLE_RELEASES_ENABLED" != "true" ]]; then
+            echo "Immutable releases must be enabled before distribution." >&2
+            exit 64
+          fi
+          read -r is_draft is_immutable is_prerelease target_commitish < <(
+            gh api \
+              -H "X-GitHub-Api-Version: 2026-03-10" \
+              "repos/$GITHUB_REPOSITORY/releases/tags/$VERSION" \
+              --jq '[.draft, .immutable, .prerelease, .target_commitish] | @tsv'
+          )
+          if [[ "$is_draft" != "false" || "$is_immutable" != "true" ||
+            "$is_prerelease" != "false" || "$target_commitish" != "$TARGET_COMMIT" ]]; then
+            echo "Only an immutable stable release from the attested commit may be distributed." >&2
+            exit 1
+          fi
+
+      - name: Download release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir release-download
+          gh release download "$VERSION" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern "$DMG_NAME" \
+            --pattern "Automic-Vault-$VERSION.spdx.json" \
+            --pattern SHA256SUMS \
+            --dir release-download
+          (cd release-download && sha256sum --check SHA256SUMS)
+          echo "DMG_SHA256=$(sha256sum "release-download/$DMG_NAME" | awk '{print $1}')" >>"$GITHUB_ENV"
+
+      - name: Verify build provenance
+        shell: bash
+        run: |
+          gh attestation verify "release-download/$DMG_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml" \
+            --source-ref refs/heads/main \
+            --source-digest "$TARGET_COMMIT"
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@61815dcd50bd041e203e49132bacad1fd04d2708 # v5
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Publish website download
+        shell: bash
+        run: |
+          set -euo pipefail
+          dmg="release-download/$DMG_NAME"
+          aws s3 cp "$dmg" "s3://$AWS_S3_BUCKET/Automic Vault.dmg" \
+            --content-type application/x-apple-diskimage \
+            --checksum-algorithm SHA256
+          expected_checksum="$(openssl dgst -sha256 -binary "$dmg" | openssl base64 -A)"
+          actual_checksum="$(
+            aws s3api head-object \
+              --bucket "$AWS_S3_BUCKET" \
+              --key "Automic Vault.dmg" \
+              --checksum-mode ENABLED \
+              --query ChecksumSHA256 \
+              --output text
+          )"
+          if [[ "$actual_checksum" != "$expected_checksum" ]]; then
+            echo "S3 checksum does not match the attested release asset." >&2
+            exit 1
+          fi
+          distribution_id="$(
+            aws cloudfront list-distributions \
+              --query "DistributionList.Items[?contains(Aliases.Items, \`$AWS_S3_BUCKET\`)].Id | [0]" \
+              --output text
+          )"
+          if [[ -z "$distribution_id" || "$distribution_id" == "None" ]]; then
+            echo "Could not resolve the website CloudFront distribution." >&2
+            exit 1
+          fi
+          invalidation_id="$(
+            aws cloudfront create-invalidation \
+              --distribution-id "$distribution_id" \
+              --paths '/av.dmg' '/Automic%20Vault.dmg' \
+              --query Invalidation.Id \
+              --output text
+          )"
+          aws cloudfront wait invalidation-completed \
+            --distribution-id "$distribution_id" \
+            --id "$invalidation_id"
+
+      - name: Check out Homebrew tap
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: automic-vault/homebrew-isotopes
+          ref: main
+          path: homebrew-isotopes
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+
+      - name: Update Homebrew cask
+        shell: bash
+        working-directory: homebrew-isotopes
+        run: |
+          set -euo pipefail
+          cask="Casks/automic-vault.rb"
+          ruby - "$cask" "$VERSION" "$DMG_SHA256" <<'RUBY'
+          path, version, sha256 = ARGV
+          contents = File.read(path)
+          replacements = {
+            /^  version "[^"]+"$/ => %(  version "#{version}"),
+            /^  sha256 "[0-9a-f]{64}"$/ => %(  sha256 "#{sha256}")
+          }
+          replacements.each do |pattern, replacement|
+            abort "#{path}: expected exactly one #{pattern.inspect}" unless contents.scan(pattern).one?
+            contents.sub!(pattern, replacement)
+          end
+          File.write("#{path}.tmp", contents)
+          File.rename("#{path}.tmp", path)
+          RUBY
+          ruby -c "$cask"
+          git diff --check -- "$cask"
+          if git diff --quiet -- "$cask"; then
+            echo "Homebrew cask is already current."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- "$cask"
+          git commit -m "Update Automic Vault cask to $VERSION"
+          git push origin HEAD:main

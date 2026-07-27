@@ -1,30 +1,23 @@
 # Releasing Automic Vault
 
-Automic Vault releases are built and published only by
-`.github/workflows/release.yml`. Do not publish a DMG from a local checkout and
-never replace an existing release asset. A correction is a new patch release.
+`scripts/build.sh --publish` starts `.github/workflows/release.yml` and waits
+for it. The DMG is built only by GitHub Actions. Never replace an existing
+release asset; a correction is a new patch release.
 
 The workflow runs from `main`, builds the reviewed commit, signs and notarizes
 the app, staples the notarization ticket, creates SHA-256 checksums and an SPDX
-SBOM, attests the final DMG, and publishes an immutable GitHub release.
+SBOM, attests the final DMG, and creates a draft GitHub release. After a human
+publishes that draft, the same workflow verifies the immutable release and its
+provenance, publishes the website download, and updates the Homebrew cask.
 Third-party Actions, the Rust toolchain, `create-dmg`, and the Syft SBOM
 generator are pinned.
-
-Every release uses the stable asset name `Automic-Vault.dmg`. The website links
-directly to:
-
-```text
-https://github.com/automic-vault/automic-vault/releases/latest/download/Automic-Vault.dmg
-```
-
-GitHub therefore serves and counts the downloads. The release workflow has no
-AWS credentials or website-bucket write access.
 
 ## One-time GitHub setup
 
 Create a GitHub Actions environment named `release`. Protect it with required
-reviewers and prevent non-`main` deployment branches if the repository plan
-supports those controls.
+reviewers. If deployment branch rules are available, allow `main` and release
+tags matching `*.*.*`; the draft build runs from `main` and approved
+distribution runs from the published tag.
 
 Enable immutable releases:
 
@@ -60,6 +53,7 @@ Add these secrets to the `release` environment:
 | `MACOS_DEVELOPER_ID_P12_BASE64` | Base64 of the Developer ID Application certificate and private key exported as a password-protected `.p12` |
 | `MACOS_DEVELOPER_ID_P12_PASSWORD` | Password chosen while exporting that `.p12` |
 | `APPLE_PASSWORD` | App-specific password for that Apple ID, not the normal account password |
+| `HOMEBREW_TAP_TOKEN` | Fine-grained token with contents write access only to `automic-vault/homebrew-isotopes` |
 
 Set them interactively so values do not enter shell history:
 
@@ -79,9 +73,10 @@ Paste that value into `MACOS_DEVELOPER_ID_P12_BASE64`.
 
 ### Environment variables
 
-The provisioning profile, Apple account name and team identifier, and PostHog
-project key are not secrets. The profile and PostHog key are embedded in the
-distributed app, and the remaining values are identifiers.
+The provisioning profile, Apple account name and team identifier, PostHog
+project key, AWS role ARN, region, and bucket are not secrets. The profile and
+PostHog key are embedded in the distributed app, and the remaining values are
+identifiers.
 
 Add them as non-secret variables on the `release` environment:
 
@@ -105,24 +100,45 @@ gh variable set POSTHOG_API_KEY \
   --repo automic-vault/automic-vault \
   --env release \
   --body PROJECT_KEY
+
+gh variable set AWS_ROLE_ARN \
+  --repo automic-vault/automic-vault \
+  --env release \
+  --body arn:aws:iam::ACCOUNT_ID:role/ROLE_NAME
+
+gh variable set AWS_REGION \
+  --repo automic-vault/automic-vault \
+  --env release \
+  --body us-east-1
+
+gh variable set AWS_S3_BUCKET \
+  --repo automic-vault/automic-vault \
+  --env release \
+  --body automicvault.com
 ```
+
+The AWS role is assumed through GitHub OIDC. Restrict its trust policy to the
+`repo:automic-vault/automic-vault:environment:release` subject and grant only
+the S3 object and CloudFront invalidation permissions used by the workflow.
 
 ## Publish a release
 
 First merge a reviewed version bump for `Cargo.toml` and `Cargo.lock` to `main`.
 The workflow never edits or commits version metadata.
 
-Then dispatch the workflow from `main`:
+Then run from that clean, pushed `main` checkout:
 
 ```sh
-gh workflow run release.yml \
-  --repo automic-vault/automic-vault \
-  --ref main \
-  -f version=X.Y.Z
+scripts/build.sh --publish
 ```
 
-The run fails if the version differs from `Cargo.toml`, the tag or release
-already exists, the checkout is not the dispatched commit, required secrets are
+The script dispatches the exact `main` commit, waits for the workflow, verifies
+that the result is a draft targeting that commit, and prints its URL. Review
+the draft in the browser and publish it manually. Publication triggers the
+distribution job; draft creation never updates the website or Homebrew.
+
+The run fails if local `main` differs from `origin/main`, the version differs
+from `Cargo.toml`, the tag or release already exists, required configuration is
 missing, or immutable releases are disabled.
 
 ## Verify
@@ -130,14 +146,16 @@ missing, or immutable releases are disabled.
 Download the release assets and verify the final DMG:
 
 ```sh
-gh attestation verify Automic-Vault.dmg \
+gh attestation verify Automic-Vault-X.Y.Z.dmg \
   --repo automic-vault/automic-vault \
   --signer-workflow \
     automic-vault/automic-vault/.github/workflows/release.yml
 
 shasum -a 256 -c SHA256SUMS
-xcrun stapler validate Automic-Vault.dmg
+xcrun stapler validate Automic-Vault-X.Y.Z.dmg
 ```
 
-The release page must show the release as immutable. Do not delete or replace
-the release to correct a problem; publish a new patch release.
+The release page must show the release as immutable, and the distribution job
+must pass its GitHub digest, provenance, S3 checksum, and Homebrew update
+checks. Do not delete or replace the release to correct a problem; publish a
+new patch release.
