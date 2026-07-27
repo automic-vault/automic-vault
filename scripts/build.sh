@@ -1,4 +1,9 @@
-#!/usr/bin/env bash
+#!/usr/local/bin/av inject --allow-missing-keys +APPLE_PASSWORD -- /bin/bash
+# --- automic-vault
+# capabilities:
+#   gh: trusted
+# ---
+# shellcheck shell=bash disable=SC1008,SC2096
 set -euo pipefail
 
 run=0

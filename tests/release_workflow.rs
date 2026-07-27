@@ -35,6 +35,15 @@ fn release_assets_are_immutable_and_never_replaced() {
 
 #[test]
 fn release_builds_are_actions_only_and_fail_closed() {
+    assert!(BUILD_SCRIPT.starts_with(
+        "#!/usr/local/bin/av inject --allow-missing-keys +APPLE_PASSWORD -- /bin/bash\n\
+# --- automic-vault\n\
+# capabilities:\n\
+#   gh: trusted\n\
+# ---\n"
+    ));
+    assert!(RELEASE_WORKFLOW
+        .contains("run: /bin/bash scripts/build.sh --release-artifact --version \"$VERSION\""));
     assert!(BUILD_SCRIPT.contains("--release-artifact"));
     assert!(BUILD_SCRIPT.contains("release artifacts may only be built by GitHub Actions"));
     assert!(BUILD_SCRIPT.contains("release checkout does not match GITHUB_SHA"));
