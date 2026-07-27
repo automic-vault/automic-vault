@@ -281,7 +281,7 @@ jobs:
 
   distribute:
     if: github.event_name == 'release'
-    name: Distribute approved release
+    name: Publish approved website download
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     environment: release
@@ -302,14 +302,11 @@ jobs:
     steps:
       - name: Validate approved release
         shell: bash
-        env:
-          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
         run: |
           set -euo pipefail
           : "${AWS_ROLE_ARN:?Add this variable to the release environment}"
           : "${AWS_REGION:?Add this variable to the release environment}"
           : "${AWS_S3_BUCKET:?Add this variable to the release environment}"
-          : "${HOMEBREW_TAP_TOKEN:?Add this secret to the release environment}"
           if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ||
             ! "$TARGET_COMMIT" =~ ^[0-9a-f]{40}$ ]]; then
             echo "Release version or target commit is invalid." >&2
@@ -343,7 +340,6 @@ jobs:
             --pattern SHA256SUMS \
             --dir release-download
           (cd release-download && sha256sum --check SHA256SUMS)
-          echo "DMG_SHA256=$(sha256sum "release-download/$DMG_NAME" | awk '{print $1}')" >>"$GITHUB_ENV"
 
       - name: Verify build provenance
         shell: bash
@@ -400,43 +396,3 @@ jobs:
           aws cloudfront wait invalidation-completed \
             --distribution-id "$distribution_id" \
             --id "$invalidation_id"
-
-      - name: Check out Homebrew tap
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          repository: automic-vault/homebrew-isotopes
-          ref: main
-          path: homebrew-isotopes
-          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
-
-      - name: Update Homebrew cask
-        shell: bash
-        working-directory: homebrew-isotopes
-        run: |
-          set -euo pipefail
-          cask="Casks/automic-vault.rb"
-          ruby - "$cask" "$VERSION" "$DMG_SHA256" <<'RUBY'
-          path, version, sha256 = ARGV
-          contents = File.read(path)
-          replacements = {
-            /^  version "[^"]+"$/ => %(  version "#{version}"),
-            /^  sha256 "[0-9a-f]{64}"$/ => %(  sha256 "#{sha256}")
-          }
-          replacements.each do |pattern, replacement|
-            abort "#{path}: expected exactly one #{pattern.inspect}" unless contents.scan(pattern).one?
-            contents.sub!(pattern, replacement)
-          end
-          File.write("#{path}.tmp", contents)
-          File.rename("#{path}.tmp", path)
-          RUBY
-          ruby -c "$cask"
-          git diff --check -- "$cask"
-          if git diff --quiet -- "$cask"; then
-            echo "Homebrew cask is already current."
-            exit 0
-          fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -- "$cask"
-          git commit -m "Update Automic Vault cask to $VERSION"
-          git push origin HEAD:main

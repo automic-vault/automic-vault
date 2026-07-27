@@ -51,7 +51,6 @@ fn release_builds_are_actions_only_and_fail_closed() {
         "MACOS_DEVELOPER_ID_P12_BASE64",
         "MACOS_DEVELOPER_ID_P12_PASSWORD",
         "APPLE_PASSWORD",
-        "HOMEBREW_TAP_TOKEN",
     ] {
         assert!(RELEASE_WORKFLOW.contains(&format!("secrets.{secret}")));
     }
@@ -78,7 +77,11 @@ fn approved_release_is_verified_before_distribution() {
     assert!(RELEASE_WORKFLOW.contains(
         "aws-actions/configure-aws-credentials@61815dcd50bd041e203e49132bacad1fd04d2708"
     ));
-    assert!(RELEASE_WORKFLOW.contains("repository: automic-vault/homebrew-isotopes"));
-    assert!(RELEASE_WORKFLOW.contains("Update Automic Vault cask to $VERSION"));
+    assert!(!RELEASE_WORKFLOW.contains("homebrew-isotopes"));
+    assert!(!RELEASE_WORKFLOW.contains("HOMEBREW_TAP_TOKEN"));
+    assert!(BUILD_SCRIPT.contains("release y/n?"));
+    assert!(BUILD_SCRIPT.contains("gh release edit"));
+    assert!(BUILD_SCRIPT.contains("Update Automic Vault cask to $version"));
+    assert!(BUILD_SCRIPT.contains("Homebrew tap main must match origin/main"));
     assert!(RELEASE_WORKFLOW.contains("DMG_NAME: Automic-Vault-${{ inputs.version }}.dmg"));
 }

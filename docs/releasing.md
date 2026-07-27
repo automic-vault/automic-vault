@@ -7,10 +7,11 @@ release asset; a correction is a new patch release.
 The workflow runs from `main`, builds the reviewed commit, signs and notarizes
 the app, staples the notarization ticket, creates SHA-256 checksums and an SPDX
 SBOM, attests the final DMG, and creates a draft GitHub release. After a human
-publishes that draft, the same workflow verifies the immutable release and its
-provenance, publishes the website download, and updates the Homebrew cask.
-Third-party Actions, the Rust toolchain, `create-dmg`, and the Syft SBOM
-generator are pinned.
+approves publication in `build.sh`, the script publishes the draft and updates
+the local Homebrew tap. The published-release workflow independently verifies
+the immutable release and its provenance before publishing the website
+download. Third-party Actions, the Rust toolchain, `create-dmg`, and the Syft
+SBOM generator are pinned.
 
 ## One-time GitHub setup
 
@@ -53,7 +54,6 @@ Add these secrets to the `release` environment:
 | `MACOS_DEVELOPER_ID_P12_BASE64` | Base64 of the Developer ID Application certificate and private key exported as a password-protected `.p12` |
 | `MACOS_DEVELOPER_ID_P12_PASSWORD` | Password chosen while exporting that `.p12` |
 | `APPLE_PASSWORD` | App-specific password for that Apple ID, not the normal account password |
-| `HOMEBREW_TAP_TOKEN` | Fine-grained token with contents write access only to `automic-vault/homebrew-isotopes` |
 
 Set them interactively so values do not enter shell history:
 
@@ -133,9 +133,11 @@ scripts/build.sh --publish
 ```
 
 The script dispatches the exact `main` commit, waits for the workflow, verifies
-that the result is a draft targeting that commit, and prints its URL. Review
-the draft in the browser and publish it manually. Publication triggers the
-distribution job; draft creation never updates the website or Homebrew.
+that the result is a draft targeting that commit, prints its URL, and asks
+`release y/n?`. Answering `y` publishes the draft, verifies that GitHub made it
+immutable, then updates and pushes the local Homebrew tap. Answering anything
+else leaves the draft unpublished. Publication triggers the website job; draft
+creation never updates the website or Homebrew.
 
 The run fails if local `main` differs from `origin/main`, the version differs
 from `Cargo.toml`, the tag or release already exists, required configuration is
@@ -155,7 +157,7 @@ shasum -a 256 -c SHA256SUMS
 xcrun stapler validate Automic-Vault-X.Y.Z.dmg
 ```
 
-The release page must show the release as immutable, and the distribution job
-must pass its GitHub digest, provenance, S3 checksum, and Homebrew update
-checks. Do not delete or replace the release to correct a problem; publish a
-new patch release.
+The release page must show the release as immutable, the website job must pass
+its GitHub digest, provenance, and S3 checksum checks, and the local Homebrew
+tap must contain the release digest. Do not delete or replace the release to
+correct a problem; publish a new patch release.
