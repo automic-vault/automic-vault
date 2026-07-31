@@ -3858,9 +3858,8 @@ private final class ApprovalServer: @unchecked Sendable {
             processes: processes,
             launchers: []
         ).id }
-        let launchers = (existing?.launchers ?? []).contains(launcherRecord)
-            ? existing!.launchers
-            : (existing?.launchers ?? []) + [launcherRecord]
+        var launchers = existing?.launchers ?? []
+        if !launchers.contains(launcherRecord) { launchers.append(launcherRecord) }
         let blessing = BlessedDotenv(
             path: path,
             checksum: checksum,
@@ -3910,7 +3909,9 @@ private final class ApprovalServer: @unchecked Sendable {
 
         if persistent {
             discloseDotenvSecret(
+                item: item,
                 key: key,
+                execution: execution,
                 request: request,
                 callerPath: callerPath,
                 launcher: launcher,
@@ -3927,7 +3928,9 @@ private final class ApprovalServer: @unchecked Sendable {
                 return
             }
             discloseDotenvSecret(
+                item: item,
                 key: key,
+                execution: execution,
                 request: request,
                 callerPath: callerPath,
                 launcher: launcher,
@@ -3979,7 +3982,9 @@ private final class ApprovalServer: @unchecked Sendable {
                 }
             }
             self.discloseDotenvSecret(
+                item: item,
                 key: key,
+                execution: execution,
                 request: request,
                 callerPath: callerPath,
                 launcher: launcher,
@@ -3992,7 +3997,9 @@ private final class ApprovalServer: @unchecked Sendable {
     }
 
     private func discloseDotenvSecret(
+        item: String,
         key: String,
+        execution: DotenvExecutionKey,
         request: ApprovalRequest,
         callerPath: String,
         launcher: LauncherIdentity,
@@ -4001,6 +4008,21 @@ private final class ApprovalServer: @unchecked Sendable {
         peer: xpc_connection_t,
         message: xpc_object_t
     ) {
+        guard let path = request.dotenvPath,
+              let checksum = request.dotenvChecksum,
+              let data = try? readBlessedScript(path: path),
+              dotenvSchemaChecksum(data) == checksum,
+              dotenvSchemaDeclaration(data: data, item: item, secret: key) != nil,
+              let parent = processIdentity(execution.pid),
+              parent.start_usec == execution.startUsec,
+              dotenvProcessChain(startingAt: parent, launcherPID: launcher.pid) == execution.processes,
+              launcherIdentities(startingAt: parent.pid).contains(where: {
+                  $0.pid == launcher.pid && $0.designatedRequirement == launcher.designatedRequirement
+              })
+        else {
+            reply(peer, to: message, ok: false, error: "dotenv authorization changed before disclosure")
+            return
+        }
         guard let value = loadStoredSecret(account: key) else {
             reply(peer, to: message, ok: false, error: "failed to load Secret Value for \(key): \(errSecItemNotFound)")
             return

@@ -35,7 +35,16 @@ public struct BlessedDotenv: Codable, Equatable, Identifiable, Sendable {
     public let blessedAt: Date
 
     public var id: String {
-        ([path] + processes.flatMap { [$0.path, $0.cwd] + $0.arguments }).joined(separator: "\u{1f}")
+        var data = Data()
+        appendIdentity(path, to: &data)
+        appendIdentity(String(processes.count), to: &data)
+        for process in processes {
+            appendIdentity(process.path, to: &data)
+            appendIdentity(process.cwd, to: &data)
+            appendIdentity(String(process.arguments.count), to: &data)
+            process.arguments.forEach { appendIdentity($0, to: &data) }
+        }
+        return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
 
     public init(
@@ -63,6 +72,12 @@ public struct BlessedDotenv: Codable, Equatable, Identifiable, Sendable {
             && self.processes == processes
             && launchers.contains { $0.requirement == launcherRequirement }
     }
+}
+
+private func appendIdentity(_ value: String, to data: inout Data) {
+    var length = UInt64(value.utf8.count).bigEndian
+    withUnsafeBytes(of: &length) { data.append(contentsOf: $0) }
+    data.append(contentsOf: value.utf8)
 }
 
 public func dotenvSchemaDeclaration(

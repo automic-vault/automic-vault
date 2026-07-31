@@ -60,4 +60,17 @@ import Testing
         )],
         launcherRequirement: "codex"
     ))
+    let embeddedSeparator = BlessedDotenv(
+        path: dotenv.path,
+        checksum: dotenv.checksum,
+        processes: [BlessedDotenvProcess(path: process.path, arguments: ["a\u{1f}b"], cwd: process.cwd)],
+        launchers: []
+    )
+    let separateArguments = BlessedDotenv(
+        path: dotenv.path,
+        checksum: dotenv.checksum,
+        processes: [BlessedDotenvProcess(path: process.path, arguments: ["a", "b"], cwd: process.cwd)],
+        launchers: []
+    )
+    #expect(embeddedSeparator.id != separateArguments.id)
 }
