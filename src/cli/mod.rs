@@ -6,6 +6,7 @@ mod aws;
 mod bless;
 pub(crate) mod docker_credential;
 pub(crate) mod doctor;
+mod dotenv;
 mod inject;
 mod launcher_bundle;
 mod list;
@@ -26,6 +27,7 @@ commands:
   $ av detectors --json                   # print detector metadata
   $ av hardeners --json                   # print hardener metadata
   $ av bless [--endorse-launcher] <path>  # review a script for secret access
+  $ av dotenv resolve ...                 # resolve a blessed Varlock dotenv item
   $ av inject +KEY... [--] <command>      # inject secrets into a command
   $ av inject -- <command>                # run an approved script
   $ av list                               # list saved secret names
@@ -390,6 +392,7 @@ where
             aws::credentials(Some("official-v2"), stdout, stderr)
         }
         Some("docker-credential") => docker_credential::run(rest, stdout, stderr),
+        Some("dotenv") => dotenv::run(rest, stdout, stderr),
         Some("list" | "ls") => list::run(rest, stdout, stderr),
         Some("bless") => bless::run(rest, stderr),
         Some("open") => {

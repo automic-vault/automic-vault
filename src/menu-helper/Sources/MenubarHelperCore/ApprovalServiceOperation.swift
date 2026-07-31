@@ -12,6 +12,7 @@ public enum ApprovalServiceOperation: String, CaseIterable, Sendable {
     case save
     case saveIfAbsentOrEqual = "save-if-absent"
     case bless
+    case dotenv
     case delete
     case openWindow = "open-window"
     case ghSave = "gh-save"

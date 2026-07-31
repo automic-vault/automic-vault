@@ -24,3 +24,4 @@ bool av_peer_pid(int fd, pid_t *pid_out);
 bool av_process_identity(pid_t pid, AVProcessIdentity *identity_out);
 bool av_process_arguments(pid_t pid, char *out, size_t out_len);
 bool av_process_environment_value(pid_t pid, const char *key, char *out, size_t out_len);
+bool av_process_cwd(pid_t pid, char *out, size_t out_len);

@@ -74,20 +74,26 @@ bool av_process_arguments(pid_t pid, char *out, size_t out_len) {
     while (cursor < end && *cursor == '\0') cursor++;
 
     size_t written = 0;
-    for (int i = 0; i < argc && cursor < end && written + 1 < out_len; i++) {
-        size_t arg_len = strnlen(cursor, (size_t)(end - cursor));
-        if (arg_len == 0) {
-            break;
+    for (int i = 0; i < argc; i++) {
+        if (cursor >= end) {
+            return false;
         }
-        if (i > 0 && written + 1 < out_len) {
+        size_t arg_len = strnlen(cursor, (size_t)(end - cursor));
+        if (cursor + arg_len >= end) {
+            return false;
+        }
+        if (memchr(cursor, '\n', arg_len) != NULL) {
+            return false;
+        }
+        size_t required = arg_len + (i > 0 ? 1 : 0);
+        if (required > out_len - written - 1) {
+            return false;
+        }
+        if (i > 0) {
             out[written++] = '\n';
         }
-        size_t copy_len = arg_len;
-        if (copy_len > out_len - written - 1) {
-            copy_len = out_len - written - 1;
-        }
-        memcpy(out + written, cursor, copy_len);
-        written += copy_len;
+        memcpy(out + written, cursor, arg_len);
+        written += arg_len;
         cursor += arg_len + 1;
     }
     out[written] = '\0';
@@ -179,5 +185,23 @@ bool av_process_environment_value(pid_t pid, const char *key, char *out, size_t 
     memcpy(out, match, match_len);
     out[match_len] = '\0';
     free(buffer);
+    return true;
+}
+
+bool av_process_cwd(pid_t pid, char *out, size_t out_len) {
+    if (out_len == 0) {
+        return false;
+    }
+    struct proc_vnodepathinfo info;
+    memset(&info, 0, sizeof(info));
+    int size = proc_pidinfo(pid, PROC_PIDVNODEPATHINFO, 0, &info, sizeof(info));
+    if (size != sizeof(info) || info.pvi_cdir.vip_path[0] == '\0') {
+        return false;
+    }
+    size_t len = strnlen(info.pvi_cdir.vip_path, sizeof(info.pvi_cdir.vip_path));
+    if (len >= out_len) {
+        return false;
+    }
+    memcpy(out, info.pvi_cdir.vip_path, len + 1);
     return true;
 }

@@ -112,6 +112,22 @@ pub(crate) fn bless_script(path: &str, endorse_launcher: bool) -> Result<bool, S
     .map(|reply| reply.value.as_deref() == Some("already blessed"))
 }
 
+pub(crate) fn resolve_dotenv_secret(schema: &str, item: &str, key: &str) -> Result<String, String> {
+    xpc_request_fields(
+        "dotenv",
+        &[
+            Some((b"schema\0", schema)),
+            Some((b"item\0", item)),
+            Some((b"key\0", key)),
+        ],
+        None,
+        None,
+        None,
+    )?
+    .value
+    .ok_or_else(|| format!("failed to resolve dotenv key {item}"))
+}
+
 pub(crate) fn list_secret_names() -> Result<Vec<String>, String> {
     if let Some(dir) = crate::test_keychain_dir() {
         let entries = match std::fs::read_dir(dir) {
@@ -212,6 +228,23 @@ fn xpc_request_with_project_directory(
     uint_field: Option<(&'static [u8], u64)>,
     project_directory: Option<&str>,
 ) -> Result<XpcReply, String> {
+    xpc_request_fields(
+        operation,
+        &[field, extra],
+        bool_field,
+        uint_field,
+        project_directory,
+    )
+}
+
+#[cfg(target_os = "macos")]
+fn xpc_request_fields(
+    operation: &str,
+    fields: &[Option<(&'static [u8], &str)>],
+    bool_field: Option<&'static [u8]>,
+    uint_field: Option<(&'static [u8], u64)>,
+    project_directory: Option<&str>,
+) -> Result<XpcReply, String> {
     use std::ffi::CString;
     use std::os::raw::{c_char, c_int, c_void};
 
@@ -288,11 +321,8 @@ fn xpc_request_with_project_directory(
 
     unsafe {
         set_string(message, b"op\0", operation)?;
-        if let Some((field, value)) = field {
+        for (field, value) in fields.iter().flatten() {
             set_string(message, field, value)?;
-        }
-        if let Some((extra_field, value)) = extra {
-            set_string(message, extra_field, value)?;
         }
         if let Some(bool_field) = bool_field {
             xpc_dictionary_set_bool(message, bool_field.as_ptr().cast(), true);
@@ -401,6 +431,17 @@ fn xpc_request(
     _extra: Option<(&'static [u8], &str)>,
     _bool_field: Option<&'static [u8]>,
     _uint_field: Option<(&'static [u8], u64)>,
+) -> Result<XpcReply, String> {
+    Err("the Automic Vault menu bar approval service is only available on macOS".to_string())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn xpc_request_fields(
+    _operation: &str,
+    _fields: &[Option<(&'static [u8], &str)>],
+    _bool_field: Option<&'static [u8]>,
+    _uint_field: Option<(&'static [u8], u64)>,
+    _project_directory: Option<&str>,
 ) -> Result<XpcReply, String> {
     Err("the Automic Vault menu bar approval service is only available on macOS".to_string())
 }
