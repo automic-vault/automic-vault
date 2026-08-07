@@ -28,7 +28,7 @@ import Testing
 
     let snapshot = try #require(session.snapshot(at: now, uptime: 100))
     #expect(snapshot.expiresAt == now.addingTimeInterval(fullAccessSessionMaximumDuration))
-    #expect(snapshot.remaining(at: now) == fullAccessSessionMaximumDuration)
+    #expect(snapshot.remaining(at: now, uptime: 100) == fullAccessSessionMaximumDuration)
 }
 
 @Test func fullAccessSessionExpiresAndCanAlwaysBeEnded() {
@@ -52,8 +52,42 @@ import Testing
     #expect(session.start(at: now, uptime: 500, duration: 60))
     #expect(session.snapshot(
         at: now.addingTimeInterval(-300),
+        uptime: 559
+    )?.remaining(at: now.addingTimeInterval(-300), uptime: 559) == 1)
+    #expect(session.snapshot(
+        at: now.addingTimeInterval(-300),
         uptime: 560
     ) == nil)
+}
+
+@Test func endingWaitsForAnAuthorizedReleaseToFinish() throws {
+    let now = Date(timeIntervalSince1970: 5_000)
+    let session = FullAccessSessionController()
+    #expect(session.start(at: now, uptime: 600, duration: 60))
+    let lease = try #require(session.lease(at: now, uptime: 600))
+    let releaseStarted = DispatchSemaphore(value: 0)
+    let allowReleaseToFinish = DispatchSemaphore(value: 0)
+    let releaseFinished = DispatchSemaphore(value: 0)
+    let endFinished = DispatchSemaphore(value: 0)
+
+    DispatchQueue.global().async {
+        _ = session.withActiveLease(lease, at: now, uptime: 600) {
+            releaseStarted.signal()
+            allowReleaseToFinish.wait()
+        }
+        releaseFinished.signal()
+    }
+    #expect(releaseStarted.wait(timeout: .now() + 1) == .success)
+    DispatchQueue.global().async {
+        session.end()
+        endFinished.signal()
+    }
+    #expect(endFinished.wait(timeout: .now() + 0.02) == .timedOut)
+
+    allowReleaseToFinish.signal()
+    #expect(releaseFinished.wait(timeout: .now() + 1) == .success)
+    #expect(endFinished.wait(timeout: .now() + 1) == .success)
+    #expect(!session.isActive(at: now, uptime: 600))
 }
 
 @Test(

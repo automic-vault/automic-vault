@@ -145,10 +145,42 @@ private enum FullAccessSessionAuthenticationError: LocalizedError {
 
 func fullAccessSessionRemainingLabel(
     _ snapshot: FullAccessSessionSnapshot,
-    at date: Date = Date()
+    at date: Date = Date(),
+    uptime: TimeInterval = ProcessInfo.processInfo.systemUptime
 ) -> String {
-    let remaining = Int(ceil(snapshot.remaining(at: date)))
+    let remaining = Int(ceil(snapshot.remaining(at: date, uptime: uptime)))
     let minutes = remaining / 60
     let seconds = remaining % 60
     return minutes > 0 ? "\(minutes)m \(seconds)s remaining" : "\(seconds)s remaining"
+}
+
+struct FullAccessSessionMenuPresentation: Equatable {
+    let title: String
+    let isEnabled: Bool
+    let showsWarning: Bool
+}
+
+func fullAccessSessionMenuPresentation(
+    snapshot: FullAccessSessionSnapshot?,
+    isAuthenticating: Bool,
+    at date: Date = Date(),
+    uptime: TimeInterval = ProcessInfo.processInfo.systemUptime
+) -> FullAccessSessionMenuPresentation {
+    if let snapshot {
+        let remaining = fullAccessSessionRemainingLabel(
+            snapshot,
+            at: date,
+            uptime: uptime
+        )
+        return FullAccessSessionMenuPresentation(
+            title: "End Full Access Session (\(remaining))",
+            isEnabled: true,
+            showsWarning: true
+        )
+    }
+    return FullAccessSessionMenuPresentation(
+        title: isAuthenticating ? "Waiting for Touch ID…" : "Start Full Access Session…",
+        isEnabled: !isAuthenticating,
+        showsWarning: false
+    )
 }

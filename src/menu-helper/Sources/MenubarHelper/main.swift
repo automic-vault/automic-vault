@@ -440,6 +440,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard alert.runModal() == .alertFirstButtonReturn else { return }
 
             readyUpdate = nil
+            fullAccessSessionModel.end()
             restoreMainWindow = beginUpdating(with: alert)
             updatingAlert = alert
             let prepared = try await update.prepareInstallation()
@@ -709,19 +710,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         automaticApprovalFlashWorkItem?.cancel()
         automaticApprovalFlashWorkItem = nil
         preFlashStatusImage = nil
-        if let snapshot = fullAccessSessionModel.snapshot {
-            fullAccessSessionItem.title = "End Full Access Session (\(fullAccessSessionRemainingLabel(snapshot)))"
-        } else {
-            fullAccessSessionItem.title = fullAccessSessionModel.isAuthenticating
-                ? "Waiting for Touch ID…"
-                : "Start Full Access Session…"
-        }
-        fullAccessSessionItem.isEnabled = !fullAccessSessionModel.isAuthenticating
+        let presentation = fullAccessSessionMenuPresentation(
+            snapshot: fullAccessSessionModel.snapshot,
+            isAuthenticating: fullAccessSessionModel.isAuthenticating
+        )
+        fullAccessSessionItem.title = presentation.title
+        fullAccessSessionItem.isEnabled = presentation.isEnabled
         refreshStatusImage()
     }
 
     private func refreshStatusImage() {
-        statusItem.button?.image = if fullAccessSessionModel.isActive {
+        let showsWarning = fullAccessSessionMenuPresentation(
+            snapshot: fullAccessSessionModel.snapshot,
+            isAuthenticating: fullAccessSessionModel.isAuthenticating
+        ).showsWarning
+        statusItem.button?.image = if showsWarning {
             shieldImage(
                 symbolName: "exclamationmark.shield.fill",
                 color: .systemOrange,
@@ -2330,17 +2333,51 @@ private final class ApprovalServer: @unchecked Sendable {
         let classification = configuredGate.map {
             classifySecretGateRequest(gateID: $0.id, request: request)
         }
+        let sessionLease = fullAccessSession.lease()
         let sessionPolicy: ResolvedSecretGatePolicy? = if let configuredGate, let classification {
             resolveFullAccessSessionPolicy(
                 gate: configuredGate,
                 launchers: policyLaunchers,
                 classification: classification,
-                sessionActive: fullAccessSession.isActive()
+                sessionActive: sessionLease != nil
             )
         } else {
             nil
         }
-        let resolvedPolicy = sessionPolicy ?? durablePolicy
+        let preferredPolicy = automaticSecretGatePolicy(
+            sessionPolicy: sessionPolicy,
+            durablePolicy: durablePolicy,
+            classification: classification,
+            hasActiveBlessing: activeBlessing != nil
+        )
+        if let configuredGate,
+           let sessionPolicy,
+           preferredPolicy?.origin == .fullAccessSession,
+           let sessionLease
+        {
+            let authorizingLauncher = sessionPolicy.launcher ?? policyLauncher
+            let authorized = fullAccessSession.withActiveLease(sessionLease) {
+                automaticallyAuthorize(
+                    request: request,
+                    awsRegistration: awsRegistration,
+                    pid: pid,
+                    identity: identity,
+                    callerPath: callerPath,
+                    launcher: authorizingLauncher,
+                    scriptApproval: scriptApproval,
+                    gate: configuredGate,
+                    policy: sessionPolicy,
+                    authorizationGate: authorizationGate,
+                    processChains: processChains,
+                    currentLaunchers: launchers,
+                    retainedGateProvenance: retainedGateProvenance,
+                    peer: peer,
+                    message: message
+                )
+                return true
+            } ?? false
+            if authorized { return }
+        }
         let retainedProcessExplanation: String?
         if !keepsDetachedProcessAccess,
            retainedBlessingMatch != nil,
@@ -2371,16 +2408,16 @@ private final class ApprovalServer: @unchecked Sendable {
         }
         let automaticApprovalExplanation: String?
         if let configuredGate,
-           let resolvedPolicy,
+           let durablePolicy,
            let classification,
-           !secretGateProtectionAllows(resolvedPolicy.protection, classification: classification),
+           !secretGateProtectionAllows(durablePolicy.protection, classification: classification),
            let explanation = secretGateAutomaticApprovalExplanation(
                gateID: configuredGate.id,
                request: request
            )
         {
             automaticApprovalExplanation = explanation
-        } else if resolvedPolicy == nil,
+        } else if durablePolicy == nil,
            classification == .readOnly,
            let failure = launcherAppVerificationFailure(for: identity)
         {
@@ -2444,23 +2481,22 @@ private final class ApprovalServer: @unchecked Sendable {
             }
             return
         }
-        if activeBlessing == nil,
-           let configuredGate,
-           let resolvedPolicy,
-           let classification,
-           secretGateProtectionAllows(
-               resolvedPolicy.protection,
-               classification: classification
+        if let configuredGate,
+           let fallbackPolicy = automaticSecretGatePolicy(
+               sessionPolicy: nil,
+               durablePolicy: durablePolicy,
+               classification: classification,
+               hasActiveBlessing: activeBlessing != nil
            )
         {
-            let authorizingLauncher = resolvedPolicy.launcher ?? policyLauncher
+            let authorizingLauncher = fallbackPolicy.launcher ?? policyLauncher
             do {
                 let payload = try approvedPayload(
                     for: request, awsRegistration: awsRegistration, pid: pid, identity: identity
                 )
                 let reason = secretGateAuthorizationReason(
                     gate: configuredGate,
-                    policy: resolvedPolicy
+                    policy: fallbackPolicy
                 )
                 let accessRequestID = UUID()
                 let record = accessRequestRecord(
@@ -2734,6 +2770,83 @@ private final class ApprovalServer: @unchecked Sendable {
                     humanApprovalDecision: "approved"
                 )
             }
+        }
+    }
+
+    private func automaticallyAuthorize(
+        request: ApprovalRequest,
+        awsRegistration: AWSRegistrationCandidate?,
+        pid: pid_t,
+        identity: AVProcessIdentity,
+        callerPath: String,
+        launcher: LauncherIdentity?,
+        scriptApproval: ScriptApproval?,
+        gate: SecretGate,
+        policy: ResolvedSecretGatePolicy,
+        authorizationGate: RetainedAuthorizationGate,
+        processChains: [[RetainedProcessChainNode]],
+        currentLaunchers: [LauncherIdentity],
+        retainedGateProvenance: RetainedProcessProvenanceMatch?,
+        peer: xpc_connection_t,
+        message: xpc_object_t
+    ) {
+        do {
+            let payload = try approvedPayload(
+                for: request,
+                awsRegistration: awsRegistration,
+                pid: pid,
+                identity: identity
+            )
+            let accessRequestID = UUID()
+            let record = accessRequestRecord(
+                id: accessRequestID,
+                request: request,
+                callerPath: callerPath,
+                decision: "Approved",
+                approvalSource: "Auto",
+                reason: secretGateAuthorizationReason(gate: gate, policy: policy),
+                launcher: launcher
+            )
+            guard onAccessRequest(record) else {
+                reply(peer, to: message, ok: false, error: "approval audit log is unavailable")
+                return
+            }
+            if let launcher {
+                rememberRetainedProvenance(
+                    at: authorizationGate,
+                    launcher: launcher,
+                    chains: processChains,
+                    retainedMatch: currentLaunchers.contains(where: {
+                        $0.designatedRequirement == launcher.designatedRequirement
+                    }) ? nil : retainedGateProvenance
+                )
+                Task { @MainActor in
+                    self.onAutoApproval(autoApprovalRecord(
+                        accessRequestID: accessRequestID,
+                        request: request,
+                        script: scriptApproval,
+                        launcher: launcher
+                    ))
+                }
+            }
+            reply(
+                peer,
+                to: message,
+                ok: true,
+                error: nil,
+                secrets: payload.secrets,
+                value: payload.value
+            )
+        } catch {
+            _ = onAccessRequest(accessRequestRecord(
+                request: request,
+                callerPath: callerPath,
+                decision: "Failed",
+                approvalSource: "Auto",
+                reason: error.localizedDescription,
+                launcher: launcher
+            ))
+            reply(peer, to: message, ok: false, error: error.localizedDescription)
         }
     }
 
@@ -3619,6 +3732,12 @@ private struct ResolvedSecretGatePolicy {
     let protection: SecretGateProtection
     let source: String
     let launcher: LauncherIdentity?
+    let origin: SecretGatePolicyOrigin
+}
+
+private enum SecretGatePolicyOrigin {
+    case durable
+    case fullAccessSession
 }
 
 private func matchingSecretGate(
@@ -3694,7 +3813,8 @@ private func resolveSecretGatePolicy(
                     ? .noAccess
                     : policy.protection,
                 source: shortAppName(launcher.identifier),
-                launcher: launcher
+                launcher: launcher,
+                origin: .durable
             )
         }
     }
@@ -3702,7 +3822,8 @@ private func resolveSecretGatePolicy(
     return ResolvedSecretGatePolicy(
         protection: gate.defaultProtection,
         source: gate.defaultPolicyLabel,
-        launcher: firstLauncher
+        launcher: firstLauncher,
+        origin: .durable
     )
 }
 
@@ -3725,7 +3846,8 @@ private func resolveFullAccessSessionPolicy(
     return ResolvedSecretGatePolicy(
         protection: protection,
         source: "Full Access Session",
-        launcher: launcher
+        launcher: launcher,
+        origin: .fullAccessSession
     )
 }
 
@@ -3753,9 +3875,29 @@ private func secretGateAuthorizationReason(
     gate: SecretGate,
     policy: ResolvedSecretGatePolicy
 ) -> String {
-    policy.source == "Full Access Session"
+    policy.origin == .fullAccessSession
         ? policy.source
         : "\(gate.protectionTitle(policy.protection)) from \(policy.source)"
+}
+
+private func automaticSecretGatePolicy(
+    sessionPolicy: ResolvedSecretGatePolicy?,
+    durablePolicy: ResolvedSecretGatePolicy?,
+    classification: SecretGateRequestClassification?,
+    hasActiveBlessing: Bool
+) -> ResolvedSecretGatePolicy? {
+    if let sessionPolicy { return sessionPolicy }
+    guard !hasActiveBlessing,
+          let durablePolicy,
+          let classification,
+          secretGateProtectionAllows(
+              durablePolicy.protection,
+              classification: classification
+          )
+    else {
+        return nil
+    }
+    return durablePolicy
 }
 
 private func secretGateProtectionAllows(
@@ -7391,6 +7533,22 @@ private func runFullAccessSessionSelfCheck() async -> Int32 {
         return 1
     }
 
+    let leasedController = FullAccessSessionController()
+    guard leasedController.start(at: now, uptime: 200, duration: 60),
+          let lease = leasedController.lease(at: now, uptime: 200),
+          leasedController.withActiveLease(lease, at: now, uptime: 200, {
+              "released"
+          }) == "released"
+    else {
+        return 1
+    }
+    leasedController.end()
+    guard leasedController.withActiveLease(lease, at: now, uptime: 200, {
+        "released"
+    }) == nil else {
+        return 1
+    }
+
     let gate = SecretGate(
         id: "gh",
         keyPatterns: ["GH_TOKEN_*"],
@@ -7406,13 +7564,38 @@ private func runFullAccessSessionSelfCheck() async -> Int32 {
         designatedRequirement: #"identifier "com.apple.Terminal" and anchor apple"#,
         runtimeProtection: .hardened
     )
-    guard resolveFullAccessSessionPolicy(
+    let fullPolicy = resolveFullAccessSessionPolicy(
         gate: gate,
         launchers: [launcher],
         classification: .secretDump,
         sessionActive: true
-    ).map({ secretGateAuthorizationReason(gate: gate, policy: $0) })
+    )
+    let durablePolicy = ResolvedSecretGatePolicy(
+        protection: .readOnly,
+        source: "All Apps",
+        launcher: launcher,
+        origin: .durable
+    )
+    guard fullPolicy.map({ secretGateAuthorizationReason(gate: gate, policy: $0) })
         == "Full Access Session",
+        automaticSecretGatePolicy(
+            sessionPolicy: fullPolicy,
+            durablePolicy: nil,
+            classification: .secretDump,
+            hasActiveBlessing: true
+        )?.source == "Full Access Session",
+        automaticSecretGatePolicy(
+            sessionPolicy: nil,
+            durablePolicy: durablePolicy,
+            classification: .readOnly,
+            hasActiveBlessing: true
+        ) == nil,
+        automaticSecretGatePolicy(
+            sessionPolicy: nil,
+            durablePolicy: durablePolicy,
+            classification: .readOnly,
+            hasActiveBlessing: false
+        )?.source == "All Apps",
         resolveFullAccessSessionPolicy(
             gate: gate,
             launchers: [launcher],
@@ -7437,7 +7620,19 @@ private func runFullAccessSessionSelfCheck() async -> Int32 {
     await authenticated.authenticateAndStart()
     guard authenticated.isActive,
           authenticated.snapshot.map({ fullAccessSessionRemainingLabel($0) })?
-            .contains("remaining") == true
+            .contains("remaining") == true,
+          fullAccessSessionMenuPresentation(
+              snapshot: authenticated.snapshot,
+              isAuthenticating: false
+          ).showsWarning,
+          fullAccessSessionMenuPresentation(
+              snapshot: nil,
+              isAuthenticating: true
+          ) == FullAccessSessionMenuPresentation(
+              title: "Waiting for Touch ID…",
+              isEnabled: false,
+              showsWarning: false
+          )
     else {
         return 1
     }
