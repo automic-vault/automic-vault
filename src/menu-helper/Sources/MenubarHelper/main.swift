@@ -377,9 +377,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let alert = NSAlert()
         alert.alertStyle = .warning
-        alert.messageText = "Start Full Access Session?"
-        alert.informativeText = "For up to one hour, every recognized operation from every verified app may run automatically, including operations that use or disclose protected secrets. Unknown and unverifiable requests still require approval or fail closed."
-        alert.addButton(withTitle: "Continue to Touch ID")
+        alert.messageText = fullAccessSessionConfirmationPresentation.title
+        alert.informativeText = fullAccessSessionConfirmationPresentation.message
+        alert.addButton(withTitle: fullAccessSessionConfirmationPresentation.actionTitle)
         alert.addButton(withTitle: "Cancel")
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         fullAccessSessionModel.start()
@@ -1790,6 +1790,21 @@ private struct ApprovedPayload {
     let value: String?
 }
 
+private struct AutomaticAuthorizationContext {
+    let request: ApprovalRequest
+    let awsRegistration: AWSRegistrationCandidate?
+    let pid: pid_t
+    let identity: AVProcessIdentity
+    let callerPath: String
+    let scriptApproval: ScriptApproval?
+    let authorizationGate: RetainedAuthorizationGate
+    let processChains: [[RetainedProcessChainNode]]
+    let currentLaunchers: [LauncherIdentity]
+    let retainedGateProvenance: RetainedProcessProvenanceMatch?
+    let peer: xpc_connection_t
+    let message: xpc_object_t
+}
+
 private let awsHelperProtocolVersion = 1
 
 private final class ApprovalServer: @unchecked Sendable {
@@ -2319,17 +2334,6 @@ private final class ApprovalServer: @unchecked Sendable {
             callerPID: pid,
             ancestorFallbackPath: ancestorFallbackPath
         ) ?? launcher
-        let directAccessRules = loadDirectAccessRules()
-        let directAccessLauncher = matchingDirectAccessLauncher(
-            request: request,
-            configuredGate: configuredGate,
-            trustedAVGateClient: isTrustedAvCaller(path: callerPath, signing: signing),
-            launchers: policyLaunchers,
-            rules: directAccessRules
-        )
-        let durablePolicy = configuredGate.flatMap {
-            resolveSecretGatePolicy(gate: $0, launchers: policyLaunchers)
-        }
         let classification = configuredGate.map {
             classifySecretGateRequest(gateID: $0.id, request: request)
         }
@@ -2344,39 +2348,46 @@ private final class ApprovalServer: @unchecked Sendable {
         } else {
             nil
         }
-        let preferredPolicy = automaticSecretGatePolicy(
-            sessionPolicy: sessionPolicy,
-            durablePolicy: durablePolicy,
-            classification: classification,
-            hasActiveBlessing: activeBlessing != nil
+        let automaticAuthorizationContext = AutomaticAuthorizationContext(
+            request: request,
+            awsRegistration: awsRegistration,
+            pid: pid,
+            identity: identity,
+            callerPath: callerPath,
+            scriptApproval: scriptApproval,
+            authorizationGate: authorizationGate,
+            processChains: processChains,
+            currentLaunchers: launchers,
+            retainedGateProvenance: retainedGateProvenance,
+            peer: peer,
+            message: message
         )
         if let configuredGate,
            let sessionPolicy,
-           preferredPolicy?.origin == .fullAccessSession,
            let sessionLease
         {
             let authorizingLauncher = sessionPolicy.launcher ?? policyLauncher
-            let authorized = fullAccessSession.withActiveLease(sessionLease) {
+            let handled = fullAccessSession.withActiveLease(sessionLease) {
                 automaticallyAuthorize(
-                    request: request,
-                    awsRegistration: awsRegistration,
-                    pid: pid,
-                    identity: identity,
-                    callerPath: callerPath,
+                    context: automaticAuthorizationContext,
                     launcher: authorizingLauncher,
-                    scriptApproval: scriptApproval,
                     gate: configuredGate,
-                    policy: sessionPolicy,
-                    authorizationGate: authorizationGate,
-                    processChains: processChains,
-                    currentLaunchers: launchers,
-                    retainedGateProvenance: retainedGateProvenance,
-                    peer: peer,
-                    message: message
+                    policy: sessionPolicy
                 )
                 return true
             } ?? false
-            if authorized { return }
+            if handled { return }
+        }
+        let directAccessRules = loadDirectAccessRules()
+        let directAccessLauncher = matchingDirectAccessLauncher(
+            request: request,
+            configuredGate: configuredGate,
+            trustedAVGateClient: isTrustedAvCaller(path: callerPath, signing: signing),
+            launchers: policyLaunchers,
+            rules: directAccessRules
+        )
+        let durablePolicy = configuredGate.flatMap {
+            resolveSecretGatePolicy(gate: $0, launchers: policyLaunchers)
         }
         let retainedProcessExplanation: String?
         if !keepsDetachedProcessAccess,
@@ -2490,58 +2501,12 @@ private final class ApprovalServer: @unchecked Sendable {
            )
         {
             let authorizingLauncher = fallbackPolicy.launcher ?? policyLauncher
-            do {
-                let payload = try approvedPayload(
-                    for: request, awsRegistration: awsRegistration, pid: pid, identity: identity
-                )
-                let reason = secretGateAuthorizationReason(
-                    gate: configuredGate,
-                    policy: fallbackPolicy
-                )
-                let accessRequestID = UUID()
-                let record = accessRequestRecord(
-                    id: accessRequestID,
-                    request: request,
-                    callerPath: callerPath,
-                    decision: "Approved",
-                    approvalSource: "Auto",
-                    reason: reason,
-                    launcher: authorizingLauncher
-                )
-                guard onAccessRequest(record) else {
-                    reply(peer, to: message, ok: false, error: "approval audit log is unavailable")
-                    return
-                }
-                if let authorizingLauncher {
-                    rememberRetainedProvenance(
-                        at: authorizationGate,
-                        launcher: authorizingLauncher,
-                        chains: processChains,
-                        retainedMatch: launchers.contains(where: {
-                            $0.designatedRequirement == authorizingLauncher.designatedRequirement
-                        }) ? nil : retainedGateProvenance
-                    )
-                    Task { @MainActor in
-                        self.onAutoApproval(autoApprovalRecord(
-                            accessRequestID: accessRequestID,
-                            request: request,
-                            script: scriptApproval,
-                            launcher: authorizingLauncher
-                        ))
-                    }
-                }
-                reply(peer, to: message, ok: true, error: nil, secrets: payload.secrets, value: payload.value)
-            } catch {
-                _ = onAccessRequest(accessRequestRecord(
-                    request: request,
-                    callerPath: callerPath,
-                    decision: "Failed",
-                    approvalSource: "Auto",
-                    reason: error.localizedDescription,
-                    launcher: authorizingLauncher
-                ))
-                reply(peer, to: message, ok: false, error: error.localizedDescription)
-            }
+            automaticallyAuthorize(
+                context: automaticAuthorizationContext,
+                launcher: authorizingLauncher,
+                gate: configuredGate,
+                policy: fallbackPolicy
+            )
             return
         }
         let promptLauncher = policyLauncher
@@ -2774,64 +2739,58 @@ private final class ApprovalServer: @unchecked Sendable {
     }
 
     private func automaticallyAuthorize(
-        request: ApprovalRequest,
-        awsRegistration: AWSRegistrationCandidate?,
-        pid: pid_t,
-        identity: AVProcessIdentity,
-        callerPath: String,
+        context: AutomaticAuthorizationContext,
         launcher: LauncherIdentity?,
-        scriptApproval: ScriptApproval?,
         gate: SecretGate,
-        policy: ResolvedSecretGatePolicy,
-        authorizationGate: RetainedAuthorizationGate,
-        processChains: [[RetainedProcessChainNode]],
-        currentLaunchers: [LauncherIdentity],
-        retainedGateProvenance: RetainedProcessProvenanceMatch?,
-        peer: xpc_connection_t,
-        message: xpc_object_t
+        policy: ResolvedSecretGatePolicy
     ) {
         do {
             let payload = try approvedPayload(
-                for: request,
-                awsRegistration: awsRegistration,
-                pid: pid,
-                identity: identity
+                for: context.request,
+                awsRegistration: context.awsRegistration,
+                pid: context.pid,
+                identity: context.identity
             )
             let accessRequestID = UUID()
             let record = accessRequestRecord(
                 id: accessRequestID,
-                request: request,
-                callerPath: callerPath,
+                request: context.request,
+                callerPath: context.callerPath,
                 decision: "Approved",
                 approvalSource: "Auto",
                 reason: secretGateAuthorizationReason(gate: gate, policy: policy),
                 launcher: launcher
             )
             guard onAccessRequest(record) else {
-                reply(peer, to: message, ok: false, error: "approval audit log is unavailable")
+                reply(
+                    context.peer,
+                    to: context.message,
+                    ok: false,
+                    error: "approval audit log is unavailable"
+                )
                 return
             }
             if let launcher {
                 rememberRetainedProvenance(
-                    at: authorizationGate,
+                    at: context.authorizationGate,
                     launcher: launcher,
-                    chains: processChains,
-                    retainedMatch: currentLaunchers.contains(where: {
+                    chains: context.processChains,
+                    retainedMatch: context.currentLaunchers.contains(where: {
                         $0.designatedRequirement == launcher.designatedRequirement
-                    }) ? nil : retainedGateProvenance
+                    }) ? nil : context.retainedGateProvenance
                 )
                 Task { @MainActor in
                     self.onAutoApproval(autoApprovalRecord(
                         accessRequestID: accessRequestID,
-                        request: request,
-                        script: scriptApproval,
+                        request: context.request,
+                        script: context.scriptApproval,
                         launcher: launcher
                     ))
                 }
             }
             reply(
-                peer,
-                to: message,
+                context.peer,
+                to: context.message,
                 ok: true,
                 error: nil,
                 secrets: payload.secrets,
@@ -2839,14 +2798,19 @@ private final class ApprovalServer: @unchecked Sendable {
             )
         } catch {
             _ = onAccessRequest(accessRequestRecord(
-                request: request,
-                callerPath: callerPath,
+                request: context.request,
+                callerPath: context.callerPath,
                 decision: "Failed",
                 approvalSource: "Auto",
                 reason: error.localizedDescription,
                 launcher: launcher
             ))
-            reply(peer, to: message, ok: false, error: error.localizedDescription)
+            reply(
+                context.peer,
+                to: context.message,
+                ok: false,
+                error: error.localizedDescription
+            )
         }
     }
 
@@ -3805,18 +3769,16 @@ private func resolveSecretGatePolicy(
     gate: SecretGate,
     launchers: [LauncherIdentity]
 ) -> ResolvedSecretGatePolicy? {
-    for launcher in launchers {
-        if let policy = gate.appPolicies.first(where: { $0.requirement == launcher.designatedRequirement }) {
-            return ResolvedSecretGatePolicy(
-                protection: policy.requiresHardenedRuntime
-                    && !launcher.runtimeProtection.allowsSecretGateAccess
-                    ? .noAccess
-                    : policy.protection,
-                source: shortAppName(launcher.identifier),
-                launcher: launcher,
-                origin: .durable
-            )
-        }
+    if let match = matchingSecretGateAppPolicy(gate: gate, launchers: launchers) {
+        return ResolvedSecretGatePolicy(
+            protection: match.policy.requiresHardenedRuntime
+                && !match.launcher.runtimeProtection.allowsSecretGateAccess
+                ? .noAccess
+                : match.policy.protection,
+            source: shortAppName(match.launcher.identifier),
+            launcher: match.launcher,
+            origin: .durable
+        )
     }
     guard let firstLauncher = launchers.first(where: { !$0.isStandalone }) else { return nil }
     return ResolvedSecretGatePolicy(
@@ -3855,20 +3817,27 @@ private func fullAccessSessionLauncher(
     gate: SecretGate,
     launchers: [LauncherIdentity]
 ) -> LauncherIdentity? {
-    for launcher in launchers {
-        guard let policy = gate.appPolicies.first(where: {
-            $0.requirement == launcher.designatedRequirement
-        }) else {
-            continue
-        }
-        guard !policy.requiresHardenedRuntime
-                || launcher.runtimeProtection.allowsSecretGateAccess
-        else {
-            return nil
-        }
-        return launcher
+    if let match = matchingSecretGateAppPolicy(gate: gate, launchers: launchers) {
+        guard !match.policy.requiresHardenedRuntime
+                || match.launcher.runtimeProtection.allowsSecretGateAccess
+        else { return nil }
+        return match.launcher
     }
     return launchers.first { !$0.isStandalone }
+}
+
+private func matchingSecretGateAppPolicy(
+    gate: SecretGate,
+    launchers: [LauncherIdentity]
+) -> (launcher: LauncherIdentity, policy: SecretGatePolicy)? {
+    for launcher in launchers {
+        if let policy = gate.appPolicies.first(where: {
+            $0.requirement == launcher.designatedRequirement
+        }) {
+            return (launcher, policy)
+        }
+    }
+    return nil
 }
 
 private func secretGateAuthorizationReason(
@@ -7632,7 +7601,9 @@ private func runFullAccessSessionSelfCheck() async -> Int32 {
               title: "Waiting for Touch ID…",
               isEnabled: false,
               showsWarning: false
-          )
+          ),
+          fullAccessSessionConfirmationPresentation.message
+            .contains("Unknown and unverifiable requests still require approval or fail closed.")
     else {
         return 1
     }

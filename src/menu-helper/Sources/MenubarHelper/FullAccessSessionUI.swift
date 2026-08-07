@@ -3,6 +3,18 @@ import LocalAuthentication
 import MenubarHelperCore
 import SwiftUI
 
+struct FullAccessSessionConfirmationPresentation: Equatable {
+    let title: String
+    let message: String
+    let actionTitle: String
+}
+
+let fullAccessSessionConfirmationPresentation = FullAccessSessionConfirmationPresentation(
+    title: "Start Full Access Session?",
+    message: "For up to one hour, every recognized operation from every verified app may run automatically, including operations that use or disclose protected secrets. Unknown and unverifiable requests still require approval or fail closed.",
+    actionTitle: "Continue to Touch ID"
+)
+
 @MainActor
 final class FullAccessSessionModel: ObservableObject {
     typealias Authenticate = @MainActor () async throws -> Bool

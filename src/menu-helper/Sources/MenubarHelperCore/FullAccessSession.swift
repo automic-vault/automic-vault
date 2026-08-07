@@ -37,8 +37,7 @@ public struct FullAccessSessionLease: Equatable, Sendable {
 public final class FullAccessSessionController: @unchecked Sendable {
     private struct State {
         let id: UUID
-        let expiresAt: Date
-        let expiresAtUptime: TimeInterval
+        let snapshot: FullAccessSessionSnapshot
     }
 
     private let lock = NSLock()
@@ -58,8 +57,10 @@ public final class FullAccessSessionController: @unchecked Sendable {
         guard expiresAtUptime.isFinite else { return false }
         let newState = State(
             id: UUID(),
-            expiresAt: date.addingTimeInterval(boundedDuration),
-            expiresAtUptime: expiresAtUptime
+            snapshot: FullAccessSessionSnapshot(
+                expiresAt: date.addingTimeInterval(boundedDuration),
+                expiresAtUptime: expiresAtUptime
+            )
         )
         lock.withLock { state = newState }
         return true
@@ -84,10 +85,7 @@ public final class FullAccessSessionController: @unchecked Sendable {
             guard let state = activeState(at: date, uptime: uptime) else { return nil }
             return FullAccessSessionLease(
                 id: state.id,
-                snapshot: FullAccessSessionSnapshot(
-                    expiresAt: state.expiresAt,
-                    expiresAtUptime: state.expiresAtUptime
-                )
+                snapshot: state.snapshot
             )
         }
     }
@@ -113,8 +111,7 @@ public final class FullAccessSessionController: @unchecked Sendable {
 
     private func activeState(at date: Date, uptime: TimeInterval) -> State? {
         guard let state,
-              state.expiresAt > date,
-              state.expiresAtUptime > uptime
+              state.snapshot.isActive(at: date, uptime: uptime)
         else {
             self.state = nil
             return nil

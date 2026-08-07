@@ -1436,13 +1436,13 @@ private struct FullAccessSessionSettingsView: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
-        .alert("Start Full Access Session?", isPresented: $showingConfirmation) {
+        .alert(fullAccessSessionConfirmationPresentation.title, isPresented: $showingConfirmation) {
             Button("Cancel", role: .cancel) {}
-            Button("Continue to Touch ID") {
+            Button(fullAccessSessionConfirmationPresentation.actionTitle) {
                 model.start()
             }
         } message: {
-            Text("For up to one hour, every recognized operation from every verified app may run automatically, including operations that use or disclose protected secrets.")
+            Text(fullAccessSessionConfirmationPresentation.message)
         }
     }
 }
