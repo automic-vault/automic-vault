@@ -66,11 +66,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         action: #selector(installCLI),
         keyEquivalent: ""
     )
+    private lazy var fullAccessSessionItem = NSMenuItem(
+        title: "Start Full Access Session…",
+        action: #selector(toggleFullAccessSession),
+        keyEquivalent: ""
+    )
     private lazy var quitItem = NSMenuItem(title: "Quit", action: #selector(quit), keyEquivalent: "q")
     private lazy var quitSeparator = NSMenuItem.separator()
     private var autoApprovalItems: [NSMenuItem] = []
     private var autoApprovalSeparator: NSMenuItem?
     private var autoApprovals: [AutoApprovalRecord] = []
+    private let fullAccessSessionController = FullAccessSessionController()
+    private lazy var fullAccessSessionModel: FullAccessSessionModel = {
+        let model = FullAccessSessionModel(controller: fullAccessSessionController)
+        model.onChange = { [weak self] in
+            self?.refreshFullAccessSessionPresentation()
+        }
+        return model
+    }()
+    private var normalStatusImage: NSImage?
     private let autoApprovalTimeFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.timeStyle = .short
@@ -147,6 +161,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func userSessionDidResignActive(_ notification: Notification) {
         isUserSessionActive = false
+        fullAccessSessionModel.end()
         if NSApp.modalWindow is ApprovalPanel {
             NSApp.abortModal()
         }
@@ -159,6 +174,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func screensDidSleep(_ notification: Notification) {
         areScreensAwake = false
+        fullAccessSessionModel.end()
         if NSApp.modalWindow is ApprovalPanel {
             NSApp.abortModal()
         }
@@ -169,11 +185,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func installStatusMenu() {
-        statusItem.button?.image = brandImage()
+        normalStatusImage = brandImage()
+        refreshStatusImage()
 
         let menu = NSMenu()
         menu.addItem(scanStatusItem)
         menu.addItem(doctorStatusItem)
+        menu.addItem(.separator())
+        fullAccessSessionItem.target = self
+        menu.addItem(fullAccessSessionItem)
         menu.addItem(.separator())
         checkForUpdatesItem.target = self
         menu.addItem(checkForUpdatesItem)
@@ -193,7 +213,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func handOffToLaunchAgent() {
         isStartingUp = true
-        statusItem.button?.image = brandImage()
+        normalStatusImage = brandImage()
+        refreshStatusImage()
         statusItem.button?.alphaValue = 0.5
         setStatusMenuItemTitle("Starting Automic Vault", on: scanStatusItem)
         updateMenuVisibility(
@@ -251,14 +272,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             doctorStatusItem.isHidden = doctorStatusItem.title.isEmpty
             installCLIItem.isHidden = FileManager.default.fileExists(atPath: installedAVCLIPath)
         }
-        statusItem.button?.image = brandImage()
+        normalStatusImage = brandImage()
+        refreshStatusImage()
         statusItem.button?.alphaValue = 1
         _ = migrateBackgroundKeychainItems()
         autoApprovals = loadAccessRequestRecords().compactMap(autoApprovalRecord)
         refreshAutoApprovalMenuItems()
         refreshCLIInstallState()
         do {
-            let approval = try ApprovalServer(serviceName: approvalServiceName) { [weak self] event in
+            let approval = try ApprovalServer(
+                serviceName: approvalServiceName,
+                fullAccessSession: fullAccessSessionController
+            ) { [weak self] event in
                 self?.recordAutoApproval(event)
             } onAccessRequest: { [weak self] record in
                 let recorded = appendAccessRequestRecord(record)
@@ -297,6 +322,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        fullAccessSessionModel.end()
         automaticUpdateCheckTask?.cancel()
         NSWorkspace.shared.notificationCenter.removeObserver(self)
         stopServices()
@@ -340,6 +366,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @MainActor @objc private func quit() {
         NSApp.terminate(nil)
+    }
+
+    @MainActor @objc private func toggleFullAccessSession() {
+        fullAccessSessionModel.refresh()
+        if fullAccessSessionModel.isActive {
+            fullAccessSessionModel.end()
+            return
+        }
+
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Start Full Access Session?"
+        alert.informativeText = "For up to one hour, every recognized operation from every verified app may run automatically, including operations that use or disclose protected secrets. Unknown and unverifiable requests still require approval or fail closed."
+        alert.addButton(withTitle: "Continue to Touch ID")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        fullAccessSessionModel.start()
     }
 
     @MainActor @objc private func checkForUpdates() {
@@ -519,7 +562,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
-        let controller = AutomicVaultMainWindowController { [weak self] in
+        let controller = AutomicVaultMainWindowController(
+            fullAccessSession: fullAccessSessionModel
+        ) { [weak self] in
             self?.checkForUpdates()
         }
         controller.setAvailableUpdateVersion(readyUpdate?.version)
@@ -629,7 +674,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             #if !DEBUG
             lastTelemetryFindingCount = nil
             #endif
-            statusItem.button?.image = brandImage()
+            normalStatusImage = brandImage()
+            refreshStatusImage()
             setScanStatus(
                 "No Vulnerabilities Detected",
                 image: shieldImage(symbolName: "shield.fill", color: .systemGreen)
@@ -643,17 +689,46 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 lastTelemetryFindingCount = detectorCount
             }
             #endif
-            statusItem.button?.image = switch level {
+            normalStatusImage = switch level {
             case .medium: brandImage()
             case .high: brandImage(color: .systemRed)
             }
+            refreshStatusImage()
             setScanStatus(
                 vulnerabilityStatusTitle(count: count),
                 image: shieldImage(color: level.color)
             )
         case .failed:
-            statusItem.button?.image = brandImage(color: .systemRed)
+            normalStatusImage = brandImage(color: .systemRed)
+            refreshStatusImage()
             setScanStatus("Scan failed", image: shieldImage(color: .systemRed))
+        }
+    }
+
+    private func refreshFullAccessSessionPresentation() {
+        automaticApprovalFlashWorkItem?.cancel()
+        automaticApprovalFlashWorkItem = nil
+        preFlashStatusImage = nil
+        if let snapshot = fullAccessSessionModel.snapshot {
+            fullAccessSessionItem.title = "End Full Access Session (\(fullAccessSessionRemainingLabel(snapshot)))"
+        } else {
+            fullAccessSessionItem.title = fullAccessSessionModel.isAuthenticating
+                ? "Waiting for Touch ID…"
+                : "Start Full Access Session…"
+        }
+        fullAccessSessionItem.isEnabled = !fullAccessSessionModel.isAuthenticating
+        refreshStatusImage()
+    }
+
+    private func refreshStatusImage() {
+        statusItem.button?.image = if fullAccessSessionModel.isActive {
+            shieldImage(
+                symbolName: "exclamationmark.shield.fill",
+                color: .systemOrange,
+                accessibilityDescription: "Full Access Session active"
+            )
+        } else {
+            normalStatusImage ?? brandImage()
         }
     }
 
@@ -885,6 +960,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 extension AppDelegate: NSMenuDelegate {
     func menuWillOpen(_ menu: NSMenu) {
         guard !isStartingUp, !isUpdating else { return }
+        fullAccessSessionModel.refresh()
+        refreshFullAccessSessionPresentation()
         refreshAutoApprovalMenuItems()
         refreshDoctorStatus()
     }
@@ -1716,6 +1793,7 @@ private final class ApprovalServer: @unchecked Sendable {
     private let serviceName: String
     private let teamIdentifier: String
     private let hardeners: [HardenerMetadata]?
+    private let fullAccessSession: FullAccessSessionController
     private let onAutoApproval: @MainActor (AutoApprovalRecord) -> Void
     private let onAccessRequest: @Sendable (AccessRequestRecord) -> Bool
     private let onBlessRequest: @MainActor (
@@ -1735,6 +1813,7 @@ private final class ApprovalServer: @unchecked Sendable {
 
     init(
         serviceName: String,
+        fullAccessSession: FullAccessSessionController = FullAccessSessionController(),
         hardeners: [HardenerMetadata]? = nil,
         onAutoApproval: @escaping @MainActor (AutoApprovalRecord) -> Void = { _ in },
         onAccessRequest: @escaping @Sendable (AccessRequestRecord) -> Bool = { appendAccessRequestRecord($0) },
@@ -1750,6 +1829,7 @@ private final class ApprovalServer: @unchecked Sendable {
         self.serviceName = serviceName
         self.teamIdentifier = teamIdentifier
         self.hardeners = hardeners
+        self.fullAccessSession = fullAccessSession
         self.onAutoApproval = onAutoApproval
         self.onAccessRequest = onAccessRequest
         self.onBlessRequest = onBlessRequest
@@ -2244,12 +2324,23 @@ private final class ApprovalServer: @unchecked Sendable {
             launchers: policyLaunchers,
             rules: directAccessRules
         )
-        let resolvedPolicy = configuredGate.flatMap {
+        let durablePolicy = configuredGate.flatMap {
             resolveSecretGatePolicy(gate: $0, launchers: policyLaunchers)
         }
         let classification = configuredGate.map {
             classifySecretGateRequest(gateID: $0.id, request: request)
         }
+        let sessionPolicy: ResolvedSecretGatePolicy? = if let configuredGate, let classification {
+            resolveFullAccessSessionPolicy(
+                gate: configuredGate,
+                launchers: policyLaunchers,
+                classification: classification,
+                sessionActive: fullAccessSession.isActive()
+            )
+        } else {
+            nil
+        }
+        let resolvedPolicy = sessionPolicy ?? durablePolicy
         let retainedProcessExplanation: String?
         if !keepsDetachedProcessAccess,
            retainedBlessingMatch != nil,
@@ -2367,7 +2458,10 @@ private final class ApprovalServer: @unchecked Sendable {
                 let payload = try approvedPayload(
                     for: request, awsRegistration: awsRegistration, pid: pid, identity: identity
                 )
-                let reason = "\(configuredGate.protectionTitle(resolvedPolicy.protection)) from \(resolvedPolicy.source)"
+                let reason = secretGateAuthorizationReason(
+                    gate: configuredGate,
+                    policy: resolvedPolicy
+                )
                 let accessRequestID = UUID()
                 let record = accessRequestRecord(
                     id: accessRequestID,
@@ -3610,6 +3704,58 @@ private func resolveSecretGatePolicy(
         source: gate.defaultPolicyLabel,
         launcher: firstLauncher
     )
+}
+
+private func resolveFullAccessSessionPolicy(
+    gate: SecretGate,
+    launchers: [LauncherIdentity],
+    classification: SecretGateRequestClassification,
+    sessionActive: Bool
+) -> ResolvedSecretGatePolicy? {
+    guard let launcher = fullAccessSessionLauncher(gate: gate, launchers: launchers),
+          let protection = fullAccessSessionProtection(
+              for: gate,
+              classification: classification,
+              launcherEligible: true,
+              sessionActive: sessionActive
+          )
+    else {
+        return nil
+    }
+    return ResolvedSecretGatePolicy(
+        protection: protection,
+        source: "Full Access Session",
+        launcher: launcher
+    )
+}
+
+private func fullAccessSessionLauncher(
+    gate: SecretGate,
+    launchers: [LauncherIdentity]
+) -> LauncherIdentity? {
+    for launcher in launchers {
+        guard let policy = gate.appPolicies.first(where: {
+            $0.requirement == launcher.designatedRequirement
+        }) else {
+            continue
+        }
+        guard !policy.requiresHardenedRuntime
+                || launcher.runtimeProtection.allowsSecretGateAccess
+        else {
+            return nil
+        }
+        return launcher
+    }
+    return launchers.first { !$0.isStandalone }
+}
+
+private func secretGateAuthorizationReason(
+    gate: SecretGate,
+    policy: ResolvedSecretGatePolicy
+) -> String {
+    policy.source == "Full Access Session"
+        ? policy.source
+        : "\(gate.protectionTitle(policy.protection)) from \(policy.source)"
 }
 
 private func secretGateProtectionAllows(
@@ -5913,6 +6059,36 @@ private func runApprovalSelfCheck() -> Int32 {
           resolveSecretGatePolicy(gate: runtimeProtectedGate, launchers: [blockedLauncher])?.protection == .readOnly,
           resolveSecretGatePolicy(gate: runtimeProtectedGate, launchers: [unhardenedLauncher])?.protection == .noAccess,
           resolveSecretGatePolicy(gate: grandfatheredGate, launchers: [unhardenedLauncher])?.protection == .readOnly,
+          resolveFullAccessSessionPolicy(
+              gate: policyGate,
+              launchers: [],
+              classification: .readOnly,
+              sessionActive: true
+          ) == nil,
+          resolveFullAccessSessionPolicy(
+              gate: policyGate,
+              launchers: [blockedLauncher],
+              classification: .secretDump,
+              sessionActive: true
+          )?.protection == .fullIncludingSecretDumps,
+          resolveFullAccessSessionPolicy(
+              gate: policyGate,
+              launchers: [blockedLauncher],
+              classification: .unknown,
+              sessionActive: true
+          ) == nil,
+          resolveFullAccessSessionPolicy(
+              gate: policyGate,
+              launchers: [blockedLauncher],
+              classification: .readOnly,
+              sessionActive: false
+          ) == nil,
+          resolveFullAccessSessionPolicy(
+              gate: runtimeProtectedGate,
+              launchers: [unhardenedLauncher],
+              classification: .readOnly,
+              sessionActive: true
+          ) == nil,
           matchingSecretGate(request: readOnlyGh, signing: ghSigning, hardeners: [ghMetadata])?.id == "gh",
           matchingSecretGate(request: ghRequest(keys: ["OTHER_TOKEN"]), signing: ghSigning, hardeners: [ghMetadata]) == nil,
           matchingSecretGate(request: ghRequest(keys: []), signing: ghSigning, hardeners: [ghMetadata]) == nil,
@@ -7194,6 +7370,94 @@ private func runUpdatePreflight() async -> Int32 {
     }
 }
 
+@MainActor
+private func runFullAccessSessionSelfCheck() async -> Int32 {
+    let now = Date(timeIntervalSince1970: 1_000)
+    let controller = FullAccessSessionController()
+    guard !controller.isActive(at: now),
+          !controller.start(at: now, duration: 0),
+          controller.start(at: now, duration: fullAccessSessionMaximumDuration * 2),
+          controller.snapshot(at: now)?.expiresAt
+            == now.addingTimeInterval(fullAccessSessionMaximumDuration),
+          !controller.isActive(at: now.addingTimeInterval(fullAccessSessionMaximumDuration))
+    else {
+        return 1
+    }
+
+    let gate = SecretGate(
+        id: "gh",
+        keyPatterns: ["GH_TOKEN_*"],
+        routes: [],
+        defaultProtection: .noAccess,
+        appPolicies: []
+    )
+    let launcher = LauncherIdentity(
+        pid: 42,
+        path: "/Applications/Terminal.app/Contents/MacOS/Terminal",
+        identifier: "com.apple.Terminal",
+        teamIdentifier: "APPLE",
+        designatedRequirement: #"identifier "com.apple.Terminal" and anchor apple"#,
+        runtimeProtection: .hardened
+    )
+    guard resolveFullAccessSessionPolicy(
+        gate: gate,
+        launchers: [launcher],
+        classification: .secretDump,
+        sessionActive: true
+    ).map({ secretGateAuthorizationReason(gate: gate, policy: $0) })
+        == "Full Access Session",
+        resolveFullAccessSessionPolicy(
+            gate: gate,
+            launchers: [launcher],
+            classification: .unknown,
+            sessionActive: true
+        ) == nil,
+        resolveFullAccessSessionPolicy(
+            gate: gate,
+            launchers: [],
+            classification: .readOnly,
+            sessionActive: true
+        ) == nil
+    else {
+        return 1
+    }
+
+    let authenticatedController = FullAccessSessionController()
+    let authenticated = FullAccessSessionModel(
+        controller: authenticatedController,
+        authenticate: { true }
+    )
+    await authenticated.authenticateAndStart()
+    guard authenticated.isActive,
+          authenticated.snapshot.map({ fullAccessSessionRemainingLabel($0) })?
+            .contains("remaining") == true
+    else {
+        return 1
+    }
+    authenticated.end()
+    guard !authenticated.isActive else { return 1 }
+
+    let rejected = FullAccessSessionModel(
+        controller: FullAccessSessionController(),
+        authenticate: { false }
+    )
+    await rejected.authenticateAndStart()
+    guard !rejected.isActive else { return 1 }
+
+    let canceled = FullAccessSessionModel(
+        controller: FullAccessSessionController(),
+        authenticate: {
+            try? await Task.sleep(nanoseconds: 20_000_000)
+            return true
+        }
+    )
+    canceled.start()
+    await Task.yield()
+    canceled.end()
+    try? await Task.sleep(nanoseconds: 30_000_000)
+    return canceled.isActive ? 1 : 0
+}
+
 if CommandLine.arguments.contains("--self-check-approvals") {
     exit(MainActor.assumeIsolated { runApprovalSelfCheck() })
 }
@@ -7240,6 +7504,13 @@ if CommandLine.arguments.contains("--self-check-launch-agent-handoff") {
 
 if CommandLine.arguments.contains("--self-check-menu-status") {
     exit(MainActor.assumeIsolated { runMenuStatusSelfCheck() })
+}
+
+if CommandLine.arguments.contains("--self-check-full-access-session") {
+    Task { @MainActor in
+        exit(await runFullAccessSessionSelfCheck())
+    }
+    dispatchMain()
 }
 
 if CommandLine.arguments.contains("--self-check-scan-scheduling") {

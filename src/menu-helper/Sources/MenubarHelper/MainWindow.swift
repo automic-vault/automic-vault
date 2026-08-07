@@ -40,12 +40,35 @@ struct BlessedScriptReviewRequest: Sendable {
 final class AutomicVaultMainWindowController: NSHostingController<DashboardRootView> {
     private let model = DashboardModel()
 
-    init(checkForUpdates: @escaping () -> Void) {
-        super.init(rootView: DashboardRootView(model: model, checkForUpdates: checkForUpdates))
+    convenience init(checkForUpdates: @escaping () -> Void) {
+        self.init(
+            fullAccessSession: FullAccessSessionModel(
+                controller: FullAccessSessionController()
+            ),
+            checkForUpdates: checkForUpdates
+        )
+    }
+
+    init(
+        fullAccessSession: FullAccessSessionModel,
+        checkForUpdates: @escaping () -> Void
+    ) {
+        super.init(rootView: DashboardRootView(
+            model: model,
+            fullAccessSession: fullAccessSession,
+            checkForUpdates: checkForUpdates
+        ))
     }
 
     @MainActor @preconcurrency required dynamic init?(coder: NSCoder) {
-        super.init(coder: coder, rootView: DashboardRootView(model: model, checkForUpdates: {}))
+        let fullAccessSession = FullAccessSessionModel(
+            controller: FullAccessSessionController()
+        )
+        super.init(coder: coder, rootView: DashboardRootView(
+            model: model,
+            fullAccessSession: fullAccessSession,
+            checkForUpdates: {}
+        ))
     }
 
     override func viewDidAppear() {
@@ -230,6 +253,12 @@ final class DashboardModel: ObservableObject {
             }
         case .settings:
             [
+                DashboardItem(
+                    id: "full-access-session",
+                    title: "Full Access Session",
+                    subtitle: "Touch ID-only automatic authorization",
+                    detail: "Temporarily authorize every recognized operation from verified apps."
+                ),
                 DashboardItem(
                     id: "automatic-approval-feedback",
                     title: "Automic Authorization",
@@ -1135,6 +1164,7 @@ func runDashboardSearchSelfCheck() -> Int32 {
     model.searchText = ""
     model.selectSection(.settings)
     guard model.items.map(\.id) == [
+        "full-access-session",
         "automatic-approval-feedback",
         "detached-process-access",
         "secret-name-access",
@@ -1228,10 +1258,18 @@ struct DashboardItem: Identifiable, Equatable {
 
 struct DashboardRootView: View {
     @ObservedObject var model: DashboardModel
+    @ObservedObject var fullAccessSession: FullAccessSessionModel
     let checkForUpdates: () -> Void
 
     var body: some View {
-        NavigationSplitView() {
+        VStack(spacing: 0) {
+            if let snapshot = fullAccessSession.snapshot {
+                FullAccessSessionBanner(
+                    snapshot: snapshot,
+                    end: fullAccessSession.end
+                )
+            }
+            NavigationSplitView() {
             DashboardSidebarView(model: model)
                 .navigationSplitViewColumnWidth(min: 186, ideal: 227, max: 250)
         } content: {
@@ -1250,7 +1288,10 @@ struct DashboardRootView: View {
                     }
                 }
         } detail: {
-            DashboardDetailView(model: model)
+            DashboardDetailView(
+                model: model,
+                fullAccessSession: fullAccessSession
+            )
                 .navigationSplitViewColumnWidth(min: 320, ideal: 320)
                 .toolbar {
                     Spacer()
@@ -1307,7 +1348,102 @@ struct DashboardRootView: View {
                     .help("Refresh")
                 }
         }
-        .searchable(text: $model.searchText, placement: .sidebar, prompt: "Search")
+            .searchable(text: $model.searchText, placement: .sidebar, prompt: "Search")
+        }
+    }
+}
+
+private struct FullAccessSessionBanner: View {
+    let snapshot: FullAccessSessionSnapshot
+    let end: () -> Void
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { context in
+            HStack(spacing: 10) {
+                Image(systemName: "exclamationmark.shield.fill")
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Full Access Session is active")
+                        .fontWeight(.semibold)
+                    Text("Recognized operations from verified apps are automatically authorized · \(fullAccessSessionRemainingLabel(snapshot, at: context.date))")
+                        .font(.caption)
+                }
+                Spacer()
+                Button("End", action: end)
+                    .buttonStyle(.borderedProminent)
+                    .tint(.orange)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 9)
+            .foregroundStyle(.primary)
+            .background(Color.orange.opacity(0.2))
+            .overlay(alignment: .bottom) {
+                Divider().overlay(Color.orange.opacity(0.55))
+            }
+        }
+    }
+}
+
+private struct FullAccessSessionSettingsView: View {
+    @ObservedObject var model: FullAccessSessionModel
+    @State private var showingConfirmation = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            Label("Full Access Session", systemImage: "exclamationmark.shield")
+                .font(.title2.weight(.semibold))
+
+            Text("Temporarily authorize every recognized operation from every verified app, including operations that use or disclose protected secrets. Unknown operations, unverifiable apps, invalid requests, missing secrets, and audit-record failures remain blocked or require approval.")
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if let snapshot = model.snapshot {
+                TimelineView(.periodic(from: .now, by: 1)) { context in
+                    Label(
+                        "Active · \(fullAccessSessionRemainingLabel(snapshot, at: context.date))",
+                        systemImage: "lock.open.fill"
+                    )
+                    .foregroundStyle(.orange)
+                    .fontWeight(.semibold)
+                }
+                Button("End Full Access Session", action: model.end)
+                    .buttonStyle(.borderedProminent)
+                    .tint(.orange)
+            } else {
+                Button("Start Full Access Session…") {
+                    showingConfirmation = true
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(model.isAuthenticating)
+
+                if model.isAuthenticating {
+                    Label("Waiting for Touch ID…", systemImage: "touchid")
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            if let error = model.authenticationError {
+                Label(error, systemImage: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button("Dismiss") {
+                    model.clearAuthenticationError()
+                }
+            }
+
+            Divider()
+            Text("The session is kept only in memory. It ends after one hour, when the Mac locks, when the displays sleep, when Automic Vault exits or updates, or when you end it. Only Touch ID in this app can start it; agents and command-line tools cannot.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .alert("Start Full Access Session?", isPresented: $showingConfirmation) {
+            Button("Cancel", role: .cancel) {}
+            Button("Continue to Touch ID") {
+                model.start()
+            }
+        } message: {
+            Text("For up to one hour, every recognized operation from every verified app may run automatically, including operations that use or disclose protected secrets.")
+        }
     }
 }
 
@@ -1426,6 +1562,7 @@ private struct DashboardListView: View {
 
 private struct DashboardDetailView: View {
     @ObservedObject var model: DashboardModel
+    @ObservedObject var fullAccessSession: FullAccessSessionModel
 
     var body: some View {
         ScrollView {
@@ -1456,7 +1593,13 @@ private struct DashboardDetailView: View {
                     .padding(.bottom, 28)
                     .frame(maxWidth: .infinity, alignment: .leading)
             } else if model.selectedSection == .settings {
-                if model.selectedItem?.id == "automatic-approval-feedback" {
+                if model.selectedItem?.id == "full-access-session" {
+                    FullAccessSessionSettingsView(model: fullAccessSession)
+                        .padding(.horizontal, 22)
+                        .padding(.top, 32)
+                        .padding(.bottom, 28)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                } else if model.selectedItem?.id == "automatic-approval-feedback" {
                     AutomaticApprovalFeedbackSettingsView()
                         .padding(.horizontal, 22)
                         .padding(.top, 32)
