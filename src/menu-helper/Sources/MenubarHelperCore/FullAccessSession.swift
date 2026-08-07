@@ -19,42 +19,59 @@ public struct FullAccessSessionSnapshot: Equatable, Sendable {
 }
 
 public final class FullAccessSessionController: @unchecked Sendable {
+    private struct State {
+        let expiresAt: Date
+        let expiresAtUptime: TimeInterval
+    }
+
     private let lock = NSLock()
-    private var expiresAt: Date?
+    private var state: State?
 
     public init() {}
 
     @discardableResult
     public func start(
         at date: Date = Date(),
+        uptime: TimeInterval = ProcessInfo.processInfo.systemUptime,
         duration: TimeInterval = fullAccessSessionMaximumDuration
     ) -> Bool {
-        guard duration.isFinite, duration > 0 else { return false }
-        let expiration = date.addingTimeInterval(min(duration, fullAccessSessionMaximumDuration))
-        lock.lock()
-        expiresAt = expiration
-        lock.unlock()
+        guard uptime.isFinite, duration.isFinite, duration > 0 else { return false }
+        let boundedDuration = min(duration, fullAccessSessionMaximumDuration)
+        let expiresAtUptime = uptime + boundedDuration
+        guard expiresAtUptime.isFinite else { return false }
+        let newState = State(
+            expiresAt: date.addingTimeInterval(boundedDuration),
+            expiresAtUptime: expiresAtUptime
+        )
+        lock.withLock { state = newState }
         return true
     }
 
     public func end() {
-        lock.lock()
-        expiresAt = nil
-        lock.unlock()
+        lock.withLock { state = nil }
     }
 
-    public func snapshot(at date: Date = Date()) -> FullAccessSessionSnapshot? {
-        lock.lock()
-        defer { lock.unlock() }
-        guard let expiresAt, expiresAt > date else {
-            self.expiresAt = nil
-            return nil
+    public func snapshot(
+        at date: Date = Date(),
+        uptime: TimeInterval = ProcessInfo.processInfo.systemUptime
+    ) -> FullAccessSessionSnapshot? {
+        lock.withLock {
+            guard let state,
+                  state.expiresAt > date,
+                  state.expiresAtUptime > uptime
+            else {
+                self.state = nil
+                return nil
+            }
+            return FullAccessSessionSnapshot(expiresAt: state.expiresAt)
         }
-        return FullAccessSessionSnapshot(expiresAt: expiresAt)
     }
 
-    public func isActive(at date: Date = Date()) -> Bool {
-        snapshot(at: date) != nil
+    public func isActive(
+        at date: Date = Date(),
+        uptime: TimeInterval = ProcessInfo.processInfo.systemUptime
+    ) -> Bool {
+        snapshot(at: date, uptime: uptime) != nil
     }
 }
 

@@ -16,13 +16,17 @@ import Testing
     let now = Date(timeIntervalSince1970: 2_000)
     let session = FullAccessSessionController()
 
-    #expect(!session.start(at: now, duration: 0))
-    #expect(!session.start(at: now, duration: -1))
-    #expect(!session.start(at: now, duration: .infinity))
-    #expect(!session.start(at: now, duration: .nan))
-    #expect(session.start(at: now, duration: fullAccessSessionMaximumDuration * 2))
+    #expect(!session.start(at: now, uptime: 100, duration: 0))
+    #expect(!session.start(at: now, uptime: 100, duration: -1))
+    #expect(!session.start(at: now, uptime: 100, duration: .infinity))
+    #expect(!session.start(at: now, uptime: 100, duration: .nan))
+    #expect(session.start(
+        at: now,
+        uptime: 100,
+        duration: fullAccessSessionMaximumDuration * 2
+    ))
 
-    let snapshot = try #require(session.snapshot(at: now))
+    let snapshot = try #require(session.snapshot(at: now, uptime: 100))
     #expect(snapshot.expiresAt == now.addingTimeInterval(fullAccessSessionMaximumDuration))
     #expect(snapshot.remaining(at: now) == fullAccessSessionMaximumDuration)
 }
@@ -31,14 +35,25 @@ import Testing
     let now = Date(timeIntervalSince1970: 3_000)
     let session = FullAccessSessionController()
 
-    #expect(session.start(at: now, duration: 30))
-    #expect(session.isActive(at: now.addingTimeInterval(29)))
-    #expect(!session.isActive(at: now.addingTimeInterval(30)))
-    #expect(session.snapshot(at: now.addingTimeInterval(30)) == nil)
+    #expect(session.start(at: now, uptime: 200, duration: 30))
+    #expect(session.isActive(at: now.addingTimeInterval(29), uptime: 229))
+    #expect(!session.isActive(at: now.addingTimeInterval(30), uptime: 230))
+    #expect(session.snapshot(at: now.addingTimeInterval(30), uptime: 230) == nil)
 
-    #expect(session.start(at: now, duration: 30))
+    #expect(session.start(at: now, uptime: 300, duration: 30))
     session.end()
-    #expect(!session.isActive(at: now))
+    #expect(!session.isActive(at: now, uptime: 300))
+}
+
+@Test func fullAccessSessionExpiresWhenTheWallClockMovesBackward() {
+    let now = Date(timeIntervalSince1970: 4_000)
+    let session = FullAccessSessionController()
+
+    #expect(session.start(at: now, uptime: 500, duration: 60))
+    #expect(session.snapshot(
+        at: now.addingTimeInterval(-300),
+        uptime: 560
+    ) == nil)
 }
 
 @Test(

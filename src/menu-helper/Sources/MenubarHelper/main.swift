@@ -7374,12 +7374,19 @@ private func runUpdatePreflight() async -> Int32 {
 private func runFullAccessSessionSelfCheck() async -> Int32 {
     let now = Date(timeIntervalSince1970: 1_000)
     let controller = FullAccessSessionController()
-    guard !controller.isActive(at: now),
-          !controller.start(at: now, duration: 0),
-          controller.start(at: now, duration: fullAccessSessionMaximumDuration * 2),
-          controller.snapshot(at: now)?.expiresAt
+    guard !controller.isActive(at: now, uptime: 100),
+          !controller.start(at: now, uptime: 100, duration: 0),
+          controller.start(
+              at: now,
+              uptime: 100,
+              duration: fullAccessSessionMaximumDuration * 2
+          ),
+          controller.snapshot(at: now, uptime: 100)?.expiresAt
             == now.addingTimeInterval(fullAccessSessionMaximumDuration),
-          !controller.isActive(at: now.addingTimeInterval(fullAccessSessionMaximumDuration))
+          !controller.isActive(
+              at: now.addingTimeInterval(-300),
+              uptime: 100 + fullAccessSessionMaximumDuration
+          )
     else {
         return 1
     }
