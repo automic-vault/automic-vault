@@ -118,7 +118,7 @@ Unconstrained Secret Application for exact Secret Names in the matching
 Launcher’s Direct Access Rules. It does not turn unknown Tool operations into
 recognized operations and does not apply to Tool-specific Gate Clients.
 
-A Full Access Session is an in-memory policy overlay, not a mutation of the durable per-gate policies. The signed app requires local biometric authentication before creating a session. No Gate Client or automation interface can create one. A session has a one-hour maximum lifetime and is discarded on user-session inactivity, display sleep, app termination, or explicit user action. Required identity, integrity, classification, Secret matching, and Authorization Record checks remain in force.
+A Full Access Session is an in-memory policy overlay, not a mutation of the durable per-gate policies. The signed app requires the user to choose 1 hour, 8 hours, or Until turned off and complete local biometric authentication before creating a session. Until turned off is selected by default. No Gate Client or automation interface can create a session or select its lifetime. Timed sessions expire against wall-clock and monotonic deadlines. Every session is discarded on user-session inactivity, display sleep, app termination, or explicit user action. Required identity, integrity, classification, Secret matching, and Authorization Record checks remain in force.
 
 ### Current compatibility model
 

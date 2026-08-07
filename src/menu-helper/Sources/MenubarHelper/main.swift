@@ -379,9 +379,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         alert.alertStyle = .warning
         alert.messageText = fullAccessSessionConfirmationPresentation.title
         alert.informativeText = fullAccessSessionConfirmationPresentation.message
+        let lifetimePicker = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 180, height: 26))
+        let lifetimes = FullAccessSessionLifetime.allCases
+        lifetimePicker.addItems(withTitles: lifetimes.map(\.title))
+        if let selectedIndex = lifetimes.firstIndex(of: fullAccessSessionModel.selectedLifetime) {
+            lifetimePicker.selectItem(at: selectedIndex)
+        }
+        let lifetimeLabel = NSTextField(labelWithString: "Duration")
+        let lifetimeControls = NSStackView(views: [lifetimeLabel, lifetimePicker])
+        lifetimeControls.orientation = .horizontal
+        lifetimeControls.spacing = 12
+        alert.accessoryView = lifetimeControls
         alert.addButton(withTitle: fullAccessSessionConfirmationPresentation.actionTitle)
         alert.addButton(withTitle: "Cancel")
         guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let selectedIndex = lifetimePicker.indexOfSelectedItem
+        guard lifetimes.indices.contains(selectedIndex) else { return }
+        fullAccessSessionModel.selectedLifetime = lifetimes[selectedIndex]
         fullAccessSessionModel.start()
     }
 
@@ -7486,24 +7500,19 @@ private func runFullAccessSessionSelfCheck() async -> Int32 {
     let now = Date(timeIntervalSince1970: 1_000)
     let controller = FullAccessSessionController()
     guard !controller.isActive(at: now, uptime: 100),
-          !controller.start(at: now, uptime: 100, duration: 0),
-          controller.start(
-              at: now,
-              uptime: 100,
-              duration: fullAccessSessionMaximumDuration * 2
-          ),
+          controller.start(at: now, uptime: 100, lifetime: .oneHour),
           controller.snapshot(at: now, uptime: 100)?.expiresAt
-            == now.addingTimeInterval(fullAccessSessionMaximumDuration),
+            == now.addingTimeInterval(60 * 60),
           !controller.isActive(
               at: now.addingTimeInterval(-300),
-              uptime: 100 + fullAccessSessionMaximumDuration
+              uptime: 100 + 60 * 60
           )
     else {
         return 1
     }
 
     let leasedController = FullAccessSessionController()
-    guard leasedController.start(at: now, uptime: 200, duration: 60),
+    guard leasedController.start(at: now, uptime: 200, lifetime: .untilEnded),
           let lease = leasedController.lease(at: now, uptime: 200),
           leasedController.withActiveLease(lease, at: now, uptime: 200, {
               "released"
@@ -7584,16 +7593,22 @@ private func runFullAccessSessionSelfCheck() async -> Int32 {
     let authenticatedController = FullAccessSessionController()
     let authenticated = FullAccessSessionModel(
         controller: authenticatedController,
-        authenticate: { true }
+        authenticate: { lifetime in lifetime == .untilEnded }
     )
     await authenticated.authenticateAndStart()
     guard authenticated.isActive,
-          authenticated.snapshot.map({ fullAccessSessionRemainingLabel($0) })?
-            .contains("remaining") == true,
+          authenticated.selectedLifetime == .untilEnded,
+          authenticated.snapshot?.lifetime == .untilEnded,
+          authenticated.snapshot.map({ fullAccessSessionRemainingLabel($0) })
+            == "Until turned off",
           fullAccessSessionMenuPresentation(
               snapshot: authenticated.snapshot,
               isAuthenticating: false
-          ).showsWarning,
+          ) == FullAccessSessionMenuPresentation(
+              title: "End Full Access Session (Until turned off)",
+              isEnabled: true,
+              showsWarning: true
+          ),
           fullAccessSessionMenuPresentation(
               snapshot: nil,
               isAuthenticating: true
@@ -7603,7 +7618,7 @@ private func runFullAccessSessionSelfCheck() async -> Int32 {
               showsWarning: false
           ),
           fullAccessSessionConfirmationPresentation.message
-            .contains("Unknown and unverifiable requests still require approval or fail closed.")
+            .contains("every valid recognized operation from every verified app may be automically authorized")
     else {
         return 1
     }
@@ -7612,14 +7627,14 @@ private func runFullAccessSessionSelfCheck() async -> Int32 {
 
     let rejected = FullAccessSessionModel(
         controller: FullAccessSessionController(),
-        authenticate: { false }
+        authenticate: { _ in false }
     )
     await rejected.authenticateAndStart()
     guard !rejected.isActive else { return 1 }
 
     let canceled = FullAccessSessionModel(
         controller: FullAccessSessionController(),
-        authenticate: {
+        authenticate: { _ in
             try? await Task.sleep(nanoseconds: 20_000_000)
             return true
         }

@@ -1364,7 +1364,7 @@ private struct FullAccessSessionBanner: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Full Access Session is active")
                         .fontWeight(.semibold)
-                    Text("Recognized operations from verified apps are automatically authorized · \(fullAccessSessionRemainingLabel(snapshot, at: context.date))")
+                    Text("Every valid recognized operation from verified apps is automically authorized · \(fullAccessSessionRemainingLabel(snapshot, at: context.date))")
                         .font(.caption)
                 }
                 Spacer()
@@ -1392,7 +1392,7 @@ private struct FullAccessSessionSettingsView: View {
             Label("Full Access Session", systemImage: "exclamationmark.shield")
                 .font(.title2.weight(.semibold))
 
-            Text("Temporarily authorize every recognized operation from every verified app, including operations that use or disclose protected secrets. Unknown operations, unverifiable apps, invalid requests, missing secrets, and audit-record failures remain blocked or require approval.")
+            Text("Temporarily authorize every valid recognized operation from every verified app, including operations that use or disclose protected secrets. Unknown operations, unverifiable apps, invalid requests, missing secrets, and audit-record failures remain blocked or require approval.")
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
@@ -1409,6 +1409,19 @@ private struct FullAccessSessionSettingsView: View {
                     .buttonStyle(.borderedProminent)
                     .tint(.orange)
             } else {
+                HStack {
+                    Text("Duration")
+                    Spacer()
+                    Picker("Duration", selection: $model.selectedLifetime) {
+                        ForEach(FullAccessSessionLifetime.allCases, id: \.self) { lifetime in
+                            Text(lifetime.title).tag(lifetime)
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(width: 170)
+                }
+                .disabled(model.isAuthenticating)
+
                 Button("Start Full Access Session…") {
                     showingConfirmation = true
                 }
@@ -1431,7 +1444,7 @@ private struct FullAccessSessionSettingsView: View {
             }
 
             Divider()
-            Text("The session is kept only in memory. It ends after one hour, when the Mac locks, when the displays sleep, when Automic Vault exits or updates, or when you end it. Only Touch ID in this app can start it; agents and command-line tools cannot.")
+            Text("The session is kept only in memory. A timed session ends when its duration expires. Every session ends when the Mac locks, the displays sleep, Automic Vault exits or updates, or you end it. Only Touch ID in this app can start it; agents and command-line tools cannot.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)

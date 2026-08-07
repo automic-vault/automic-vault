@@ -7,40 +7,50 @@ import Testing
     let first = FullAccessSessionController()
 
     #expect(!first.isActive(at: now))
-    #expect(first.start(at: now, duration: 300))
+    #expect(first.start(at: now))
     #expect(first.isActive(at: now))
+    #expect(first.snapshot(at: now)?.lifetime == .untilEnded)
     #expect(!FullAccessSessionController().isActive(at: now))
 }
 
-@Test func fullAccessSessionDurationIsPositiveAndCappedAtOneHour() throws {
+@Test(
+    arguments: [
+        (FullAccessSessionLifetime.oneHour, 60.0 * 60),
+        (FullAccessSessionLifetime.eightHours, 8.0 * 60 * 60),
+    ]
+)
+func timedFullAccessSessionLifetimeExpiresAtItsPreset(
+    lifetime: FullAccessSessionLifetime,
+    expectedDuration: TimeInterval
+) throws {
     let now = Date(timeIntervalSince1970: 2_000)
     let session = FullAccessSessionController()
 
-    #expect(!session.start(at: now, uptime: 100, duration: 0))
-    #expect(!session.start(at: now, uptime: 100, duration: -1))
-    #expect(!session.start(at: now, uptime: 100, duration: .infinity))
-    #expect(!session.start(at: now, uptime: 100, duration: .nan))
-    #expect(session.start(
-        at: now,
-        uptime: 100,
-        duration: fullAccessSessionMaximumDuration * 2
-    ))
+    #expect(session.start(at: now, uptime: 100, lifetime: lifetime))
 
     let snapshot = try #require(session.snapshot(at: now, uptime: 100))
-    #expect(snapshot.expiresAt == now.addingTimeInterval(fullAccessSessionMaximumDuration))
-    #expect(snapshot.remaining(at: now, uptime: 100) == fullAccessSessionMaximumDuration)
+    #expect(snapshot.lifetime == lifetime)
+    #expect(snapshot.expiresAt == now.addingTimeInterval(expectedDuration))
+    #expect(snapshot.remaining(at: now, uptime: 100) == expectedDuration)
 }
 
-@Test func fullAccessSessionExpiresAndCanAlwaysBeEnded() {
+@Test func fullAccessSessionExpiresAndCanAlwaysBeEnded() throws {
     let now = Date(timeIntervalSince1970: 3_000)
     let session = FullAccessSessionController()
 
-    #expect(session.start(at: now, uptime: 200, duration: 30))
-    #expect(session.isActive(at: now.addingTimeInterval(29), uptime: 229))
-    #expect(!session.isActive(at: now.addingTimeInterval(30), uptime: 230))
-    #expect(session.snapshot(at: now.addingTimeInterval(30), uptime: 230) == nil)
+    #expect(session.start(at: now, uptime: 200, lifetime: .oneHour))
+    #expect(session.isActive(at: now.addingTimeInterval(3_599), uptime: 3_799))
+    #expect(!session.isActive(at: now.addingTimeInterval(3_600), uptime: 3_800))
+    #expect(session.snapshot(at: now.addingTimeInterval(3_600), uptime: 3_800) == nil)
 
-    #expect(session.start(at: now, uptime: 300, duration: 30))
+    #expect(session.start(at: now, uptime: 300, lifetime: .untilEnded))
+    let snapshot = try #require(session.snapshot(
+        at: now.addingTimeInterval(60 * 60 * 24 * 365),
+        uptime: 60 * 60 * 24 * 365
+    ))
+    #expect(snapshot.lifetime == .untilEnded)
+    #expect(snapshot.expiresAt == nil)
+    #expect(snapshot.remaining(at: now, uptime: 300) == nil)
     session.end()
     #expect(!session.isActive(at: now, uptime: 300))
 }
@@ -49,21 +59,21 @@ import Testing
     let now = Date(timeIntervalSince1970: 4_000)
     let session = FullAccessSessionController()
 
-    #expect(session.start(at: now, uptime: 500, duration: 60))
+    #expect(session.start(at: now, uptime: 500, lifetime: .oneHour))
     #expect(session.snapshot(
         at: now.addingTimeInterval(-300),
-        uptime: 559
-    )?.remaining(at: now.addingTimeInterval(-300), uptime: 559) == 1)
+        uptime: 4_099
+    )?.remaining(at: now.addingTimeInterval(-300), uptime: 4_099) == 1)
     #expect(session.snapshot(
         at: now.addingTimeInterval(-300),
-        uptime: 560
+        uptime: 4_100
     ) == nil)
 }
 
 @Test func endingWaitsForAnAuthorizedReleaseToFinish() throws {
     let now = Date(timeIntervalSince1970: 5_000)
     let session = FullAccessSessionController()
-    #expect(session.start(at: now, uptime: 600, duration: 60))
+    #expect(session.start(at: now, uptime: 600, lifetime: .untilEnded))
     let lease = try #require(session.lease(at: now, uptime: 600))
     let releaseStarted = DispatchSemaphore(value: 0)
     let allowReleaseToFinish = DispatchSemaphore(value: 0)

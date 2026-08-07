@@ -1,12 +1,30 @@
 import Foundation
 
-public let fullAccessSessionMaximumDuration: TimeInterval = 60 * 60
+public enum FullAccessSessionLifetime: String, CaseIterable, Hashable, Sendable {
+    case oneHour
+    case eightHours
+    case untilEnded
+
+    fileprivate var duration: TimeInterval? {
+        switch self {
+        case .oneHour: 60 * 60
+        case .eightHours: 8 * 60 * 60
+        case .untilEnded: nil
+        }
+    }
+}
 
 public struct FullAccessSessionSnapshot: Equatable, Sendable {
-    public let expiresAt: Date
-    private let expiresAtUptime: TimeInterval
+    public let lifetime: FullAccessSessionLifetime
+    public let expiresAt: Date?
+    private let expiresAtUptime: TimeInterval?
 
-    public init(expiresAt: Date, expiresAtUptime: TimeInterval) {
+    fileprivate init(
+        lifetime: FullAccessSessionLifetime,
+        expiresAt: Date?,
+        expiresAtUptime: TimeInterval?
+    ) {
+        self.lifetime = lifetime
         self.expiresAt = expiresAt
         self.expiresAtUptime = expiresAtUptime
     }
@@ -15,14 +33,16 @@ public struct FullAccessSessionSnapshot: Equatable, Sendable {
         at date: Date = Date(),
         uptime: TimeInterval = ProcessInfo.processInfo.systemUptime
     ) -> Bool {
-        expiresAt > date && expiresAtUptime > uptime
+        guard let expiresAt, let expiresAtUptime else { return true }
+        return expiresAt > date && expiresAtUptime > uptime
     }
 
     public func remaining(
         at date: Date = Date(),
         uptime: TimeInterval = ProcessInfo.processInfo.systemUptime
-    ) -> TimeInterval {
-        max(0, min(
+    ) -> TimeInterval? {
+        guard let expiresAt, let expiresAtUptime else { return nil }
+        return max(0, min(
             expiresAt.timeIntervalSince(date),
             expiresAtUptime - uptime
         ))
@@ -49,16 +69,17 @@ public final class FullAccessSessionController: @unchecked Sendable {
     public func start(
         at date: Date = Date(),
         uptime: TimeInterval = ProcessInfo.processInfo.systemUptime,
-        duration: TimeInterval = fullAccessSessionMaximumDuration
+        lifetime: FullAccessSessionLifetime = .untilEnded
     ) -> Bool {
-        guard uptime.isFinite, duration.isFinite, duration > 0 else { return false }
-        let boundedDuration = min(duration, fullAccessSessionMaximumDuration)
-        let expiresAtUptime = uptime + boundedDuration
-        guard expiresAtUptime.isFinite else { return false }
+        guard uptime.isFinite else { return false }
+        let expiresAt = lifetime.duration.map(date.addingTimeInterval)
+        let expiresAtUptime = lifetime.duration.map { uptime + $0 }
+        if let expiresAtUptime, !expiresAtUptime.isFinite { return false }
         let newState = State(
             id: UUID(),
             snapshot: FullAccessSessionSnapshot(
-                expiresAt: date.addingTimeInterval(boundedDuration),
+                lifetime: lifetime,
+                expiresAt: expiresAt,
                 expiresAtUptime: expiresAtUptime
             )
         )

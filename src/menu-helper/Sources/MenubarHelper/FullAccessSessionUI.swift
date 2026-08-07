@@ -11,17 +11,28 @@ struct FullAccessSessionConfirmationPresentation: Equatable {
 
 let fullAccessSessionConfirmationPresentation = FullAccessSessionConfirmationPresentation(
     title: "Start Full Access Session?",
-    message: "For up to one hour, every recognized operation from every verified app may run automatically, including operations that use or disclose protected secrets. Unknown and unverifiable requests still require approval or fail closed.",
+    message: "For the selected duration, every valid recognized operation from every verified app may be automically authorized, including operations that use or disclose protected secrets. Unknown, invalid, and unverifiable requests still require approval or fail closed.",
     actionTitle: "Continue to Touch ID"
 )
 
+extension FullAccessSessionLifetime {
+    var title: String {
+        switch self {
+        case .oneHour: "1 hour"
+        case .eightHours: "8 hours"
+        case .untilEnded: "Until turned off"
+        }
+    }
+}
+
 @MainActor
 final class FullAccessSessionModel: ObservableObject {
-    typealias Authenticate = @MainActor () async throws -> Bool
+    typealias Authenticate = @MainActor (FullAccessSessionLifetime) async throws -> Bool
 
     @Published private(set) var snapshot: FullAccessSessionSnapshot?
     @Published private(set) var isAuthenticating = false
     @Published private(set) var authenticationError: String?
+    @Published var selectedLifetime: FullAccessSessionLifetime = .untilEnded
 
     private let controller: FullAccessSessionController
     private let authenticate: Authenticate
@@ -51,12 +62,13 @@ final class FullAccessSessionModel: ObservableObject {
     func authenticateAndStart() async {
         guard !isActive, !isAuthenticating else { return }
         let attempt = UUID()
+        let lifetime = selectedLifetime
         authenticationAttempt = attempt
         isAuthenticating = true
         authenticationError = nil
         onChange?()
         do {
-            let authenticated = try await authenticate()
+            let authenticated = try await authenticate(lifetime)
             guard authenticationAttempt == attempt, !Task.isCancelled else { return }
             authenticationAttempt = nil
             authenticationTask = nil
@@ -65,7 +77,7 @@ final class FullAccessSessionModel: ObservableObject {
                 onChange?()
                 return
             }
-            guard controller.start() else {
+            guard controller.start(lifetime: lifetime) else {
                 throw FullAccessSessionAuthenticationError.couldNotStart
             }
             isAuthenticating = false
@@ -99,8 +111,8 @@ final class FullAccessSessionModel: ObservableObject {
         let updated = controller.snapshot(at: date)
         guard updated != snapshot else { return }
         snapshot = updated
-        if let updated {
-            scheduleExpiration(at: updated.expiresAt)
+        if let expiresAt = updated?.expiresAt {
+            scheduleExpiration(at: expiresAt)
         } else {
             expirationTask?.cancel()
             expirationTask = nil
@@ -124,7 +136,9 @@ final class FullAccessSessionModel: ObservableObject {
 }
 
 @MainActor
-private func authenticateFullAccessSession() async throws -> Bool {
+private func authenticateFullAccessSession(
+    lifetime: FullAccessSessionLifetime
+) async throws -> Bool {
     let context = LAContext()
     context.localizedFallbackTitle = ""
     context.touchIDAuthenticationAllowableReuseDuration = 0
@@ -137,7 +151,7 @@ private func authenticateFullAccessSession() async throws -> Bool {
     }
     return try await context.evaluatePolicy(
         .deviceOwnerAuthenticationWithBiometrics,
-        localizedReason: "Start a one-hour Full Access Session that automatically authorizes every recognized operation from verified apps."
+        localizedReason: "Start a Full Access Session for \(lifetime.title) that automically authorizes every valid recognized operation from verified apps."
     )
 }
 
@@ -160,9 +174,16 @@ func fullAccessSessionRemainingLabel(
     at date: Date = Date(),
     uptime: TimeInterval = ProcessInfo.processInfo.systemUptime
 ) -> String {
-    let remaining = Int(ceil(snapshot.remaining(at: date, uptime: uptime)))
+    guard let interval = snapshot.remaining(at: date, uptime: uptime) else {
+        return "Until turned off"
+    }
+    let remaining = Int(ceil(interval))
+    let hours = remaining / 3_600
     let minutes = remaining / 60
     let seconds = remaining % 60
+    if hours > 0 {
+        return "\(hours)h \(minutes % 60)m remaining"
+    }
     return minutes > 0 ? "\(minutes)m \(seconds)s remaining" : "\(seconds)s remaining"
 }
 
