@@ -105,10 +105,11 @@ Each Authorization Gate owns one Authorization Policy:
 
 1. The gate defines an explicit default Access Level.
 2. Launcher-specific rules override that default for matching Verified Launchers.
-3. An unverifiable Launcher receives no durable policy grant.
-4. The classifier describes the operation's characteristics.
-5. Policy must permit every characteristic for automic authorization.
-6. Unknown prevents automic authorization.
+3. An active Full Access Session temporarily overlays Full Access for Verified Launchers at every gate.
+4. An unverifiable Launcher receives no durable or session policy grant.
+5. The classifier describes the operation's characteristics.
+6. Policy must permit every characteristic for automic authorization.
+7. Unknown prevents automic authorization, including during a Full Access Session.
 
 Access Levels are named presets over operation characteristics. The user sees a small set of presets and concrete Approval reasons. The policy engine's target model keeps Homebrew Update, Local Write, System Write, Remote Write, Elevated Secret Application, Unconstrained Secret Application, and Secret Disclosure distinct.
 
@@ -116,6 +117,8 @@ Direct Access is available only at the Direct Secret Gate. It permits
 Unconstrained Secret Application for exact Secret Names in the matching
 Launcher’s Direct Access Rules. It does not turn unknown Tool operations into
 recognized operations and does not apply to Tool-specific Gate Clients.
+
+A Full Access Session is an in-memory policy overlay, not a mutation of the durable per-gate policies. The signed app requires local biometric authentication before creating a session. No Gate Client or automation interface can create one. A session has a one-hour maximum lifetime and is discarded on user-session inactivity, display sleep, app termination, or explicit user action. Required identity, integrity, classification, Secret matching, and Authorization Record checks remain in force.
 
 ### Current compatibility model
 

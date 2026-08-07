@@ -194,6 +194,12 @@ Every requested characteristic must fit the selected preset. Gates may omit pres
 
 The Homebrew Execution Gate does not expose Read Only. Homebrew may update itself and its package metadata while running inspection commands, so Automic Vault treats Read Only and Homebrew Update as one indivisible level: Read & Update.
 
+### Full Access Session
+
+A short-lived, device-owner-authorized policy overlay that applies the Full Access level at every Authorization Gate for Verified Launchers. A Full Access Session never authorizes an Unknown operation, an unverifiable Launcher, an untrusted Gate Client or Target, an invalid request, a missing Secret, or a failed required Authorization Record.
+
+Starting a Full Access Session requires local biometric authentication in the signed app. The session ends after one hour, when the user session becomes inactive, when the displays sleep, when the app exits, or when the user ends it. Ending a session restores the durable Authorization Policies immediately and requires no authentication. Full Access Sessions are never persisted and cannot be started by a Gate Client, command-line interface, URL handler, or other automation.
+
 ## Detection and hardening
 
 ### Detector
