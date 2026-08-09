@@ -570,27 +570,34 @@ final class DashboardModel: ObservableObject {
         return false
     }
 
-    func chooseDirectAccessLauncher(_ completion: @escaping (BlessedScriptLauncher?) -> Void) {
+    func chooseDirectAccessLauncher(_ completion: @escaping (DirectAccessLauncherSelection?) -> Void) {
         pickLauncher { signing in
             guard let signing else { return }
-            guard signing.runtimeProtection.allowsSecretGateAccess else {
+            guard let runtimeRequirement = signing.runtimeProtection.secretGateAdmissionRequirement else {
                 showLauncherCannotBeAllowed(secretGateAdmissionError(
                     appName: signing.identifier,
                     protection: signing.runtimeProtection
                 ))
                 return
             }
-            completion(BlessedScriptLauncher(
-                bundleIdentifier: signing.identifier,
-                requirement: signing.requirement
+            completion(DirectAccessLauncherSelection(
+                launcher: BlessedScriptLauncher(
+                    bundleIdentifier: signing.identifier,
+                    requirement: signing.requirement
+                ),
+                runtimeRequirement: runtimeRequirement
             ))
         }
     }
 
-    func addDirectAccessLauncher(_ launcher: BlessedScriptLauncher, to secret: StoredSecret) {
+    func addDirectAccessLauncher(_ selection: DirectAccessLauncherSelection, to secret: StoredSecret) {
         finishPolicyUpdate(
-            allowDirectAccess(to: secret.account, for: launcher),
-            error: "Could not allow \(launcher.bundleIdentifier) to use \(secret.account)"
+            allowDirectAccess(
+                to: secret.account,
+                for: selection.launcher,
+                runtimeRequirement: selection.runtimeRequirement
+            ),
+            error: "Could not allow \(selection.launcher.bundleIdentifier) to use \(secret.account)"
         )
     }
 
@@ -648,7 +655,7 @@ final class DashboardModel: ObservableObject {
     func addApp(to gate: SecretGate) {
         chooseLauncher { [weak self] signing in
             guard let self, let signing else { return }
-            guard signing.runtimeProtection.allowsSecretGateAccess else {
+            guard let runtimeRequirement = signing.runtimeProtection.secretGateAdmissionRequirement else {
                 showLauncherCannotBeAllowed(secretGateAdmissionError(
                     appName: signing.identifier,
                     protection: signing.runtimeProtection
@@ -659,7 +666,7 @@ final class DashboardModel: ObservableObject {
                 requirement: signing.requirement,
                 protection: .readOnly,
                 for: gate,
-                requiresHardenedRuntime: true
+                runtimeRequirement: runtimeRequirement
             )
             if status == errSecSuccess {
                 self.errorMessage = nil
@@ -683,7 +690,7 @@ final class DashboardModel: ObservableObject {
                 requirement: app.requirement,
                 protection: protection,
                 for: gate,
-                requiresHardenedRuntime: app.requiresHardenedRuntime
+                runtimeRequirement: app.runtimeRequirement
             ),
             error: "Could not update \(app.bundleIdentifier)"
         )
@@ -1682,7 +1689,7 @@ private struct StoredSecretDetailView: View {
     @State private var isAvailableWhileLocked: Bool
     @State private var isConfirmingDelete = false
     @State private var isConfirmingDirectAccess = false
-    @State private var pendingDirectAccessLauncher: BlessedScriptLauncher?
+    @State private var pendingDirectAccessLauncher: DirectAccessLauncherSelection?
 
     init(model: DashboardModel, secret: StoredSecret) {
         self.model = model
@@ -1785,13 +1792,14 @@ private struct StoredSecretDetailView: View {
         .sheet(isPresented: $isConfirmingDirectAccess, onDismiss: {
             pendingDirectAccessLauncher = nil
         }) {
-            if let launcher = pendingDirectAccessLauncher {
+            if let selection = pendingDirectAccessLauncher {
                 DirectAccessConfirmationView(
                     secretName: secret.account,
-                    launcherName: launcher.bundleIdentifier
+                    launcherName: selection.launcher.bundleIdentifier,
+                    runtimeWarning: launcherRuntimeWarning(selection.runtimeRequirement)
                 ) {
                     isConfirmingDirectAccess = false
-                    model.addDirectAccessLauncher(launcher, to: secret)
+                    model.addDirectAccessLauncher(selection, to: secret)
                 }
             }
         }
@@ -1816,6 +1824,7 @@ private struct StoredSecretDetailView: View {
 private struct DirectAccessConfirmationView: View {
     let secretName: String
     let launcherName: String
+    let runtimeWarning: String?
     let confirm: () -> Void
     @Environment(\.dismiss) private var dismiss
 
@@ -1827,12 +1836,15 @@ private struct DirectAccessConfirmationView: View {
                     .foregroundStyle(.orange)
                 Text("The verified Launcher “\(launcherName)” will be able to apply \(secretName) to any Target and arguments it chooses through direct av inject requests.")
                     .fixedSize(horizontal: false, vertical: true)
+                if let runtimeWarning {
+                    InfoBlock(title: "Warning", text: runtimeWarning)
+                }
                 Link("Read the safer alternatives", destination: directAccessDocumentationURL)
                     .font(.callout)
                 Spacer(minLength: 0)
             }
             .padding(22)
-            .frame(width: 470, height: 180, alignment: .topLeading)
+            .frame(width: 470, height: runtimeWarning == nil ? 180 : 260, alignment: .topLeading)
             .navigationTitle("Allow Direct Secret Access?")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -2855,12 +2867,38 @@ private struct LauncherSigning {
     let runtimeProtection: LauncherRuntimeProtection
 }
 
+struct DirectAccessLauncherSelection {
+    let launcher: BlessedScriptLauncher
+    let runtimeRequirement: LauncherRuntimeRequirement
+}
+
+private let libraryValidationWarning = "This Launcher permits third-party libraries and plug-ins to run inside its process. That code can inherit the Launcher’s Secret Gate authority."
+
+private func launcherRuntimeWarning(_ requirement: LauncherRuntimeRequirement) -> String? {
+    requirement == .hardenedAllowingLibraryValidationDisabled
+        ? libraryValidationWarning
+        : nil
+}
+
+private func launcherRuntimeWarning(_ protection: LauncherRuntimeProtection) -> String? {
+    switch protection {
+    case .hardened:
+        nil
+    case .hardenedWithLibraryValidationDisabled:
+        libraryValidationWarning
+    case .hardenedRuntimeMissing:
+        "This Launcher does not enable Hardened Runtime. It can be endorsed for an exact Blessed Script, but it cannot receive Secret Gate access."
+    case .unsafeEntitlements(let entitlements):
+        "This Launcher enables blocked Hardened Runtime exceptions: \(entitlements.joined(separator: ", ")). It can be endorsed for an exact Blessed Script, but it cannot receive Secret Gate access."
+    }
+}
+
 private func secretGateAdmissionError(
     appName: String,
     protection: LauncherRuntimeProtection
 ) -> String {
     switch protection {
-    case .hardened:
+    case .hardened, .hardenedWithLibraryValidationDisabled:
         return ""
     case .hardenedRuntimeMissing:
         return "\(appName) does not enable Hardened Runtime and cannot receive secret-gate access."
@@ -2894,6 +2932,10 @@ private func chooseLauncher(_ completion: @escaping (LauncherSigning?) -> Void) 
         Designated requirement:
         \(signing.requirement)
         """
+        if let warning = launcherRuntimeWarning(signing.runtimeProtection) {
+            alert.alertStyle = .warning
+            alert.informativeText += "\n\nWarning:\n\(warning)"
+        }
         alert.addButton(withTitle: "Allow")
         alert.addButton(withTitle: "Cancel")
         completion(alert.runModal() == .alertFirstButtonReturn ? signing : nil)

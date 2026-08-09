@@ -18,9 +18,13 @@ import Testing
             "com.apple.security.cs.allow-unsigned-executable-memory",
         ]
     ) == .hardened)
+    #expect(launcherRuntimeProtection(
+        signatureFlags: SecCodeSignatureFlags.runtime.rawValue,
+        enabledEntitlements: ["com.apple.security.cs.disable-library-validation"]
+    ) == .hardenedWithLibraryValidationDisabled)
 }
 
-@Test func hardenedRuntimeExceptionsPreventSecretGateAdmission() {
+@Test func injectionAndDebuggingExceptionsPreventSecretGateAdmission() {
     let unsafe: Set<String> = [
         "com.apple.security.cs.allow-dyld-environment-variables",
         "com.apple.security.cs.disable-executable-page-protection",
@@ -40,5 +44,20 @@ import Testing
             "com.apple.security.cs.allow-dyld-environment-variables": false,
             "com.apple.security.cs.disable-library-validation": true,
         ],
-    ]) == .unsafeEntitlements(["com.apple.security.cs.disable-library-validation"]))
+    ]) == .hardenedWithLibraryValidationDisabled)
+}
+
+@Test func runtimeRequirementsRejectPostEnrollmentExpansion() {
+    #expect(LauncherRuntimeRequirement.hardened.allows(.hardened))
+    #expect(!LauncherRuntimeRequirement.hardened.allows(.hardenedWithLibraryValidationDisabled))
+
+    let libraryLoading = LauncherRuntimeRequirement.hardenedAllowingLibraryValidationDisabled
+    #expect(libraryLoading.allows(.hardened))
+    #expect(libraryLoading.allows(.hardenedWithLibraryValidationDisabled))
+    #expect(!libraryLoading.allows(.hardenedRuntimeMissing))
+    #expect(!libraryLoading.allows(.unsafeEntitlements([
+        "com.apple.security.cs.allow-dyld-environment-variables",
+    ])))
+
+    #expect(LauncherRuntimeRequirement.legacyUnchecked.allows(.hardenedRuntimeMissing))
 }

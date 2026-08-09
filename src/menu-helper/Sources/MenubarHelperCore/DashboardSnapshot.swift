@@ -408,7 +408,9 @@ public struct SecretGatePolicy: Equatable, Sendable {
     public let bundleIdentifier: String
     public let requirement: String
     public let protection: SecretGateProtection
-    public let requiresHardenedRuntime: Bool
+    public let runtimeRequirement: LauncherRuntimeRequirement
+
+    public var requiresHardenedRuntime: Bool { runtimeRequirement != .legacyUnchecked }
 
     public init(
         bundleIdentifier: String,
@@ -416,25 +418,69 @@ public struct SecretGatePolicy: Equatable, Sendable {
         protection: SecretGateProtection,
         requiresHardenedRuntime: Bool = false
     ) {
+        self.init(
+            bundleIdentifier: bundleIdentifier,
+            requirement: requirement,
+            protection: protection,
+            runtimeRequirement: requiresHardenedRuntime ? .hardened : .legacyUnchecked
+        )
+    }
+
+    public init(
+        bundleIdentifier: String,
+        requirement: String,
+        protection: SecretGateProtection,
+        runtimeRequirement: LauncherRuntimeRequirement
+    ) {
         self.bundleIdentifier = bundleIdentifier
         self.requirement = requirement
         self.protection = protection
-        self.requiresHardenedRuntime = requiresHardenedRuntime
+        self.runtimeRequirement = runtimeRequirement
     }
 }
 
 public enum LauncherRuntimeProtection: Equatable, Sendable {
     case hardened
+    case hardenedWithLibraryValidationDisabled
     case hardenedRuntimeMissing
     case unsafeEntitlements([String])
 
-    public var allowsSecretGateAccess: Bool { self == .hardened }
+    public var secretGateAdmissionRequirement: LauncherRuntimeRequirement? {
+        switch self {
+        case .hardened:
+            .hardened
+        case .hardenedWithLibraryValidationDisabled:
+            .hardenedAllowingLibraryValidationDisabled
+        case .hardenedRuntimeMissing, .unsafeEntitlements:
+            nil
+        }
+    }
+
+    public var allowsSecretGateAccess: Bool { secretGateAdmissionRequirement != nil }
 }
 
-private let unsafeLauncherRuntimeEntitlements: Set<String> = [
+public enum LauncherRuntimeRequirement: String, Codable, Equatable, Sendable {
+    case legacyUnchecked
+    case hardened
+    case hardenedAllowingLibraryValidationDisabled
+
+    public func allows(_ protection: LauncherRuntimeProtection) -> Bool {
+        switch self {
+        case .legacyUnchecked:
+            true
+        case .hardened:
+            protection == .hardened
+        case .hardenedAllowingLibraryValidationDisabled:
+            protection == .hardened || protection == .hardenedWithLibraryValidationDisabled
+        }
+    }
+}
+
+private let libraryValidationEntitlement = "com.apple.security.cs.disable-library-validation"
+
+private let blockedLauncherRuntimeEntitlements: Set<String> = [
     "com.apple.security.cs.allow-dyld-environment-variables",
     "com.apple.security.cs.disable-executable-page-protection",
-    "com.apple.security.cs.disable-library-validation",
     "com.apple.security.get-task-allow",
 ]
 
@@ -445,8 +491,18 @@ public func launcherRuntimeProtection(
     guard signatureFlags & SecCodeSignatureFlags.runtime.rawValue != 0 else {
         return .hardenedRuntimeMissing
     }
-    let unsafe = enabledEntitlements.intersection(unsafeLauncherRuntimeEntitlements).sorted()
-    return unsafe.isEmpty ? .hardened : .unsafeEntitlements(unsafe)
+    let blocked = enabledEntitlements.intersection(blockedLauncherRuntimeEntitlements)
+    if !blocked.isEmpty {
+        let relevant = blocked.union(
+            enabledEntitlements.contains(libraryValidationEntitlement)
+                ? [libraryValidationEntitlement]
+                : []
+        )
+        return .unsafeEntitlements(relevant.sorted())
+    }
+    return enabledEntitlements.contains(libraryValidationEntitlement)
+        ? .hardenedWithLibraryValidationDisabled
+        : .hardened
 }
 
 public func launcherRuntimeProtection(
@@ -793,7 +849,7 @@ public func loadSecretGates(
                         bundleIdentifier: appIdentifier(from: $0) ?? "unknown",
                         requirement: $0,
                         protection: prototype.normalizedProtection(record.protection),
-                        requiresHardenedRuntime: record.requiresHardenedRuntime == true
+                        runtimeRequirement: record.resolvedRuntimeRequirement
                     )
                 }
             }.uniqueSorted()
@@ -864,13 +920,31 @@ public func setSecretGateAppProtection(
     service: String = secretGatePoliciesKeychainService,
     account: String = secretGatePoliciesKeychainAccount
 ) -> OSStatus {
+    setSecretGateAppProtection(
+        requirement: requirement,
+        protection: protection,
+        for: gate,
+        runtimeRequirement: requiresHardenedRuntime ? .hardened : .legacyUnchecked,
+        service: service,
+        account: account
+    )
+}
+
+public func setSecretGateAppProtection(
+    requirement: String,
+    protection: SecretGateProtection,
+    for gate: SecretGate,
+    runtimeRequirement: LauncherRuntimeRequirement,
+    service: String = secretGatePoliciesKeychainService,
+    account: String = secretGatePoliciesKeychainAccount
+) -> OSStatus {
     let protection = gate.normalizedProtection(protection)
     return setSecretGatePolicyRecord(
         SecretGatePolicyRecord(
             gateID: gate.id,
             requirement: requirement,
             protection: protection,
-            requiresHardenedRuntime: requiresHardenedRuntime
+            runtimeRequirement: runtimeRequirement
         ),
         service: service,
         account: account
@@ -909,17 +983,23 @@ private struct SecretGatePolicyRecord: Codable, Equatable {
     let requirement: String?
     let protection: SecretGateProtection
     let requiresHardenedRuntime: Bool?
+    let runtimeRequirement: LauncherRuntimeRequirement?
+
+    var resolvedRuntimeRequirement: LauncherRuntimeRequirement {
+        runtimeRequirement ?? (requiresHardenedRuntime == true ? .hardened : .legacyUnchecked)
+    }
 
     init(
         gateID: String,
         requirement: String?,
         protection: SecretGateProtection,
-        requiresHardenedRuntime: Bool? = nil
+        runtimeRequirement: LauncherRuntimeRequirement? = nil
     ) {
         self.gateID = gateID
         self.requirement = requirement
         self.protection = protection
-        self.requiresHardenedRuntime = requiresHardenedRuntime
+        self.requiresHardenedRuntime = runtimeRequirement.map { $0 != .legacyUnchecked }
+        self.runtimeRequirement = runtimeRequirement
     }
 }
 
@@ -1396,10 +1476,32 @@ public func migrateBackgroundKeychainItems(
 public struct DirectAccessRule: Codable, Equatable, Sendable {
     public let secretName: String
     public let launcher: BlessedScriptLauncher
+    public let runtimeRequirement: LauncherRuntimeRequirement
 
-    public init(secretName: String, launcher: BlessedScriptLauncher) {
+    public init(
+        secretName: String,
+        launcher: BlessedScriptLauncher,
+        runtimeRequirement: LauncherRuntimeRequirement = .hardened
+    ) {
         self.secretName = secretName
         self.launcher = launcher
+        self.runtimeRequirement = runtimeRequirement
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case secretName
+        case launcher
+        case runtimeRequirement
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        secretName = try container.decode(String.self, forKey: .secretName)
+        launcher = try container.decode(BlessedScriptLauncher.self, forKey: .launcher)
+        runtimeRequirement = try container.decodeIfPresent(
+            LauncherRuntimeRequirement.self,
+            forKey: .runtimeRequirement
+        ) ?? .hardened
     }
 }
 
@@ -1415,6 +1517,7 @@ public func loadDirectAccessRules(
 public func allowDirectAccess(
     to secretName: String,
     for launcher: BlessedScriptLauncher,
+    runtimeRequirement: LauncherRuntimeRequirement = .hardened,
     service: String = directAccessKeychainService,
     account: String = directAccessKeychainAccount
 ) -> OSStatus {
@@ -1427,7 +1530,11 @@ public func allowDirectAccess(
     rules.removeAll {
         $0.secretName == secretName && $0.launcher.requirement == launcher.requirement
     }
-    rules.append(DirectAccessRule(secretName: secretName, launcher: launcher))
+    rules.append(DirectAccessRule(
+        secretName: secretName,
+        launcher: launcher,
+        runtimeRequirement: runtimeRequirement
+    ))
     return saveDirectAccessRules(rules, service: service, account: account)
 }
 
@@ -1460,13 +1567,12 @@ public func directAccessAllows(
     runtimeProtection: LauncherRuntimeProtection,
     rules: [DirectAccessRule]
 ) -> Bool {
-    guard !secretNames.isEmpty,
-          !launcherRequirement.isEmpty,
-          runtimeProtection.allowsSecretGateAccess
-    else { return false }
+    guard !secretNames.isEmpty, !launcherRequirement.isEmpty else { return false }
     return Set(secretNames).allSatisfy { secretName in
         rules.contains {
-            $0.secretName == secretName && $0.launcher.requirement == launcherRequirement
+            $0.secretName == secretName
+                && $0.launcher.requirement == launcherRequirement
+                && $0.runtimeRequirement.allows(runtimeProtection)
         }
     }
 }

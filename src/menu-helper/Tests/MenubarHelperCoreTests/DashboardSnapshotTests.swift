@@ -417,8 +417,27 @@ private func secretlessGateMetadata() -> HardenerMetadata {
     #expect(!directAccessAllows(
         secretNames: ["ALPHA_TOKEN"],
         launcherRequirement: launcher.requirement,
-        runtimeProtection: .hardenedRuntimeMissing,
+        runtimeProtection: .hardenedWithLibraryValidationDisabled,
         rules: rules
+    ))
+    let libraryLoadingRules = rules.map {
+        DirectAccessRule(
+            secretName: $0.secretName,
+            launcher: $0.launcher,
+            runtimeRequirement: .hardenedAllowingLibraryValidationDisabled
+        )
+    }
+    #expect(directAccessAllows(
+        secretNames: ["ALPHA_TOKEN", "BETA_TOKEN"],
+        launcherRequirement: launcher.requirement,
+        runtimeProtection: .hardenedWithLibraryValidationDisabled,
+        rules: libraryLoadingRules
+    ))
+    #expect(!directAccessAllows(
+        secretNames: ["ALPHA_TOKEN"],
+        launcherRequirement: launcher.requirement,
+        runtimeProtection: .hardenedRuntimeMissing,
+        rules: libraryLoadingRules
     ))
     #expect(!directAccessAllows(
         secretNames: [],
@@ -440,12 +459,18 @@ private func secretlessGateMetadata() -> HardenerMetadata {
 
     #expect(saveStoredSecret(account: "API_TOKEN", value: "secret", service: secretService) == errSecSuccess)
     #expect(allowDirectAccess(
-        to: "API_TOKEN", for: zeta, service: policyService, account: policyAccount
+        to: "API_TOKEN",
+        for: zeta,
+        runtimeRequirement: .hardenedAllowingLibraryValidationDisabled,
+        service: policyService,
+        account: policyAccount
     ) == errSecSuccess)
     #expect(allowDirectAccess(
         to: "API_TOKEN", for: alpha, service: policyService, account: policyAccount
     ) == errSecSuccess)
-    #expect(loadDirectAccessRules(service: policyService, account: policyAccount).map(\.launcher) == [alpha, zeta])
+    let rules = loadDirectAccessRules(service: policyService, account: policyAccount)
+    #expect(rules.map(\.launcher) == [alpha, zeta])
+    #expect(rules.last?.runtimeRequirement == .hardenedAllowingLibraryValidationDisabled)
     #expect(loadStoredSecrets(
         service: secretService,
         directAccessRules: loadDirectAccessRules(service: policyService, account: policyAccount)
@@ -460,6 +485,24 @@ private func secretlessGateMetadata() -> HardenerMetadata {
         to: "API_TOKEN", service: policyService, account: policyAccount
     ) == errSecSuccess)
     #expect(loadDirectAccessRules(service: policyService, account: policyAccount).isEmpty)
+}
+
+@Test func legacyDirectAccessRulesRemainStrictlyHardened() throws {
+    guard dataProtectionKeychainAvailable() else { return }
+    let service = "com.automicvault.tests.direct.\(UUID().uuidString)"
+    let account = "rules"
+    defer { _ = deleteStoredSecret(account: account, service: service) }
+    let legacy = #"[{"secretName":"API_TOKEN","launcher":{"bundleIdentifier":"com.example.app","requirement":"requirement"}}]"#
+    #expect(saveStoredSecret(account: account, value: legacy, service: service) == errSecSuccess)
+
+    let rule = try #require(loadDirectAccessRules(service: service, account: account).first)
+    #expect(rule.runtimeRequirement == .hardened)
+    #expect(!directAccessAllows(
+        secretNames: ["API_TOKEN"],
+        launcherRequirement: "requirement",
+        runtimeProtection: .hardenedWithLibraryValidationDisabled,
+        rules: [rule]
+    ))
 }
 
 @Test func malformedDirectAccessPolicyFailsClosedAndIsNotReplaced() throws {
@@ -538,6 +581,7 @@ private func secretlessGateMetadata() -> HardenerMetadata {
     #expect(gate.defaultProtection == .fullExceptSecretDumps)
     #expect(gate.appPolicies.first?.protection == .fullExceptSecretDumps)
     #expect(gate.appPolicies.first?.requiresHardenedRuntime == false)
+    #expect(gate.appPolicies.first?.runtimeRequirement == .legacyUnchecked)
 
     #expect(setSecretGateDefaultProtection(
         .readOnly,
@@ -551,6 +595,22 @@ private func secretlessGateMetadata() -> HardenerMetadata {
         account: account
     ).first)
     #expect(gate.defaultProtection == .readOnlyAndUpdates)
+}
+
+@Test func existingHardenedRuntimePoliciesRemainStrict() throws {
+    guard dataProtectionKeychainAvailable() else { return }
+    let service = "com.automicvault.tests.\(UUID().uuidString)"
+    let account = "policies.\(UUID().uuidString)"
+    defer { _ = deleteStoredSecret(account: account, service: service) }
+    let legacy = #"[{"gateID":"test","requirement":"identifier \"com.example.app\"","protection":"readOnly","requiresHardenedRuntime":true}]"#
+    #expect(saveStoredSecret(account: account, value: legacy, service: service) == errSecSuccess)
+
+    let gate = try #require(loadSecretGates(
+        hardeners: [testGateMetadata()],
+        service: service,
+        account: account
+    ).first)
+    #expect(gate.appPolicies.first?.runtimeRequirement == .hardened)
 }
 
 @Test func unhealthyInstalledWrapperKeepsItsSecretGate() throws {
@@ -618,7 +678,7 @@ func protectionPolicyMatrix(
         requirement: requirement,
         protection: .noAccess,
         for: gate,
-        requiresHardenedRuntime: true,
+        runtimeRequirement: .hardenedAllowingLibraryValidationDisabled,
         service: service,
         account: account
     ) == errSecSuccess)
@@ -626,6 +686,7 @@ func protectionPolicyMatrix(
     let appPolicy = try #require(gate.appPolicies.first)
     #expect(appPolicy.protection == .noAccess)
     #expect(appPolicy.requiresHardenedRuntime)
+    #expect(appPolicy.runtimeRequirement == .hardenedAllowingLibraryValidationDisabled)
     #expect(gate.defaultPolicyLabel == "All Other Apps")
     #expect(secretGateProtection(for: requirement, in: gate).protection == .noAccess)
     #expect(secretGateProtection(for: #"identifier "com.other.app""#, in: gate).protection == .fullExceptSecretDumps)
@@ -634,12 +695,12 @@ func protectionPolicyMatrix(
         requirement: appPolicy.requirement,
         protection: .readOnly,
         for: gate,
-        requiresHardenedRuntime: appPolicy.requiresHardenedRuntime,
+        runtimeRequirement: appPolicy.runtimeRequirement,
         service: service,
         account: account
     ) == errSecSuccess)
     gate = try #require(loadSecretGates(hardeners: [metadata], service: service, account: account).first)
-    #expect(gate.appPolicies.first?.requiresHardenedRuntime == true)
+    #expect(gate.appPolicies.first?.runtimeRequirement == .hardenedAllowingLibraryValidationDisabled)
 
     #expect(removeSecretGateAppPolicy(appPolicy, from: gate, service: service, account: account) == errSecSuccess)
     gate = try #require(loadSecretGates(hardeners: [metadata], service: service, account: account).first)
