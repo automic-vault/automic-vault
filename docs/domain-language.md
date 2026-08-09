@@ -60,6 +60,22 @@ The app or executable at the root of the operation's verified launch chain, such
 
 A live Launcher whose code signature, designated requirement, and runtime protections meet the gate's eligibility rules. Code signing establishes identity and integrity, not intent. Failed verification prevents automic authorization.
 
+Eligible Launchers enable Hardened Runtime. A gate may accept narrowly defined
+compatibility exceptions while continuing to block runtime capabilities that
+permit environment-driven code injection, disable executable-page protection,
+or allow debugger attachment. A Launcher that disables library validation may
+be eligible, but the UI must warn that third-party libraries and plug-ins can
+run inside its process and inherit its authority.
+
+### Launcher Runtime Requirement
+
+The maximum Hardened Runtime exception profile accepted when a durable
+Launcher rule is created. It is stored with the rule and checked against the
+live Launcher on every request. Removing an accepted exception remains valid;
+adding an exception beyond the stored requirement disables automic
+authorization. Legacy rules that predate runtime requirements retain their
+existing compatibility behavior.
+
 ### Launcher Identity
 
 The designated requirement stored when the user establishes trust and revalidated for each request. A path, display name, process identifier, or icon is metadata, not identity.

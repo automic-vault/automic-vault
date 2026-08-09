@@ -12,6 +12,19 @@ For a standalone executable to be eligible, it must:
 - pass strict macOS code-signature validation; and
 - enable Hardened Runtime before it can receive secret-gate access.
 
+JIT launchers may enable `allow-jit` and
+`allow-unsigned-executable-memory`. Launchers such as Claude Code may also
+disable library validation so they can load third-party libraries or plug-ins.
+Automic Vault supports that exception, warns that loaded code can inherit the
+Launcher's authority, and records the accepted runtime requirement with each
+new rule.
+
+Automic Vault continues to reject launchers that allow DYLD environment
+variables, disable executable-page protection, enable debugger attachment, or
+do not enable Hardened Runtime. Every request rechecks the live posture. A rule
+created for a strictly hardened Launcher does not silently expand if the
+Launcher later disables library validation.
+
 Unsigned and ad-hoc signed executables are rejected. Ad-hoc signing can protect
 one build from modification, but it does not establish a vendor or Team identity.
 Placing such an executable inside an unsigned app does not make it eligible.
@@ -28,8 +41,8 @@ Placing such an executable inside an unsigned app does not make it eligible.
 
 Automic Vault resolves symlinks and verifies the selected executable itself. If
 the signature is missing, ad-hoc, invalid, or not Developer ID for a standalone
-executable, selection fails. If the identity cannot be verified later, automatic
-approval fails closed and requires manual approval.
+executable, selection fails. If the identity cannot be verified later, automic
+authorization fails closed and requires Approval.
 
 Some package formats start a signed native payload through a wrapper. Prefer a
 standalone installer or Homebrew cask when available because the live launcher

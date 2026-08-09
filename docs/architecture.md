@@ -90,6 +90,19 @@ Authorization Record.
 
 The policy identity is the Launcher's designated requirement, checked against the live process and its launch chain. Paths, process identifiers, names, and icons help the user recognize software but do not establish identity. Hardened Runtime requirements and rejected entitlements form part of launcher eligibility.
 
+Eligible Launchers must enable Hardened Runtime. JIT executable-memory
+exceptions and disabled library validation are supported compatibility
+exceptions. Disabled library validation is presented as a warning because
+third-party code loaded into the Launcher inherits its authority. DYLD
+environment-variable injection, disabled executable-page protection, and
+debugger attachment remain ineligible.
+
+New durable Launcher rules store the accepted Launcher Runtime Requirement.
+Every request rechecks the live signature and permits an equal or stronger
+posture, so removing an exception is safe while adding an unacknowledged
+exception fails closed. Existing strict rules remain strict. Compatibility
+records that predate runtime requirements retain their established behavior.
+
 Retained Launcher Provenance identifies an intermediary by its macOS process
 execution identity, including PID version and process start time, and by its live
 code identity. PID alone, PID plus start time, a pathname, or a basename is not
@@ -160,6 +173,9 @@ The Direct Secret Gate starts at Approval Required and has no broad default.
 Adding each Direct Access Rule requires an explicit warning and acknowledgement.
 Runtime signature or Hardened Runtime verification failure disables automic
 authorization and falls back to Approval when human approval is available.
+An eligible Launcher that disables library validation remains subject to its
+exact designated requirement and live runtime check, and the UI warns that
+loaded third-party code can inherit its authority.
 
 Detached-process access is off by default. While it is off, Retained Launcher
 Provenance may be observed in memory only to explain an Approval that the setting
