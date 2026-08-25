@@ -7566,6 +7566,8 @@ private func classifySecretGateRequest(
         return oxideRequestClassification(request.args)
     case "terraform", "opentofu":
         return terraformRequestClassification(request.args)
+    case "aliyun-cli":
+        return aliyunRequestClassification(request.args)
     case "aws":
         if awsRequestMayUseLongLivedCredentials(request) { return .secretDump }
         return awsRequestIsReadOnly(awsCommandWords(request)) ? .readOnly : .mutating
@@ -7753,6 +7755,17 @@ private func terraformRequestClassification(_ args: [String]) -> SecretGateReque
     default:
         return .unknown
     }
+}
+
+private func aliyunRequestClassification(_ args: [String]) -> SecretGateRequestClassification {
+    let words = args.map { $0.lowercased() }
+    if words == ["--version"] || words == ["version"] || words == ["help"] {
+        return .readOnly
+    }
+    if words.starts(with: ["sts", "getcalleridentity"]) {
+        return .readOnly
+    }
+    return .unknown
 }
 
 private func dockerRequestClassification(_ args: [String]) -> SecretGateRequestClassification {
@@ -12673,7 +12686,9 @@ private func runTerraformCredentialSelfCheck() -> Int32 {
 }
 
 private func runAliyunCredentialSelfCheck() -> Int32 {
-    guard normalizeAliyunProfile("prod") == "prod",
+    guard aliyunRequestClassification(["sts", "GetCallerIdentity"]) == .readOnly,
+          aliyunRequestClassification(["ecs", "DescribeInstances"]) == .unknown,
+          normalizeAliyunProfile("prod") == "prod",
           normalizeAliyunProfile(" prod") == nil,
           normalizeAliyunProfile("prod\n") == nil,
           aliyunCredentialSecretName("prod")
