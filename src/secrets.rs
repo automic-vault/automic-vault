@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 const APPROVAL_SERVICE: &str = "com.automicvault.av2.approval";
+const ALIYUN_HELPER_PROTOCOL_VERSION: u64 = 1;
 const DOCKER_HELPER_PROTOCOL_VERSION: u64 = 2;
 const OXIDE_HELPER_PROTOCOL_VERSION: u64 = 1;
 const GOAT_HELPER_PROTOCOL_VERSION: u64 = 1;
@@ -14,6 +15,33 @@ const UAA_HELPER_PROTOCOL_VERSION: u64 = 1;
 struct XpcReply {
     value: Option<String>,
     names: Vec<String>,
+}
+
+pub(crate) fn ensure_aliyun_helper_ready() -> Result<(), String> {
+    if crate::test_keychain_dir().is_some() {
+        return Ok(());
+    }
+    let reply = xpc_request(
+        "aliyun-helper-version",
+        None,
+        None,
+        None,
+        Some((b"requested_version\0", ALIYUN_HELPER_PROTOCOL_VERSION)),
+    )
+    .map_err(|error| {
+        format!(
+            "Alibaba Cloud credential-helper protocol negotiation failed; update and open the Automic Vault app: {error}"
+        )
+    })?;
+    match reply.value.as_deref() {
+        Some("1") => Ok(()),
+        Some(version) => Err(format!(
+            "the running Automic Vault app reported unsupported Alibaba Cloud helper version {version}"
+        )),
+        None => {
+            Err("the running Automic Vault app returned no Alibaba Cloud helper version".into())
+        }
+    }
 }
 
 pub(crate) fn store_secret(account: &str, value: &str) -> Result<(), String> {

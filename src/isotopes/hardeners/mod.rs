@@ -1,3 +1,4 @@
+pub(crate) mod aliyun_cli;
 pub(crate) mod aws_cli;
 pub(crate) mod aws_release;
 pub(crate) mod codex;
@@ -295,6 +296,7 @@ macro_rules! ungated_hardener {
 
 pub(crate) fn metadata() -> Vec<HardenerMetadata> {
     let mut metadata = vec![
+        gated_hardener!(aliyun_cli, "aliyun-cli"),
         gated_hardener!(aws_cli, "aws"),
         ungated_hardener!(codex, "codex"),
         gated_hardener!(docker, "docker"),
@@ -330,6 +332,7 @@ pub(crate) fn metadata() -> Vec<HardenerMetadata> {
 pub(crate) fn secret_gates() -> Vec<SecretGateDescriptor> {
     let mut gates = vec![
         gpg_signing_gate(),
+        aliyun_cli::secret_gate(),
         aws_cli::secret_gate(),
         docker::secret_gate(),
         goat::secret_gate(),

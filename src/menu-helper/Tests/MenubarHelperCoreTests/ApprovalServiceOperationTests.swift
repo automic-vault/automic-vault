@@ -17,6 +17,11 @@ import Testing
     #expect(ApprovalServiceOperation.terraformGet.rawValue == "terraform-get")
 }
 
+@Test func aliyunCredentialGetHasADedicatedWireOperation() {
+    #expect(ApprovalServiceOperation.aliyunHelperVersion.rawValue == "aliyun-helper-version")
+    #expect(ApprovalServiceOperation.aliyunGet.rawValue == "aliyun-get")
+}
+
 @Test func oxideCredentialsHaveDedicatedWireOperations() {
     #expect(ApprovalServiceOperation.oxideGet.rawValue == "oxide-get")
     #expect(ApprovalServiceOperation.oxideSave.rawValue == "oxide-save")

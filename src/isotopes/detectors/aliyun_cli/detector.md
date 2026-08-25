@@ -8,14 +8,12 @@
 
 - `~/.aliyun/config.json`
 
-## Why This is not Yet Hardened
+## Hardening
 
-The retired `aliyun-cli` hardener moved the detected secret to the macOS
-Keychain, then recreated `~/.aliyun/config.json` inside a temporary directory
-for each run. We no longer consider a temporary plaintext file a sufficient
-security boundary, so this detector remains report-only.
+Run `av harden aliyun-cli` to migrate AccessKey and STS profiles into Automic
+Vault custody. The Hardener replaces inline credentials with Alibaba Cloud
+CLI's native External credential provider and installs an eligible Isotope as
+the gated Target.
 
-If a narrow environment-variable or credential-helper interface can cover this
-state without writing the secret back to disk, we can reconsider the hardener.
-
-[Open an issue to discuss a safer integration](https://github.com/automic-vault/automic-vault/issues).
+OAuth, bearer-token, and private-key profiles remain report-only and are refused
+by the Hardener.

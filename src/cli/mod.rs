@@ -2,6 +2,7 @@ use std::ffi::OsString;
 use std::io::{IsTerminal, Write};
 use std::path::PathBuf;
 
+pub(crate) mod aliyun_credential;
 mod aws;
 mod bless;
 pub(crate) mod docker_credential;
@@ -380,6 +381,10 @@ where
                 let result = hardeners::oxide_cli::run(stdout, yes);
                 return finish_hardening(result, "oxide-cli", stdout, stderr);
             }
+            if target == "aliyun" || target == "aliyun-cli" {
+                let result = hardeners::aliyun_cli::run(stdout, yes);
+                return finish_hardening(result, "aliyun-cli", stdout, stderr);
+            }
             if target == "goat" {
                 let result = hardeners::goat::run(stdout, yes);
                 return finish_hardening(result, "goat", stdout, stderr);
@@ -459,6 +464,7 @@ where
         }
         Some("docker-credential") => docker_credential::run(rest, stdout, stderr),
         Some("terraform-credential") => terraform_credential::run(rest, stdout, stderr),
+        Some("aliyun-credential") => aliyun_credential::run(rest, stdout, stderr),
         Some("oxide-credential") => oxide_credential::run(rest, stdout, stderr),
         Some("goat-credential") => goat_credential::run(rest, stdout, stderr),
         Some("ordercli-credential") => ordercli_credential::run(rest, stdout, stderr),
