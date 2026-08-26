@@ -84,11 +84,12 @@ public struct DashboardSnapshot: Equatable, Sendable {
         policyService: String = secretGatePoliciesKeychainService
     ) -> DashboardSnapshot {
         _ = resumePendingSecretMutation()
-        let hardenerMetadata = loadHardenerMetadata(avExecutableURL: avExecutableURL)
+        let hardening = loadDashboardHardening(avExecutableURL: avExecutableURL)
+        let hardenerMetadata = hardening.hardeners
         let secrets = loadStoredSecrets(directAccessRules: loadDirectAccessRules())
         let gateDescriptors = dashboardSecretGateDescriptors(
             hardeners: hardenerMetadata,
-            catalog: (try? loadSecretGateDescriptors(avExecutableURL: avExecutableURL)) ?? [],
+            catalog: hardening.secretGates,
             storedSecretNames: Set(secrets.map(\.account))
         )
         _ = initializeSecretGatePolicies(descriptors: gateDescriptors, service: policyService)
@@ -98,7 +99,7 @@ public struct DashboardSnapshot: Equatable, Sendable {
             metadata: hardenerMetadata
         )
         return DashboardSnapshot(
-            detectors: loadDetectorMetadata(avExecutableURL: avExecutableURL),
+            detectors: hardening.detectors,
             detectorFindings: [],
             hardenedTools: hardenedTools,
             hardeners: hardenerMetadata,
@@ -107,7 +108,7 @@ public struct DashboardSnapshot: Equatable, Sendable {
             secretNameAccessApps: loadSecretNameAccessApps(),
             secrets: secrets,
             accessRequests: loadAccessRequestRecords(),
-            doctorIssues: loadDoctorIssues(avExecutableURL: avExecutableURL)
+            doctorIssues: hardening.doctorIssues
         )
     }
 }
@@ -871,6 +872,27 @@ struct HardenerReport: Codable {
     let hardeners: [HardenerMetadata]
 }
 
+struct DashboardHardening: Sendable {
+    let hardeners: [HardenerMetadata]
+    let detectors: [DetectorMetadata]
+    let secretGates: [SecretGateDescriptor]
+    let doctorIssues: [DoctorIssue]
+}
+
+private struct DashboardHardeningReport: Codable {
+    let hardeners: [HardenerMetadata]
+    let detectors: [DetectorMetadata]
+    let secretGates: [SecretGateDescriptor]
+    let results: [DoctorResult]
+
+    private enum CodingKeys: String, CodingKey {
+        case hardeners
+        case detectors
+        case secretGates = "secret_gates"
+        case results
+    }
+}
+
 private struct SecretGateReport: Codable {
     let secretGates: [SecretGateDescriptor]
 
@@ -920,8 +942,30 @@ public func hardenerMetadata(from hardenersJSON: Data) throws -> [HardenerMetada
     try JSONDecoder().decode(HardenerReport.self, from: hardenersJSON).hardeners
 }
 
+func dashboardHardening(
+    from dashboardJSON: Data,
+    loginShellPATHAvailable: Bool = true
+) throws -> DashboardHardening {
+    let report = try JSONDecoder().decode(DashboardHardeningReport.self, from: dashboardJSON)
+    return DashboardHardening(
+        hardeners: report.hardeners,
+        detectors: report.detectors,
+        secretGates: try validatedSecretGateDescriptors(report.secretGates),
+        doctorIssues: doctorIssues(
+            from: report.results,
+            loginShellPATHAvailable: loginShellPATHAvailable
+        )
+    )
+}
+
 public func secretGateDescriptors(from secretGatesJSON: Data) throws -> [SecretGateDescriptor] {
     let gates = try JSONDecoder().decode(SecretGateReport.self, from: secretGatesJSON).secretGates
+    return try validatedSecretGateDescriptors(gates)
+}
+
+private func validatedSecretGateDescriptors(
+    _ gates: [SecretGateDescriptor]
+) throws -> [SecretGateDescriptor] {
     guard !gates.isEmpty,
           Set(gates.map(\.id)).count == gates.count,
           gates.allSatisfy({ gate in
@@ -941,7 +985,15 @@ public func secretGateDescriptors(from secretGatesJSON: Data) throws -> [SecretG
 }
 
 public func doctorIssues(from doctorJSON: Data, loginShellPATHAvailable: Bool = true) throws -> [DoctorIssue] {
-    var issues = try JSONDecoder().decode(DoctorReport.self, from: doctorJSON).results.flatMap { result in
+    let results = try JSONDecoder().decode(DoctorReport.self, from: doctorJSON).results
+    return doctorIssues(from: results, loginShellPATHAvailable: loginShellPATHAvailable)
+}
+
+private func doctorIssues(
+    from results: [DoctorResult],
+    loginShellPATHAvailable: Bool
+) -> [DoctorIssue] {
+    var issues = results.flatMap { result in
         result.issues.map {
             DoctorIssue(
                 hardener: result.name,
@@ -2593,6 +2645,25 @@ public func loadDetectorMetadata(avExecutableURL: URL) -> [DetectorMetadata] {
 public func loadHardenerMetadata(avExecutableURL: URL) -> [HardenerMetadata] {
     loadJSON(avExecutableURL: avExecutableURL, arguments: ["hardeners", "--json"])
         .flatMap { try? hardenerMetadata(from: $0) } ?? []
+}
+
+func loadDashboardHardening(avExecutableURL: URL) -> DashboardHardening {
+    if let data = loadJSON(
+        avExecutableURL: avExecutableURL,
+        arguments: ["__dashboard-hardening-json"]
+    ), let report = try? dashboardHardening(from: data, loginShellPATHAvailable: false) {
+        return report
+    }
+    let hardeners = loadHardenerMetadata(avExecutableURL: avExecutableURL)
+    let secretGates = (try? loadSecretGateDescriptors(avExecutableURL: avExecutableURL)) ?? []
+    let detectors = loadDetectorMetadata(avExecutableURL: avExecutableURL)
+    let doctorIssues = loadDoctorIssues(avExecutableURL: avExecutableURL)
+    return DashboardHardening(
+        hardeners: hardeners,
+        detectors: detectors,
+        secretGates: secretGates,
+        doctorIssues: doctorIssues
+    )
 }
 
 public func loadSecretGateDescriptors(avExecutableURL: URL) throws -> [SecretGateDescriptor] {

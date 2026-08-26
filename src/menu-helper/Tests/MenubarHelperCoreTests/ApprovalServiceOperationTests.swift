@@ -30,6 +30,8 @@ import Testing
 
 @Test func goatCredentialsHaveDedicatedWireOperations() {
     #expect(ApprovalServiceOperation.goatGet.rawValue == "goat-get")
+    #expect(ApprovalServiceOperation.wakatimeHelperVersion.rawValue == "wakatime-helper-version")
+    #expect(ApprovalServiceOperation.wakatimeGet.rawValue == "wakatime-get")
     #expect(ApprovalServiceOperation.goatSave.rawValue == "goat-save")
     #expect(ApprovalServiceOperation.goatDelete.rawValue == "goat-delete")
 }

@@ -24,6 +24,7 @@ mod scan;
 mod shell_secrets;
 pub(crate) mod terraform_credential;
 pub(crate) mod uaa_credential;
+pub(crate) mod wakatime_credential;
 
 use crate::isotopes::hardeners;
 
@@ -54,7 +55,7 @@ modes:
 more:
   $ open https://www.automicvault.com/docs/";
 
-pub(crate) const INSTALL_REVISION: u32 = 38;
+pub(crate) const INSTALL_REVISION: u32 = 39;
 
 pub(crate) fn bash_shell_secret_insecurity_reasons() -> Result<Vec<String>, String> {
     shell_secrets::bash_reasons()
@@ -314,6 +315,15 @@ where
         }
         Some("detectors") if rest == [OsString::from("--json")] => scan::run_detectors_json(stdout),
         Some("hardeners") if rest == [OsString::from("--json")] => scan::run_hardeners_json(stdout),
+        Some("__dashboard-hardening-json") if rest.is_empty() => {
+            match scan::run_dashboard_hardening_json(stdout) {
+                Ok(code) => code,
+                Err(err) => {
+                    let _ = writeln!(stderr, "av: {err}");
+                    1
+                }
+            }
+        }
         Some("__secret-gates-json") if rest.is_empty() => scan::run_secret_gates_json(stdout),
         Some("gpg-sign") => gpg_sign::run(rest, stdout, stderr),
         Some("__gpg-public-key") if rest.is_empty() => gpg_sign::validate(stdout, stderr),
@@ -409,6 +419,10 @@ where
                 let result = hardeners::plumber::run(stdout, yes);
                 return finish_hardening(result, "plumber", stdout, stderr);
             }
+            if target == "wakatime" || target == "wakatime-cli" {
+                let result = hardeners::wakatime_cli::run(stdout, yes);
+                return finish_hardening(result, "wakatime-cli", stdout, stderr);
+            }
             if target == "gh" || target == "gh-cli" {
                 let result = hardeners::gh_cli::run(stdout, yes);
                 return finish_hardening(result, "gh", stdout, stderr);
@@ -472,6 +486,7 @@ where
         Some("plumber-credential") => plumber_credential::run(rest, stdout, stderr),
         Some("uaa-credential") => uaa_credential::run(rest, stdout, stderr),
         Some("railway-credential") => railway_credential::run(rest, stdout, stderr),
+        Some("wakatime-credential") => wakatime_credential::run(rest, stdout, stderr),
         Some("list" | "ls") => list::run(rest, stdout, stderr),
         Some("bless") => bless::run(rest, stderr),
         Some("open") => {
@@ -682,6 +697,33 @@ mod tests {
 
         assert_eq!(code, 0);
         assert_eq!(stderr, "");
+    }
+
+    #[test]
+    fn private_dashboard_hardening_report_combines_hardeners_and_doctor() {
+        let _guard = crate::global_test_env_lock().lock().unwrap();
+        unsafe {
+            std::env::set_var("AUTOMIC_VAULT_TEST_AWS_STUB_PATH", "/nonexistent");
+        }
+
+        let (code, stdout, stderr) = run_args(&["av", "__dashboard-hardening-json"]);
+
+        unsafe { std::env::remove_var("AUTOMIC_VAULT_TEST_AWS_STUB_PATH") };
+        let report: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+        assert_eq!(code, 0);
+        assert_eq!(stderr, "");
+        assert!(
+            report["hardeners"]
+                .as_array()
+                .is_some_and(|items| !items.is_empty())
+        );
+        assert!(
+            report["detectors"]
+                .as_array()
+                .is_some_and(|items| !items.is_empty())
+        );
+        assert!(report["secret_gates"].is_array());
+        assert!(report["results"].is_array());
     }
 
     #[test]

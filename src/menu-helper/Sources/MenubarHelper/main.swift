@@ -2869,6 +2869,8 @@ private struct ApprovedFulfillmentMaterial: Sendable {
     let awsRegistration: AWSRegistration?
 }
 
+private let dockerHelperProtocolVersion: UInt64 = 2
+
 private final class ApprovalServer: @unchecked Sendable {
     private let serviceName: String
     private let teamIdentifier: String
@@ -3066,11 +3068,11 @@ private final class ApprovalServer: @unchecked Sendable {
             reply(peer, to: message, ok: true, error: nil, value: String(negotiated))
         case .dockerHelperVersion where isTrustedAvCaller(path: callerPath, signing: signing):
             let requested = xpc_dictionary_get_uint64(message, "requested_version")
-            guard requested == 1 else {
+            guard requested == dockerHelperProtocolVersion else {
                 reply(peer, to: message, ok: false, error: "Docker helper protocol upgrade is required")
                 return
             }
-            reply(peer, to: message, ok: true, error: nil, value: "1")
+            reply(peer, to: message, ok: true, error: nil, value: String(dockerHelperProtocolVersion))
         case .goatHelperVersion where isTrustedAvCaller(path: callerPath, signing: signing):
             let requested = xpc_dictionary_get_uint64(message, "requested_version")
             guard requested == 1 else {
@@ -3134,6 +3136,13 @@ private final class ApprovalServer: @unchecked Sendable {
                 return
             }
             reply(peer, to: message, ok: true, error: nil, value: "1")
+        case .wakatimeHelperVersion where isTrustedAvCaller(path: callerPath, signing: signing):
+            let requested = xpc_dictionary_get_uint64(message, "requested_version")
+            guard requested == 1 else {
+                reply(peer, to: message, ok: false, error: "WakaTime helper protocol upgrade is required")
+                return
+            }
+            reply(peer, to: message, ok: true, error: nil, value: "1")
         case .gpgSign where isTrustedAvCaller(path: callerPath, signing: signing):
             handleInject(
                 message,
@@ -3145,7 +3154,7 @@ private final class ApprovalServer: @unchecked Sendable {
                 signing: signing
             )
         case .inject, .keys, .authorize, .dockerGet, .goatGet, .ordercliGet, .openhueGet, .plumberGet, .uaaGet, .railwayGet,
-             .oxideGet, .terraformGet, .aliyunGet:
+             .oxideGet, .terraformGet, .aliyunGet, .wakatimeGet:
             handleInject(
                 message,
                 on: peer,
@@ -3543,15 +3552,22 @@ private final class ApprovalServer: @unchecked Sendable {
                 helperPath: callerPath,
                 helperSigning: signing
             )
-            let conflicts = Set(oxideRequest.envConflicts)
-            let selectionNames = oxideRequest.keys.filter {
-                oxideRequest.replaceExistingEnv || !conflicts.contains($0)
+            let wakatimeRequest = try wakatimeCredentialRequest(
+                from: message,
+                request: oxideRequest,
+                helperIdentity: identity,
+                helperPath: callerPath,
+                helperSigning: signing
+            )
+            let conflicts = Set(wakatimeRequest.envConflicts)
+            let selectionNames = wakatimeRequest.keys.filter {
+                wakatimeRequest.replaceExistingEnv || !conflicts.contains($0)
             }
             let selected = try secretValueCustody.bind(
                 names: selectionNames,
-                cwd: oxideRequest.cwd
+                cwd: wakatimeRequest.cwd
             )
-            request = approvalRequestWithCredentialContext(oxideRequest.selecting(selected))
+            request = approvalRequestWithCredentialContext(wakatimeRequest.selecting(selected))
         } catch {
             reply(peer, to: message, ok: false, error: error.localizedDescription)
             return
@@ -6419,6 +6435,71 @@ private final class ApprovalServer: @unchecked Sendable {
         )
     }
 
+    private func wakatimeCredentialRequest(
+        from message: xpc_object_t,
+        request: ApprovalRequest,
+        helperIdentity: AVProcessIdentity,
+        helperPath: String,
+        helperSigning: SigningInfo
+    ) throws -> ApprovalRequest {
+        guard request.op == "wakatime-get" else { return request }
+        guard request.tool == "wakatime-cli",
+              isTrustedAvCaller(path: helperPath, signing: helperSigning),
+              request.target.isEmpty,
+              request.args.isEmpty,
+              request.keys == [wakatimeCredentialSecretName],
+              !request.replaceExistingEnv,
+              !request.allowMissingKeys,
+              request.envConflicts.isEmpty,
+              request.shebangScript == nil,
+              request.scriptData == nil,
+              let urlPointer = xpc_dictionary_get_string(message, "wakatime_api_url"),
+              String(cString: urlPointer) == wakatimeOfficialAPIURL
+        else { throw AppError("invalid WakaTime credential request") }
+        let parent = try wakatimeCredentialParent(for: helperIdentity)
+        return ApprovalRequest(
+            op: request.op,
+            keys: request.keys,
+            target: parent.target,
+            args: Array(parent.arguments.dropFirst()),
+            cwd: request.cwd,
+            replaceExistingEnv: false,
+            allowMissingKeys: false,
+            envConflicts: [],
+            shebangScript: nil,
+            scriptData: nil,
+            tool: "wakatime-cli",
+            title: "Use the WakaTime API key?",
+            detail: "The verified WakaTime Target will receive the global API key for WakaTime's official API endpoint.",
+            credentialScope: wakatimeOfficialAPIURL,
+            credentialParent: parent
+        )
+    }
+
+    private func wakatimeCredentialParent(
+        for helperIdentity: AVProcessIdentity
+    ) throws -> CredentialHelperParent {
+        let parentPID = helperIdentity.ppid
+        var parentIdentity = AVProcessIdentity()
+        guard parentPID > 1,
+              av_process_identity(parentPID, &parentIdentity),
+              parentIdentity.euid == helperIdentity.euid,
+              let arguments = processArguments(parentPID),
+              !arguments.isEmpty
+        else { throw AppError("WakaTime credential helper has no live parent") }
+        let target = pathString(parentIdentity)
+        guard wakatimeTargetIdentityValid(pid: parentPID, path: target) else {
+            throw AppError("credential helper parent is not an eligible WakaTime Target")
+        }
+        return CredentialHelperParent(
+            pid: parentPID,
+            startUsec: parentIdentity.start_usec,
+            euid: parentIdentity.euid,
+            target: target,
+            arguments: arguments
+        )
+    }
+
     private func terraformCredentialParent(
         for helperIdentity: AVProcessIdentity
     ) throws -> CredentialHelperParent {
@@ -6524,6 +6605,7 @@ private final class ApprovalServer: @unchecked Sendable {
         case "tofu": "opentofu"
         case "terraform": "terraform"
         case "uaa": "uaa-cli"
+        case "wakatime-cli": "wakatime-cli"
         default: ""
         }
     }
@@ -6568,6 +6650,9 @@ private final class ApprovalServer: @unchecked Sendable {
         case "terraform", "opentofu":
             return credentialHelperTool(parent) == tool
                 && terraformTargetIdentityValid(pid: parent.pid, path: parent.target)
+        case "wakatime-cli":
+            return credentialHelperTool(parent) == tool
+                && wakatimeTargetIdentityValid(pid: parent.pid, path: parent.target)
         default: return false
         }
     }
@@ -6674,6 +6759,18 @@ private final class ApprovalServer: @unchecked Sendable {
             && signing.runtimeProtection.allowsSecretGateAccess
     }
 
+    private func wakatimeTargetIdentityValid(pid: pid_t, path: String) -> Bool {
+        guard configuredSecretGateTarget("wakatime-cli", matches: path),
+              let signing = liveSigningInfo(pid: pid),
+              signing.mainExecutable == path
+        else { return false }
+        return signing.identifier == "wakatime-cli"
+            && signing.teamIdentifier == "ZU76A67LGU"
+            && signing.isDeveloperID
+            && signing.runtimeProtection == .hardened
+            && liveProcessHasNoEntitlements(pid: pid)
+    }
+
     private func configuredSecretGateTarget(_ gateID: String, matches path: String) -> Bool {
         secretGateDescriptors.first(where: { $0.id == gateID })?.routes.contains {
             normalizedExecutablePath($0.targetPath) == normalizedExecutablePath(path)
@@ -6685,7 +6782,7 @@ private final class ApprovalServer: @unchecked Sendable {
         awsRegistration: AWSRegistrationCandidate?
     ) throws -> AuthorizationFulfillmentTransaction<ApprovedFulfillmentMaterial> {
         let credentialParent: CredentialHelperParent?
-        if ["docker-get", "goat-get", "ordercli-get", "openhue-get", "plumber-get", "uaa-get", "railway-get", "oxide-get", "terraform-get", "aliyun-get"]
+        if ["docker-get", "goat-get", "ordercli-get", "openhue-get", "plumber-get", "uaa-get", "railway-get", "oxide-get", "terraform-get", "aliyun-get", "wakatime-get"]
             .contains(request.op)
         {
             guard let scope = request.credentialScope,
@@ -6718,6 +6815,11 @@ private final class ApprovalServer: @unchecked Sendable {
                     throw AppError("Oxide credential scope changed before Secret Application")
                 }
                 expected = oxide.secretName
+            case "wakatime-get":
+                guard scope == wakatimeOfficialAPIURL else {
+                    throw AppError("WakaTime API endpoint changed before Secret Application")
+                }
+                expected = wakatimeCredentialSecretName
             default: expected = terraformCredentialSecretName(scope)
             }
             guard request.keys == [expected] else {
@@ -6777,6 +6879,11 @@ private final class ApprovalServer: @unchecked Sendable {
                 guard let value = secrets[aliyunCredentialSecretName(scope)],
                       parseAliyunCredential(value)
                 else { throw AppError("Alibaba Cloud credential changed before Secret Application") }
+            } else if request.op == "wakatime-get" {
+                guard scope == wakatimeOfficialAPIURL,
+                      let value = secrets[wakatimeCredentialSecretName],
+                      validWakaTimeAPIKey(value)
+                else { throw AppError("WakaTime credential changed before Secret Application") }
             } else {
                 guard let value = secrets[terraformCredentialSecretName(scope)],
                       parseTerraformCredential(value) != nil
@@ -7154,7 +7261,7 @@ private final class ApprovalServer: @unchecked Sendable {
         let op = String(cString: opPointer)
         guard op == "inject" || op == "keys" || op == "authorize" || op == "gpg-sign"
             || op == "docker-get" || op == "goat-get" || op == "ordercli-get" || op == "openhue-get" || op == "plumber-get" || op == "uaa-get" || op == "railway-get"
-            || op == "oxide-get" || op == "terraform-get" || op == "aliyun-get"
+            || op == "oxide-get" || op == "terraform-get" || op == "aliyun-get" || op == "wakatime-get"
             || op == "proxy-start"
         else { return nil }
         let scriptData: Data?
@@ -7568,6 +7675,8 @@ private func classifySecretGateRequest(
         return terraformRequestClassification(request.args)
     case "aliyun-cli":
         return aliyunRequestClassification(request.args)
+    case "wakatime-cli":
+        return wakatimeRequestClassification(request.args)
     case "aws":
         if awsRequestMayUseLongLivedCredentials(request) { return .secretDump }
         return awsRequestIsReadOnly(awsCommandWords(request)) ? .readOnly : .mutating
@@ -7579,6 +7688,24 @@ private func classifySecretGateRequest(
             arguments: secretGateCommandWords(request)
         )
     }
+}
+
+private func wakatimeRequestClassification(_ args: [String]) -> SecretGateRequestClassification {
+    let words = args.map { $0.lowercased() }
+    if words.contains(where: {
+        $0 == "--entity" || $0.hasPrefix("--entity=") || $0 == "--extra-heartbeats"
+            || $0 == "--sync-offline-activity" || $0.hasPrefix("--sync-offline-activity=")
+            || $0 == "--sync-ai-activity" || $0 == "--sync-ai-heartbeats"
+    }) {
+        return .mutating
+    }
+    if words.contains(where: {
+        $0 == "--today" || $0 == "--file-experts" || $0 == "--today-goal"
+            || $0.hasPrefix("--today-goal=")
+    }) {
+        return .readOnly
+    }
+    return .unknown
 }
 
 private func goatRequestClassification(_ args: [String]) -> SecretGateRequestClassification {
@@ -8641,6 +8768,23 @@ private func parseTerraformCredential(_ value: String) -> String? {
     return token
 }
 
+private let wakatimeCredentialSecretName = "WAKATIME_API_KEY"
+private let wakatimeOfficialAPIURL = "https://api.wakatime.com/api/v1"
+
+private func validWakaTimeAPIKey(_ value: String) -> Bool {
+    let key = value.hasPrefix("waka_") ? String(value.dropFirst(5)) : value
+    let bytes = Array(key.utf8)
+    let hyphens = Set([8, 13, 18, 23])
+    guard bytes.count == 36, bytes[14] == 52, [56, 57, 97, 98].contains(bytes[19]) else {
+        return false
+    }
+    return bytes.enumerated().allSatisfy { index, byte in
+        hyphens.contains(index)
+            ? byte == 45
+            : (48...57).contains(byte) || (97...102).contains(byte)
+    }
+}
+
 private func isGhTokenKey(_ key: String) -> Bool {
     key.hasPrefix("GH_TOKEN_") && validSecretKeyName(key)
 }
@@ -9336,6 +9480,11 @@ private func launcherIdentities(
         }
         + [associatedAppBundleURL(path: path, signing: signing)].compactMap { $0 }
     ).filter { seenApps.insert($0.path).inserted }
+    let helperAssociation = verifiedLauncherHelperAssociation(
+        path: path,
+        signing: signing,
+        containingAppURLs: containingAppURLs
+    )
     let claimsLauncherBundleIdentity = signing.identifier.hasPrefix(launcherBundleIdentifierPrefix)
         || containingAppURLs.contains(where: launcherBundleClaimsReservedIdentity)
     if claimsLauncherBundleIdentity {
@@ -9361,7 +9510,7 @@ private func launcherIdentities(
         )]
     }
     guard !signing.isAdHoc else { return [] }
-    let apps: [LauncherIdentity] = appURLs.compactMap { appURL in
+    var apps: [LauncherIdentity] = appURLs.compactMap { appURL in
         guard let app = appSigning(appURL) else { return nil }
         return LauncherIdentity(
             pid: pid,
@@ -9371,6 +9520,18 @@ private func launcherIdentities(
             designatedRequirement: app.designatedRequirement,
             runtimeProtection: signing.runtimeProtection
         )
+    }
+    if let helperAssociation,
+       seenApps.insert(helperAssociation.appURL.path).inserted,
+       let app = verifiedLauncherHelperSigningInfo(helperAssociation, pid: pid) {
+        apps.append(LauncherIdentity(
+            pid: pid,
+            path: path,
+            identifier: app.identifier,
+            teamIdentifier: app.teamIdentifier,
+            designatedRequirement: app.designatedRequirement,
+            runtimeProtection: signing.runtimeProtection
+        ))
     }
     if !apps.isEmpty { return apps }
     guard allowsStandaloneFallback,
@@ -9461,6 +9622,12 @@ private struct StaticSigningInfo {
     let identifier: String
     let teamIdentifier: String
     let designatedRequirement: String
+}
+
+private struct VerifiedLauncherHelperAssociation {
+    let helper: VerifiedLauncherHelper
+    let appURL: URL
+    let executableURL: URL
 }
 
 private func runtimeProtection(_ dictionary: [CFString: Any]) -> LauncherRuntimeProtection {
@@ -9596,11 +9763,15 @@ private func staticSigningInfo(url: URL) -> StaticSigningInfo? {
     var staticCode: SecStaticCode?
     guard SecStaticCodeCreateWithPath(url as CFURL, [], &staticCode) == errSecSuccess,
           let staticCode,
-          SecStaticCodeCheckValidity(staticCode, [], nil) == errSecSuccess
+          validateAppBundleMainExecutable(staticCode) == errSecSuccess
     else {
         return nil
     }
 
+    return staticSigningInfo(staticCode)
+}
+
+private func staticSigningInfo(_ staticCode: SecStaticCode) -> StaticSigningInfo? {
     var info: CFDictionary?
     let flags = SecCSFlags(rawValue: kSecCSSigningInformation | kSecCSRequirementInformation)
     guard SecCodeCopySigningInformation(staticCode, flags, &info) == errSecSuccess,
@@ -9633,14 +9804,29 @@ private func launcherAppVerificationFailure(
             guard av_process_identity(pid, &ancestor) else { break }
             let path = pathString(ancestor)
             if let signing = liveSigningInfo(pid: pid) ?? executableSigningInfo(path: path) {
-                let appURLs = (
+                let containingAppURLs = (
                     appBundleURLs(containing: path)
                     + appBundleURLs(containing: signing.mainExecutable)
-                ).filter {
-                    appBundleMatchesMainExecutable(
-                        $0,
-                        executablePaths: [path, signing.mainExecutable]
+                )
+                let helperAssociation = verifiedLauncherHelperAssociation(
+                    path: path,
+                    signing: signing,
+                    containingAppURLs: containingAppURLs
+                )
+                if let helperAssociation,
+                   checkedApps.insert(helperAssociation.appURL.path).inserted,
+                   verifiedLauncherHelperSigningInfo(helperAssociation, pid: pid) == nil {
+                    return LauncherAppVerificationFailure(
+                        appName: helperAssociation.helper.appName,
+                        resourcesUnreadable: false
                     )
+                }
+                let appURLs = containingAppURLs.filter {
+                    $0.path != helperAssociation?.appURL.path
+                        && appBundleMatchesMainExecutable(
+                            $0,
+                            executablePaths: [path, signing.mainExecutable]
+                        )
                 }
                     + [associatedAppBundleURL(path: path, signing: signing)].compactMap { $0 }
                 for appURL in appURLs where checkedApps.insert(appURL.path).inserted {
@@ -9660,7 +9846,7 @@ private func appBundleVerificationFailure(_ url: URL) -> LauncherAppVerification
     else {
         return nil
     }
-    let status = SecStaticCodeCheckValidity(staticCode, [], nil)
+    let status = validateAppBundleMainExecutable(staticCode)
     guard status != errSecSuccess else { return nil }
     let name = url.deletingPathExtension().lastPathComponent
     let executableOnly = SecCSFlags(
@@ -9746,6 +9932,105 @@ private func associatedAppBundleURL(path: String, signing: LiveSigningInfo) -> U
     }
     return NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.automicvault.vaultty")
         ?? URL(fileURLWithPath: "/Applications/Vaultty.app")
+}
+
+private func verifiedLauncherHelperAssociation(
+    path: String,
+    signing: LiveSigningInfo,
+    containingAppURLs: [URL]? = nil,
+    helpers: [VerifiedLauncherHelper] = verifiedLauncherHelpers,
+    configuration: VerifiedLauncherHelperConfiguration? = nil,
+    bundleIdentifier: (URL) -> String? = { Bundle(url: $0)?.bundleIdentifier }
+) -> VerifiedLauncherHelperAssociation? {
+    guard signing.isDeveloperID,
+          let helper = helpers.first(where: {
+              $0.helperSigningIdentifier == signing.identifier
+                  && $0.helperTeamIdentifier == signing.teamIdentifier
+          }),
+          (configuration ?? loadVerifiedLauncherHelperConfiguration()).isEnabled(helper)
+    else { return nil }
+    let executablePath = signing.mainExecutable.isEmpty ? path : signing.mainExecutable
+    let executableURL = URL(fileURLWithPath: executablePath)
+        .standardizedFileURL
+        .resolvingSymlinksInPath()
+    let appURLs = containingAppURLs ?? appBundleURLs(containing: executableURL.path)
+    guard let appURL = appURLs.first(where: {
+        bundleIdentifier($0) == helper.appBundleIdentifier
+    }) else { return nil }
+    return VerifiedLauncherHelperAssociation(
+        helper: helper,
+        appURL: appURL,
+        executableURL: executableURL
+    )
+}
+
+private func verifiedLauncherHelperSigningInfo(
+    _ association: VerifiedLauncherHelperAssociation,
+    pid: pid_t
+) -> StaticSigningInfo? {
+    guard let liveCodeIdentifier = liveCodeIdentity(pid: pid),
+          let fileCodeIdentifier = staticCodeIdentity(association.executableURL),
+          liveCodeIdentifier == fileCodeIdentifier
+    else { return nil }
+
+    return verifiedLauncherHelperAppSigningInfo(association)
+}
+
+private func verifiedLauncherHelperAppSigningInfo(
+    _ association: VerifiedLauncherHelperAssociation
+) -> StaticSigningInfo? {
+    var staticCode: SecStaticCode?
+    guard SecStaticCodeCreateWithPath(
+        association.appURL as CFURL,
+        [],
+        &staticCode
+    ) == errSecSuccess,
+        let staticCode,
+        let requirement = verifiedLauncherHelperAppRequirement(association.helper)
+    else { return nil }
+
+    guard validateAppBundleResource(
+        staticCode,
+        resourceURL: association.executableURL,
+        requirement: requirement
+    ) == errSecSuccess,
+          let app = staticSigningInfo(staticCode),
+          app.identifier == association.helper.appBundleIdentifier,
+          app.teamIdentifier == association.helper.appTeamIdentifier
+    else { return nil }
+    return app
+}
+
+private func verifiedLauncherHelperAppRequirement(
+    _ helper: VerifiedLauncherHelper
+) -> SecRequirement? {
+    let source = """
+    identifier "\(helper.appBundleIdentifier)" and \
+    anchor apple generic and \
+    certificate 1[field.1.2.840.113635.100.6.2.6] exists and \
+    certificate leaf[field.1.2.840.113635.100.6.1.13] exists and \
+    certificate leaf[subject.OU] = "\(helper.appTeamIdentifier)"
+    """
+    var requirement: SecRequirement?
+    guard SecRequirementCreateWithString(
+        source as CFString,
+        [],
+        &requirement
+    ) == errSecSuccess else { return nil }
+    return requirement
+}
+
+private func staticCodeIdentity(_ url: URL) -> Data? {
+    var staticCode: SecStaticCode?
+    guard SecStaticCodeCreateWithPath(url as CFURL, [], &staticCode) == errSecSuccess,
+          let staticCode,
+          SecStaticCodeCheckValidity(staticCode, [], nil) == errSecSuccess
+    else { return nil }
+    var info: CFDictionary?
+    guard SecCodeCopySigningInformation(staticCode, [], &info) == errSecSuccess,
+          let dictionary = info as? [CFString: Any]
+    else { return nil }
+    return dictionary[kSecCodeInfoUnique] as? Data
 }
 
 private func scriptApproval(for request: ApprovalRequest) -> ScriptApproval? {
@@ -12235,6 +12520,75 @@ private func runStandaloneLauncherSelfCheck() -> Int32 {
         runtimeProtection: .hardened,
         isDeveloperID: true
     )
+    let bundledCodex = LiveSigningInfo(
+        identifier: codexVerifiedLauncherHelper.helperSigningIdentifier,
+        teamIdentifier: codexVerifiedLauncherHelper.helperTeamIdentifier,
+        designatedRequirement: #"identifier "codex" and anchor apple generic"#,
+        mainExecutable: "/Applications/ChatGPT.app/Contents/Resources/codex",
+        isAdHoc: false,
+        runtimeProtection: .hardened,
+        isDeveloperID: true
+    )
+    let chatGPTURL = URL(fileURLWithPath: "/Applications/ChatGPT.app")
+    let codexAssociation = verifiedLauncherHelperAssociation(
+        path: bundledCodex.mainExecutable,
+        signing: bundledCodex,
+        containingAppURLs: [chatGPTURL],
+        configuration: VerifiedLauncherHelperConfiguration(),
+        bundleIdentifier: { _ in codexVerifiedLauncherHelper.appBundleIdentifier }
+    )
+    let disabledCodexAssociation = verifiedLauncherHelperAssociation(
+        path: bundledCodex.mainExecutable,
+        signing: bundledCodex,
+        containingAppURLs: [chatGPTURL],
+        configuration: VerifiedLauncherHelperConfiguration(
+            disabledHelperIDs: [codexVerifiedLauncherHelper.id]
+        ),
+        bundleIdentifier: { _ in codexVerifiedLauncherHelper.appBundleIdentifier }
+    )
+    let xcodeGit = LiveSigningInfo(
+        identifier: "com.apple.git",
+        teamIdentifier: "Software Signing",
+        designatedRequirement: #"identifier "com.apple.git" and anchor apple"#,
+        mainExecutable: "/Applications/Xcode.app/Contents/Developer/usr/bin/git",
+        isAdHoc: false,
+        runtimeProtection: .hardened,
+        isDeveloperID: false
+    )
+    let xcodeHelperAssociation = verifiedLauncherHelperAssociation(
+        path: xcodeGit.mainExecutable,
+        signing: xcodeGit,
+        containingAppURLs: [URL(fileURLWithPath: "/Applications/Xcode.app")],
+        configuration: VerifiedLauncherHelperConfiguration(),
+        bundleIdentifier: { _ in "com.apple.dt.Xcode" }
+    )
+    let installedCodexValidation: Bool = {
+        let executableURL = URL(
+            fileURLWithPath: "/Applications/ChatGPT.app/Contents/Resources/codex"
+        )
+        guard FileManager.default.fileExists(atPath: executableURL.path) else { return true }
+        guard let signing = executableSigningInfo(path: executableURL.path),
+              let association = verifiedLauncherHelperAssociation(
+                  path: executableURL.path,
+                  signing: signing,
+                  helpers: [codexVerifiedLauncherHelper],
+                  configuration: VerifiedLauncherHelperConfiguration()
+              ),
+              verifiedLauncherHelperAppSigningInfo(association) != nil
+        else { return false }
+        let outsideResource = VerifiedLauncherHelperAssociation(
+            helper: codexVerifiedLauncherHelper,
+            appURL: association.appURL,
+            executableURL: URL(fileURLWithPath: "/bin/ls")
+        )
+        return verifiedLauncherHelperAppSigningInfo(outsideResource) == nil
+    }()
+    let installedMainAppValidation = [
+        URL(fileURLWithPath: "/Applications/ChatGPT.app"),
+        URL(fileURLWithPath: "/Applications/Xcode.app"),
+    ].allSatisfy {
+        !FileManager.default.fileExists(atPath: $0.path) || staticSigningInfo(url: $0) != nil
+    }
     let liveBundleFallback = launcherIdentities(
         pid: 44,
         path: bundledDeveloperID.mainExecutable,
@@ -12257,6 +12611,13 @@ private func runStandaloneLauncherSelfCheck() -> Int32 {
           ),
           launcher.isStandalone,
           launcher.designatedRequirement == requirement,
+          targetedAppResourceValidationAvailable,
+          codexAssociation?.helper == codexVerifiedLauncherHelper,
+          codexAssociation?.appURL == chatGPTURL,
+          disabledCodexAssociation == nil,
+          xcodeHelperAssociation == nil,
+          installedCodexValidation,
+          installedMainAppValidation,
           let liveBundleFallback,
           liveBundleFallback.isStandalone,
           liveBundleFallback.identifier == bundledDeveloperID.identifier,
@@ -12702,6 +13063,22 @@ private func runAliyunCredentialSelfCheck() -> Int32 {
           !parseAliyunCredential(
               #"{"mode":"AK","access_key_id":"id","access_key_secret":"secret","future":true}"#
           )
+    else { return 1 }
+    return 0
+}
+
+private func runWakaTimeCredentialSelfCheck() -> Int32 {
+    let valid = ["waka_01234567", "89ab", "4cde", "8fab", "0123456789ab"].joined(separator: "-")
+    let bare = ["01234567", "89ab", "4cde", "bfab", "0123456789ab"].joined(separator: "-")
+    let wrongVersion = ["01234567", "89ab", "3cde", "8fab", "0123456789ab"].joined(separator: "-")
+    guard wakatimeRequestClassification(["--today"]) == .readOnly,
+          wakatimeRequestClassification(["--today-goal=123"]) == .readOnly,
+          wakatimeRequestClassification(["--entity", "/tmp/main.rs"]) == .mutating,
+          wakatimeRequestClassification(["--sync-offline-activity=100"]) == .mutating,
+          wakatimeRequestClassification(["--future-operation"]) == .unknown,
+          validWakaTimeAPIKey(valid),
+          validWakaTimeAPIKey(bare),
+          !validWakaTimeAPIKey(wrongVersion)
     else { return 1 }
     return 0
 }
@@ -13811,6 +14188,10 @@ if CommandLine.arguments.contains("--self-check-terraform-credentials") {
 
 if CommandLine.arguments.contains("--self-check-aliyun-credentials") {
     exit(runAliyunCredentialSelfCheck())
+}
+
+if CommandLine.arguments.contains("--self-check-wakatime-credentials") {
+    exit(runWakaTimeCredentialSelfCheck())
 }
 
 if CommandLine.arguments.contains("--self-check-oxide-credentials") {

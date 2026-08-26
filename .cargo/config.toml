@@ -1,5 +1,6 @@
 [env]
 RUST_TEST_THREADS = "1"
+MACOSX_DEPLOYMENT_TARGET = { value = "14.0", force = true }
 
 [target.aarch64-apple-darwin]
 rustflags = ["-C", "link-arg=-mmacosx-version-min=14.0"]

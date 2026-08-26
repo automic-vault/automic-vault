@@ -10,6 +10,7 @@ public enum ApprovalServiceOperation: String, CaseIterable, Sendable {
     case oxideHelperVersion = "oxide-helper-version"
     case terraformHelperVersion = "terraform-helper-version"
     case aliyunHelperVersion = "aliyun-helper-version"
+    case wakatimeHelperVersion = "wakatime-helper-version"
     case inject
     case varlock
     case keys
@@ -27,6 +28,7 @@ public enum ApprovalServiceOperation: String, CaseIterable, Sendable {
     case oxideGet = "oxide-get"
     case terraformGet = "terraform-get"
     case aliyunGet = "aliyun-get"
+    case wakatimeGet = "wakatime-get"
     case dockerSave = "docker-save"
     case dockerDelete = "docker-delete"
     case goatSave = "goat-save"

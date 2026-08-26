@@ -320,6 +320,12 @@ final class DashboardModel: ObservableObject {
                     detail: "Allow an exact live process execution to retain gate-specific Launcher attribution after its parent chain exits."
                 ),
                 DashboardItem(
+                    id: "verified-launcher-helpers",
+                    title: "Verified Launcher Helpers",
+                    subtitle: "Recognize signed CLIs sealed inside vendor apps",
+                    detail: "Manage exact app and helper signing-identity associations."
+                ),
+                DashboardItem(
                     id: "gpg-signing",
                     title: "GPG Signing",
                     subtitle: "Authorize Git commit signing",
@@ -1409,6 +1415,9 @@ func runDashboardSearchSelfCheck() -> Int32 {
     let detachedProcessAccessHeight = NSHostingView(
         rootView: DetachedProcessAccessSettingsView()
     ).fittingSize.height
+    let verifiedLauncherHelpersHeight = NSHostingView(
+        rootView: VerifiedLauncherHelpersSettingsView()
+    ).fittingSize.height
     let previousScriptData = Data("#!/usr/local/bin/av inject +TOKEN /bin/sh\necho old\n".utf8)
     let currentScriptData = Data("#!/usr/local/bin/av inject +TOKEN /bin/sh\necho current\n".utf8)
     guard let currentDeclaration = try? blessedScriptDeclaration(data: currentScriptData) else { return 1 }
@@ -1483,6 +1492,7 @@ func runDashboardSearchSelfCheck() -> Int32 {
           secretDetailHeight.map({ $0 > 0 }) == true,
           aboutHeight > 0,
           detachedProcessAccessHeight > 0,
+          verifiedLauncherHelpersHeight > 0,
           appRowHeight < 140,
           launcherBundleDisplay.name == "herdr",
           launcherBundleDisplay.bundleIdentifier == launcherBundle.bundleIdentifier,
@@ -1563,6 +1573,7 @@ func runDashboardSearchSelfCheck() -> Int32 {
         "iphone-approval",
         "automatic-approval-feedback",
         "detached-process-access",
+        "verified-launcher-helpers",
         "gpg-signing",
         "secret-name-access",
         "about",
@@ -1854,10 +1865,7 @@ private struct DashboardListView: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             } else {
-                List(selection: itemSelection) {
-                    rows(items)
-                }
-                .listStyle(.inset)
+                itemList(items)
             }
         }
         .sheet(isPresented: $model.isAddingSecret) {
@@ -1870,6 +1878,22 @@ private struct DashboardListView: View {
             model.selectedItemID
         } set: { id in
             model.selectedItemID = id
+        }
+    }
+
+    private func itemList(_ items: [DashboardItem]) -> some View {
+        List(selection: itemSelection) {
+            rows(items)
+        }
+        .listStyle(.inset)
+        .overlay(alignment: .top) {
+            Rectangle()
+                .fill(.bar)
+                .mask(LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom))
+                .frame(height: 52)
+                .padding(.leading, -100)
+                .offset(y: -52)
+                .allowsHitTesting(false)
         }
     }
 
@@ -1940,6 +1964,12 @@ private struct DashboardDetailView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                 } else if model.selectedItem?.id == "detached-process-access" {
                     DetachedProcessAccessSettingsView()
+                        .padding(.horizontal, 22)
+                        .padding(.top, 32)
+                        .padding(.bottom, 28)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                } else if model.selectedItem?.id == "verified-launcher-helpers" {
+                    VerifiedLauncherHelpersSettingsView()
                         .padding(.horizontal, 22)
                         .padding(.top, 32)
                         .padding(.bottom, 28)
@@ -3784,6 +3814,78 @@ private struct DetachedProcessAccessSettingsView: View {
     }
 }
 
+private struct VerifiedLauncherHelpersSettingsView: View {
+    @State private var configuration = loadVerifiedLauncherHelperConfiguration()
+    @State private var status = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Verified Launcher Helpers")
+                    .font(.system(size: 24, weight: .semibold))
+                Text("Allow exact vendor-signed CLIs sealed inside their vendor's app to represent that app as the Verified Launcher.")
+                    .font(.system(size: 13))
+                    .foregroundStyle(.secondary)
+            }
+            helperRow(codexVerifiedLauncherHelper)
+            Divider()
+            helperRow(claudeCodeVerifiedLauncherHelper)
+            InfoBlock(
+                title: "Exact identities only",
+                text: "Each association verifies both signing identities, binds the live helper to its on-disk executable, and confirms that exact executable is unmodified in the app's resource seal. Other bundled executables do not inherit the app's authority."
+            )
+            if !status.isEmpty {
+                Text(status)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func helperRow(_ helper: VerifiedLauncherHelper) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Toggle(
+                "\(helper.name) in \(helper.appName)",
+                isOn: Binding(
+                    get: { configuration.isEnabled(helper) },
+                    set: { next in
+                        guard next else {
+                            persist(helper, enabled: false)
+                            return
+                        }
+                        requestAuthorityChangeApproval(
+                            title: "Enable \(helper.name) Launcher Helper",
+                            detail: "Allow the exact signed \(helper.name) helper sealed inside \(helper.appName) to represent \(helper.appName) as the Verified Launcher."
+                        ) { approved in
+                            if approved { persist(helper, enabled: true) }
+                        }
+                    }
+                )
+            )
+            Text("\(helper.helperSigningIdentifier) → \(helper.appBundleIdentifier)")
+                .font(.caption.monospaced())
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+        }
+    }
+
+    private func persist(_ helper: VerifiedLauncherHelper, enabled: Bool) {
+        var next = configuration
+        if enabled {
+            next.disabledHelperIDs.remove(helper.id)
+        } else {
+            next.disabledHelperIDs.insert(helper.id)
+        }
+        let result = saveVerifiedLauncherHelperConfiguration(next)
+        guard result == errSecSuccess else {
+            status = "Could not save Verified Launcher Helpers: \(result)"
+            return
+        }
+        configuration = next
+        status = ""
+    }
+}
+
 private struct GPGSigningSettingsView: View {
     let onCredentialSaved: () -> Void
     @State private var defaultConfigured = hasGPGSigningCredential(alternate: false)
@@ -4708,15 +4810,18 @@ private func launcherSigning(_ url: URL) -> LauncherSigning? {
     }
     var staticCode: SecStaticCode?
     guard SecStaticCodeCreateWithPath(url as CFURL, [], &staticCode) == errSecSuccess,
-          let staticCode,
-          SecStaticCodeCheckValidity(
-              staticCode,
-              SecCSFlags(rawValue: kSecCSStrictValidate | kSecCSCheckNestedCode),
-              nil
-          ) == errSecSuccess
+          let staticCode
     else {
         return nil
     }
+    let validationStatus = isApp
+        ? validateAppBundleMainExecutable(staticCode)
+        : SecStaticCodeCheckValidity(
+            staticCode,
+            SecCSFlags(rawValue: kSecCSStrictValidate | kSecCSCheckNestedCode),
+            nil
+        )
+    guard validationStatus == errSecSuccess else { return nil }
 
     var info: CFDictionary?
     let flags = SecCSFlags(rawValue: kSecCSSigningInformation | kSecCSRequirementInformation)

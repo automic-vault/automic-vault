@@ -185,7 +185,7 @@ jobs:
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
           POSTHOG_API_KEY: ${{ vars.POSTHOG_API_KEY }}
-        run: /bin/bash scripts/build.sh --release-artifact --version "$VERSION"
+        run: /bin/bash scripts/build.sh --release-artifact --wmo --version "$VERSION"
 
       - name: Verify signed release artifact
         shell: bash

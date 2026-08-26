@@ -113,6 +113,14 @@ pub(crate) const ALIYUN: Spec = Spec {
     binaries: &["aliyun"],
     test_path: "AUTOMIC_VAULT_TEST_ALIYUN_TARGET",
 };
+pub(crate) const WAKATIME: Spec = Spec {
+    hardener: "wakatime-cli",
+    formula: "wakatime-cli-isotope",
+    repository: "wakatime-cli",
+    primary: "wakatime-cli",
+    binaries: &["wakatime-cli"],
+    test_path: "AUTOMIC_VAULT_TEST_WAKATIME_TARGET",
+};
 
 #[derive(Clone, Copy)]
 pub(crate) struct Spec {
@@ -339,6 +347,9 @@ pub(crate) fn install_privileged(
         }
         if spec.hardener == PLUMBER.hardener {
             super::plumber::verify_target(&stage)?;
+        }
+        if spec.hardener == WAKATIME.hardener {
+            super::wakatime_cli::verify_target(&stage)?;
         }
         staged.push((stage, bin_dir.join(binary)));
     }
@@ -732,6 +743,9 @@ fn installed(spec: Spec, path: &Path) -> bool {
     if spec.hardener == ALIYUN.hardener {
         return super::aliyun_cli::verify_target(path).is_ok();
     }
+    if spec.hardener == WAKATIME.hardener {
+        return super::wakatime_cli::verify_target(path).is_ok();
+    }
     true
 }
 
@@ -742,7 +756,7 @@ fn formula_url(spec: Spec) -> String {
 fn spec(hardener: &str) -> Option<Spec> {
     [
         GH, STRIPE, SUPABASE, OPENTOFU, OXIDE, GOAT, RAILWAY, ORDERCLI, OPENHUE, UAA, PLUMBER,
-        ALIYUN,
+        ALIYUN, WAKATIME,
     ]
     .into_iter()
     .find(|spec| spec.hardener == hardener)
@@ -850,7 +864,7 @@ mod tests {
     #[test]
     fn every_executable_isotope_is_registered_for_direct_fallback() {
         for expected in [
-            OPENTOFU, OXIDE, GOAT, RAILWAY, ORDERCLI, OPENHUE, UAA, PLUMBER,
+            OPENTOFU, OXIDE, GOAT, RAILWAY, ORDERCLI, OPENHUE, UAA, PLUMBER, WAKATIME,
         ] {
             assert_eq!(
                 spec(expected.hardener).map(|value| value.hardener),
@@ -870,6 +884,7 @@ mod tests {
             (UAA, "uaa-cli-isotope", "uaa-cli"),
             (OPENHUE, "openhue-cli-isotope", "openhue-cli"),
             (PLUMBER, "plumber-isotope", "plumber"),
+            (WAKATIME, "wakatime-cli-isotope", "wakatime-cli"),
         ] {
             assert_eq!(isotope.formula, formula);
             assert_eq!(isotope.repository, repository);
@@ -888,6 +903,7 @@ mod tests {
         }
         for isotope in [
             GH, STRIPE, SUPABASE, OPENTOFU, OXIDE, GOAT, RAILWAY, ORDERCLI, OPENHUE, UAA, PLUMBER,
+            WAKATIME,
         ] {
             let missing =
                 std::env::temp_dir().join(format!("av-test-missing-{}-isotope", isotope.hardener));

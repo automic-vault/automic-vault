@@ -124,8 +124,7 @@ pub(crate) fn current_release_valid() -> Result<(), String> {
             target.display()
         ));
     }
-    validate_protected_tree(&release_root, true)?;
-    verify_manifest(&release_root)?;
+    verify_protected_manifest(&release_root)?;
     verify_aws_executable(&target)
 }
 
@@ -424,8 +423,7 @@ fn install_payload(root: &Path, payload: &Path, version: &str, sha256: &str) -> 
         manifest.as_bytes(),
         0o444,
     )?;
-    validate_protected_tree(&replacement, true)?;
-    verify_manifest(&replacement)?;
+    verify_protected_manifest(&replacement)?;
 
     fs::rename(&replacement, &destination)
         .map_err(|err| format!("failed to install official AWS CLI: {err}"))?;
@@ -574,8 +572,16 @@ fn parse_latest_version(changelog: &str) -> Result<String, String> {
 }
 
 fn build_manifest(root: &Path) -> Result<String, String> {
+    build_manifest_with(root, &mut |_, _| Ok(()))
+}
+
+fn build_manifest_with(
+    root: &Path,
+    visit: &mut impl FnMut(&Path, &fs::Metadata) -> Result<(), String>,
+) -> Result<String, String> {
     let mut entries = Vec::new();
     walk(root, &mut |path, metadata| {
+        visit(path, metadata)?;
         let relative = path
             .strip_prefix(root)
             .map_err(|_| "AWS manifest path escaped its root".to_string())?
@@ -604,10 +610,14 @@ fn build_manifest(root: &Path) -> Result<String, String> {
     Ok(entries.join("\n") + "\n")
 }
 
-fn verify_manifest(root: &Path) -> Result<(), String> {
+fn verify_protected_manifest(root: &Path) -> Result<(), String> {
+    validate_protected_entry(
+        root,
+        &fs::symlink_metadata(root).map_err(|err| err.to_string())?,
+    )?;
+    let actual = build_manifest_with(root, &mut validate_protected_entry)?;
     let expected = fs::read_to_string(root.join(".av-manifest"))
         .map_err(|err| format!("official AWS CLI integrity manifest is unavailable: {err}"))?;
-    let actual = build_manifest(root)?;
     if actual == expected {
         Ok(())
     } else {
@@ -637,16 +647,6 @@ fn protect_tree(root: &Path) -> Result<(), String> {
             .map_err(|err| format!("failed to inspect {}: {err}", root.display()))?,
     )?;
     walk(root, protect)
-}
-
-fn validate_protected_tree(root: &Path, include_root: bool) -> Result<(), String> {
-    if include_root {
-        validate_protected_entry(
-            root,
-            &fs::symlink_metadata(root).map_err(|err| err.to_string())?,
-        )?;
-    }
-    walk(root, &mut validate_protected_entry)
 }
 
 fn validate_protected_entry(path: &Path, metadata: &fs::Metadata) -> Result<(), String> {
@@ -1002,6 +1002,28 @@ mod tests {
             "2.36.22"
         );
         assert!(parse_latest_version("CHANGELOG\nlatest\n======\n").is_err());
+    }
+
+    #[test]
+    fn protected_manifest_verification_rejects_unsafe_modes_and_content_changes() {
+        let _guard = crate::global_test_env_lock().lock().unwrap();
+        let root = temp_path("protected-manifest");
+        let release = root.join("release");
+        fs::create_dir_all(&release).unwrap();
+        fs::write(release.join("aws"), "original").unwrap();
+        let manifest = build_manifest(&release).unwrap();
+        fs::write(release.join(".av-manifest"), manifest).unwrap();
+        unsafe { std::env::set_var("AUTOMIC_VAULT_TEST_AWS_INSTALL_ROOT", &root) };
+
+        assert!(verify_protected_manifest(&release).is_ok());
+        fs::set_permissions(release.join("aws"), fs::Permissions::from_mode(0o666)).unwrap();
+        assert!(verify_protected_manifest(&release).is_err());
+        fs::set_permissions(release.join("aws"), fs::Permissions::from_mode(0o644)).unwrap();
+        fs::write(release.join("aws"), "changed").unwrap();
+        assert!(verify_protected_manifest(&release).is_err());
+
+        unsafe { std::env::remove_var("AUTOMIC_VAULT_TEST_AWS_INSTALL_ROOT") };
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]

@@ -704,7 +704,7 @@ verify_draft_update() (
   )"
   if [[ "$previous_version" == "2.9.0" || "$previous_version" == "2.10.0" ]]; then
     echo "Bootstrapping the updater preflight from code as version $previous_version." >&2
-    APP_VERSION="$previous_version" "$ROOT/scripts/build.sh"
+    APP_VERSION="$previous_version" "$ROOT/scripts/build.sh" --wmo
     preflight_app="$ROOT/target/swift/Automic Vault.app"
   elif [[ "$marker" == "1" ]]; then
     preflight_app="$tmp/previous/Automic Vault.app"

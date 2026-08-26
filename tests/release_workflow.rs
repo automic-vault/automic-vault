@@ -87,21 +87,33 @@ fn release_builds_are_actions_only_and_fail_closed() {
     assert!(PUBLISH_SCRIPT.contains("RESUME_RELEASE=1"));
     assert!(PUBLISH_SCRIPT.contains("retry with: $0 --version $VERSION"));
     assert!(PUBLISH_SCRIPT.contains("-f notes=\"$(<\"$RELEASE_NOTES\")\""));
+    assert!(
+        PUBLISH_SCRIPT
+            .contains("APP_VERSION=\"$previous_version\" \"$ROOT/scripts/build.sh\" --wmo")
+    );
     assert!(RELEASE_WORKFLOW.contains("--notes-file \"$notes\""));
     assert!(!RELEASE_WORKFLOW.contains("--generate-notes"));
-    assert!(
-        RELEASE_WORKFLOW
-            .contains("run: /bin/bash scripts/build.sh --release-artifact --version \"$VERSION\"")
-    );
+    assert!(RELEASE_WORKFLOW.contains(
+        "run: /bin/bash scripts/build.sh --release-artifact --wmo --version \"$VERSION\""
+    ));
     assert!(BUILD_SCRIPT.contains("--release-artifact"));
     assert!(BUILD_SCRIPT.contains("release artifacts may only be built by GitHub Actions"));
     assert!(BUILD_SCRIPT.contains("release checkout does not match GITHUB_SHA"));
     assert!(BUILD_SCRIPT.contains("cargo build --release --locked"));
     assert!(BUILD_SCRIPT.contains("--disable-automatic-resolution"));
-    assert_eq!(BUILD_SCRIPT.matches("--build-system xcode").count(), 2);
-    assert!(BUILD_SCRIPT.contains(
-        "lipo \"$SWIFT_BIN/AutomicVaultMenubar\" -thin arm64 -output \"$MACOS/AutomicVaultMenubar\""
-    ));
+    assert_eq!(
+        BUILD_SCRIPT
+            .matches("swift build \"${swift_build_args[@]}\"")
+            .count(),
+        2
+    );
+    assert!(
+        BUILD_SCRIPT
+            .contains("cp \"$SWIFT_BIN/AutomicVaultMenubar\" \"$MACOS/AutomicVaultMenubar\"")
+    );
+    assert!(BUILD_SCRIPT.contains("--arch arm64"));
+    assert!(BUILD_SCRIPT.contains("-no-whole-module-optimization"));
+    assert!(!BUILD_SCRIPT.contains("lipo "));
     assert!(BUILD_SCRIPT.contains(
         "ditto \"$SWIFT_BIN/AppUpdater_AppUpdater.bundle\" \"$RESOURCES/AppUpdater_AppUpdater.bundle\""
     ));

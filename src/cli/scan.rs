@@ -59,7 +59,16 @@ pub(crate) fn run_json<W: Write, E: Write>(
 pub(crate) fn run_detectors_json<W: Write>(stdout: &mut W) -> i32 {
     let home = home();
     let report = serde_json::json!({
-        "detectors": isotopes::detector_metadata(Path::new(&home)).into_iter().map(|detector| {
+        "detectors": json_detectors(Path::new(&home)),
+    });
+    let _ = writeln!(stdout, "{report}");
+    0
+}
+
+fn json_detectors(home: &Path) -> Vec<serde_json::Value> {
+    isotopes::detector_metadata(home)
+        .into_iter()
+        .map(|detector| {
             serde_json::json!({
                 "name": detector.name,
                 "homepage": detector.homepage,
@@ -70,16 +79,43 @@ pub(crate) fn run_detectors_json<W: Write>(stdout: &mut W) -> i32 {
                     "recursive": scope.recursive,
                 })).collect::<Vec<_>>(),
             })
-        }).collect::<Vec<_>>(),
+        })
+        .collect()
+}
+
+pub(crate) fn run_hardeners_json<W: Write>(stdout: &mut W) -> i32 {
+    let hardeners = isotopes::hardener_metadata();
+    let report = serde_json::json!({
+        "hardeners": json_hardeners(&hardeners),
     });
     let _ = writeln!(stdout, "{report}");
     0
 }
 
-pub(crate) fn run_hardeners_json<W: Write>(stdout: &mut W) -> i32 {
+pub(crate) fn run_dashboard_hardening_json<W: Write>(stdout: &mut W) -> Result<i32, String> {
+    let home = home();
+    let (hardener_report, doctor_report) = super::doctor::dashboard_results_json(|| {
+        let hardeners = isotopes::hardener_metadata();
+        let report = json_hardeners(&hardeners);
+        (hardeners, report)
+    })?;
     let report = serde_json::json!({
-        "hardeners": isotopes::hardener_metadata().into_iter().map(|hardener| {
-            let secret_gate = hardener.secret_gate.map(json_secret_gate);
+        "hardeners": hardener_report,
+        "detectors": json_detectors(Path::new(&home)),
+        "secret_gates": json_secret_gates(),
+        "results": doctor_report,
+    });
+    let _ = writeln!(stdout, "{report}");
+    Ok(0)
+}
+
+fn json_hardeners(
+    hardeners: &[crate::isotopes::hardeners::HardenerMetadata],
+) -> Vec<serde_json::Value> {
+    hardeners
+        .iter()
+        .map(|hardener| {
+            let secret_gate = hardener.secret_gate.as_ref().map(json_secret_gate);
             serde_json::json!({
                 "name": hardener.name,
                 "documentation": hardener.documentation,
@@ -87,7 +123,7 @@ pub(crate) fn run_hardeners_json<W: Write>(stdout: &mut W) -> i32 {
                 "applicable": hardener.detection.applicable,
                 "stub_path": hardener.detection.stub_path,
                 "target_path": hardener.detection.target_path,
-                "commands": hardener.detection.commands.into_iter().map(|command| serde_json::json!({
+                "commands": hardener.detection.commands.iter().map(|command| serde_json::json!({
                     "name": command.name,
                     "hardened": command.hardened,
                     "stub_path": command.stub_path,
@@ -96,28 +132,30 @@ pub(crate) fn run_hardeners_json<W: Write>(stdout: &mut W) -> i32 {
                 })).collect::<Vec<_>>(),
                 "secret_gate": secret_gate,
             })
-        }).collect::<Vec<_>>(),
-    });
-    let _ = writeln!(stdout, "{report}");
-    0
+        })
+        .collect()
 }
 
 pub(crate) fn run_secret_gates_json<W: Write>(stdout: &mut W) -> i32 {
     let report = serde_json::json!({
-        "secret_gates": isotopes::secret_gate_metadata()
-            .into_iter()
-            .map(json_secret_gate)
-            .collect::<Vec<_>>(),
+        "secret_gates": json_secret_gates(),
     });
     let _ = writeln!(stdout, "{report}");
     0
 }
 
-fn json_secret_gate(gate: crate::isotopes::hardeners::SecretGateDescriptor) -> serde_json::Value {
+fn json_secret_gates() -> Vec<serde_json::Value> {
+    isotopes::secret_gate_metadata()
+        .iter()
+        .map(json_secret_gate)
+        .collect()
+}
+
+fn json_secret_gate(gate: &crate::isotopes::hardeners::SecretGateDescriptor) -> serde_json::Value {
     serde_json::json!({
         "id": gate.id,
         "key_patterns": gate.key_patterns,
-        "routes": gate.routes.into_iter().map(|route| serde_json::json!({
+        "routes": gate.routes.iter().map(|route| serde_json::json!({
             "operation": route.operation,
             "script_path": route.script_path,
             "target_path": route.target_path,

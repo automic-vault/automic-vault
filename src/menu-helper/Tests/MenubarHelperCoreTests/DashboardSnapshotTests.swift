@@ -133,6 +133,76 @@ import Testing
     #expect(hardener.secretGate?.routes.first?.callerIdentifiers == ["gh", "com.github.cli"])
 }
 
+@Test func dashboardHardeningJSONDecodesHardenerAndDoctorFromOneReport() throws {
+    let data = Data(#"""
+    {
+      "hardeners":[{"name":"aws","documentation":"AWS docs","hardened":true,"stub_path":"/usr/local/bin/aws","target_path":"/opt/av/aws/current/aws"}],
+      "detectors":[{"name":"aws-cli","homepage":"https://example.com","docs_url":"https://example.com/docs","documentation":"AWS detector","watch_scopes":[]}],
+      "secret_gates":[{"id":"aws","key_patterns":["AWS_ACCESS_KEY_ID"],"routes":[{"operation":"inject","script_path":null,"target_path":"/usr/local/bin/aws","caller_identifiers":["com.automicvault.av"],"key_patterns":["AWS_ACCESS_KEY_ID"],"replace_existing_env":false,"allow_missing_keys":false}]}],
+      "results":[{"name":"aws","commands":["aws"],"issues":[{"kind":"aws_update_available","command":"aws","message":"Update available","remediation":"Run `av harden aws`.","stub_path":"/usr/local/bin/aws","target_path":"/opt/av/aws/current/aws","resolved_path":null}]}]
+    }
+    """#.utf8)
+
+    let report = try dashboardHardening(from: data, loginShellPATHAvailable: false)
+
+    #expect(report.hardeners.map(\.name) == ["aws"])
+    #expect(report.detectors.map(\.name) == ["aws-cli"])
+    #expect(report.secretGates.map(\.id) == ["aws"])
+    #expect(report.doctorIssues.map(\.kind) == ["aws_update_available"])
+}
+
+@Test func dashboardHardeningLoadsThroughOneExecutableInvocation() throws {
+    let directory = temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let executable = directory.appendingPathComponent("av")
+    let invocations = directory.appendingPathComponent("invocations")
+    try #"""
+#!/bin/sh
+printf '%s\n' "$*" >> "$(dirname "$0")/invocations"
+test "$1" = '__dashboard-hardening-json' || exit 2
+printf '%s\n' '{"hardeners":[{"name":"aws","documentation":"AWS docs","hardened":true}],"detectors":[],"secret_gates":[{"id":"aws","key_patterns":["AWS_ACCESS_KEY_ID"],"routes":[{"operation":"inject","script_path":null,"target_path":"/usr/local/bin/aws","caller_identifiers":["com.automicvault.av"],"key_patterns":["AWS_ACCESS_KEY_ID"],"replace_existing_env":false,"allow_missing_keys":false}]}],"results":[]}'
+"""#.write(to: executable, atomically: true, encoding: .utf8)
+    try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
+
+    let report = loadDashboardHardening(avExecutableURL: executable)
+
+    #expect(report.hardeners.map(\.name) == ["aws"])
+    #expect(report.detectors.isEmpty)
+    #expect(report.secretGates.map(\.id) == ["aws"])
+    #expect(report.doctorIssues.isEmpty)
+    #expect(try String(contentsOf: invocations, encoding: .utf8) == "__dashboard-hardening-json\n")
+}
+
+@Test func dashboardHardeningFallsBackForOlderExecutable() throws {
+    let directory = temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let executable = directory.appendingPathComponent("av")
+    let invocations = directory.appendingPathComponent("invocations")
+    try #"""
+#!/bin/sh
+printf '%s\n' "$*" >> "$(dirname "$0")/invocations"
+case "$*" in
+  'hardeners --json') printf '%s\n' '{"hardeners":[{"name":"aws","documentation":"AWS docs","hardened":true}]}' ;;
+  'detectors --json') printf '%s\n' '{"detectors":[]}' ;;
+  '__secret-gates-json') printf '%s\n' '{"secret_gates":[{"id":"aws","key_patterns":["AWS_ACCESS_KEY_ID"],"routes":[{"operation":"inject","script_path":null,"target_path":"/usr/local/bin/aws","caller_identifiers":["com.automicvault.av"],"key_patterns":["AWS_ACCESS_KEY_ID"],"replace_existing_env":false,"allow_missing_keys":false}]}]}' ;;
+  'doctor --json') printf '%s\n' '{"results":[]}' ;;
+  *) exit 2 ;;
+esac
+"""#.write(to: executable, atomically: true, encoding: .utf8)
+    try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
+
+    let report = loadDashboardHardening(avExecutableURL: executable)
+
+    #expect(report.hardeners.map(\.name) == ["aws"])
+    #expect(report.detectors.isEmpty)
+    #expect(report.secretGates.map(\.id) == ["aws"])
+    #expect(report.doctorIssues.isEmpty)
+    #expect(
+        try String(contentsOf: invocations, encoding: .utf8)
+            == "__dashboard-hardening-json\nhardeners --json\n__secret-gates-json\ndetectors --json\ndoctor --json\n"
+    )
+}
+
 @Test func secretGateCatalogRequiresUniqueDefinitions() throws {
     let data = Data(#"{"secret_gates":[{"id":"aws","key_patterns":["AWS_ACCESS_KEY_ID"],"routes":[{"operation":"inject","script_path":null,"target_path":"/usr/local/libexec/av/aws","caller_identifiers":["com.automicvault.av"],"key_patterns":["AWS_ACCESS_KEY_ID"],"replace_existing_env":false,"allow_missing_keys":false}]}]}"#.utf8)
 

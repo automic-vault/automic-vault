@@ -8,14 +8,11 @@
 
 - `~/.wakatime.cfg`
 
-## Why This is not Yet Hardened
+## Remediation
 
-The retired `wakatime-cli` hardener moved the detected secret to the macOS
-Keychain, then recreated `~/.wakatime.cfg` inside a temporary directory for each
-run. We no longer consider a temporary plaintext file a sufficient security
-boundary, so this detector remains report-only.
+Run `av harden wakatime-cli`. The hardener installs the signed WakaTime CLI
+Isotope, stores the global API key in Automic Vault, configures the native
+credential helper, and points editor plugins at the verified Target.
 
-If a narrow environment-variable or credential-helper interface can cover this
-state without writing the secret back to disk, we can reconsider the hardener.
-
-[Open an issue to discuss a safer integration](https://github.com/automic-vault/automic-vault/issues).
+Project-specific API keys and alternate credential destinations are rejected;
+remove them manually before hardening.

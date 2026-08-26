@@ -66,12 +66,13 @@ pub(crate) fn invocation_is_secretless(
     script_data: &[u8],
     args: &[OsString],
 ) -> bool {
-    let Some(stub) = wrapper("node").map(|wrapper| &wrapper.primary) else {
+    let Some(stub) = WRAPPERS
+        .iter()
+        .flat_map(stubs)
+        .find(|stub| same_path(script_path, &stub_path(stub.command)))
+    else {
         return false;
     };
-    if !same_path(script_path, &stub_path(stub.command)) {
-        return false;
-    }
     let Ok(contents) = std::str::from_utf8(script_data) else {
         return false;
     };
@@ -87,7 +88,49 @@ pub(crate) fn invocation_is_secretless(
     if !same_path(Path::new(script), script_path) {
         return false;
     }
-    npm_invocation_is_secretless(&args[1..])
+    let args = &args[1..];
+    match stub.command {
+        "npm" => npm_invocation_is_secretless(args),
+        "pnpm" => {
+            local_command(
+                args,
+                &["bin", "help", "list", "ls", "prefix", "root", "why"],
+            ) || args.first().is_some_and(|arg| arg == "store")
+                && args.get(1).is_some_and(|arg| arg == "path")
+        }
+        "fly" | "flyctl" => local_command(args, &["completion", "help", "version"]),
+        "k6" => local_command(
+            args,
+            &["archive", "completion", "help", "inspect", "new", "version"],
+        ),
+        "twine" => local_command(args, &["check"]),
+        "vagrant" => local_command(args, &["global-status", "validate", "version"]),
+        "hf" => local_command(args, &["cache"]),
+        "composer" => local_command(
+            args,
+            &[
+                "clear-cache",
+                "clearcache",
+                "licenses",
+                "status",
+                "validate",
+            ],
+        ),
+        _ => false,
+    }
+}
+
+fn local_command(args: &[OsString], commands: &[&str]) -> bool {
+    args.is_empty()
+        || args.iter().any(|arg| arg == "--help" || arg == "-h")
+        || args.len() == 1
+            && args
+                .first()
+                .is_some_and(|arg| arg == "--version" || arg == "-V" || arg == "-v")
+        || args.first().is_some_and(|arg| {
+            arg.to_str()
+                .is_some_and(|command| commands.contains(&command))
+        })
 }
 
 fn npm_invocation_is_secretless(args: &[OsString]) -> bool {
@@ -936,6 +979,50 @@ mod tests {
             format!("{script}# changed\n").as_bytes(),
             &args(&["root"]),
         ));
+
+        unsafe { std::env::remove_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR") };
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn local_env_wrapper_commands_bypass_secret_application() {
+        let _guard = crate::global_test_env_lock().lock().unwrap();
+        let dir = temp_dir("env-wrapper-secretless-commands");
+        unsafe { std::env::set_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR", &dir) };
+
+        for (wrapper_name, command, args, expected) in [
+            ("pnpm", "pnpm", &["root", "-g"][..], true),
+            ("pnpm", "pnpm", &["store", "path"][..], true),
+            ("pnpm", "pnpm", &["install"][..], false),
+            ("flyctl", "flyctl", &["version"][..], true),
+            ("flyctl", "fly", &["deploy", "--help"][..], true),
+            ("flyctl", "fly", &["deploy"][..], false),
+            ("k6", "k6", &["inspect", "script.js"][..], true),
+            ("k6", "k6", &["run", "script.js"][..], false),
+            ("twine", "twine", &["check", "dist/*"][..], true),
+            ("twine", "twine", &["upload", "dist/*"][..], false),
+            ("vagrant", "vagrant", &["validate"][..], true),
+            ("vagrant", "vagrant", &["up"][..], false),
+            ("huggingface-cli", "hf", &["cache", "ls"][..], true),
+            ("huggingface-cli", "hf", &["download", "repo"][..], false),
+            ("composer", "composer", &["validate"][..], true),
+            ("composer", "composer", &["install"][..], false),
+        ] {
+            let stub = stubs(wrapper(wrapper_name).unwrap())
+                .find(|stub| stub.command == command)
+                .unwrap();
+            let script_path = dir.join(command);
+            let script = stub_script(stub, &Path::new("/opt/homebrew/bin").join(command));
+            let invocation = std::iter::once(script_path.clone().into_os_string())
+                .chain(args.iter().map(OsString::from))
+                .collect::<Vec<_>>();
+
+            assert_eq!(
+                invocation_is_secretless(&script_path, script.as_bytes(), &invocation),
+                expected,
+                "{command} {args:?}",
+            );
+        }
 
         unsafe { std::env::remove_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR") };
         let _ = fs::remove_dir_all(dir);

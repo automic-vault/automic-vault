@@ -197,6 +197,28 @@ History or telemetry.
 
 The designated requirement stored when the user establishes trust and revalidated for each request. A path, display name, process identifier, or icon is metadata, not identity.
 
+For an ordinary app Launcher, integrity validation covers the app's signed main
+executable and the exact executable representing the Launcher. Other resources
+in the app bundle are outside the Launcher Identity and are not evidence for or
+against it. If targeted resource validation is unavailable, Automic Vault
+validates the complete bundle. Launcher Bundles retain their separately defined
+complete enrollment and integrity checks.
+
+### Verified Launcher Helper
+
+A vendor-signed executable that may represent one exact containing app as its
+Launcher even though it is not that app's declared main executable. The
+association binds the helper and app signing identities and is enabled through
+an explicit positive catalog whose disabled entries are stored in the Data
+Protection Keychain. Bundle containment, a filename, a path, or a shared Team
+ID alone never creates the association.
+
+Automic Vault verifies the live helper, the app's signed executable, and that
+the exact helper file is a required unmodified resource in the app's resource
+seal before attributing the app's Launcher Identity. If any check fails, the
+helper does not receive the app identity; an independently eligible Developer
+ID executable may still qualify under its own standalone Launcher Identity.
+
 ### Retained Launcher Provenance
 
 Ephemeral evidence that Automic Vault recorded one exact live process execution

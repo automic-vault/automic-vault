@@ -70,36 +70,7 @@ pub(crate) fn run<W: Write>(
     json: bool,
     style: Style,
 ) -> Result<i32, String> {
-    let path = std::env::var_os("PATH").unwrap_or_default();
-    let launcher_bundles = launcher_bundles();
-    let selected_launcher = selector.and_then(|selector| {
-        launcher_bundles
-            .iter()
-            .find(|launcher| launcher.command == selector)
-    });
-    let mut results = if let Some(launcher) = selected_launcher {
-        vec![diagnose_launcher_bundle(
-            launcher,
-            Path::new(LAUNCHER_BUNDLE_COMMAND_ROOT),
-            &path,
-            0,
-        )]
-    } else if let Some(agent) = select_agent_cli(selector) {
-        vec![diagnose_agent_cli(agent, &path, vendor_signature_valid)]
-    } else {
-        diagnose(hardeners::metadata(), selector, &path)?
-    };
-    if selector.is_none() {
-        results.extend(launcher_bundles.iter().map(|launcher| {
-            diagnose_launcher_bundle(launcher, Path::new(LAUNCHER_BUNDLE_COMMAND_ROOT), &path, 0)
-        }));
-        results.extend(
-            AGENT_CLIS
-                .iter()
-                .filter(|agent| resolve(agent.command, &path).is_some())
-                .map(|agent| diagnose_agent_cli(agent, &path, vendor_signature_valid)),
-        );
-    }
+    let results = results(selector, None)?;
     let issue_count = results
         .iter()
         .map(|result| result.issues.len())
@@ -110,6 +81,88 @@ pub(crate) fn run<W: Write>(
         print_human(stdout, &results, issue_count, style);
     }
     Ok(if issue_count == 0 { 0 } else { 1 })
+}
+
+pub(crate) fn dashboard_results_json<T>(
+    load_hardeners: impl FnOnce() -> (Vec<HardenerMetadata>, T),
+) -> Result<(T, Vec<serde_json::Value>), String> {
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    let launcher_bundles = launcher_bundles();
+    std::thread::scope(|scope| {
+        let agent_results = scope.spawn(|| agent_cli_results(&path, vendor_signature_valid));
+        let (hardeners, hardener_report) = load_hardeners();
+        let mut results = diagnose(hardeners, None, &path)?;
+        results.extend(launcher_bundles.iter().map(|launcher| {
+            diagnose_launcher_bundle(launcher, Path::new(LAUNCHER_BUNDLE_COMMAND_ROOT), &path, 0)
+        }));
+        results.extend(
+            agent_results
+                .join()
+                .expect("agent CLI Doctor worker panicked"),
+        );
+        Ok((hardener_report, json_results(&results)))
+    })
+}
+
+fn results(
+    selector: Option<&str>,
+    hardeners: Option<Vec<HardenerMetadata>>,
+) -> Result<Vec<DoctorResult>, String> {
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    let launcher_bundles = launcher_bundles();
+    if selector.is_none() {
+        return std::thread::scope(|scope| {
+            let agent_results = scope.spawn(|| agent_cli_results(&path, vendor_signature_valid));
+            let mut results = diagnose(hardeners.unwrap_or_else(hardeners::metadata), None, &path)?;
+            results.extend(launcher_bundles.iter().map(|launcher| {
+                diagnose_launcher_bundle(
+                    launcher,
+                    Path::new(LAUNCHER_BUNDLE_COMMAND_ROOT),
+                    &path,
+                    0,
+                )
+            }));
+            results.extend(
+                agent_results
+                    .join()
+                    .expect("agent CLI Doctor worker panicked"),
+            );
+            Ok(results)
+        });
+    }
+    let selected_launcher = selector.and_then(|selector| {
+        launcher_bundles
+            .iter()
+            .find(|launcher| launcher.command == selector)
+    });
+    let results = if let Some(launcher) = selected_launcher {
+        vec![diagnose_launcher_bundle(
+            launcher,
+            Path::new(LAUNCHER_BUNDLE_COMMAND_ROOT),
+            &path,
+            0,
+        )]
+    } else if let Some(agent) = select_agent_cli(selector) {
+        vec![diagnose_agent_cli(agent, &path, vendor_signature_valid)]
+    } else {
+        diagnose(
+            hardeners.unwrap_or_else(hardeners::metadata),
+            selector,
+            &path,
+        )?
+    };
+    Ok(results)
+}
+
+fn agent_cli_results(
+    path: &OsStr,
+    signature_valid: fn(&Path, &str, &str) -> bool,
+) -> Vec<DoctorResult> {
+    AGENT_CLIS
+        .iter()
+        .filter(|agent| resolve(agent.command, path).is_some())
+        .map(|agent| diagnose_agent_cli(agent, path, signature_valid))
+        .collect()
 }
 
 fn select_agent_cli(selector: Option<&str>) -> Option<&'static AgentCliDoctor> {
@@ -956,21 +1009,30 @@ fn same_path(left: &Path, right: &Path) -> bool {
 
 fn print_json(stdout: &mut dyn Write, results: &[DoctorResult]) {
     let report = serde_json::json!({
-        "results": results.iter().map(|result| serde_json::json!({
-            "name": result.name,
-            "commands": result.commands,
-            "issues": result.issues.iter().map(|issue| serde_json::json!({
-                "kind": issue.kind,
-                "command": issue.command,
-                "message": issue.message,
-                "remediation": issue.remediation,
-                "stub_path": issue.stub_path,
-                "target_path": issue.target_path,
-                "resolved_path": issue.resolved_path,
-            })).collect::<Vec<_>>(),
-        })).collect::<Vec<_>>(),
+        "results": json_results(results),
     });
     let _ = writeln!(stdout, "{report}");
+}
+
+fn json_results(results: &[DoctorResult]) -> Vec<serde_json::Value> {
+    results
+        .iter()
+        .map(|result| {
+            serde_json::json!({
+                "name": result.name,
+                "commands": result.commands,
+                "issues": result.issues.iter().map(|issue| serde_json::json!({
+                    "kind": issue.kind,
+                    "command": issue.command,
+                    "message": issue.message,
+                    "remediation": issue.remediation,
+                    "stub_path": issue.stub_path,
+                    "target_path": issue.target_path,
+                    "resolved_path": issue.resolved_path,
+                })).collect::<Vec<_>>(),
+            })
+        })
+        .collect()
 }
 
 fn print_human(stdout: &mut dyn Write, results: &[DoctorResult], issue_count: usize, style: Style) {
@@ -1127,6 +1189,27 @@ mod tests {
                 .remediation
                 .contains("Anthropic's native installer or the Homebrew cask")
         );
+    }
+
+    #[test]
+    fn aggregate_agent_cli_results_preserve_catalog_order() {
+        let dir = temp_dir("agent-order");
+        executable_file(&dir.join("claude"));
+        executable_file(&dir.join("codex"));
+
+        let results = agent_cli_results(dir.as_os_str(), |_, _, _| false);
+
+        assert_eq!(
+            results
+                .iter()
+                .map(|result| result.name.as_str())
+                .collect::<Vec<_>>(),
+            ["claude", "codex"]
+        );
+        assert!(results.iter().all(|result| {
+            result.issues.len() == 1 && result.issues[0].kind == "agent_cli_signature_invalid"
+        }));
+        let _ = fs::remove_dir_all(dir);
     }
 
     #[test]
@@ -1586,6 +1669,7 @@ mod tests {
                                 | "oxide-cli"
                                 | "stripe"
                                 | "supabase"
+                                | "wakatime-cli"
                         ),
                         "{}:{} needs explicit target-only Doctor coverage review",
                         hardener.name,

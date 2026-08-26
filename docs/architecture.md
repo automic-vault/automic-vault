@@ -282,6 +282,22 @@ Authorization Record.
 
 The policy identity is the Launcher's designated requirement, checked against the live process and its launch chain. Paths, process identifiers, names, and icons help the user recognize software but do not establish identity. Hardened Runtime requirements and rejected entitlements form part of launcher eligibility.
 
+An app's declared main executable may represent the app after its code signature
+and exact membership in the app's resource seal are validated. A non-main
+executable may represent the app only as an enabled Verified Launcher Helper
+whose exact app and helper signing identities appear in the built-in positive
+catalog. Disabled catalog entries are stored in the Data Protection Keychain;
+missing or malformed stored configuration fails closed except that a genuinely
+absent record uses the built-in defaults. Runtime verification binds the live
+helper to the on-disk executable, validates the app executable, and validates
+the exact helper as a required, unaltered member of the app's resource seal.
+Unrelated app resources are not Launcher Identity evidence and are not scanned.
+If targeted resource validation is unavailable, Automic Vault falls back to
+complete bundle validation. Other bundle-contained executables do not inherit
+the app identity. Launcher Bundles retain their complete enrolled-bundle and
+payload verification. See [ADR 0020](adr/0020-app-launcher-main-executable.md)
+and [ADR 0033](adr/0033-targeted-app-launcher-validation.md).
+
 Eligible Launchers must enable Hardened Runtime or be Apple platform binaries
 signed as part of a macOS release, for which macOS applies the runtime
 protections intrinsically. JIT executable-memory exceptions and disabled
