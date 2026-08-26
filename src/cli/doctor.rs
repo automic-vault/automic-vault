@@ -1575,7 +1575,9 @@ mod tests {
                     assert!(
                         matches!(
                             hardener.name,
-                            "aliyun-cli" | "gh" | "goat"
+                            "aliyun-cli"
+                                | "gh"
+                                | "goat"
                                 | "ordercli"
                                 | "openhue-cli"
                                 | "plumber"
