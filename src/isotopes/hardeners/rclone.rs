@@ -355,6 +355,7 @@ pub(crate) fn verify_target(path: &Path) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::fs::PermissionsExt;
 
     #[test]
     fn recognizes_only_supported_native_encryption() {
@@ -368,5 +369,46 @@ mod tests {
         let password = generate_password().unwrap();
         assert_eq!(password.len(), 64);
         assert!(crate::cli::rclone_password::validate_password(&password).is_ok());
+    }
+
+    #[test]
+    fn hardener_creates_password_only_after_the_target_reports_it_missing() {
+        let _guard = crate::global_test_env_lock().lock().unwrap();
+        let root = std::env::temp_dir().join(format!("av-rclone-hardener-{}", std::process::id()));
+        let config = root.join("rclone.conf");
+        let target = root.join("rclone");
+        let keychain = root.join("keychain");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&keychain).unwrap();
+        std::fs::write(&config, "[remote]\ntoken = plaintext\n").unwrap();
+        std::fs::set_permissions(&config, std::fs::Permissions::from_mode(0o600)).unwrap();
+        std::fs::write(
+            &target,
+            "#!/bin/sh\nset -eu\ntest \"$1\" = --config\ntest \"$3 $4 $5\" = 'config encryption set'\nif test -f \"$AUTOMIC_VAULT_TEST_KEYCHAIN_DIR/RCLONE_CONFIG_PASSWORD\"; then\n  printf '# encrypted\\n\\nRCLONE_ENCRYPT_V0:\\ndata\\n' > \"$2\"\nelse\n  echo 'failed to load secret RCLONE_CONFIG_PASSWORD: -25300' >&2\nfi\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o755)).unwrap();
+        unsafe {
+            std::env::set_var("AUTOMIC_VAULT_TEST_RCLONE_CONFIG", &config);
+            std::env::set_var("AUTOMIC_VAULT_TEST_RCLONE_TARGET", &target);
+            std::env::set_var("AUTOMIC_VAULT_TEST_KEYCHAIN_DIR", &keychain);
+        }
+
+        let mut output = Vec::new();
+        let result = run(&mut output, true);
+
+        unsafe {
+            std::env::remove_var("AUTOMIC_VAULT_TEST_RCLONE_CONFIG");
+            std::env::remove_var("AUTOMIC_VAULT_TEST_RCLONE_TARGET");
+            std::env::remove_var("AUTOMIC_VAULT_TEST_KEYCHAIN_DIR");
+        }
+        assert!(result.is_ok(), "{result:?}");
+        assert!(encrypted_state(&std::fs::read_to_string(&config).unwrap()).unwrap());
+        assert!(
+            keychain
+                .join(crate::cli::rclone_password::SECRET_NAME)
+                .exists()
+        );
+        std::fs::remove_dir_all(root).unwrap();
     }
 }
