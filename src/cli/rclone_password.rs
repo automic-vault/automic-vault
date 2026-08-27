@@ -16,8 +16,11 @@ pub(crate) fn run(args: Vec<OsString>, stdout: &mut dyn Write, stderr: &mut dyn 
 }
 
 fn run_inner(args: &[OsString], stdout: &mut dyn Write) -> Result<(), String> {
-    if args != ["1"] {
+    let [version] = args else {
         return Err("usage: av rclone-password 1".into());
+    };
+    if version != "1" {
+        return Err("unsupported rclone password request".into());
     }
     crate::secrets::ensure_rclone_helper_ready()?;
     let password = inject::rclone_password(SECRET_NAME.into())?;

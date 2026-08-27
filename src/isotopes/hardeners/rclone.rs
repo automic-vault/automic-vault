@@ -249,7 +249,7 @@ struct EncryptionResult {
 
 impl EncryptionResult {
     fn secret_was_missing(&self) -> bool {
-        self.output.contains("RCLONE_CONFIG_PASSWORD") && self.output.contains("-25300")
+        output_reports_missing_secret(&self.output)
     }
 
     fn failure(&self, prefix: &str) -> String {
@@ -262,6 +262,10 @@ impl EncryptionResult {
             .then_some(())
             .ok_or_else(|| self.failure("rclone config encryption failed"))
     }
+}
+
+fn output_reports_missing_secret(output: &str) -> bool {
+    output.contains("failed to load secret RCLONE_CONFIG_PASSWORD: -25300")
 }
 
 fn encryption_set(target: &Path, config: &Path) -> Result<EncryptionResult, String> {
@@ -369,6 +373,16 @@ mod tests {
         let password = generate_password().unwrap();
         assert_eq!(password.len(), 64);
         assert!(crate::cli::rclone_password::validate_password(&password).is_ok());
+    }
+
+    #[test]
+    fn only_the_exact_missing_secret_error_allows_password_creation() {
+        assert!(output_reports_missing_secret(
+            "rclone-password: failed to load secret RCLONE_CONFIG_PASSWORD: -25300"
+        ));
+        assert!(!output_reports_missing_secret(
+            "another failure for RCLONE_CONFIG_PASSWORD also mentioned -25300"
+        ));
     }
 
     #[test]
