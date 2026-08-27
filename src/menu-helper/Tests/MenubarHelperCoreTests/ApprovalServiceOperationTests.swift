@@ -42,6 +42,11 @@ import Testing
     #expect(ApprovalServiceOperation.railwayDelete.rawValue == "railway-delete")
 }
 
+@Test func rclonePasswordHasDedicatedWireOperations() {
+    #expect(ApprovalServiceOperation.rcloneHelperVersion.rawValue == "rclone-helper-version")
+    #expect(ApprovalServiceOperation.rcloneGet.rawValue == "rclone-get")
+}
+
 @Test func ordercliCredentialsHaveDedicatedWireOperations() {
     #expect(ApprovalServiceOperation.ordercliGet.rawValue == "ordercli-get")
     #expect(ApprovalServiceOperation.ordercliSave.rawValue == "ordercli-save")

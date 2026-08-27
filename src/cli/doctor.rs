@@ -1666,6 +1666,7 @@ mod tests {
                                 | "plumber"
                                 | "uaa-cli"
                                 | "railway"
+                                | "rclone"
                                 | "oxide-cli"
                                 | "stripe"
                                 | "supabase"

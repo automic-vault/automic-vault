@@ -3154,6 +3154,13 @@ private final class ApprovalServer: @unchecked Sendable {
                 return
             }
             reply(peer, to: message, ok: true, error: nil, value: "1")
+        case .rcloneHelperVersion where isTrustedAvCaller(path: callerPath, signing: signing):
+            let requested = xpc_dictionary_get_uint64(message, "requested_version")
+            guard requested == 1 else {
+                reply(peer, to: message, ok: false, error: "rclone helper protocol upgrade is required")
+                return
+            }
+            reply(peer, to: message, ok: true, error: nil, value: "1")
         case .gpgSign where isTrustedAvCaller(path: callerPath, signing: signing):
             handleInject(
                 message,
@@ -3165,7 +3172,7 @@ private final class ApprovalServer: @unchecked Sendable {
                 signing: signing
             )
         case .inject, .keys, .authorize, .dockerGet, .goatGet, .ordercliGet, .openhueGet, .plumberGet, .uaaGet, .railwayGet,
-             .oxideGet, .terraformGet, .aliyunGet, .wakatimeGet:
+             .oxideGet, .terraformGet, .aliyunGet, .wakatimeGet, .rcloneGet:
             handleInject(
                 message,
                 on: peer,
@@ -3570,15 +3577,21 @@ private final class ApprovalServer: @unchecked Sendable {
                 helperPath: callerPath,
                 helperSigning: signing
             )
-            let conflicts = Set(wakatimeRequest.envConflicts)
-            let selectionNames = wakatimeRequest.keys.filter {
-                wakatimeRequest.replaceExistingEnv || !conflicts.contains($0)
+            let rcloneRequest = try rclonePasswordRequest(
+                request: wakatimeRequest,
+                helperIdentity: identity,
+                helperPath: callerPath,
+                helperSigning: signing
+            )
+            let conflicts = Set(rcloneRequest.envConflicts)
+            let selectionNames = rcloneRequest.keys.filter {
+                rcloneRequest.replaceExistingEnv || !conflicts.contains($0)
             }
             let selected = try secretValueCustody.bind(
                 names: selectionNames,
-                cwd: wakatimeRequest.cwd
+                cwd: rcloneRequest.cwd
             )
-            request = approvalRequestWithCredentialContext(wakatimeRequest.selecting(selected))
+            request = approvalRequestWithCredentialContext(rcloneRequest.selecting(selected))
         } catch {
             reply(peer, to: message, ok: false, error: error.localizedDescription)
             return
@@ -6511,6 +6524,68 @@ private final class ApprovalServer: @unchecked Sendable {
         )
     }
 
+    private func rclonePasswordRequest(
+        request: ApprovalRequest,
+        helperIdentity: AVProcessIdentity,
+        helperPath: String,
+        helperSigning: SigningInfo
+    ) throws -> ApprovalRequest {
+        guard request.op == "rclone-get" else { return request }
+        guard request.tool == "rclone",
+              isTrustedAvCaller(path: helperPath, signing: helperSigning),
+              request.target.isEmpty,
+              request.args.isEmpty,
+              request.keys == [rcloneConfigPasswordSecretName],
+              !request.replaceExistingEnv,
+              !request.allowMissingKeys,
+              request.envConflicts.isEmpty,
+              request.shebangScript == nil,
+              request.scriptData == nil
+        else { throw AppError("invalid rclone password request") }
+        let parent = try rcloneCredentialParent(for: helperIdentity)
+        return ApprovalRequest(
+            op: request.op,
+            keys: request.keys,
+            target: parent.target,
+            args: Array(parent.arguments.dropFirst()),
+            cwd: "",
+            replaceExistingEnv: false,
+            allowMissingKeys: false,
+            envConflicts: [],
+            shebangScript: nil,
+            scriptData: nil,
+            tool: "rclone",
+            title: "Unlock the rclone configuration?",
+            detail: "The verified rclone Target will receive one wrapping password that unlocks every configured remote for this process.",
+            credentialScope: rcloneAllRemotesScope,
+            credentialParent: parent
+        )
+    }
+
+    private func rcloneCredentialParent(
+        for helperIdentity: AVProcessIdentity
+    ) throws -> CredentialHelperParent {
+        let parentPID = helperIdentity.ppid
+        var parentIdentity = AVProcessIdentity()
+        guard parentPID > 1,
+              av_process_identity(parentPID, &parentIdentity),
+              parentIdentity.euid == helperIdentity.euid,
+              let arguments = processArguments(parentPID),
+              !arguments.isEmpty
+        else { throw AppError("rclone password helper has no live parent") }
+        let target = pathString(parentIdentity)
+        guard rcloneTargetIdentityValid(pid: parentPID, path: target) else {
+            throw AppError("credential helper parent is not an eligible rclone Target")
+        }
+        return CredentialHelperParent(
+            pid: parentPID,
+            startUsec: parentIdentity.start_usec,
+            euid: parentIdentity.euid,
+            target: target,
+            arguments: arguments
+        )
+    }
+
     private func terraformCredentialParent(
         for helperIdentity: AVProcessIdentity
     ) throws -> CredentialHelperParent {
@@ -6613,6 +6688,7 @@ private final class ApprovalServer: @unchecked Sendable {
         case "oxide": "oxide-cli"
         case "plumber": "plumber"
         case "railway": "railway"
+        case "rclone": "rclone"
         case "tofu": "opentofu"
         case "terraform": "terraform"
         case "uaa": "uaa-cli"
@@ -6664,6 +6740,9 @@ private final class ApprovalServer: @unchecked Sendable {
         case "wakatime-cli":
             return credentialHelperTool(parent) == tool
                 && wakatimeTargetIdentityValid(pid: parent.pid, path: parent.target)
+        case "rclone":
+            return credentialHelperTool(parent) == tool
+                && rcloneTargetIdentityValid(pid: parent.pid, path: parent.target)
         default: return false
         }
     }
@@ -6782,6 +6861,18 @@ private final class ApprovalServer: @unchecked Sendable {
             && liveProcessHasNoEntitlements(pid: pid)
     }
 
+    private func rcloneTargetIdentityValid(pid: pid_t, path: String) -> Bool {
+        guard configuredSecretGateTarget("rclone", matches: path),
+              let signing = liveSigningInfo(pid: pid),
+              signing.mainExecutable == path
+        else { return false }
+        return signing.identifier == "rclone"
+            && signing.teamIdentifier == "ZU76A67LGU"
+            && signing.isDeveloperID
+            && signing.runtimeProtection == .hardened
+            && liveProcessHasNoEntitlements(pid: pid)
+    }
+
     private func configuredSecretGateTarget(_ gateID: String, matches path: String) -> Bool {
         secretGateDescriptors.first(where: { $0.id == gateID })?.routes.contains {
             normalizedExecutablePath($0.targetPath) == normalizedExecutablePath(path)
@@ -6793,7 +6884,7 @@ private final class ApprovalServer: @unchecked Sendable {
         awsRegistration: AWSRegistrationCandidate?
     ) throws -> AuthorizationFulfillmentTransaction<ApprovedFulfillmentMaterial> {
         let credentialParent: CredentialHelperParent?
-        if ["docker-get", "goat-get", "ordercli-get", "openhue-get", "plumber-get", "uaa-get", "railway-get", "oxide-get", "terraform-get", "aliyun-get", "wakatime-get"]
+        if ["docker-get", "goat-get", "ordercli-get", "openhue-get", "plumber-get", "uaa-get", "railway-get", "oxide-get", "terraform-get", "aliyun-get", "wakatime-get", "rclone-get"]
             .contains(request.op)
         {
             guard let scope = request.credentialScope,
@@ -6831,6 +6922,11 @@ private final class ApprovalServer: @unchecked Sendable {
                     throw AppError("WakaTime API endpoint changed before Secret Application")
                 }
                 expected = wakatimeCredentialSecretName
+            case "rclone-get":
+                guard scope == rcloneAllRemotesScope else {
+                    throw AppError("rclone credential scope changed before Secret Application")
+                }
+                expected = rcloneConfigPasswordSecretName
             default: expected = terraformCredentialSecretName(scope)
             }
             guard request.keys == [expected] else {
@@ -6895,6 +6991,11 @@ private final class ApprovalServer: @unchecked Sendable {
                       let value = secrets[wakatimeCredentialSecretName],
                       validWakaTimeAPIKey(value)
                 else { throw AppError("WakaTime credential changed before Secret Application") }
+            } else if request.op == "rclone-get" {
+                guard scope == rcloneAllRemotesScope,
+                      let value = secrets[rcloneConfigPasswordSecretName],
+                      validRcloneConfigPassword(value)
+                else { throw AppError("rclone config password changed before Secret Application") }
             } else {
                 guard let value = secrets[terraformCredentialSecretName(scope)],
                       parseTerraformCredential(value) != nil
@@ -7688,6 +7789,8 @@ private func classifySecretGateRequest(
         return aliyunRequestClassification(request.args)
     case "wakatime-cli":
         return wakatimeRequestClassification(request.args)
+    case "rclone":
+        return .unknown
     case "aws":
         if awsRequestMayUseLongLivedCredentials(request) { return .secretDump }
         return awsRequestIsReadOnly(awsCommandWords(request)) ? .readOnly : .mutating
@@ -8794,6 +8897,14 @@ private func validWakaTimeAPIKey(_ value: String) -> Bool {
             ? byte == 45
             : (48...57).contains(byte) || (97...102).contains(byte)
     }
+}
+
+private let rcloneConfigPasswordSecretName = "RCLONE_CONFIG_PASSWORD"
+private let rcloneAllRemotesScope = "all-remotes"
+
+private func validRcloneConfigPassword(_ value: String) -> Bool {
+    !value.isEmpty && value.utf8.count <= 1024
+        && !value.unicodeScalars.contains(where: { [0, 10, 13].contains($0.value) })
 }
 
 private func isGhTokenKey(_ key: String) -> Bool {
