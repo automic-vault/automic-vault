@@ -201,7 +201,7 @@ fn target() -> PathBuf {
 }
 
 fn read_config(path: &Path) -> Result<String, String> {
-    let mut file = OpenOptions::new()
+    let file = OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
         .open(path)
@@ -220,8 +220,15 @@ fn read_config(path: &Path) -> Result<String, String> {
         ));
     }
     let mut contents = String::new();
-    file.read_to_string(&mut contents)
+    file.take(MAX_CONFIG_BYTES + 1)
+        .read_to_string(&mut contents)
         .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
+    if contents.len() as u64 > MAX_CONFIG_BYTES {
+        return Err(format!(
+            "rclone configuration is too large: {}",
+            path.display()
+        ));
+    }
     Ok(contents)
 }
 
