@@ -313,10 +313,8 @@ fn configured_hosts(hosts_paths: &[PathBuf]) -> BTreeMap<String, Option<String>>
 pub(super) fn security_find_generic_password(
     service: &str,
     account: Option<&str>,
-) -> Option<String> {
+) -> Result<Option<String>, String> {
     security_find_generic_password_result(service, account)
-        .ok()
-        .flatten()
 }
 
 pub(super) fn security_find_generic_password_result(

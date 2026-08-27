@@ -41,12 +41,12 @@ pub(crate) fn run(stdout: &mut dyn Write, yes: bool) -> Result<(), String> {
             {
                 add_credential(&mut credentials, key.clone(), value, None)?;
             }
-            if let Some(value) = legacy_keychain_value(&legacy_key) {
+            if let Some(value) = legacy_keychain_value(&legacy_key)? {
                 add_credential(&mut credentials, key, value, Some(legacy_key))?;
             }
         }
         let session_key = format!("{profile}.stripe_cli_session");
-        if let Some(value) = legacy_keychain_value(&session_key) {
+        if let Some(value) = legacy_keychain_value(&session_key)? {
             add_credential(
                 &mut credentials,
                 vault_key(&session_key),
@@ -55,7 +55,7 @@ pub(crate) fn run(stdout: &mut dyn Write, yes: bool) -> Result<(), String> {
             )?;
         }
     }
-    if let Some(value) = legacy_keychain_value("uat") {
+    if let Some(value) = legacy_keychain_value("uat")? {
         add_credential(
             &mut credentials,
             vault_key("uat"),
@@ -284,11 +284,11 @@ fn add_credential(
     Ok(())
 }
 
-fn legacy_keychain_value(account: &str) -> Option<String> {
+fn legacy_keychain_value(account: &str) -> Result<Option<String>, String> {
     if let Some(json) = crate::test_env_string("AUTOMIC_VAULT_TEST_STRIPE_LEGACY_KEYS") {
         return serde_json::from_str::<BTreeMap<String, String>>(&json)
-            .ok()?
-            .remove(account);
+            .map(|mut values| values.remove(account))
+            .map_err(|err| format!("failed to parse test Stripe Keychain values: {err}"));
     }
     super::gh_cli::security_find_generic_password(KEYCHAIN_SERVICE, Some(account))
 }
@@ -362,6 +362,7 @@ fn redact(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::fs::PermissionsExt;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
@@ -455,6 +456,29 @@ mod tests {
         assert_eq!(gate.key_patterns, ["STRIPE_CLI_*"]);
         assert_eq!(gate.routes[0].caller_identifiers, ["stripe"]);
         assert_eq!(gate.routes[0].key_patterns, ["STRIPE_CLI_*"]);
+    }
+
+    #[test]
+    fn keychain_read_errors_fail_closed() {
+        let _guard = crate::global_test_env_lock().lock().unwrap();
+        let security = temp_path("denied-stripe-keychain");
+        fs::write(
+            &security,
+            "#!/bin/sh\nprintf '%s\\n' 'user interaction is not allowed' >&2\nexit 1\n",
+        )
+        .unwrap();
+        fs::set_permissions(&security, fs::Permissions::from_mode(0o700)).unwrap();
+        unsafe {
+            std::env::set_var("AUTOMIC_VAULT_TEST_SECURITY_PATH", &security);
+        }
+
+        let error = legacy_keychain_value("uat").unwrap_err();
+
+        unsafe {
+            std::env::remove_var("AUTOMIC_VAULT_TEST_SECURITY_PATH");
+        }
+        assert!(error.contains("failed to read legacy keychain item"));
+        let _ = fs::remove_file(security);
     }
 
     fn temp_path(name: &str) -> PathBuf {
