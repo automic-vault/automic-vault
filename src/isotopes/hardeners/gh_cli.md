@@ -5,8 +5,9 @@
 We provide a [patched version] of `gh`. `av harden gh` installs it from our
 [tap] when Homebrew is available, or installs the same signed release directly
 at `/usr/local/bin/gh`. The supported hardened path is designed so that only
-the verified `gh` Isotope can apply its GitHub Secret through the Automic Vault
-Secret Gate.
+the verified `gh` Isotope submits authenticated operations through the `gh`
+Secret Gate; Automic Vault applies the GitHub Secret only to the authorized
+Target.
 
 The statements below describe the intended hardened-state contract. They do
 not establish that this checkout, or a particular installed `gh`, is already
@@ -25,11 +26,11 @@ into Automic Vault. Direct installs are updated by running the same command when
 ## Credential-resolution failure contract
 
 Authenticated operations use the error-aware Automic Vault credential path.
-If Secret retrieval is denied, times out, or the approval service or XPC
-broker is unavailable, `gh` returns a local Vault-retrieval error before it
-makes a GitHub request. An operational retrieval failure never falls back to a
-legacy credential, sends an anonymous request, or turns into a misleading
-HTTP 401.
+If the Secret Application required for credential resolution is denied or
+unavailable, including a timeout or approval-service/XPC unavailability, `gh`
+returns a local Automic Vault credential-resolution error before it makes a
+GitHub request. A credential-resolution failure never falls back to a legacy
+credential, sends an anonymous request, or turns into a misleading HTTP 401.
 
 An account-specific lookup may use the legacy host-wide credential only when
 the account-specific lookup returns the exact `ErrNotFound` condition. If both
@@ -37,12 +38,17 @@ credential locations are genuinely absent, an endpoint that explicitly allows
 anonymous access may remain anonymous. Absence and operational unavailability
 are different outcomes.
 
-`gh auth status` reports Vault retrieval unavailability separately from an
-invalid GitHub credential. It must not describe an operational Vault failure
-as logged out or invalid, or direct the user to log in or authenticate again.
-Long-running authenticated operations resolve through the error-aware path for
-each request or refresh decision, so a transient local Vault failure does not
-poison a later fresh invocation; a subsequent invocation may recover normally.
+`gh auth status` reports a credential-resolution failure caused by a denied or
+unavailable Secret Application separately from an invalid GitHub credential.
+Its operational diagnostic is `Vault retrieval unavailable.` It must not
+describe that failure as logged out or invalid, or direct the user to log in or
+authenticate again.
+
+At the tested request boundaries, API transport and watchers re-resolve
+through the error-aware path before each request. Refresh uses the
+authenticated-flow token directly for credential setup and performs no
+post-login Vault reread. A fresh invocation may recover after a transient
+local Vault failure.
 
 ## Release and installation boundary
 
@@ -73,9 +79,10 @@ Write Access authorizes recognized remote writes, but Secret Disclosure through
 
 ## Upstream context
 
-The upstream discussion in [GitHub CLI issue #13317] and [pull request #13318]
-tracks misleading authentication behavior when credential retrieval fails.
-Both remain open as of 2026-08-27. The Automic Vault Isotope extends the
+On 2026-08-27, the official public GitHub REST state listed [GitHub CLI issue
+#13317] as open. The official [pull request #13318] was open and non-draft.
+These separate upstream records track misleading authentication behavior when
+credential resolution fails. The Automic Vault Isotope extends the
 error-aware contract across the remaining authentication-sensitive callers,
 including API transport, Git credential resolution, token and refresh flows,
 logout, status, and long-running operations.
