@@ -6548,7 +6548,7 @@ private final class ApprovalServer: @unchecked Sendable {
             keys: request.keys,
             target: parent.target,
             args: Array(parent.arguments.dropFirst()),
-            cwd: "",
+            cwd: "/",
             replaceExistingEnv: false,
             allowMissingKeys: false,
             envConflicts: [],

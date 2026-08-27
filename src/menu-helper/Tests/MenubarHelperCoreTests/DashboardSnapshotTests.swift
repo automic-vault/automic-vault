@@ -1135,6 +1135,27 @@ func protectionPolicyMatrix(
     #expect(selected["MISSING"] == nil)
 }
 
+@Test func filesystemRootSelectionCannotResolveAProjectValue() throws {
+    let global = StoredSecretValue(
+        source: .global,
+        keychainAccount: "GLOBAL",
+        accessibility: .whenUnlocked,
+        keychainProperties: []
+    )
+    let project = StoredSecretValue(
+        source: .projectDirectory(FileManager.default.temporaryDirectory.path),
+        keychainAccount: "PROJECT",
+        accessibility: .whenUnlocked,
+        keychainProperties: []
+    )
+    let selected = try resolveStoredSecretValues(
+        names: ["TOKEN"],
+        cwd: "/",
+        secrets: [StoredSecret(account: "TOKEN", values: [project, global])]
+    )
+    #expect(selected["TOKEN"] == global)
+}
+
 @Test func projectDirectoryValidationUsesPhysicalCanonicalPathsAndRejectsRoots() throws {
     let root = FileManager.default.temporaryDirectory
         .appendingPathComponent("av-project-path-\(UUID().uuidString)", isDirectory: true)
