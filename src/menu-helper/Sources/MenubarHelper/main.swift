@@ -4077,12 +4077,10 @@ private final class ApprovalServer: @unchecked Sendable {
             launcherRuntimeProtection: launcher?.runtimeProtection,
             agentTaskContext: currentAgentTaskContext
         )
-        let promptAccessLevel: String? = if let configuredGate, let resolvedPolicy {
+        let promptAccessLevel = if let configuredGate, let resolvedPolicy {
             configuredGate.protectionTitle(resolvedPolicy.protection)
-        } else if configuredGate == nil {
-            SecretGateProtection.noAccess.title
         } else {
-            nil
+            SecretGateProtection.noAccess.title
         }
         let transientApproval = request.decisionReuseRequest(
             clientIdentity: identity,
