@@ -2822,14 +2822,15 @@ private func temporaryAccessGrantCandidate(
     launcher: LauncherIdentity?,
     agentTaskContext: AgentTaskContext?
 ) -> TemporaryAccessGrantCandidate? {
-    guard let gate, let classification, let launcher, let agentTaskContext else { return nil }
-    switch classification {
-    case .localWrite, .update, .mutating:
-        break
-    case .readOnly, .secretDump, .unknown:
-        return nil
-    }
-    guard let runtimeRequirement = launcher.runtimeProtection.secretGateAdmissionRequirement else {
+    guard temporaryAccessGrantUnavailableReason(
+        hasToolSpecificGate: gate != nil,
+        classification: classification,
+        launcherRuntimeProtection: launcher?.runtimeProtection,
+        agentTaskContext: agentTaskContext
+    ) == nil,
+    let gate, let launcher, let agentTaskContext,
+    let runtimeRequirement = launcher.runtimeProtection.secretGateAdmissionRequirement
+    else {
         return nil
     }
     let launcherName = temporaryAccessGrantLauncherName(launcher)
@@ -4070,6 +4071,19 @@ private final class ApprovalServer: @unchecked Sendable {
             launcher: launcher,
             agentTaskContext: currentAgentTaskContext
         )
+        let temporaryGrantUnavailableReason = temporaryAccessGrantUnavailableReason(
+            hasToolSpecificGate: configuredGate != nil,
+            classification: classification,
+            launcherRuntimeProtection: launcher?.runtimeProtection,
+            agentTaskContext: currentAgentTaskContext
+        )
+        let promptAccessLevel: String? = if let configuredGate, let resolvedPolicy {
+            configuredGate.protectionTitle(resolvedPolicy.protection)
+        } else if configuredGate == nil {
+            SecretGateProtection.noAccess.title
+        } else {
+            nil
+        }
         let transientApproval = request.decisionReuseRequest(
             clientIdentity: identity,
             callerPath: callerPath,
@@ -4245,7 +4259,9 @@ private final class ApprovalServer: @unchecked Sendable {
                 automaticApprovalExplanation: lostBlessingExplanation(for: scriptApproval)
                     ?? retainedProcessExplanation
                     ?? automaticApprovalExplanation,
+                accessLevel: promptAccessLevel,
                 temporaryGrantCandidate: temporaryGrantCandidate,
+                temporaryGrantUnavailableReason: temporaryGrantUnavailableReason,
                 classification: classification,
                 cancellation: cancellation
             )
@@ -10397,7 +10413,9 @@ private func showApprovalAlert(
     launcher: LauncherIdentity?,
     launcherFallbackPath: String,
     automaticApprovalExplanation: String?,
+    accessLevel: String? = nil,
     temporaryGrantCandidate: TemporaryAccessGrantCandidate? = nil,
+    temporaryGrantUnavailableReason: String? = nil,
     allowsPersistentApproval: Bool = false,
     persistentApprovalLabel: String = "Always Allow",
     classification: SecretGateRequestClassification? = nil,
@@ -10422,6 +10440,9 @@ private func showApprovalAlert(
         title: request.title,
         detail: request.detail,
         automaticApprovalExplanation: automaticApprovalExplanation,
+        operation: classification.map(operationClassificationTitle),
+        accessLevel: accessLevel,
+        temporaryGrantUnavailableReason: temporaryGrantUnavailableReason,
         cwd: escapedSecurityPath(request.cwd),
         keys: approvalPromptSecretNames(
             requested: request.keys,
@@ -10729,6 +10750,9 @@ private struct ApprovalPromptContent {
     let title: String?
     let detail: String?
     let automaticApprovalExplanation: String?
+    let operation: String?
+    let accessLevel: String?
+    let temporaryGrantUnavailableReason: String?
     let cwd: String
     let keys: String
     let blessing: BlessedScriptPromptContext?
@@ -11165,6 +11189,14 @@ private struct ApprovalPromptView: View {
             .defaultScrollAnchor(.top)
             .layoutPriority(1)
 
+            if let reason = content.temporaryGrantUnavailableReason {
+                Text(reason)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
             if usesIPhoneApproval {
                 VStack(spacing: 10) {
                     HStack(spacing: 10) {
@@ -11335,6 +11367,20 @@ private struct ApprovalPromptCommandView: View {
                     }
                 }
                 VStack(alignment: .leading, spacing: 8) {
+                    if let operation = content.operation {
+                        ApprovalPromptInlineMeta(
+                            label: "Operation",
+                            value: operation,
+                            systemImage: "list.bullet"
+                        )
+                    }
+                    if let accessLevel = content.accessLevel {
+                        ApprovalPromptInlineMeta(
+                            label: "Access Level",
+                            value: accessLevel,
+                            systemImage: "shield.lefthalf.filled"
+                        )
+                    }
                     ApprovalPromptInlineMeta(
                         label: "Secret Names",
                         value: content.keys,
@@ -12148,6 +12194,9 @@ private func runApprovalSelfCheck() -> Int32 {
         title: "GitHub token requested",
         detail: "gh needs the GitHub token",
         automaticApprovalExplanation: automaticApprovalExplanation,
+        operation: operationClassificationTitle(.unknown),
+        accessLevel: SecretGateProtection.noAccess.title,
+        temporaryGrantUnavailableReason: "10-minute Write Access excludes Unknown operations.",
         cwd: "/tmp",
         keys: "GH_TOKEN_GITHUB_COM",
         blessing: promptBlessing,
@@ -12184,6 +12233,9 @@ private func runApprovalSelfCheck() -> Int32 {
                 title: nil,
                 detail: nil,
                 automaticApprovalExplanation: nil,
+                operation: nil,
+                accessLevel: nil,
+                temporaryGrantUnavailableReason: nil,
                 cwd: "/tmp",
                 keys: "GH_TOKEN_GITHUB_COM",
                 blessing: nil,
