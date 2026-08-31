@@ -1,5 +1,23 @@
 use std::ffi::CStr;
 
+#[cfg(target_os = "macos")]
+unsafe extern "C" {
+    static _xpc_error_connection_invalid: u8;
+    fn xpc_equal(object1: *mut std::ffi::c_void, object2: *mut std::ffi::c_void) -> bool;
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) unsafe fn connection_invalid(reply: *mut std::ffi::c_void) -> bool {
+    unsafe {
+        xpc_equal(
+            reply,
+            std::ptr::addr_of!(_xpc_error_connection_invalid)
+                .cast_mut()
+                .cast(),
+        )
+    }
+}
+
 pub(crate) fn unavailable_message(service: &CStr) -> &'static str {
     unavailable_message_for_sandbox(sandbox_denies_mach_lookup(service))
 }
@@ -35,6 +53,15 @@ fn unavailable_message_for_sandbox(sandbox_denied: bool) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn recognizes_connection_invalid_xpc_object() {
+        let error = std::ptr::addr_of!(_xpc_error_connection_invalid)
+            .cast_mut()
+            .cast();
+        assert!(unsafe { connection_invalid(error) });
+    }
 
     #[test]
     fn unavailable_message_distinguishes_sandbox_denial() {
