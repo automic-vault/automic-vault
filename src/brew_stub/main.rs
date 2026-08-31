@@ -512,7 +512,7 @@ fn xpc_authorize(request: &AuthorizationRequest) -> Result<(), String> {
                     .into_owned()
             };
             if error == "Connection invalid" {
-                Err("Automic Vault approval service is not running; open the menu bar app".into())
+                Err(av::approval_service_unavailable_message(&service).into())
             } else {
                 Err(error)
             }

@@ -362,11 +362,16 @@ fn xpc_request(
     let result = unsafe {
         if xpc_get_type(reply) == std::ptr::addr_of!(_xpc_type_error).cast() {
             let value = xpc_dictionary_get_string(reply, _xpc_error_key_description);
-            Err(if value.is_null() {
+            let error = if value.is_null() {
                 "approval XPC connection failed".into()
             } else {
                 CStr::from_ptr(value).to_string_lossy().into_owned()
-            })
+            };
+            if error == "Connection invalid" {
+                Err(crate::approval_service_unavailable_message(service).into())
+            } else {
+                Err(error)
+            }
         } else if !xpc_dictionary_get_bool(reply, c"ok".as_ptr()) {
             let value = xpc_dictionary_get_string(reply, c"error".as_ptr());
             Err(if value.is_null() {

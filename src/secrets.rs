@@ -864,7 +864,7 @@ fn xpc_request_with_project_directory(
                     .into_owned()
             };
             if error == "Connection invalid" {
-                Err("Automic Vault approval service is not running; open the menu bar app".into())
+                Err(crate::approval_service_unavailable_message(&service).into())
             } else {
                 Err(error)
             }
