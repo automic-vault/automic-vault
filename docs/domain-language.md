@@ -513,6 +513,9 @@ The Homebrew Execution Gate does not expose Read Only. Homebrew may update itsel
 ### Detector
 
 A read-only check for one supported Exposure or Hazard in the developer environment.
+A Detector never initiates Secret Use or executes a configured credential helper.
+When runtime behavior cannot be established without crossing an Authorization
+Gate, it relies on passive evidence and may report the uncertainty as a Hazard.
 
 ### Scan
 

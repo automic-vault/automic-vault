@@ -1,4 +1,5 @@
 use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::process::{Command, Output};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -108,6 +109,51 @@ fn av_scan_json_can_run_one_detector() {
 }
 
 #[test]
+fn av_scan_git_credential_fill_does_not_invoke_configured_helpers() {
+    let home = temp_home("git-credential-fill-passive");
+    let marker = home.join("helper-invoked");
+    let helper = home.join("credential-helper");
+    fs::write(
+        &helper,
+        format!("#!/bin/sh\nprintf invoked > {}\n", marker.display()),
+    )
+    .unwrap();
+    let mut permissions = fs::metadata(&helper).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&helper, permissions).unwrap();
+    fs::write(
+        home.join(".gitconfig"),
+        format!(
+            "[credential \"https://github.com\"]\nhelper =\nhelper = !{}\n",
+            helper.display()
+        ),
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_av"))
+        .args(["scan", "--json", "--detector", "git-credential-fill"])
+        .current_dir(&home)
+        .env_clear()
+        .env("HOME", &home)
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
+        .output()
+        .unwrap();
+    let stdout = stdout(&output);
+    let helper_was_invoked = marker.exists();
+    let _ = fs::remove_dir_all(home);
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(stdout.contains(r#""source":"git-credential-fill""#));
+    assert!(stdout.contains("ambient credential helper"));
+    assert!(stdout.contains(r#""line":3"#));
+    assert!(
+        !helper_was_invoked,
+        "av scan invoked a configured Git credential helper"
+    );
+}
+
+#[test]
 fn av_scan_json_rejects_an_unknown_detector() {
     let home = temp_home("unknown-detector");
     let output = Command::new(env!("CARGO_BIN_EXE_av"))
@@ -134,7 +180,6 @@ fn av_scan(home: &std::path::Path) -> Output {
             "AUTOMIC_VAULT_TEST_SIP_STATUS",
             "System Integrity Protection status: enabled.",
         )
-        .env("AUTOMIC_VAULT_DISABLE_GIT_CREDENTIAL_FILL_DETECTOR", "1")
         .env("AUTOMIC_VAULT_DISABLE_SUDO_DETECTOR", "1")
         .env("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
         .output()
@@ -153,7 +198,6 @@ fn av_scan_json(home: &std::path::Path) -> Output {
             "AUTOMIC_VAULT_TEST_SIP_STATUS",
             "System Integrity Protection status: enabled.",
         )
-        .env("AUTOMIC_VAULT_DISABLE_GIT_CREDENTIAL_FILL_DETECTOR", "1")
         .env("AUTOMIC_VAULT_DISABLE_SUDO_DETECTOR", "1")
         .env("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
         .output()

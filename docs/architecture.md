@@ -43,6 +43,11 @@ Developer tools and agent harnesses use their existing commands. Automic Vault d
 ### Exposure Detection
 
 Detectors inspect the developer environment without changing it. A Scan produces Findings for supported Exposures and Hazards. It cannot certify the whole environment.
+Detectors do not initiate Secret Use, invoke configured credential helpers, or
+cross an Authorization Gate. They may run trusted configuration-only plumbing
+that cannot apply or disclose a Secret. When passive evidence cannot establish
+runtime behavior, the Detector reports a Hazard rather than performing the
+protected operation.
 
 ### Tool Hardening
 

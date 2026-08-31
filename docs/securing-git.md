@@ -16,16 +16,16 @@ Detected hazards:
 
 - `~/.git-credentials`
 - global `credential.helper = store --file ...` paths
-- `printf 'protocol=https\nhost=github.com\n\n' | git credential fill`
-  returning a non-empty `password=` for `github.com`
+- an effective ambient GitHub credential helper, including `osxkeychain` when
+  Keychain metadata confirms a matching Internet password
 - Git config that delegates GitHub credentials to an untrusted `gh auth
   git-credential` helper
 - Git config that enables `git-credential-oauth`
 - plaintext `oauthClientSecret` values in Git config
 
-The live `git credential fill` finding may not have a file and line. Git does
-not always say which helper returned the token. File-backed findings do include
-the affected path and line.
+The Git helper Detector resolves includes and precedence through Git's
+configuration-only plumbing. It does not invoke credential helpers or request
+Secret Application. File-backed findings include the origin path and line.
 
 
 The fix is not merely "use a better HTTPS credential helper". On macOS, if Git
@@ -54,7 +54,7 @@ creates the signature. Automic Vault controls its application and zeroizes
 transient input buffers; it does not claim that a compromised Target cannot
 inspect its own memory.
 
-## Check What Git Can Read
+## Check Git Credential Configuration
 
 Start with the boring check:
 
@@ -84,26 +84,30 @@ $ av scan
 ╰─ scan complete
 ```
 
-Then check what Git itself can retrieve for GitHub:
+Inspect the effective configuration without invoking a helper:
 
 ```sh
-$ printf 'protocol=https\nhost=github.com\n\n' | git credential fill
-protocol=https
-host=github.com
-username=x-access-token
-password=github_pat_...
-# ^^ bad: Git can retrieve a token without you approving this command
+$ git config --includes --show-origin --get-regexp \
+    '^credential\..*\.helper$|^credential\.helper$'
+file:/Applications/Xcode.app/.../gitconfig credential.helper osxkeychain
+file:/Users/you/.gitconfig credential.https://github.com.helper
+file:/Users/you/.gitconfig credential.https://github.com.helper !/usr/local/bin/gh auth git-credential
 ```
 
-Clean output is no `password=` line:
+The empty helper resets the inherited `osxkeychain` entry. The remaining
+absolute `gh` helper is accepted only when it carries the Automic Vault Isotope
+signature.
+
+You can also inspect GitHub Internet-password metadata without retrieving its
+value:
 
 ```sh
-$ printf 'protocol=https\nhost=github.com\n\n' | git credential fill
-protocol=https
-host=github.com
-username=
-# ^^ fine; exact output varies, but there should be no password
+$ security find-internet-password -s github.com -r htps
 ```
+
+An explicit `git credential fill` test invokes the configured helper. It may
+request Automic Vault Approval and print a usable credential, so `av scan`
+never performs it. Do not paste its output anywhere.
 
 Also check for plaintext credential-store files:
 
@@ -112,8 +116,6 @@ $ test -f ~/.git-credentials && sed -n '1,3p' ~/.git-credentials
 https://user:token@example.com/repo.git
 # ^^ bad: plaintext token on disk
 ```
-
-Do not paste the output anywhere. It may be the secret.
 
 ## The Safe Target State
 
@@ -376,13 +378,16 @@ $ git config --global --edit
 
 Delete the `helper = !gh auth git-credential` line.
 
-Then verify:
+Then verify the effective helper configuration:
 
 ```sh
-$ printf 'protocol=https\nhost=github.com\n\n' | git credential fill
+$ git config --includes --show-origin --get-regexp \
+    '^credential\..*\.helper$|^credential\.helper$'
+$ av scan
 ```
 
-Again: no `password=`.
+An SSH-only setup has no effective GitHub HTTPS helper. A hardened HTTPS setup
+has one reset followed only by the signed Automic Vault `gh` Isotope.
 
 ## Remove `git-credential-oauth` Exposure
 
@@ -422,13 +427,15 @@ $ av scan
 ╰─ vault sealed
 ```
 
-Check GitHub HTTPS credential fill:
+Check the effective helper configuration:
 
 ```sh
-$ printf 'protocol=https\nhost=github.com\n\n' | git credential fill
+$ git config --includes --show-origin --get-regexp \
+    '^credential\..*\.helper$|^credential\.helper$'
 ```
 
-There should be no `password=`.
+There should be no ambient GitHub helper. The signed Automic Vault `gh` Isotope
+may remain after an empty reset.
 
 Check remotes:
 
