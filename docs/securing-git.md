@@ -9,7 +9,7 @@ Use SSH transport with a passphrase-protected key stored in the macOS Keychain.
 > signed Automic Vault `gh` Isotope and the `gh` Secret Gate authorizes each
 > request.
 
-`av scan` reports Git configurations that expose credentials to ordinary
+`av scan` reports Git configurations that can expose credentials to ordinary
 same-user processes, including agent subprocesses.
 
 Detected hazards:

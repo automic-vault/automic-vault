@@ -171,7 +171,9 @@ fn av_scan_json_rejects_an_unknown_detector() {
 fn av_scan(home: &std::path::Path) -> Output {
     Command::new(env!("CARGO_BIN_EXE_av"))
         .arg("scan")
+        .env_clear()
         .env("HOME", home)
+        .env("GIT_CONFIG_NOSYSTEM", "1")
         .env(
             "AUTOMIC_VAULT_TEST_BREW_TARGET",
             home.join("missing-opt-homebrew/bin/brew"),
@@ -189,7 +191,9 @@ fn av_scan(home: &std::path::Path) -> Output {
 fn av_scan_json(home: &std::path::Path) -> Output {
     Command::new(env!("CARGO_BIN_EXE_av"))
         .args(["scan", "--json"])
+        .env_clear()
         .env("HOME", home)
+        .env("GIT_CONFIG_NOSYSTEM", "1")
         .env(
             "AUTOMIC_VAULT_TEST_BREW_TARGET",
             home.join("missing-opt-homebrew/bin/brew"),

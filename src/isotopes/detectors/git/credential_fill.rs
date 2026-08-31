@@ -52,7 +52,7 @@ use super::config::{self, read_to_string};
 const NAME: &str = "git-credential-fill";
 const DOCS_URL: &str = "https://github.com/automic-vault/automic-vault/blob/main/src/isotopes/detectors/git/credential_fill.md";
 const GIT_PATH: &str = "/usr/bin/git";
-const GH_HELPER_MESSAGE: &str = "Git credential helper delegates github.com credentials to `gh auth git-credential`, exposing the GitHub CLI token through `git credential fill`. Click Learn More to learn how to fix it.";
+const GH_HELPER_MESSAGE: &str = "Git config delegates github.com credentials to an untrusted `gh auth git-credential` command. Any same-user process can invoke this configured capability through `git credential fill`. Click Learn More to learn how to fix it.";
 const GH_HELPER_SOLUTION: &str = "Edit the affected Git config and remove the `helper = !gh auth git-credential` line; then change GitHub remotes to SSH with `git remote set-url origin git@github.com:OWNER/REPO.git`.";
 const AMBIENT_HELPER_MESSAGE: &str = "Git config enables an ambient credential helper for github.com. Any same-user process can invoke it through `git credential fill`. Click Learn More to learn how to fix it.";
 const AMBIENT_HELPER_SOLUTION: &str = "Remove the affected credential helper, or reset the effective GitHub helper chain and retain only the signed Automic Vault `gh` Isotope. Use SSH remotes when HTTPS credentials are unnecessary.";
@@ -248,12 +248,14 @@ fn resolved_github_credential_helpers_with(
             r"^credential\..*\.helper$|^credential\.helper$",
         ])
         .env("HOME", home)
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_COMMON_DIR")
         // Keep repository-local config out of this global environment scan.
         .current_dir("/")
         .output()
     {
         Ok(output) => output,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(_) => return Err("failed to inspect Git credential-helper configuration".to_string()),
     };
     if output.status.code() == Some(1) {
@@ -592,6 +594,61 @@ mod tests {
         assert_eq!(helpers[2].affected, Some(affected(&included, 5)));
         assert!(!marker.exists());
         assert!(findings_with(helpers, |_| true, || Ok(false)).is_empty());
+        let _ = fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn git_config_ignores_forced_repository_environment() {
+        let home = temp_home("forced-repository");
+        fs::write(
+            home.join(".gitconfig"),
+            "[credential \"https://github.com\"]\nhelper =\nhelper = !/opt/homebrew/bin/gh auth git-credential\n",
+        )
+        .unwrap();
+        let git_dir = home.join("spoofed.git");
+        assert!(
+            Command::new("/usr/bin/git")
+                .args(["init", "--bare"])
+                .arg(&git_dir)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .unwrap()
+                .success()
+        );
+        fs::write(
+            git_dir.join("config"),
+            "[credential \"https://github.com\"]\nhelper = !/tmp/spoofed-helper\n",
+        )
+        .unwrap();
+
+        let mut command = Command::new("/usr/bin/git");
+        command
+            .env_clear()
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_DIR", &git_dir);
+        let helpers = resolved_github_credential_helpers_with(&home, &mut command).unwrap();
+
+        assert_eq!(helpers.len(), 2);
+        assert_eq!(helpers[0].value, "");
+        assert_eq!(
+            helpers[1].value,
+            "!/opt/homebrew/bin/gh auth git-credential"
+        );
+        let _ = fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn missing_git_is_an_inspection_failure() {
+        let home = temp_home("missing-git");
+        let mut command = Command::new(home.join("missing-git"));
+
+        let error = resolved_github_credential_helpers_with(&home, &mut command).unwrap_err();
+
+        assert_eq!(
+            error,
+            "failed to inspect Git credential-helper configuration"
+        );
         let _ = fs::remove_dir_all(home);
     }
 
