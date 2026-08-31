@@ -90,7 +90,7 @@ public func operationClassificationTitle(
     case .readOnly: "Read Only"
     case .localWrite: "Local Write"
     case .update: "Homebrew Update"
-    case .mutating: "Write"
+    case .mutating: "Local Write, System Write, Remote Write, or a combination"
     case .secretDump: "Elevated Secret Application or Secret Disclosure"
     case .unknown: "Unknown"
     }
