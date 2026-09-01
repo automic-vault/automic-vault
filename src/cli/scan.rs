@@ -69,6 +69,7 @@ pub(crate) fn run_detectors_json<W: Write>(stdout: &mut W) -> i32 {
                     "path": scope.path,
                     "recursive": scope.recursive,
                 })).collect::<Vec<_>>(),
+                "can_produce_unattributed_findings": detector.can_produce_unattributed_findings,
             })
         }).collect::<Vec<_>>(),
     });
@@ -544,6 +545,7 @@ mod tests {
         assert!(output.contains(r#""name":"git-credentials-file""#));
         assert!(output.contains(r##""documentation":"# git-credential-fill Detector"##));
         assert!(output.contains(r#""watch_scopes":[{"path":"#));
+        assert!(output.contains(r#""can_produce_unattributed_findings":true"#));
     }
 
     #[test]

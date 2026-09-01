@@ -18,6 +18,7 @@ private let pendingSecretGateKey = "pendingSecretGate"
 let secCodeSignatureAdHoc: UInt32 = 0x2
 private let transientApprovalTTL: TimeInterval = 5 * 60
 private let scanMaximumDelay: TimeInterval = 5
+private let unattributedDetectorScanInterval: TimeInterval = 5 * 60
 private let scanQueue = DispatchQueue(label: "com.automicvault.av2.scan")
 private let updateCheckInterval: Duration = .seconds(24 * 60 * 60)
 private var toastWindows: [NSWindow] = []
@@ -91,6 +92,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var fileWatchSources: [DispatchSourceFileSystemObject] = []
     private var missingFileWatchDetectors: [String: Set<String>] = [:]
     private var missingFilePoller: DispatchSourceTimer?
+    private var unattributedDetectorPoller: DispatchSourceTimer?
     private var mainWindow: NSWindow?
     private var isUserSessionActive = true
     private var areScreensAwake = true
@@ -331,6 +333,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         scanWorkItem = nil
         scanBurstStartedAt = nil
         stopDetectorWatchers()
+        stopUnattributedDetectorPoller()
         approval?.stop()
         approval = nil
     }
@@ -642,6 +645,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         recursiveWatchDetectors = recursive
         startRecursiveWatcher(paths: Array(recursive.keys))
         startMissingFilePoller()
+        startUnattributedDetectorPoller()
     }
 
     private func startRecursiveWatcher(paths: [String]) {
@@ -712,6 +716,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         missingFilePoller = poller
     }
 
+    private func startUnattributedDetectorPoller() {
+        guard unattributedDetectorPoller == nil else { return }
+        let detectors = unattributedDetectorNames(detectorMetadata)
+        guard !detectors.isEmpty else { return }
+        let poller = DispatchSource.makeTimerSource(queue: .main)
+        poller.schedule(
+            deadline: .now() + unattributedDetectorScanInterval,
+            repeating: unattributedDetectorScanInterval
+        )
+        poller.setEventHandler { [weak self] in
+            self?.scheduleScan(detectors: detectors, after: 0)
+        }
+        poller.resume()
+        unattributedDetectorPoller = poller
+    }
+
     private func stopDetectorWatchers() {
         fileWatchSources.forEach { $0.cancel() }
         fileWatchSources.removeAll()
@@ -725,6 +745,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             FSEventStreamRelease(eventStream)
             self.eventStream = nil
         }
+    }
+
+    private func stopUnattributedDetectorPoller() {
+        unattributedDetectorPoller?.cancel()
+        unattributedDetectorPoller = nil
     }
 
     private func scheduleScan(detectors: Set<String>? = nil, after delay: TimeInterval) {
@@ -1046,6 +1071,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 private func scanDetectorGroup(_ detectors: Set<String>) -> Set<String> {
     guard !detectors.isDisjoint(with: ["bash", "zsh"]) else { return detectors }
     return detectors.union(["bash", "zsh"])
+}
+
+private func unattributedDetectorNames(_ metadata: [DetectorMetadata]) -> Set<String> {
+    Set(metadata.lazy.filter(\.canProduceUnattributedFindings).map(\.name))
 }
 
 extension AppDelegate: NSMenuDelegate {
@@ -7718,7 +7747,12 @@ private func runScanSchedulingSelfCheck() -> Int32 {
         maximumDelay: 5
     ) == 0,
     scanDetectorGroup(["npm"]) == ["npm"],
-    scanDetectorGroup(["bash"]) == ["bash", "zsh"]
+    scanDetectorGroup(["bash"]) == ["bash", "zsh"],
+    unattributedDetectorNames([
+        DetectorMetadata(name: "git-credential-fill", homepage: "", docsURL: "", canProduceUnattributedFindings: true),
+        DetectorMetadata(name: "git-credential-oauth", homepage: "", docsURL: ""),
+        DetectorMetadata(name: "sip", homepage: "", docsURL: "", canProduceUnattributedFindings: true),
+    ]) == ["git-credential-fill", "sip"]
     else {
         return 1
     }

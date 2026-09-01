@@ -161,6 +161,7 @@ pub(crate) struct DetectorMetadata {
     pub(crate) docs_url: String,
     pub(crate) documentation: &'static str,
     pub(crate) watch_scopes: Vec<DetectorWatchScope>,
+    pub(crate) can_produce_unattributed_findings: bool,
 }
 
 pub(crate) struct DetectorWatchScope {
@@ -178,6 +179,7 @@ struct Detector {
     findings: fn(&Path) -> Vec<Finding>,
     docs_url: &'static str,
     documentation: &'static str,
+    can_produce_unattributed_findings: bool,
 }
 
 #[cfg(test)]
@@ -195,6 +197,7 @@ macro_rules! detector {
                 "/detector.md"
             ),
             documentation: include_str!(concat!(stringify!($module), "/detector.md")),
+            can_produce_unattributed_findings: false,
         }
     };
     ($package:ident::$module:ident, $name:literal) => {
@@ -214,6 +217,27 @@ macro_rules! detector {
                 stringify!($module),
                 ".md"
             )),
+            can_produce_unattributed_findings: false,
+        }
+    };
+    ($package:ident::$module:ident, $name:literal, unattributed) => {
+        Detector {
+            module: $name,
+            findings: $package::$module::findings,
+            docs_url: concat!(
+                "https://github.com/automic-vault/automic-vault/blob/main/src/isotopes/detectors/",
+                stringify!($package),
+                "/",
+                stringify!($module),
+                ".md"
+            ),
+            documentation: include_str!(concat!(
+                stringify!($package),
+                "/",
+                stringify!($module),
+                ".md"
+            )),
+            can_produce_unattributed_findings: true,
         }
     };
 }
@@ -269,7 +293,7 @@ const DETECTORS: &[Detector] = &[
     detector!(gcli),
     detector!(gh_cli::hosts_token, "gh-cli-hosts-token"),
     detector!(gh_cli::keychain_access, "gh-cli-keychain-access"),
-    detector!(git::credential_fill, "git-credential-fill"),
+    detector!(git::credential_fill, "git-credential-fill", unattributed),
     detector!(git::credential_oauth, "git-credential-oauth"),
     detector!(git::credentials_file, "git-credentials-file"),
     detector!(glab),
@@ -343,7 +367,13 @@ const DETECTORS: &[Detector] = &[
     detector!(secretlint::shell_history, "secretlint-shell-history"),
     detector!(sentry_cli),
     detector!(shodan),
-    detector!(sip),
+    Detector {
+        module: "sip",
+        findings: sip::findings,
+        docs_url: "https://github.com/automic-vault/automic-vault/blob/main/src/isotopes/detectors/sip/detector.md",
+        documentation: include_str!("sip/detector.md"),
+        can_produce_unattributed_findings: true,
+    },
     detector!(skopeo),
     detector!(snowflake_cli),
     detector!(snyk),
@@ -538,6 +568,7 @@ pub(crate) fn metadata(home: &Path) -> Vec<DetectorMetadata> {
                 docs_url: detector.docs_url.to_string(),
                 name,
                 watch_scopes: sensitive_file_scopes(detector.documentation, home),
+                can_produce_unattributed_findings: detector.can_produce_unattributed_findings,
             }
         })
         .collect()
@@ -652,6 +683,9 @@ mod tests {
         assert!(names.contains(&"mysql@8.0".to_string()));
         assert!(names.contains(&"sudo".to_string()));
         assert!(names.contains(&"terraform-core".to_string()));
+        assert!(metadata.iter().find(|detector| detector.name == "git-credential-fill").unwrap().can_produce_unattributed_findings);
+        assert!(!metadata.iter().find(|detector| detector.name == "git-credential-oauth").unwrap().can_produce_unattributed_findings);
+        assert!(metadata.iter().find(|detector| detector.name == "sip").unwrap().can_produce_unattributed_findings);
         assert_eq!(
             metadata
                 .iter()
