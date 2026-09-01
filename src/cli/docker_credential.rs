@@ -100,7 +100,7 @@ fn run_with_io(
     match action {
         "store" => {
             let credential = parse_credential(&read_limited(input)?)?;
-            crate::secrets::store_docker_credential(
+            crate::secrets::store_registry_credential(
                 &secret_name(&credential.server_url),
                 &credential.storage_json(),
             )?;
@@ -141,7 +141,7 @@ fn run_with_io(
         }
         "erase" => {
             let server_url = parse_server_url(&read_limited(input)?)?;
-            crate::secrets::delete_docker_credential(&secret_name(&server_url), &server_url)?;
+            crate::secrets::delete_registry_credential(&secret_name(&server_url), &server_url)?;
             if flavor == Flavor::Podman {
                 crate::isotopes::hardeners::podman::remove_helper_marker(&server_url)?;
             }
@@ -174,15 +174,15 @@ pub(crate) fn secret_name(server_url: &str) -> String {
 
 pub(crate) fn parse_credential(input: &str) -> Result<DockerCredential, String> {
     let value: Value = serde_json::from_str(input)
-        .map_err(|error| format!("invalid Docker credential JSON: {error}"))?;
+        .map_err(|error| format!("invalid registry credential JSON: {error}"))?;
     let object = value
         .as_object()
-        .ok_or_else(|| "Docker credential must be a JSON object".to_string())?;
+        .ok_or_else(|| "registry credential must be a JSON object".to_string())?;
     if object
         .keys()
         .any(|key| !["ServerURL", "Username", "Secret"].contains(&key.as_str()))
     {
-        return Err("Docker credential contains an unknown field".into());
+        return Err("registry credential contains an unknown field".into());
     }
     let string = |name: &str| {
         object
@@ -190,7 +190,7 @@ pub(crate) fn parse_credential(input: &str) -> Result<DockerCredential, String> 
             .and_then(Value::as_str)
             .filter(|value| !value.is_empty())
             .map(str::to_string)
-            .ok_or_else(|| format!("Docker credential has no {name}"))
+            .ok_or_else(|| format!("registry credential has no {name}"))
     };
     let credential = DockerCredential {
         server_url: string("ServerURL")?,
@@ -199,7 +199,7 @@ pub(crate) fn parse_credential(input: &str) -> Result<DockerCredential, String> 
     };
     validate_server_url(&credential.server_url)?;
     if credential.username.as_bytes().contains(&0) || credential.secret.as_bytes().contains(&0) {
-        return Err("Docker credential contains NUL".into());
+        return Err("registry credential contains NUL".into());
     }
     Ok(credential)
 }
@@ -228,7 +228,7 @@ fn validate_server_url(server_url: &str) -> Result<(), String> {
             .bytes()
             .any(|byte| byte == 0 || byte == b'\r' || byte == b'\n')
     {
-        return Err("invalid Docker registry address".into());
+        return Err("invalid registry address".into());
     }
     Ok(())
 }

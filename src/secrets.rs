@@ -210,7 +210,7 @@ pub(crate) fn ensure_registry_helper_ready() -> Result<(), String> {
     }
 }
 
-pub(crate) fn store_docker_credential(account: &str, value: &str) -> Result<(), String> {
+pub(crate) fn store_registry_credential(account: &str, value: &str) -> Result<(), String> {
     if let Some(dir) = crate::test_keychain_dir() {
         std::fs::create_dir_all(&dir)
             .map_err(|err| format!("failed to create test keychain dir: {err}"))?;
@@ -218,6 +218,7 @@ pub(crate) fn store_docker_credential(account: &str, value: &str) -> Result<(), 
         return std::fs::write(&path, value)
             .map_err(|err| format!("failed to write {}: {err}", path.display()));
     }
+    // Stable compatibility wire name shared by Docker and Podman.
     xpc_request(
         "docker-save",
         Some((b"key\0", account)),
@@ -228,14 +229,15 @@ pub(crate) fn store_docker_credential(account: &str, value: &str) -> Result<(), 
     .map(|_| ())
 }
 
-pub(crate) fn delete_docker_credential(account: &str, server_url: &str) -> Result<(), String> {
+pub(crate) fn delete_registry_credential(account: &str, server_url: &str) -> Result<(), String> {
     if let Some(dir) = crate::test_keychain_dir() {
         return match std::fs::remove_file(dir.join(account)) {
             Ok(()) => Ok(()),
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(err) => Err(format!("failed to delete test Docker credential: {err}")),
+            Err(err) => Err(format!("failed to delete test registry credential: {err}")),
         };
     }
+    // Stable compatibility wire names and field shared by Docker and Podman.
     xpc_request(
         "docker-delete",
         Some((b"key\0", account)),

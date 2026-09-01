@@ -488,9 +488,9 @@ pub(super) fn install_shared_helper(testing: bool) -> Result<(), String> {
 pub(super) fn install_stub(path: &Path, contents: &str) -> Result<(), String> {
     let parent = path
         .parent()
-        .ok_or_else(|| format!("Docker helper has no parent: {}", path.display()))?;
+        .ok_or_else(|| format!("registry helper has no parent: {}", path.display()))?;
     let staging = parent.join(format!(
-        ".docker-credential-av.{}.{}.tmp",
+        ".registry-credential-helper.{}.{}.tmp",
         std::process::id(),
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -525,13 +525,13 @@ pub(super) fn helper_path() -> PathBuf {
 pub(super) fn validate_helper_install_path(path: &Path) -> Result<(), String> {
     let parent = path
         .parent()
-        .ok_or_else(|| format!("Docker helper has no parent: {}", path.display()))?;
+        .ok_or_else(|| format!("registry helper has no parent: {}", path.display()))?;
     for ancestor in parent.ancestors() {
         let metadata = fs::symlink_metadata(ancestor)
             .map_err(|error| format!("failed to inspect {}: {error}", ancestor.display()))?;
         if !secure_install_directory(&metadata, 0) {
             return Err(format!(
-                "refusing Docker helper path through unsafe directory {}: every containing directory must be root-owned and protected from group/world writes",
+                "refusing registry helper path through unsafe directory {}: every containing directory must be root-owned and protected from group/world writes",
                 ancestor.display()
             ));
         }
