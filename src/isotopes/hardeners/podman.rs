@@ -229,32 +229,34 @@ fn sanitize_auth(
     let object = value
         .as_object_mut()
         .ok_or_else(|| "registry auth config must be a JSON object".to_string())?;
-    if let Some(helpers) = object.get("credHelpers") {
-        let helpers = helpers
-            .as_object()
-            .ok_or_else(|| "registry `credHelpers` must be an object".to_string())?;
-        if helpers
-            .values()
-            .any(|helper| helper.as_str() != Some("av-podman"))
-        {
-            return Err("competing registry credential helpers are not supported yet".into());
-        }
-        for registry in helpers.keys() {
-            if normalize_registry(registry)? != *registry {
-                return Err(format!(
-                    "invalid Podman credential-helper registry `{registry}`"
-                ));
+    let mut markers = match object.get("credHelpers") {
+        Some(Value::Object(helpers)) => {
+            let mut markers = Map::new();
+            for (registry, helper) in helpers {
+                if helper.as_str() != Some("av-podman") {
+                    return Err(
+                        "competing registry credential helpers are not supported yet".into(),
+                    );
+                }
+                markers.insert(
+                    normalize_registry(registry)?,
+                    Value::String("av-podman".into()),
+                );
             }
+            markers
         }
-    }
-    let mut markers = object
-        .get("credHelpers")
-        .and_then(Value::as_object)
-        .cloned()
-        .unwrap_or_default();
-    let Some(auths) = object.get_mut("auths") else {
-        return Ok((value, Vec::new()));
+        Some(_) => return Err("registry `credHelpers` must be an object".into()),
+        None => Map::new(),
     };
+    if !object.contains_key("auths") {
+        if markers.is_empty() {
+            object.remove("credHelpers");
+        } else {
+            object.insert("credHelpers".into(), Value::Object(markers));
+        }
+        return Ok((value, Vec::new()));
+    }
+    let auths = object.get_mut("auths").expect("checked above");
     let auths = auths
         .as_object_mut()
         .ok_or_else(|| "Podman `auths` must be an object".to_string())?;
@@ -849,6 +851,23 @@ mod tests {
             .is_err()
         );
         assert!(decode_auth("dXNlcjp0b2tlbgA=".into()).is_err());
+    }
+
+    #[test]
+    fn normalizes_existing_helper_markers() {
+        let (sanitized, credentials) = sanitize_auth(json!({
+            "credHelpers": {
+                "docker.io": "av-podman",
+                "index.docker.io": "av-podman"
+            }
+        }))
+        .unwrap();
+
+        assert!(credentials.is_empty());
+        assert_eq!(
+            sanitized,
+            json!({"credHelpers": {"index.docker.io": "av-podman"}})
+        );
     }
 
     #[test]
