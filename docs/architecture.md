@@ -273,6 +273,15 @@ operation intent. kubectl operations therefore classify as Unknown and require
 Approval unless a later design introduces independently verified operation
 context.
 
+Podman uses the same registry credential-helper protocol as Docker, but its
+macOS remote client resolves credentials locally before sending an
+`X-Registry-Auth` header to the Linux service. The Podman Hardener keeps Red
+Hat's Developer ID-signed, Hardened Runtime client at `/opt/podman/bin/podman`,
+selects Automic Vault as the user's global containers/image credential helper,
+and removes migrated plaintext registry credentials. The shared helper derives
+whether Docker or Podman is requesting a credential from the live parent
+Target; each remains governed by its own Authorization Gate.
+
 Grants are memory-only and running countdowns use both wall-clock and monotonic
 deadlines. Suspending freezes the lesser remaining duration from those clocks
 and makes the grant ineligible to authorize requests. Resuming creates new
