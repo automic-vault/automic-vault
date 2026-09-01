@@ -5460,7 +5460,7 @@ private final class ApprovalServer: @unchecked Sendable {
         guard let keyPointer = xpc_dictionary_get_string(message, "key"),
               let valuePointer = xpc_dictionary_get_string(message, "value")
         else {
-            reply(peer, to: message, ok: false, error: "invalid Docker credential store request")
+            reply(peer, to: message, ok: false, error: "invalid registry credential store request")
             return
         }
         let key = String(cString: keyPointer)
@@ -5468,7 +5468,7 @@ private final class ApprovalServer: @unchecked Sendable {
         guard let credential = parseDockerCredential(value),
               key == dockerCredentialSecretName(credential.serverURL)
         else {
-            reply(peer, to: message, ok: false, error: "invalid Docker credential")
+            reply(peer, to: message, ok: false, error: "invalid registry credential")
             return
         }
         do {
@@ -5498,13 +5498,13 @@ private final class ApprovalServer: @unchecked Sendable {
         guard let keyPointer = xpc_dictionary_get_string(message, "key"),
               let serverPointer = xpc_dictionary_get_string(message, "docker_server_url")
         else {
-            reply(peer, to: message, ok: false, error: "invalid Docker credential erase request")
+            reply(peer, to: message, ok: false, error: "invalid registry credential erase request")
             return
         }
         let key = String(cString: keyPointer)
         let serverURL = String(cString: serverPointer)
         guard validDockerServerURL(serverURL), key == dockerCredentialSecretName(serverURL) else {
-            reply(peer, to: message, ok: false, error: "invalid Docker credential")
+            reply(peer, to: message, ok: false, error: "invalid registry credential")
             return
         }
         do {
@@ -6173,7 +6173,7 @@ private final class ApprovalServer: @unchecked Sendable {
               parentIdentity.euid == helperIdentity.euid,
               let arguments = processArguments(parentPID),
               !arguments.isEmpty
-        else { throw AppError("Docker credential helper has no live parent") }
+        else { throw AppError("registry credential helper has no live parent") }
         let target = pathString(parentIdentity)
         guard dockerTargetIdentityValid(pid: parentPID, path: target)
                 || podmanTargetIdentityValid(pid: parentPID, path: target)
