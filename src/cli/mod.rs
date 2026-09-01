@@ -10,6 +10,7 @@ pub(crate) mod doctor;
 pub(crate) mod goat_credential;
 mod gpg_sign;
 mod inject;
+pub(crate) mod kubectl_credential;
 mod launcher_bundle;
 mod list;
 mod open;
@@ -56,7 +57,7 @@ modes:
 more:
   $ open https://www.automicvault.com/docs/";
 
-pub(crate) const INSTALL_REVISION: u32 = 41;
+pub(crate) const INSTALL_REVISION: u32 = 42;
 
 pub(crate) fn bash_shell_secret_insecurity_reasons() -> Result<Vec<String>, String> {
     shell_secrets::bash_reasons()
@@ -428,6 +429,10 @@ where
                 let result = hardeners::rclone::run(stdout, yes);
                 return finish_hardening(result, "rclone", stdout, stderr);
             }
+            if target == "kubectl" || target == "kubernetes-cli" {
+                let result = hardeners::kubectl::run(stdout, yes);
+                return finish_hardening(result, "kubectl", stdout, stderr);
+            }
             if target == "gh" || target == "gh-cli" {
                 let result = hardeners::gh_cli::run(stdout, yes);
                 return finish_hardening(result, "gh", stdout, stderr);
@@ -486,6 +491,7 @@ where
         Some("aliyun-credential") => aliyun_credential::run(rest, stdout, stderr),
         Some("oxide-credential") => oxide_credential::run(rest, stdout, stderr),
         Some("goat-credential") => goat_credential::run(rest, stdout, stderr),
+        Some("kubectl-credential") => kubectl_credential::run(rest, stdout, stderr),
         Some("ordercli-credential") => ordercli_credential::run(rest, stdout, stderr),
         Some("openhue-credential") => openhue_credential::run(rest, stdout, stderr),
         Some("plumber-credential") => plumber_credential::run(rest, stdout, stderr),

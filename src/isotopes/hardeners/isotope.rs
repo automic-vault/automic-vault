@@ -129,6 +129,14 @@ pub(crate) const RCLONE: Spec = Spec {
     binaries: &["rclone"],
     test_path: "AUTOMIC_VAULT_TEST_RCLONE_TARGET",
 };
+pub(crate) const KUBECTL: Spec = Spec {
+    hardener: "kubectl",
+    formula: "kubectl-isotope",
+    repository: "kubectl",
+    primary: "kubectl",
+    binaries: &["kubectl"],
+    test_path: "AUTOMIC_VAULT_TEST_KUBECTL_TARGET",
+};
 
 #[derive(Clone, Copy)]
 pub(crate) struct Spec {
@@ -361,6 +369,9 @@ pub(crate) fn install_privileged(
         }
         if spec.hardener == RCLONE.hardener {
             super::rclone::verify_target(&stage)?;
+        }
+        if spec.hardener == KUBECTL.hardener {
+            super::kubectl::verify_target(&stage)?;
         }
         staged.push((stage, bin_dir.join(binary)));
     }
@@ -683,16 +694,21 @@ fn conflicting_formula(spec: Spec) -> Option<String> {
         return crate::test_env_string("AUTOMIC_VAULT_TEST_ISOTOPE_CONFLICT")
             .filter(|formula| !formula.is_empty());
     }
+    let conflict = if spec.hardener == KUBECTL.hardener {
+        "kubernetes-cli"
+    } else {
+        spec.hardener
+    };
     ["/opt/homebrew/opt", "/usr/local/opt"]
         .map(|root| {
             Path::new(root)
-                .join(spec.hardener)
+                .join(conflict)
                 .join("bin")
                 .join(spec.primary)
         })
         .into_iter()
         .any(|path| executable(&path))
-        .then(|| spec.hardener.to_string())
+        .then(|| conflict.to_string())
 }
 
 fn direct_target(spec: Spec) -> PathBuf {
@@ -760,6 +776,9 @@ fn installed(spec: Spec, path: &Path) -> bool {
     if spec.hardener == RCLONE.hardener {
         return super::rclone::verify_target(path).is_ok();
     }
+    if spec.hardener == KUBECTL.hardener {
+        return super::kubectl::verify_target(path).is_ok();
+    }
     true
 }
 
@@ -770,7 +789,7 @@ fn formula_url(spec: Spec) -> String {
 fn spec(hardener: &str) -> Option<Spec> {
     [
         GH, STRIPE, SUPABASE, OPENTOFU, OXIDE, GOAT, RAILWAY, ORDERCLI, OPENHUE, UAA, PLUMBER,
-        ALIYUN, WAKATIME, RCLONE,
+        ALIYUN, WAKATIME, RCLONE, KUBECTL,
     ]
     .into_iter()
     .find(|spec| spec.hardener == hardener)

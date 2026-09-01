@@ -12,6 +12,7 @@ public enum ApprovalServiceOperation: String, CaseIterable, Sendable {
     case aliyunHelperVersion = "aliyun-helper-version"
     case wakatimeHelperVersion = "wakatime-helper-version"
     case rcloneHelperVersion = "rclone-helper-version"
+    case kubectlHelperVersion = "kubectl-helper-version"
     case inject
     case varlock
     case keys
@@ -31,6 +32,7 @@ public enum ApprovalServiceOperation: String, CaseIterable, Sendable {
     case aliyunGet = "aliyun-get"
     case wakatimeGet = "wakatime-get"
     case rcloneGet = "rclone-get"
+    case kubectlGet = "kubectl-get"
     case dockerSave = "docker-save"
     case dockerDelete = "docker-delete"
     case goatSave = "goat-save"

@@ -47,6 +47,11 @@ import Testing
     #expect(ApprovalServiceOperation.rcloneGet.rawValue == "rclone-get")
 }
 
+@Test func kubectlCredentialsHaveDedicatedWireOperations() {
+    #expect(ApprovalServiceOperation.kubectlHelperVersion.rawValue == "kubectl-helper-version")
+    #expect(ApprovalServiceOperation.kubectlGet.rawValue == "kubectl-get")
+}
+
 @Test func ordercliCredentialsHaveDedicatedWireOperations() {
     #expect(ApprovalServiceOperation.ordercliGet.rawValue == "ordercli-get")
     #expect(ApprovalServiceOperation.ordercliSave.rawValue == "ordercli-save")

@@ -3240,6 +3240,13 @@ private final class ApprovalServer: @unchecked Sendable {
                 return
             }
             reply(peer, to: message, ok: true, error: nil, value: "1")
+        case .kubectlHelperVersion where isTrustedAvCaller(path: callerPath, signing: signing):
+            let requested = xpc_dictionary_get_uint64(message, "requested_version")
+            guard requested == 1 else {
+                reply(peer, to: message, ok: false, error: "kubectl helper protocol upgrade is required")
+                return
+            }
+            reply(peer, to: message, ok: true, error: nil, value: "1")
         case .gpgSign where isTrustedAvCaller(path: callerPath, signing: signing):
             handleInject(
                 message,
@@ -3251,7 +3258,7 @@ private final class ApprovalServer: @unchecked Sendable {
                 signing: signing
             )
         case .inject, .keys, .authorize, .dockerGet, .goatGet, .ordercliGet, .openhueGet, .plumberGet, .uaaGet, .railwayGet,
-             .oxideGet, .terraformGet, .aliyunGet, .wakatimeGet, .rcloneGet:
+             .oxideGet, .terraformGet, .aliyunGet, .wakatimeGet, .rcloneGet, .kubectlGet:
             handleInject(
                 message,
                 on: peer,
@@ -3662,15 +3669,22 @@ private final class ApprovalServer: @unchecked Sendable {
                 helperPath: callerPath,
                 helperSigning: signing
             )
-            let conflicts = Set(rcloneRequest.envConflicts)
-            let selectionNames = rcloneRequest.keys.filter {
-                rcloneRequest.replaceExistingEnv || !conflicts.contains($0)
+            let kubectlRequest = try kubectlCredentialRequest(
+                from: message,
+                request: rcloneRequest,
+                helperIdentity: identity,
+                helperPath: callerPath,
+                helperSigning: signing
+            )
+            let conflicts = Set(kubectlRequest.envConflicts)
+            let selectionNames = kubectlRequest.keys.filter {
+                kubectlRequest.replaceExistingEnv || !conflicts.contains($0)
             }
             let selected = try secretValueCustody.bind(
                 names: selectionNames,
-                cwd: rcloneRequest.cwd
+                cwd: kubectlRequest.cwd
             )
-            request = approvalRequestWithCredentialContext(rcloneRequest.selecting(selected))
+            request = approvalRequestWithCredentialContext(kubectlRequest.selecting(selected))
         } catch {
             reply(peer, to: message, ok: false, error: error.localizedDescription)
             return
@@ -6678,6 +6692,72 @@ private final class ApprovalServer: @unchecked Sendable {
         )
     }
 
+    private func kubectlCredentialRequest(
+        from message: xpc_object_t,
+        request: ApprovalRequest,
+        helperIdentity: AVProcessIdentity,
+        helperPath: String,
+        helperSigning: SigningInfo
+    ) throws -> ApprovalRequest {
+        guard request.op == "kubectl-get" else { return request }
+        guard request.tool == "kubectl",
+              isTrustedAvCaller(path: helperPath, signing: helperSigning),
+              request.target.isEmpty,
+              request.args.isEmpty,
+              request.keys.count == 1,
+              !request.replaceExistingEnv,
+              !request.allowMissingKeys,
+              request.envConflicts.isEmpty,
+              request.shebangScript == nil,
+              request.scriptData == nil,
+              let scopePointer = xpc_dictionary_get_string(message, "kubectl_scope"),
+              let scope = parseKubectlCredentialScope(String(cString: scopePointer)),
+              request.keys == [scope.secretName]
+        else { throw AppError("invalid kubectl credential request") }
+        let parent = try kubectlCredentialParent(for: helperIdentity)
+        return ApprovalRequest(
+            op: request.op,
+            keys: request.keys,
+            target: parent.target,
+            args: Array(parent.arguments.dropFirst()),
+            cwd: "/",
+            replaceExistingEnv: false,
+            allowMissingKeys: false,
+            envConflicts: [],
+            shebangScript: nil,
+            scriptData: nil,
+            tool: "kubectl",
+            title: "Use Kubernetes credential for \(scope.user)?",
+            detail: "The verified kubectl Target will receive this credential for \(scope.server).",
+            credentialScope: scope.canonical,
+            credentialParent: parent
+        )
+    }
+
+    private func kubectlCredentialParent(
+        for helperIdentity: AVProcessIdentity
+    ) throws -> CredentialHelperParent {
+        let parentPID = helperIdentity.ppid
+        var parentIdentity = AVProcessIdentity()
+        guard parentPID > 1,
+              av_process_identity(parentPID, &parentIdentity),
+              parentIdentity.euid == helperIdentity.euid,
+              let arguments = processArguments(parentPID),
+              !arguments.isEmpty
+        else { throw AppError("kubectl credential helper has no live parent") }
+        let target = pathString(parentIdentity)
+        guard kubectlTargetIdentityValid(pid: parentPID, path: target) else {
+            throw AppError("credential helper parent is not an eligible kubectl Target")
+        }
+        return CredentialHelperParent(
+            pid: parentPID,
+            startUsec: parentIdentity.start_usec,
+            euid: parentIdentity.euid,
+            target: target,
+            arguments: arguments
+        )
+    }
+
     private func terraformCredentialParent(
         for helperIdentity: AVProcessIdentity
     ) throws -> CredentialHelperParent {
@@ -6781,6 +6861,7 @@ private final class ApprovalServer: @unchecked Sendable {
         case "plumber": "plumber"
         case "railway": "railway"
         case "rclone": "rclone"
+        case "kubectl": "kubectl"
         case "tofu": "opentofu"
         case "terraform": "terraform"
         case "uaa": "uaa-cli"
@@ -6835,6 +6916,9 @@ private final class ApprovalServer: @unchecked Sendable {
         case "rclone":
             return credentialHelperTool(parent) == tool
                 && rcloneTargetIdentityValid(pid: parent.pid, path: parent.target)
+        case "kubectl":
+            return credentialHelperTool(parent) == tool
+                && kubectlTargetIdentityValid(pid: parent.pid, path: parent.target)
         default: return false
         }
     }
@@ -6965,6 +7049,18 @@ private final class ApprovalServer: @unchecked Sendable {
             && liveProcessHasNoEntitlements(pid: pid)
     }
 
+    private func kubectlTargetIdentityValid(pid: pid_t, path: String) -> Bool {
+        guard configuredSecretGateTarget("kubectl", matches: path),
+              let signing = liveSigningInfo(pid: pid),
+              signing.mainExecutable == path
+        else { return false }
+        return signing.identifier == "kubectl"
+            && signing.teamIdentifier == "ZU76A67LGU"
+            && signing.isDeveloperID
+            && signing.runtimeProtection == .hardened
+            && liveProcessHasNoEntitlements(pid: pid)
+    }
+
     private func configuredSecretGateTarget(_ gateID: String, matches path: String) -> Bool {
         secretGateDescriptors.first(where: { $0.id == gateID })?.routes.contains {
             normalizedExecutablePath($0.targetPath) == normalizedExecutablePath(path)
@@ -6976,7 +7072,7 @@ private final class ApprovalServer: @unchecked Sendable {
         awsRegistration: AWSRegistrationCandidate?
     ) throws -> AuthorizationFulfillmentTransaction<ApprovedFulfillmentMaterial> {
         let credentialParent: CredentialHelperParent?
-        if ["docker-get", "goat-get", "ordercli-get", "openhue-get", "plumber-get", "uaa-get", "railway-get", "oxide-get", "terraform-get", "aliyun-get", "wakatime-get", "rclone-get"]
+        if ["docker-get", "goat-get", "ordercli-get", "openhue-get", "plumber-get", "uaa-get", "railway-get", "oxide-get", "terraform-get", "aliyun-get", "wakatime-get", "rclone-get", "kubectl-get"]
             .contains(request.op)
         {
             guard let scope = request.credentialScope,
@@ -7019,6 +7115,11 @@ private final class ApprovalServer: @unchecked Sendable {
                     throw AppError("rclone credential scope changed before Secret Application")
                 }
                 expected = rcloneConfigPasswordSecretName
+            case "kubectl-get":
+                guard let kubectl = parseKubectlCredentialScope(scope) else {
+                    throw AppError("kubectl credential scope changed before Secret Application")
+                }
+                expected = kubectl.secretName
             default: expected = terraformCredentialSecretName(scope)
             }
             guard request.keys == [expected] else {
@@ -7088,6 +7189,11 @@ private final class ApprovalServer: @unchecked Sendable {
                       let value = secrets[rcloneConfigPasswordSecretName],
                       validRcloneConfigPassword(value)
                 else { throw AppError("rclone config password changed before Secret Application") }
+            } else if request.op == "kubectl-get" {
+                guard let scope = parseKubectlCredentialScope(scope),
+                      let value = secrets[scope.secretName],
+                      validKubectlCredential(value, kind: scope.kind)
+                else { throw AppError("kubectl credential changed before Secret Application") }
             } else {
                 guard let value = secrets[terraformCredentialSecretName(scope)],
                       parseTerraformCredential(value) != nil
@@ -7466,6 +7572,7 @@ private final class ApprovalServer: @unchecked Sendable {
         guard op == "inject" || op == "keys" || op == "authorize" || op == "gpg-sign"
             || op == "docker-get" || op == "goat-get" || op == "ordercli-get" || op == "openhue-get" || op == "plumber-get" || op == "uaa-get" || op == "railway-get"
             || op == "oxide-get" || op == "terraform-get" || op == "aliyun-get" || op == "wakatime-get"
+            || op == "rclone-get" || op == "kubectl-get"
             || op == "proxy-start"
         else { return nil }
         let scriptData: Data?
@@ -7882,6 +7989,8 @@ private func classifySecretGateRequest(
     case "wakatime-cli":
         return wakatimeRequestClassification(request.args)
     case "rclone":
+        return .unknown
+    case "kubectl":
         return .unknown
     case "aws":
         if awsRequestMayUseLongLivedCredentials(request) { return .secretDump }
@@ -8999,6 +9108,79 @@ private func validRcloneConfigPassword(_ value: String) -> Bool {
         && !value.unicodeScalars.contains(where: { [0, 10, 13].contains($0.value) })
 }
 
+private struct StoredKubectlCredentialScope {
+    let kind: String
+    let server: String
+    let user: String
+    let canonical: String
+
+    var secretName: String {
+        let hash = SHA256.hash(data: Data(user.utf8)).map { String(format: "%02X", $0) }.joined()
+        return "KUBECTL_USER_CREDENTIAL_\(hash)"
+    }
+}
+
+private func parseKubectlCredentialScope(_ value: String) -> StoredKubectlCredentialScope? {
+    guard value.utf8.count <= 8 * 1024,
+          let data = value.data(using: .utf8),
+          let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          Set(object.keys) == Set(["kind", "server", "user"]),
+          let kind = object["kind"] as? String,
+          kind == "token" || kind == "client-certificate",
+          let server = object["server"] as? String,
+          server.utf8.count <= 4096,
+          server.unicodeScalars.allSatisfy(\.isASCII),
+          let components = URLComponents(string: server),
+          components.scheme == "http" || components.scheme == "https",
+          components.host?.isEmpty == false,
+          components.user == nil,
+          components.password == nil,
+          components.query == nil,
+          components.fragment == nil,
+          let user = object["user"] as? String,
+          !user.isEmpty,
+          user.utf8.count <= 1024,
+          user == user.trimmingCharacters(in: .whitespacesAndNewlines),
+          !user.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains),
+          let canonicalData = try? JSONSerialization.data(
+              withJSONObject: ["kind": kind, "server": server, "user": user],
+              options: [.sortedKeys, .withoutEscapingSlashes]
+          ),
+          let canonical = String(data: canonicalData, encoding: .utf8),
+          canonical == value
+    else { return nil }
+    return StoredKubectlCredentialScope(
+        kind: kind,
+        server: server,
+        user: user,
+        canonical: canonical
+    )
+}
+
+private func validKubectlCredential(_ value: String, kind: String) -> Bool {
+    guard value.utf8.count <= 4 * 1024 * 1024,
+          let data = value.data(using: .utf8),
+          let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+    else { return false }
+    if kind == "token" {
+        guard Set(object.keys) == Set(["token"]), let token = object["token"] as? String else {
+            return false
+        }
+        return !token.isEmpty && token.utf8.count <= 1024 * 1024
+            && !token.unicodeScalars.contains(where: { $0.value == 0 })
+    }
+    guard kind == "client-certificate",
+          Set(object.keys) == Set(["clientCertificateData", "clientKeyData"]),
+          let certificate = object["clientCertificateData"] as? String,
+          let key = object["clientKeyData"] as? String
+    else { return false }
+    return certificate.contains("-----BEGIN CERTIFICATE-----")
+        && key.contains("-----BEGIN")
+        && key.contains("PRIVATE KEY-----")
+        && !certificate.unicodeScalars.contains(where: { $0.value == 0 })
+        && !key.unicodeScalars.contains(where: { $0.value == 0 })
+}
+
 private func isGhTokenKey(_ key: String) -> Bool {
     key.hasPrefix("GH_TOKEN_") && validSecretKeyName(key)
 }
@@ -9886,8 +10068,9 @@ private extension ApprovalServiceOperation {
         switch self {
         case .openWindow, .awsHelperVersion, .dockerHelperVersion, .goatHelperVersion,
              .ordercliHelperVersion, .openhueHelperVersion, .plumberHelperVersion, .uaaHelperVersion,
-             .railwayHelperVersion, .oxideHelperVersion,
-             .terraformHelperVersion, .aliyunHelperVersion: false
+             .railwayHelperVersion, .oxideHelperVersion, .terraformHelperVersion,
+             .aliyunHelperVersion, .wakatimeHelperVersion, .rcloneHelperVersion,
+             .kubectlHelperVersion: false
         default: true
         }
     }
@@ -13555,6 +13738,23 @@ private func runWakaTimeCredentialSelfCheck() -> Int32 {
     return 0
 }
 
+private func runKubectlCredentialSelfCheck() -> Int32 {
+    let canonical = #"{"kind":"token","server":"https://example.com/","user":"prod"}"#
+    guard let scope = parseKubectlCredentialScope(canonical),
+          scope.kind == "token",
+          scope.server == "https://example.com/",
+          scope.user == "prod",
+          scope.secretName
+              == "KUBECTL_USER_CREDENTIAL_6754AF9632A2745E85C293E5AAC0863370D9BD3330B9938C00CADFD215227D77",
+          validKubectlCredential(#"{"token":"secret"}"#, kind: "token"),
+          !validKubectlCredential(#"{"token":"secret","future":true}"#, kind: "token"),
+          parseKubectlCredentialScope(
+              #"{"kind":"token","server":"https://user@example.com/","user":"prod"}"#
+          ) == nil
+    else { return 1 }
+    return 0
+}
+
 private func runOxideCredentialSelfCheck() -> Int32 {
     let canonical = #"{"host":"https://oxide.example","profile":"prod"}"#
     guard oxideRequestClassification(["auth", "status"]) == .readOnly,
@@ -14690,6 +14890,10 @@ if CommandLine.arguments.contains("--self-check-aliyun-credentials") {
 
 if CommandLine.arguments.contains("--self-check-wakatime-credentials") {
     exit(runWakaTimeCredentialSelfCheck())
+}
+
+if CommandLine.arguments.contains("--self-check-kubectl-credentials") {
+    exit(runKubectlCredentialSelfCheck())
 }
 
 if CommandLine.arguments.contains("--self-check-oxide-credentials") {

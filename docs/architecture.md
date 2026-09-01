@@ -265,6 +265,14 @@ menu shows any available Verified Launcher attribution, Target, and Secret
 Names. Process liveness changes display state only: it grants no authority and
 cannot revoke Secret Values already released.
 
+The kubectl credential helper additionally binds Secret Application to the
+exact kubeconfig user and normalized Kubernetes API server supplied through
+Kubernetes' native `ExecCredential` request. The signed kubectl Isotope remains
+unmodified; its Hardened Runtime identity establishes the Target boundary, not
+operation intent. kubectl operations therefore classify as Unknown and require
+Approval unless a later design introduces independently verified operation
+context.
+
 Grants are memory-only and running countdowns use both wall-clock and monotonic
 deadlines. Suspending freezes the lesser remaining duration from those clocks
 and makes the grant ineligible to authorize requests. Resuming creates new

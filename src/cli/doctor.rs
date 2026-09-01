@@ -1667,6 +1667,7 @@ mod tests {
                                 | "uaa-cli"
                                 | "railway"
                                 | "rclone"
+                                | "kubectl"
                                 | "oxide-cli"
                                 | "stripe"
                                 | "supabase"

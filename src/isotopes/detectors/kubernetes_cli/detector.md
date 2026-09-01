@@ -9,11 +9,11 @@
 - `$KUBECONFIG`
 - `~/.kube/config`
 
-## Why This is not Yet Hardened
+## Hardening
 
-The retired hardener moved kubeconfig credentials to the macOS Keychain and
-rewrote supported users to call `av credential-helper kubernetes`. The current
-`av` CLI does not ship that credential-helper route. We need to review its
-approval-token boundary before restoring a hardener that changes kubeconfig.
+Run `av harden kubectl`. The hardener supports one kubeconfig containing inline
+bearer tokens or complete inline client certificate/key pairs. It stores each
+credential as a Global Value and configures Kubernetes' native `ExecCredential`
+protocol to request it from Automic Vault.
 
-[Open an issue to discuss a safer integration](https://github.com/automic-vault/automic-vault/issues).
+Unsupported, ambiguous, or unsafe kubeconfigs fail closed without being rewritten.

@@ -546,6 +546,42 @@ pub(super) fn rclone_password(key: String) -> Result<String, String> {
         .ok_or_else(|| format!("Automic Vault returned no rclone config password for {key}"))
 }
 
+pub(super) fn kubectl_credential(key: String, scope: String) -> Result<String, String> {
+    validate_key_name(&key)?;
+    let request = ApprovalRequest {
+        op: "kubectl-get",
+        keys: vec![key.clone()],
+        target: String::new(),
+        args: Vec::new(),
+        cwd: crate::path_security::current_working_directory_utf8()?,
+        replace_existing_env: false,
+        allow_missing_keys: false,
+        env_conflicts: Vec::new(),
+        shebang_script: None,
+        script_data: None,
+        snapshot_incompatible_interpreter: None,
+        tool: Some("kubectl"),
+        docker_server_url: None,
+        terraform_hostname: None,
+        aliyun_profile: None,
+        oxide_scope: None,
+        goat_scope: None,
+        ordercli_scope: None,
+        openhue_scope: None,
+        uaa_scope: None,
+        // kubectl is the only new scope and reuses this internal slot to keep the wire struct flat.
+        railway_scope: Some(scope),
+        wakatime_api_url: None,
+    };
+    if crate::test_keychain_dir().is_some() {
+        return load_test_secret_if_present(&key)?
+            .ok_or_else(|| format!("failed to load secret {key}: -25300"));
+    }
+    xpc_approve_injection(&request)?
+        .remove(&key)
+        .ok_or_else(|| format!("Automic Vault returned no kubectl credential for {key}"))
+}
+
 pub(super) fn oxide_credential(key: String, scope: String) -> Result<String, String> {
     validate_key_name(&key)?;
     let request = ApprovalRequest {
@@ -1200,7 +1236,15 @@ fn xpc_approve_request(
             set_string(message, b"uaa_scope\0", scope)?;
         }
         if let Some(scope) = &request.railway_scope {
-            set_string(message, b"railway_scope\0", scope)?;
+            set_string(
+                message,
+                if request.tool == Some("kubectl") {
+                    b"kubectl_scope\0"
+                } else {
+                    b"railway_scope\0"
+                },
+                scope,
+            )?;
         }
         if let Some(api_url) = &request.wakatime_api_url {
             set_string(message, b"wakatime_api_url\0", api_url)?;

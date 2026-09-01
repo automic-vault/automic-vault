@@ -5,6 +5,7 @@ const ALIYUN_HELPER_PROTOCOL_VERSION: u64 = 1;
 const DOCKER_HELPER_PROTOCOL_VERSION: u64 = 2;
 const OXIDE_HELPER_PROTOCOL_VERSION: u64 = 1;
 const GOAT_HELPER_PROTOCOL_VERSION: u64 = 1;
+const KUBECTL_HELPER_PROTOCOL_VERSION: u64 = 1;
 const ORDERCLI_HELPER_PROTOCOL_VERSION: u64 = 1;
 const OPENHUE_HELPER_PROTOCOL_VERSION: u64 = 1;
 const PLUMBER_HELPER_PROTOCOL_VERSION: u64 = 1;
@@ -316,6 +317,31 @@ pub(crate) fn ensure_rclone_helper_ready() -> Result<(), String> {
             "the running Automic Vault app reported unsupported rclone helper version {version}"
         )),
         None => Err("the running Automic Vault app returned no rclone helper version".into()),
+    }
+}
+
+pub(crate) fn ensure_kubectl_helper_ready() -> Result<(), String> {
+    if crate::test_keychain_dir().is_some() {
+        return Ok(());
+    }
+    let reply = xpc_request(
+        "kubectl-helper-version",
+        None,
+        None,
+        None,
+        Some((b"requested_version\0", KUBECTL_HELPER_PROTOCOL_VERSION)),
+    )
+    .map_err(|error| {
+        format!(
+            "kubectl credential-helper protocol negotiation failed; update and open the Automic Vault app: {error}"
+        )
+    })?;
+    match reply.value.as_deref() {
+        Some("1") => Ok(()),
+        Some(version) => Err(format!(
+            "the running Automic Vault app reported unsupported kubectl helper version {version}"
+        )),
+        None => Err("the running Automic Vault app returned no kubectl helper version".into()),
     }
 }
 

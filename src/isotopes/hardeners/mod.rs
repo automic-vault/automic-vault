@@ -8,6 +8,7 @@ pub(crate) mod gh_cli;
 pub(crate) mod goat;
 pub(crate) mod homebrew;
 pub(crate) mod isotope;
+pub(crate) mod kubectl;
 mod migrations;
 pub(crate) mod openhue_cli;
 pub(crate) mod ordercli;
@@ -134,7 +135,9 @@ pub(crate) struct RequiredIdentity {
 }
 
 pub(crate) fn write_secret_gate_notice(stdout: &mut dyn std::io::Write, gate_id: &str) {
-    let protection = if gate_id == "brew" {
+    let protection = if gate_id == "kubectl" {
+        "Approval Required"
+    } else if gate_id == "brew" {
         "Read & Update"
     } else {
         "Read Only"
@@ -309,6 +312,7 @@ pub(crate) fn metadata() -> Vec<HardenerMetadata> {
         gated_hardener!(uaa_cli, "uaa-cli"),
         gated_hardener!(railway, "railway"),
         gated_hardener!(rclone, "rclone"),
+        gated_hardener!(kubectl, "kubectl"),
         gated_hardener!(oxide_cli, "oxide-cli"),
         gated_hardener!(homebrew, "brew"),
         gated_hardener!(gh_cli, "gh"),
