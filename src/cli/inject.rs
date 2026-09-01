@@ -410,7 +410,7 @@ pub(super) fn docker_credential(
     }
     xpc_approve_injection(&request)?
         .remove(&key)
-        .ok_or_else(|| format!("Automic Vault returned no Docker credential for {key}"))
+        .ok_or_else(|| format!("Automic Vault returned no registry credential for {key}"))
 }
 
 pub(super) fn terraform_credential(key: String, hostname: String) -> Result<String, String> {

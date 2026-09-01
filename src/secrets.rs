@@ -188,6 +188,7 @@ pub(crate) fn ensure_registry_helper_ready() -> Result<(), String> {
     if crate::test_keychain_dir().is_some() {
         return Ok(());
     }
+    // Stable compatibility wire name shared by Docker and Podman registry helpers.
     let reply = xpc_request(
         "docker-helper-version",
         None,

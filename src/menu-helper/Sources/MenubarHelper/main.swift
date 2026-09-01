@@ -2979,7 +2979,7 @@ private struct ApprovedFulfillmentMaterial: Sendable {
     let awsRegistration: AWSRegistration?
 }
 
-private let dockerHelperProtocolVersion: UInt64 = 3
+private let registryHelperProtocolVersion: UInt64 = 3
 
 private final class ApprovalServer: @unchecked Sendable {
     private let serviceName: String
@@ -3178,11 +3178,11 @@ private final class ApprovalServer: @unchecked Sendable {
             reply(peer, to: message, ok: true, error: nil, value: String(negotiated))
         case .dockerHelperVersion where isTrustedAvCaller(path: callerPath, signing: signing):
             let requested = xpc_dictionary_get_uint64(message, "requested_version")
-            guard requested == dockerHelperProtocolVersion else {
+            guard requested == registryHelperProtocolVersion else {
                 reply(peer, to: message, ok: false, error: "Registry helper protocol upgrade is required")
                 return
             }
-            reply(peer, to: message, ok: true, error: nil, value: String(dockerHelperProtocolVersion))
+            reply(peer, to: message, ok: true, error: nil, value: String(registryHelperProtocolVersion))
         case .goatHelperVersion where isTrustedAvCaller(path: callerPath, signing: signing):
             let requested = xpc_dictionary_get_uint64(message, "requested_version")
             guard requested == 1 else {
