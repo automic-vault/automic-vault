@@ -3202,7 +3202,7 @@ private func isMediumDetectorSeverity(_ severity: String) -> Bool {
 private struct InfoBlock: View {
     let title: String
     let text: String
-    var rendersMarkdown = false
+    let rendersMarkdown: Bool = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
