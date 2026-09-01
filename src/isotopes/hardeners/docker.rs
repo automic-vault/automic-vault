@@ -129,7 +129,7 @@ pub(crate) fn install_privileged() -> Result<(), String> {
     }
     let helper = helper_path();
     validate_helper_install_path(&helper)?;
-    install_stub(&helper)
+    install_stub(&helper, crate::cli::docker_credential::helper_stub())
 }
 
 pub(crate) fn detect() -> HardenerDetection {
@@ -460,7 +460,7 @@ fn write_config(path: &Path, value: &Value) -> Result<(), String> {
 
 pub(super) fn install_shared_helper(testing: bool) -> Result<(), String> {
     if testing {
-        return install_stub(&helper_path());
+        return install_stub(&helper_path(), crate::cli::docker_credential::helper_stub());
     }
     super::env_wrapper::validate_privileged_av(Path::new(AV_PATH))?;
     let revision = Command::new(AV_PATH)
@@ -485,7 +485,7 @@ pub(super) fn install_shared_helper(testing: bool) -> Result<(), String> {
         .ok_or_else(|| format!("Docker helper installation failed: {status}"))
 }
 
-fn install_stub(path: &Path) -> Result<(), String> {
+pub(super) fn install_stub(path: &Path, contents: &str) -> Result<(), String> {
     let parent = path
         .parent()
         .ok_or_else(|| format!("Docker helper has no parent: {}", path.display()))?;
@@ -504,7 +504,7 @@ fn install_stub(path: &Path) -> Result<(), String> {
             .mode(0o600)
             .open(&staging)
             .map_err(|error| format!("failed to create {}: {error}", staging.display()))?;
-        file.write_all(crate::cli::docker_credential::helper_stub().as_bytes())
+        file.write_all(contents.as_bytes())
             .and_then(|()| file.sync_all())
             .map_err(|error| format!("failed to write {}: {error}", staging.display()))?;
         file.set_permissions(fs::Permissions::from_mode(0o755))

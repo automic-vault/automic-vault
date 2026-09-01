@@ -2979,7 +2979,7 @@ private struct ApprovedFulfillmentMaterial: Sendable {
     let awsRegistration: AWSRegistration?
 }
 
-private let dockerHelperProtocolVersion: UInt64 = 2
+private let dockerHelperProtocolVersion: UInt64 = 3
 
 private final class ApprovalServer: @unchecked Sendable {
     private let serviceName: String
@@ -3179,7 +3179,7 @@ private final class ApprovalServer: @unchecked Sendable {
         case .dockerHelperVersion where isTrustedAvCaller(path: callerPath, signing: signing):
             let requested = xpc_dictionary_get_uint64(message, "requested_version")
             guard requested == dockerHelperProtocolVersion else {
-                reply(peer, to: message, ok: false, error: "Docker helper protocol upgrade is required")
+                reply(peer, to: message, ok: false, error: "Registry helper protocol upgrade is required")
                 return
             }
             reply(peer, to: message, ok: true, error: nil, value: String(dockerHelperProtocolVersion))
@@ -6116,12 +6116,12 @@ private final class ApprovalServer: @unchecked Sendable {
         helperSigning: SigningInfo
     ) throws -> ApprovalRequest {
         guard request.op == "docker-get" else {
-            guard request.tool != "docker" else {
+            guard request.tool != "docker" && request.tool != "podman" else {
                 throw AppError("Docker credentials require the Docker helper protocol")
             }
             return request
         }
-        guard request.tool == "docker",
+        guard request.tool == "docker" || request.tool == "podman",
               isTrustedAvCaller(path: helperPath, signing: helperSigning),
               request.target.isEmpty,
               request.args.isEmpty,
@@ -6140,7 +6140,7 @@ private final class ApprovalServer: @unchecked Sendable {
         }
         let parent = try dockerCredentialParent(for: helperIdentity)
         let tool = credentialHelperTool(parent)
-        guard tool == "docker" || tool == "podman" else {
+        guard (tool == "docker" || tool == "podman"), request.tool == tool else {
             throw AppError("registry credential helper parent is not a supported Target")
         }
         let displayName = tool == "podman" ? "Podman" : "Docker"
@@ -8015,8 +8015,10 @@ private func classifySecretGateRequest(
         return .localWrite
     case "gh":
         return ghRequestClassification(request.args)
-    case "docker", "podman":
+    case "docker":
         return dockerRequestClassification(request.args)
+    case "podman":
+        return .secretDump
     case "goat":
         return goatRequestClassification(request.args)
     case "ordercli":

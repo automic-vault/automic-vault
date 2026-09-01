@@ -373,7 +373,11 @@ fn approval_request(
     })
 }
 
-pub(super) fn docker_credential(key: String, server_url: String) -> Result<String, String> {
+pub(super) fn docker_credential(
+    key: String,
+    server_url: String,
+    tool: &'static str,
+) -> Result<String, String> {
     validate_key_name(&key)?;
     let request = ApprovalRequest {
         op: "docker-get",
@@ -387,7 +391,7 @@ pub(super) fn docker_credential(key: String, server_url: String) -> Result<Strin
         shebang_script: None,
         script_data: None,
         snapshot_incompatible_interpreter: None,
-        tool: Some("docker"),
+        tool: Some(tool),
         docker_server_url: Some(server_url),
         terraform_hostname: None,
         aliyun_profile: None,

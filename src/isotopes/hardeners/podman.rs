@@ -17,7 +17,7 @@ use super::{
 const AV_PATH: &str = "/usr/local/bin/av";
 const TARGET_PATH: &str = "/opt/podman/bin/podman";
 const TEAM_IDENTIFIER: &str = "HYSCB8KRL2";
-const DROP_IN: &str = "credential-helpers = [\"av\"]\n";
+const DROP_IN: &str = "credential-helpers = [\"av-podman\"]\n";
 const MAX_CONFIG_BYTES: u64 = 1024 * 1024;
 
 struct AuthState {
@@ -36,25 +36,26 @@ pub(crate) fn run(stdout: &mut dyn Write, yes: bool) -> Result<(), String> {
     if !testing {
         crate::secrets::ensure_docker_helper_ready()?;
         verify_target(&target())?;
-        super::docker::validate_helper_install_path(&super::docker::helper_path())?;
+        super::docker::validate_helper_install_path(&helper_path())?;
     }
 
     let states = auth_states()?;
     let credentials = merge_credentials(&states)?;
+    let markers = auth_markers(&states);
     let drop_in = drop_in_path()?;
 
     writeln!(stdout, "╭─ harden podman").ok();
     writeln!(stdout, "│").ok();
     writeln!(stdout, "├─ keep Red Hat's signed Podman client").ok();
+    writeln!(stdout, "├─ install {}", helper_path().display()).ok();
     writeln!(
         stdout,
-        "├─ install {}",
-        super::docker::helper_path().display()
+        "├─ select Automic Vault as Podman's registry credential helper"
     )
     .ok();
     writeln!(
         stdout,
-        "├─ select Automic Vault as Podman's registry credential helper"
+        "├─ treat every remote registry request as a Secret Dump (upstream sends all credentials)"
     )
     .ok();
     if !credentials.is_empty() {
@@ -78,12 +79,15 @@ pub(crate) fn run(stdout: &mut dyn Write, yes: bool) -> Result<(), String> {
             &credential.storage_json(),
         )?;
     }
-    super::docker::install_shared_helper(testing)?;
+    install_helper(testing)?;
     write_drop_in(&drop_in)?;
     for state in &states {
         if state.existed && state.original != state.sanitized {
             write_json(&state.path, &state.sanitized)?;
         }
+    }
+    for registry in &markers {
+        add_helper_marker(registry)?;
     }
     verify_hardened_state()?;
 
@@ -96,8 +100,8 @@ pub(crate) fn detect() -> HardenerDetection {
     let testing = test_auth_path().is_some();
     let target = target();
     let target_valid = testing || verify_target(&target).is_ok();
-    let helper = super::docker::helper_path();
-    let helper_valid = super::docker::helper_valid(&helper, testing);
+    let helper = helper_path();
+    let helper_valid = podman_helper_valid(&helper, testing);
     let config_valid = reject_competing_config().is_ok()
         && reject_fallback_auth_sources().is_ok()
         && drop_in_path().is_ok_and(|path| drop_in_is_effective(&path))
@@ -105,6 +109,7 @@ pub(crate) fn detect() -> HardenerDetection {
             states
                 .iter()
                 .all(|state| state.credentials.is_empty() && state.original == state.sanitized)
+                && markers_are_discoverable(&states)
         });
     let hardened = target_valid && helper_valid && config_valid;
     let command = HardenerCommand {
@@ -202,6 +207,22 @@ fn merge_credentials(
     Ok(merged)
 }
 
+fn auth_markers(states: &[AuthState]) -> BTreeSet<String> {
+    states
+        .iter()
+        .filter_map(|state| state.sanitized.get("credHelpers")?.as_object())
+        .flat_map(|helpers| helpers.keys().cloned())
+        .collect()
+}
+
+fn markers_are_discoverable(states: &[AuthState]) -> bool {
+    helper_markers().is_ok_and(|primary| {
+        auth_markers(states)
+            .iter()
+            .all(|registry| primary.contains_key(registry))
+    })
+}
+
 fn sanitize_auth(
     mut value: Value,
 ) -> Result<(Value, Vec<crate::cli::docker_credential::DockerCredential>), String> {
@@ -212,10 +233,25 @@ fn sanitize_auth(
         let helpers = helpers
             .as_object()
             .ok_or_else(|| "Podman `credHelpers` must be an object".to_string())?;
-        if helpers.values().any(|helper| helper.as_str() != Some("av")) {
+        if helpers
+            .values()
+            .any(|helper| helper.as_str() != Some("av-podman"))
+        {
             return Err("competing Podman credential helpers are not supported yet".into());
         }
+        for registry in helpers.keys() {
+            if normalize_registry(registry)? != *registry {
+                return Err(format!(
+                    "invalid Podman credential-helper registry `{registry}`"
+                ));
+            }
+        }
     }
+    let mut markers = object
+        .get("credHelpers")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
     let Some(auths) = object.get_mut("auths") else {
         return Ok((value, Vec::new()));
     };
@@ -250,14 +286,19 @@ fn sanitize_auth(
         else {
             continue;
         };
+        let server_url = normalize_registry(registry)?;
+        markers.insert(server_url.clone(), Value::String("av-podman".into()));
         credentials.push(crate::cli::docker_credential::DockerCredential {
-            server_url: normalize_registry(registry)?,
+            server_url,
             username,
             secret,
         });
     }
     auths.clear();
     object.remove("auths");
+    if !markers.is_empty() {
+        object.insert("credHelpers".into(), Value::Object(markers));
+    }
     Ok((value, credentials))
 }
 
@@ -336,6 +377,129 @@ fn target() -> PathBuf {
     crate::test_env_var("AUTOMIC_VAULT_TEST_PODMAN_TARGET")
         .map(PathBuf::from)
         .unwrap_or_else(|| TARGET_PATH.into())
+}
+
+fn helper_path() -> PathBuf {
+    crate::cli::docker_credential::podman_helper_path()
+}
+
+fn podman_helper_valid(path: &Path, testing: bool) -> bool {
+    let metadata = fs::symlink_metadata(path).ok();
+    crate::cli::docker_credential::podman_helper_stub_valid(path)
+        && metadata.as_ref().is_some_and(|metadata| {
+            metadata.permissions().mode() & 0o777 == 0o755
+                && (testing
+                    || (metadata.uid() == 0
+                        && super::docker::validate_helper_install_path(path).is_ok()))
+        })
+}
+
+fn install_helper(testing: bool) -> Result<(), String> {
+    if testing {
+        return super::docker::install_stub(
+            &helper_path(),
+            crate::cli::docker_credential::podman_helper_stub(),
+        );
+    }
+    super::env_wrapper::validate_privileged_av(Path::new(AV_PATH))?;
+    let revision = Command::new(AV_PATH)
+        .arg("__version")
+        .output()
+        .map_err(|error| format!("failed to check {AV_PATH}: {error}"))?;
+    if !revision.status.success()
+        || std::str::from_utf8(&revision.stdout)
+            .ok()
+            .and_then(|value| value.trim().parse::<u32>().ok())
+            != Some(crate::cli::INSTALL_REVISION)
+    {
+        return Err("update the av CLI from the Automic Vault app before hardening Podman".into());
+    }
+    let status = Command::new("/usr/bin/sudo")
+        .args([AV_PATH, "__install-podman-helper"])
+        .status()
+        .map_err(|error| format!("failed to run sudo: {error}"))?;
+    status
+        .success()
+        .then_some(())
+        .ok_or_else(|| format!("Podman helper installation failed: {status}"))
+}
+
+pub(crate) fn install_privileged() -> Result<(), String> {
+    if test_auth_path().is_some()
+        || crate::test_env_var("AUTOMIC_VAULT_TEST_PODMAN_HELPER_PATH").is_some()
+    {
+        return Err("test path overrides are forbidden during privileged installation".into());
+    }
+    if super::effective_uid() != 0 {
+        return Err("Podman helper installation requires root".into());
+    }
+    let path = helper_path();
+    super::docker::validate_helper_install_path(&path)?;
+    super::docker::install_stub(&path, crate::cli::docker_credential::podman_helper_stub())
+}
+
+pub(crate) fn helper_markers() -> Result<BTreeMap<String, String>, String> {
+    let (_, value) = read_json(&primary_auth_path()?)?;
+    let (value, credentials) = sanitize_auth(value)?;
+    if !credentials.is_empty() {
+        return Err("Podman auth file contains unmigrated credentials".into());
+    }
+    Ok(value
+        .get("credHelpers")
+        .and_then(Value::as_object)
+        .into_iter()
+        .flatten()
+        .map(|(registry, _)| (registry.clone(), String::new()))
+        .collect())
+}
+
+pub(crate) fn add_helper_marker(registry: &str) -> Result<(), String> {
+    update_helper_marker(registry, true)
+}
+
+pub(crate) fn remove_helper_marker(registry: &str) -> Result<(), String> {
+    update_helper_marker(registry, false)
+}
+
+fn update_helper_marker(registry: &str, add: bool) -> Result<(), String> {
+    if normalize_registry(registry)? != registry {
+        return Err("Podman helper received a non-canonical registry".into());
+    }
+    let path = primary_auth_path()?;
+    let (_, value) = read_json(&path)?;
+    let (mut value, credentials) = sanitize_auth(value)?;
+    if !credentials.is_empty() {
+        return Err("Podman auth file contains unmigrated credentials".into());
+    }
+    let object = value.as_object_mut().expect("sanitized object");
+    let helpers = object
+        .entry("credHelpers")
+        .or_insert_with(|| Value::Object(Map::new()))
+        .as_object_mut()
+        .expect("sanitized helpers");
+    if add {
+        helpers.insert(registry.into(), Value::String("av-podman".into()));
+    } else {
+        helpers.remove(registry);
+        if helpers.is_empty() {
+            object.remove("credHelpers");
+        }
+    }
+    write_json(&path, &value)
+}
+
+fn primary_auth_path() -> Result<PathBuf, String> {
+    if let Some(path) = test_auth_path() {
+        return Ok(path);
+    }
+    if let Some(path) = std::env::var_os("REGISTRY_AUTH_FILE").filter(|value| !value.is_empty()) {
+        return Ok(path.into());
+    }
+    let home = std::env::var_os("HOME")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .ok_or_else(|| "HOME is not set".to_string())?;
+    Ok(home.join(".config/containers/auth.json"))
 }
 
 fn drop_in_path() -> Result<PathBuf, String> {
@@ -519,10 +683,12 @@ fn write_bytes(path: &Path, bytes: &[u8]) -> Result<(), String> {
 
 fn verify_hardened_state() -> Result<(), String> {
     let path = drop_in_path()?;
+    let states = auth_states()?;
     if !drop_in_is_effective(&path)
-        || auth_states()?
+        || states
             .iter()
             .any(|state| !state.credentials.is_empty() || state.original != state.sanitized)
+        || !markers_are_discoverable(&states)
     {
         return Err("Podman hardening postcondition failed".into());
     }
@@ -625,7 +791,13 @@ mod tests {
             }
         }))
         .unwrap();
-        assert_eq!(sanitized, json!({}));
+        assert_eq!(
+            sanitized,
+            json!({"credHelpers": {
+                "index.docker.io": "av-podman",
+                "quay.io": "av-podman"
+            }})
+        );
         assert_eq!(credentials.len(), 2);
         assert_eq!(credentials[0].server_url, "index.docker.io");
         assert_eq!(credentials[0].username, "user");
@@ -663,7 +835,7 @@ mod tests {
         let root = std::env::temp_dir().join(format!("av-podman-hardener-{}", std::process::id()));
         let auth = root.join("auth.json");
         let drop_in = root.join("registries.conf.d/999-automic-vault.conf");
-        let helper = root.join("docker-credential-av");
+        let helper = root.join("docker-credential-av-podman");
         let keychain = root.join("keychain");
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).unwrap();
@@ -676,7 +848,7 @@ mod tests {
         unsafe {
             std::env::set_var("AUTOMIC_VAULT_TEST_PODMAN_AUTH", &auth);
             std::env::set_var("AUTOMIC_VAULT_TEST_PODMAN_DROP_IN", &drop_in);
-            std::env::set_var("AUTOMIC_VAULT_TEST_DOCKER_HELPER_PATH", &helper);
+            std::env::set_var("AUTOMIC_VAULT_TEST_PODMAN_HELPER_PATH", &helper);
             std::env::set_var("AUTOMIC_VAULT_TEST_KEYCHAIN_DIR", &keychain);
             std::env::remove_var("CONTAINERS_REGISTRIES_CONF");
         }
@@ -686,7 +858,7 @@ mod tests {
         assert_eq!(fs::read_to_string(&drop_in).unwrap(), DROP_IN);
         assert_eq!(
             serde_json::from_slice::<Value>(&fs::read(&auth).unwrap()).unwrap(),
-            json!({})
+            json!({"credHelpers": {"quay.io": "av-podman"}})
         );
         let saved = fs::read_to_string(
             keychain.join(crate::cli::docker_credential::secret_name("quay.io")),
@@ -704,7 +876,7 @@ mod tests {
             for name in [
                 "AUTOMIC_VAULT_TEST_PODMAN_AUTH",
                 "AUTOMIC_VAULT_TEST_PODMAN_DROP_IN",
-                "AUTOMIC_VAULT_TEST_DOCKER_HELPER_PATH",
+                "AUTOMIC_VAULT_TEST_PODMAN_HELPER_PATH",
                 "AUTOMIC_VAULT_TEST_KEYCHAIN_DIR",
             ] {
                 std::env::remove_var(name);

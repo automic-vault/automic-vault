@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 const APPROVAL_SERVICE: &str = "com.automicvault.av2.approval";
 const ALIYUN_HELPER_PROTOCOL_VERSION: u64 = 1;
-const DOCKER_HELPER_PROTOCOL_VERSION: u64 = 2;
+const DOCKER_HELPER_PROTOCOL_VERSION: u64 = 3;
 const OXIDE_HELPER_PROTOCOL_VERSION: u64 = 1;
 const GOAT_HELPER_PROTOCOL_VERSION: u64 = 1;
 const KUBECTL_HELPER_PROTOCOL_VERSION: u64 = 1;
@@ -197,15 +197,15 @@ pub(crate) fn ensure_docker_helper_ready() -> Result<(), String> {
     )
     .map_err(|error| {
         format!(
-            "Docker credential-helper protocol negotiation failed; update and open the Automic Vault app: {error}"
+            "Registry credential-helper protocol negotiation failed; update and open the Automic Vault app: {error}"
         )
     })?;
     match reply.value.as_deref() {
         Some(version) if version == DOCKER_HELPER_PROTOCOL_VERSION.to_string() => Ok(()),
         Some(version) => Err(format!(
-            "the running Automic Vault app reported unsupported Docker helper version {version}"
+            "the running Automic Vault app reported unsupported registry helper version {version}"
         )),
-        None => Err("the running Automic Vault app returned no Docker helper version".into()),
+        None => Err("the running Automic Vault app returned no registry helper version".into()),
     }
 }
 

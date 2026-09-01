@@ -57,7 +57,7 @@ modes:
 more:
   $ open https://www.automicvault.com/docs/";
 
-pub(crate) const INSTALL_REVISION: u32 = 42;
+pub(crate) const INSTALL_REVISION: u32 = 43;
 
 pub(crate) fn bash_shell_secret_insecurity_reasons() -> Result<Vec<String>, String> {
     shell_secrets::bash_reasons()
@@ -267,6 +267,15 @@ where
         }
         Some("__install-docker-helper") if rest.is_empty() => {
             match hardeners::docker::install_privileged() {
+                Ok(()) => 0,
+                Err(err) => {
+                    let _ = writeln!(stderr, "av: {err}");
+                    1
+                }
+            }
+        }
+        Some("__install-podman-helper") if rest.is_empty() => {
+            match hardeners::podman::install_privileged() {
                 Ok(()) => 0,
                 Err(err) => {
                     let _ = writeln!(stderr, "av: {err}");
@@ -491,6 +500,7 @@ where
             aws::credentials(Some("official-v2"), stdout, stderr)
         }
         Some("docker-credential") => docker_credential::run(rest, stdout, stderr),
+        Some("podman-credential") => docker_credential::run_podman(rest, stdout, stderr),
         Some("terraform-credential") => terraform_credential::run(rest, stdout, stderr),
         Some("aliyun-credential") => aliyun_credential::run(rest, stdout, stderr),
         Some("oxide-credential") => oxide_credential::run(rest, stdout, stderr),
