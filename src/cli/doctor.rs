@@ -565,6 +565,8 @@ fn diagnose_command(hardener: &str, command: &HardenerCommand, path: &OsStr) -> 
 }
 
 fn executable_at_reserved_launcher_path(command: &HardenerCommand) -> Option<&str> {
+    // Environment wrappers retain the bare Command name only when they could
+    // not resolve a separate Target outside the reserved Launcher path.
     (Path::new(&command.target_path) == Path::new(&command.name))
         .then(|| command.stub_path.as_deref())
         .flatten()
