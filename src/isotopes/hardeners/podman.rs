@@ -320,8 +320,8 @@ fn decode_auth(encoded: String) -> Result<(String, String), String> {
     let (username, secret) = decoded
         .split_once(':')
         .ok_or_else(|| "Podman credential has no username/password separator".to_string())?;
-    let secret = secret.trim_matches('\0');
-    if username.is_empty() || secret.is_empty() || username.contains('\0') {
+    if username.is_empty() || secret.is_empty() || username.contains('\0') || secret.contains('\0')
+    {
         return Err("Podman credential has an empty or invalid username/password".into());
     }
     Ok((username.into(), secret.into()))
@@ -814,6 +814,7 @@ mod tests {
             }))
             .is_err()
         );
+        assert!(decode_auth("dXNlcjp0b2tlbgA=".into()).is_err());
     }
 
     #[test]
