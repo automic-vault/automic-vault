@@ -42,7 +42,7 @@ pub(crate) fn run(stdout: &mut dyn Write, yes: bool) -> Result<(), String> {
     let testing = test_config_path().is_some();
     PRIVILEGE_MODE.require_user("docker", testing)?;
     if !testing {
-        crate::secrets::ensure_docker_helper_ready()?;
+        crate::secrets::ensure_registry_helper_ready()?;
         verify_vendor_install()?;
         validate_helper_install_path(&helper_path())?;
     }

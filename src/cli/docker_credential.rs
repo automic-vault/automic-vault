@@ -95,7 +95,7 @@ fn run_with_io(
         .to_str()
         .ok_or_else(|| "credential-helper action must be valid UTF-8".to_string())?;
     if matches!(action, "store" | "get" | "erase") {
-        crate::secrets::ensure_docker_helper_ready()?;
+        crate::secrets::ensure_registry_helper_ready()?;
     }
     match action {
         "store" => {

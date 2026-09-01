@@ -34,7 +34,7 @@ pub(crate) fn run(stdout: &mut dyn Write, yes: bool) -> Result<(), String> {
     reject_competing_config()?;
     reject_fallback_auth_sources()?;
     if !testing {
-        crate::secrets::ensure_docker_helper_ready()?;
+        crate::secrets::ensure_registry_helper_ready()?;
         verify_target(&target())?;
         super::docker::validate_helper_install_path(&helper_path())?;
     }
@@ -228,16 +228,16 @@ fn sanitize_auth(
 ) -> Result<(Value, Vec<crate::cli::docker_credential::DockerCredential>), String> {
     let object = value
         .as_object_mut()
-        .ok_or_else(|| "Podman auth config must be a JSON object".to_string())?;
+        .ok_or_else(|| "registry auth config must be a JSON object".to_string())?;
     if let Some(helpers) = object.get("credHelpers") {
         let helpers = helpers
             .as_object()
-            .ok_or_else(|| "Podman `credHelpers` must be an object".to_string())?;
+            .ok_or_else(|| "registry `credHelpers` must be an object".to_string())?;
         if helpers
             .values()
             .any(|helper| helper.as_str() != Some("av-podman"))
         {
-            return Err("competing Podman credential helpers are not supported yet".into());
+            return Err("competing registry credential helpers are not supported yet".into());
         }
         for registry in helpers.keys() {
             if normalize_registry(registry)? != *registry {

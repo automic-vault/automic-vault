@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 const APPROVAL_SERVICE: &str = "com.automicvault.av2.approval";
 const ALIYUN_HELPER_PROTOCOL_VERSION: u64 = 1;
-const DOCKER_HELPER_PROTOCOL_VERSION: u64 = 3;
+const REGISTRY_HELPER_PROTOCOL_VERSION: u64 = 3;
 const OXIDE_HELPER_PROTOCOL_VERSION: u64 = 1;
 const GOAT_HELPER_PROTOCOL_VERSION: u64 = 1;
 const KUBECTL_HELPER_PROTOCOL_VERSION: u64 = 1;
@@ -184,7 +184,7 @@ fn list_secret_names_filtered(global_only: bool) -> Result<Vec<String>, String> 
     .names)
 }
 
-pub(crate) fn ensure_docker_helper_ready() -> Result<(), String> {
+pub(crate) fn ensure_registry_helper_ready() -> Result<(), String> {
     if crate::test_keychain_dir().is_some() {
         return Ok(());
     }
@@ -193,7 +193,7 @@ pub(crate) fn ensure_docker_helper_ready() -> Result<(), String> {
         None,
         None,
         None,
-        Some((b"requested_version\0", DOCKER_HELPER_PROTOCOL_VERSION)),
+        Some((b"requested_version\0", REGISTRY_HELPER_PROTOCOL_VERSION)),
     )
     .map_err(|error| {
         format!(
@@ -201,7 +201,7 @@ pub(crate) fn ensure_docker_helper_ready() -> Result<(), String> {
         )
     })?;
     match reply.value.as_deref() {
-        Some(version) if version == DOCKER_HELPER_PROTOCOL_VERSION.to_string() => Ok(()),
+        Some(version) if version == REGISTRY_HELPER_PROTOCOL_VERSION.to_string() => Ok(()),
         Some(version) => Err(format!(
             "the running Automic Vault app reported unsupported registry helper version {version}"
         )),
