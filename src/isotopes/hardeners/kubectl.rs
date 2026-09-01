@@ -236,6 +236,7 @@ fn render_config(target: &Path, config: &Path) -> Result<Value, String> {
 }
 
 fn sanitize_config(mut root: Value) -> Result<SanitizedConfig, String> {
+    validate_clusters(&root)?;
     let users = root
         .as_object_mut()
         .and_then(|root| root.get_mut("users"))
@@ -328,6 +329,47 @@ fn sanitize_config(mut root: Value) -> Result<SanitizedConfig, String> {
         migrations,
         has_helper,
     })
+}
+
+fn validate_clusters(root: &Value) -> Result<(), String> {
+    let clusters = root
+        .as_object()
+        .and_then(|root| root.get("clusters"))
+        .and_then(Value::as_array)
+        .ok_or_else(|| "kubeconfig has no clusters array".to_string())?;
+    for entry in clusters {
+        let cluster = entry
+            .as_object()
+            .and_then(|entry| entry.get("cluster"))
+            .and_then(Value::as_object)
+            .ok_or_else(|| "kubeconfig contains an invalid cluster entry".to_string())?;
+        let server = cluster
+            .get("server")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "kubeconfig contains a cluster without a server".to_string())?;
+        if server.is_empty() || server.len() > 4096 || !server.is_ascii() {
+            return Err("kubeconfig contains an invalid Kubernetes API server".into());
+        }
+        let url = url::Url::parse(server)
+            .map_err(|_| "kubeconfig contains an invalid Kubernetes API server")?;
+        if url.scheme() != "https"
+            || url.host_str().is_none()
+            || !url.username().is_empty()
+            || url.password().is_some()
+            || url.query().is_some()
+            || url.fragment().is_some()
+        {
+            return Err("kubeconfig contains an unsafe Kubernetes API server".into());
+        }
+        if cluster
+            .get("insecure-skip-tls-verify")
+            .and_then(Value::as_bool)
+            == Some(true)
+        {
+            return Err("kubeconfig disables Kubernetes API certificate verification".into());
+        }
+    }
+    Ok(())
 }
 
 fn reject_unsupported_auth(auth: &Map<String, Value>, name: &str) -> Result<(), String> {
@@ -516,6 +558,7 @@ mod tests {
         let input = json!({
             "apiVersion": "v1",
             "kind": "Config",
+            "clusters": [{"name": "prod", "cluster": {"server": "https://example.com"}}],
             "users": [{"name": "prod", "user": {"token": "secret"}}]
         });
         let sanitized = sanitize_config(input).unwrap();
@@ -527,13 +570,25 @@ mod tests {
         );
         assert!(
             sanitize_config(json!({
+                "clusters": [{"name": "prod", "cluster": {"server": "https://example.com"}}],
                 "users": [{"name": "prod", "user": {"username": "u", "password": "p"}}]
             }))
             .is_err()
         );
         assert!(
             sanitize_config(json!({
+                "clusters": [{"name": "prod", "cluster": {"server": "https://example.com"}}],
                 "users": [{"name": "prod", "user": {"exec": {"command": "other"}}}]
+            }))
+            .is_err()
+        );
+        assert!(
+            sanitize_config(json!({
+                "clusters": [{"name": "prod", "cluster": {
+                    "server": "https://example.com",
+                    "insecure-skip-tls-verify": true
+                }}],
+                "users": [{"name": "prod", "user": {"token": "secret"}}]
             }))
             .is_err()
         );
@@ -562,7 +617,7 @@ mod tests {
         fs::create_dir_all(&root).unwrap();
         fs::write(
             &config,
-            r#"{"apiVersion":"v1","kind":"Config","users":[{"name":"prod","user":{"token":"secret"}}]}"#,
+            r#"{"apiVersion":"v1","kind":"Config","clusters":[{"name":"prod","cluster":{"server":"https://example.com"}}],"users":[{"name":"prod","user":{"token":"secret"}}]}"#,
         )
         .unwrap();
         fs::write(

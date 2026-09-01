@@ -9131,7 +9131,7 @@ private func parseKubectlCredentialScope(_ value: String) -> StoredKubectlCreden
           server.utf8.count <= 4096,
           server.unicodeScalars.allSatisfy(\.isASCII),
           let components = URLComponents(string: server),
-          components.scheme == "http" || components.scheme == "https",
+          components.scheme == "https",
           components.host?.isEmpty == false,
           components.user == nil,
           components.password == nil,
@@ -13750,6 +13750,9 @@ private func runKubectlCredentialSelfCheck() -> Int32 {
           !validKubectlCredential(#"{"token":"secret","future":true}"#, kind: "token"),
           parseKubectlCredentialScope(
               #"{"kind":"token","server":"https://user@example.com/","user":"prod"}"#
+          ) == nil,
+          parseKubectlCredentialScope(
+              #"{"kind":"token","server":"http://example.com/","user":"prod"}"#
           ) == nil
     else { return 1 }
     return 0

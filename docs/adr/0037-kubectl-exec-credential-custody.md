@@ -25,8 +25,8 @@ kubeconfig user, Kubernetes API server, credential kind, live parent kubectl
 Target, and complete parent arguments. Unknown fields, multiple kubeconfig
 paths, basic authentication, credential files, auth-provider plugins,
 pre-existing exec plugins, ambiguous credentials, and unsafe filesystem state
-fail closed. The Authorization Record is persisted before the credential is
-released.
+fail closed. Cluster endpoints must use HTTPS with certificate verification
+enabled. The Authorization Record is persisted before the credential is released.
 
 ## Consequences
 

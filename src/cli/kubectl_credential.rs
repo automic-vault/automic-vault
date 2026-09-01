@@ -90,7 +90,7 @@ fn normalize_server(server: &str) -> Result<String, String> {
         return Err("invalid Kubernetes API server".into());
     }
     let url = url::Url::parse(server).map_err(|_| "invalid Kubernetes API server")?;
-    if !matches!(url.scheme(), "http" | "https")
+    if url.scheme() != "https"
         || url.host_str().is_none()
         || !url.username().is_empty()
         || url.password().is_some()
@@ -191,6 +191,7 @@ mod tests {
             r#"{"kind":"token","server":"https://example.com/","user":"prod"}"#
         );
         assert!(credential_scope("token", "https://user@example.com", "prod").is_err());
+        assert!(credential_scope("token", "http://example.com", "prod").is_err());
         assert!(credential_scope("token", "file:///tmp/socket", "prod").is_err());
     }
 

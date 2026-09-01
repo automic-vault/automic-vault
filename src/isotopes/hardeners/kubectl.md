@@ -8,5 +8,6 @@ kubeconfig is replaced atomically.
 The migration fails closed for multiple kubeconfig paths, basic authentication,
 credential files, auth-provider plugins, pre-existing exec plugins, ambiguous
 credentials, unsafe file ownership or permissions, and incomplete certificate pairs.
-Every credential request initially requires approval and is bound to the exact
-kubeconfig user and Kubernetes API server.
+Clusters must use HTTPS with certificate verification enabled. Every credential
+request initially requires approval and is bound to the exact kubeconfig user and
+Kubernetes API server.
