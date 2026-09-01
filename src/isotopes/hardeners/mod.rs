@@ -350,6 +350,7 @@ pub(crate) fn secret_gates() -> Vec<SecretGateDescriptor> {
         uaa_cli::secret_gate(),
         railway::secret_gate(),
         rclone::secret_gate(),
+        kubectl::secret_gate(),
         oxide_cli::secret_gate(),
         homebrew::secret_gate(),
         gh_cli::secret_gate(),
@@ -405,6 +406,13 @@ mod tests {
         assert_eq!(
             String::from_utf8(brew).unwrap(),
             "\n◇ `brew` defaults to Read & Update, adjust this in the app: `av open --secret-gate brew`\n"
+        );
+
+        let mut kubectl = Vec::new();
+        super::write_secret_gate_notice(&mut kubectl, "kubectl");
+        assert_eq!(
+            String::from_utf8(kubectl).unwrap(),
+            "\n◇ `kubectl` defaults to Approval Required, adjust this in the app: `av open --secret-gate kubectl`\n"
         );
     }
 
