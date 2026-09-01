@@ -141,9 +141,22 @@ fn run_with_io(
         }
         "erase" => {
             let server_url = parse_server_url(&read_limited(input)?)?;
-            crate::secrets::delete_registry_credential(&secret_name(&server_url), &server_url)?;
             if flavor == Flavor::Podman {
                 crate::isotopes::hardeners::podman::remove_helper_marker(&server_url)?;
+                if let Err(error) = crate::secrets::delete_registry_credential(
+                    &secret_name(&server_url),
+                    &server_url,
+                ) {
+                    return match crate::isotopes::hardeners::podman::add_helper_marker(&server_url)
+                    {
+                        Ok(()) => Err(error),
+                        Err(rollback) => Err(format!(
+                            "{error}; additionally failed to restore Podman registry marker: {rollback}"
+                        )),
+                    };
+                }
+            } else {
+                crate::secrets::delete_registry_credential(&secret_name(&server_url), &server_url)?;
             }
             Ok(())
         }
@@ -409,6 +422,26 @@ mod tests {
             serde_json::from_slice::<Value>(&output).unwrap(),
             json!({"registry.example": ""})
         );
+        let secret = keychain.join(secret_name("registry.example"));
+        let backup = keychain.join("credential-backup");
+        fs::rename(&secret, &backup).unwrap();
+        fs::create_dir(&secret).unwrap();
+        let mut args = vec![helper.clone().into_os_string(), "erase".into()];
+        assert!(
+            run_with_io(
+                Flavor::Podman,
+                &mut args,
+                &mut "registry.example\n".as_bytes(),
+                &mut Vec::new(),
+            )
+            .is_err()
+        );
+        assert_eq!(
+            crate::isotopes::hardeners::podman::helper_markers().unwrap(),
+            std::iter::once(("registry.example".into(), String::new())).collect()
+        );
+        fs::remove_dir(&secret).unwrap();
+        fs::rename(&backup, &secret).unwrap();
         let mut args = vec![helper.clone().into_os_string(), "erase".into()];
         run_with_io(
             Flavor::Podman,
