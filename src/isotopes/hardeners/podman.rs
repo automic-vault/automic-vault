@@ -363,10 +363,17 @@ fn auth_paths() -> Result<Vec<PathBuf>, String> {
         return Ok(vec![path]);
     }
     let mut unique = BTreeSet::new();
-    Ok(crate::isotopes::detectors::podman_auth_paths()?
+    let paths = crate::isotopes::detectors::podman_auth_paths()?
         .into_iter()
         .filter(|path| unique.insert(path.clone()))
-        .collect())
+        .collect::<Vec<_>>();
+    if let Some(path) = paths.iter().find(|path| !path.is_absolute()) {
+        return Err(format!(
+            "Podman auth path must be absolute: {}",
+            path.display()
+        ));
+    }
+    Ok(paths)
 }
 
 fn test_auth_path() -> Option<PathBuf> {
@@ -492,25 +499,33 @@ fn primary_auth_path() -> Result<PathBuf, String> {
     if let Some(path) = test_auth_path() {
         return Ok(path);
     }
-    if let Some(path) = std::env::var_os("REGISTRY_AUTH_FILE").filter(|value| !value.is_empty()) {
-        return Ok(path.into());
-    }
-    let home = std::env::var_os("HOME")
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
-        .ok_or_else(|| "HOME is not set".to_string())?;
-    Ok(home.join(".config/containers/auth.json"))
+    auth_paths()?
+        .into_iter()
+        .next()
+        .ok_or_else(|| "Podman has no registry auth path".into())
 }
 
 fn drop_in_path() -> Result<PathBuf, String> {
     if let Some(path) = crate::test_env_var("AUTOMIC_VAULT_TEST_PODMAN_DROP_IN") {
         return Ok(path.into());
     }
-    let home = std::env::var_os("HOME")
+    let root = std::env::var_os("XDG_CONFIG_HOME")
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME")
+                .filter(|value| !value.is_empty())
+                .map(PathBuf::from)
+                .map(|home| home.join(".config"))
+        })
         .ok_or_else(|| "HOME is not set".to_string())?;
-    Ok(home.join(".config/containers/registries.conf.d/999-automic-vault.conf"))
+    if !root.is_absolute() {
+        return Err(format!(
+            "Podman config path must be absolute: {}",
+            root.display()
+        ));
+    }
+    Ok(root.join("containers/registries.conf.d/999-automic-vault.conf"))
 }
 
 fn reject_competing_config() -> Result<(), String> {
@@ -828,6 +843,52 @@ mod tests {
         fs::write(root.join("zzz.conf"), "credential-helpers = [\"other\"]\n").unwrap();
         assert!(!drop_in_is_effective(&ours));
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn xdg_paths_are_selected_and_relative_paths_fail_closed() {
+        let _guard = crate::global_test_env_lock().lock().unwrap();
+        let names = [
+            "HOME",
+            "XDG_RUNTIME_DIR",
+            "XDG_CONFIG_HOME",
+            "REGISTRY_AUTH_FILE",
+            "AUTOMIC_VAULT_TEST_PODMAN_AUTH",
+            "AUTOMIC_VAULT_TEST_PODMAN_DROP_IN",
+        ];
+        let previous = names.map(|name| std::env::var_os(name));
+        unsafe {
+            std::env::set_var("HOME", "/tmp/av-podman-home");
+            std::env::set_var("XDG_RUNTIME_DIR", "/tmp/av-podman-runtime");
+            std::env::set_var("XDG_CONFIG_HOME", "/tmp/av-podman-config");
+            for name in &names[3..] {
+                std::env::remove_var(name);
+            }
+        }
+        assert_eq!(
+            primary_auth_path().unwrap(),
+            Path::new("/tmp/av-podman-runtime/containers/auth.json")
+        );
+        assert_eq!(
+            drop_in_path().unwrap(),
+            Path::new("/tmp/av-podman-config/containers/registries.conf.d/999-automic-vault.conf")
+        );
+        unsafe { std::env::set_var("XDG_RUNTIME_DIR", "relative") };
+        assert!(primary_auth_path().is_err());
+        unsafe {
+            std::env::set_var("XDG_RUNTIME_DIR", "/tmp/av-podman-runtime");
+            std::env::set_var("XDG_CONFIG_HOME", "relative");
+        }
+        assert!(drop_in_path().is_err());
+
+        unsafe {
+            for (name, value) in names.into_iter().zip(previous) {
+                match value {
+                    Some(value) => std::env::set_var(name, value),
+                    None => std::env::remove_var(name),
+                }
+            }
+        }
     }
 
     #[test]
