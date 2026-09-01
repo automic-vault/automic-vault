@@ -334,7 +334,20 @@ fn normalize_registry(value: &str) -> Result<String, String> {
         .or_else(|| value.strip_prefix("http://").map(|value| (value, true)))
         .unwrap_or((value, false));
     let registry = if had_scheme {
-        registry.split('/').next().unwrap_or_default()
+        let (authority, path) = registry.split_once('/').unwrap_or((registry, ""));
+        let legacy_docker_path = matches!(
+            (authority, path),
+            (
+                "docker.io" | "index.docker.io" | "registry-1.docker.io",
+                "v1" | "v1/"
+            )
+        );
+        if !path.is_empty() && !legacy_docker_path {
+            return Err(format!(
+                "namespaced Podman credential `{value}` cannot be preserved by an external helper"
+            ));
+        }
+        authority
     } else {
         if registry.contains('/') {
             return Err(format!(
@@ -351,7 +364,7 @@ fn normalize_registry(value: &str) -> Result<String, String> {
         || registry.len() > 2048
         || registry
             .bytes()
-            .any(|byte| byte == 0 || byte == b'\r' || byte == b'\n')
+            .any(|byte| matches!(byte, 0 | b'\r' | b'\n' | b'?' | b'#' | b'@'))
     {
         return Err("invalid Podman registry address".into());
     }
@@ -822,6 +835,12 @@ mod tests {
                 "auths": {"quay.io/team": {"auth": "dXNlcjp0b2tlbg=="}}
             }))
             .is_err()
+        );
+        assert!(normalize_registry("https://quay.io/team").is_err());
+        assert!(normalize_registry("https://quay.io?scope=team").is_err());
+        assert_eq!(
+            normalize_registry("https://index.docker.io/v1/").unwrap(),
+            "index.docker.io"
         );
         assert!(
             sanitize_auth(json!({
