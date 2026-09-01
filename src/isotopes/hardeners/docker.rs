@@ -80,7 +80,7 @@ pub(crate) fn run(stdout: &mut dyn Write, yes: bool) -> Result<(), String> {
             &credential.storage_json(),
         )?;
     }
-    install_helper()?;
+    install_shared_helper(testing)?;
     let source = old_store
         .as_deref()
         .filter(|store| *store != "av")
@@ -139,7 +139,7 @@ pub(crate) fn detect() -> HardenerDetection {
         .as_deref()
         .and_then(|path| read_config(path).ok())
         .is_some_and(|value| validate_config(&value).ok().flatten().as_deref() == Some("av"));
-    let stub_valid = helper_valid(&helper);
+    let stub_valid = helper_valid(&helper, test_config_path().is_some());
     let vendor = test_config_path().is_some() || verify_vendor_install().is_ok();
     let hardened = config_valid && stub_valid && vendor;
     let commands = TARGETS
@@ -158,7 +158,7 @@ pub(crate) fn detect() -> HardenerDetection {
                     path: AV_PATH.into(),
                 }]
             },
-            stub_requirements: Some(stub_requirements(&helper)),
+            stub_requirements: Some(stub_requirements(&helper, test_config_path().is_some())),
             injected_keys: Vec::new(),
             assignment_keys: Vec::new(),
             isotope: None,
@@ -458,8 +458,8 @@ fn write_config(path: &Path, value: &Value) -> Result<(), String> {
     result
 }
 
-fn install_helper() -> Result<(), String> {
-    if test_config_path().is_some() {
+pub(super) fn install_shared_helper(testing: bool) -> Result<(), String> {
+    if testing {
         return install_stub(&helper_path());
     }
     super::env_wrapper::validate_privileged_av(Path::new(AV_PATH))?;
@@ -518,11 +518,11 @@ fn install_stub(path: &Path) -> Result<(), String> {
     result
 }
 
-fn helper_path() -> PathBuf {
+pub(super) fn helper_path() -> PathBuf {
     crate::cli::docker_credential::helper_path()
 }
 
-fn validate_helper_install_path(path: &Path) -> Result<(), String> {
+pub(super) fn validate_helper_install_path(path: &Path) -> Result<(), String> {
     let parent = path
         .parent()
         .ok_or_else(|| format!("Docker helper has no parent: {}", path.display()))?;
@@ -545,22 +545,23 @@ fn secure_install_directory(metadata: &fs::Metadata, owner_uid: u32) -> bool {
         && metadata.permissions().mode() & 0o022 == 0
 }
 
-fn helper_valid(path: &Path) -> bool {
+pub(super) fn helper_valid(path: &Path, testing: bool) -> bool {
     let metadata = fs::symlink_metadata(path).ok();
     crate::cli::docker_credential::helper_stub_valid(path)
         && metadata.as_ref().is_some_and(|metadata| {
             metadata.permissions().mode() & 0o777 == 0o755
-                && (test_config_path().is_some()
-                    || (metadata.uid() == 0 && validate_helper_install_path(path).is_ok()))
+                && (testing || (metadata.uid() == 0 && validate_helper_install_path(path).is_ok()))
         })
 }
 
-fn stub_requirements(path: &Path) -> StubRequirements {
-    let test_ids = test_config_path().and_then(|_| {
-        path.parent()
-            .and_then(|parent| parent.metadata().ok())
-            .map(|metadata| (metadata.uid(), metadata.gid()))
-    });
+pub(super) fn stub_requirements(path: &Path, testing: bool) -> StubRequirements {
+    let test_ids = testing
+        .then(|| {
+            path.parent()
+                .and_then(|parent| parent.metadata().ok())
+                .map(|metadata| (metadata.uid(), metadata.gid()))
+        })
+        .flatten();
     StubRequirements {
         mode: 0o755,
         owner: RequiredIdentity {
@@ -775,7 +776,7 @@ mod tests {
                 .secret,
             "token"
         );
-        assert!(helper_valid(&installed));
+        assert!(helper_valid(&installed, true));
         unsafe {
             for name in [
                 "AUTOMIC_VAULT_TEST_DOCKER_CONFIG",

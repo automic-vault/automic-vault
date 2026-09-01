@@ -14,6 +14,7 @@ pub(crate) mod openhue_cli;
 pub(crate) mod ordercli;
 pub(crate) mod oxide_cli;
 pub(crate) mod plumber;
+pub(crate) mod podman;
 pub(crate) mod railway;
 pub(crate) mod rclone;
 pub(crate) mod stripe_cli;
@@ -309,6 +310,7 @@ pub(crate) fn metadata() -> Vec<HardenerMetadata> {
         gated_hardener!(ordercli, "ordercli"),
         gated_hardener!(openhue_cli, "openhue-cli"),
         gated_hardener!(plumber, "plumber"),
+        gated_hardener!(podman, "podman"),
         gated_hardener!(uaa_cli, "uaa-cli"),
         gated_hardener!(railway, "railway"),
         gated_hardener!(rclone, "rclone"),
@@ -347,6 +349,7 @@ pub(crate) fn secret_gates() -> Vec<SecretGateDescriptor> {
         ordercli::secret_gate(),
         openhue_cli::secret_gate(),
         plumber::secret_gate(),
+        podman::secret_gate(),
         uaa_cli::secret_gate(),
         railway::secret_gate(),
         rclone::secret_gate(),

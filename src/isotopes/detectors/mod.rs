@@ -106,6 +106,7 @@ mod pianobar;
 mod plumber;
 mod pnpm;
 mod podman;
+pub(crate) use podman::candidate_auth_paths as podman_auth_paths;
 mod poetry;
 mod pulumi;
 mod qwen_code;

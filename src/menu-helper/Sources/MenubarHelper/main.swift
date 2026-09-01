@@ -2030,6 +2030,8 @@ enum SecretMutation {
     case delete(account: String)
     case dockerSave(account: String, value: String, serverURL: String, username: String)
     case dockerDelete(account: String, serverURL: String)
+    case podmanSave(account: String, value: String, serverURL: String, username: String)
+    case podmanDelete(account: String, serverURL: String)
     case goatSave(account: String, value: String, scope: String)
     case goatDelete(account: String, scope: String)
     case ordercliSave(account: String, value: String, scope: String)
@@ -2091,6 +2093,18 @@ enum SecretMutation {
                 "docker-delete", [account], ["credential", "erase", serverURL],
                 "Delete Docker credential for \(serverURL)?",
                 "Docker will no longer be able to authenticate to this registry with the stored credential."
+            )
+        case .podmanSave(let account, _, let serverURL, let username):
+            properties = (
+                "docker-save", [account], ["credential", "store", serverURL],
+                "Store Podman credential for \(serverURL)?",
+                "Podman will use the \(username) credential for this registry through its Automic Vault Secret Gate."
+            )
+        case .podmanDelete(let account, let serverURL):
+            properties = (
+                "docker-delete", [account], ["credential", "erase", serverURL],
+                "Delete Podman credential for \(serverURL)?",
+                "Podman will no longer be able to authenticate to this registry with the stored credential."
             )
         case .goatSave(let account, _, let scope):
             properties = (
@@ -2198,6 +2212,7 @@ enum SecretMutation {
         }
         let tool = switch self {
         case .dockerSave, .dockerDelete: "docker"
+        case .podmanSave, .podmanDelete: "podman"
         case .goatSave, .goatDelete: "goat"
         case .ordercliSave, .ordercliDelete: "ordercli"
         case .openhueSave: "openhue-cli"
@@ -2224,7 +2239,8 @@ enum SecretMutation {
                 keychainProperties: []
             )])
             credentialScope = nil
-        case .dockerSave(_, _, let serverURL, _), .dockerDelete(_, let serverURL):
+        case .dockerSave(_, _, let serverURL, _), .dockerDelete(_, let serverURL),
+             .podmanSave(_, _, let serverURL, _), .podmanDelete(_, let serverURL):
             cwd = requestCWD
             selectedSecretValues = SelectedSecretValues(values: [:])
             credentialScope = serverURL
@@ -2326,6 +2342,10 @@ enum SecretMutation {
         case .dockerSave(let account, let value, _, _):
             return saveStoredSecret(account: account, value: value, accessibility: .whenUnlocked)
         case .dockerDelete(let account, _):
+            return deleteStoredSecretRevokingDirectAccess(account: account)
+        case .podmanSave(let account, let value, _, _):
+            return saveStoredSecret(account: account, value: value, accessibility: .whenUnlocked)
+        case .podmanDelete(let account, _):
             return deleteStoredSecretRevokingDirectAccess(account: account)
         case .goatSave(let account, let value, _):
             return saveStoredSecret(account: account, value: value, accessibility: .whenUnlocked)
@@ -5453,8 +5473,11 @@ private final class ApprovalServer: @unchecked Sendable {
         }
         do {
             let parent = try dockerCredentialParent(for: caller.identity)
+            let mutation: SecretMutation = credentialHelperTool(parent) == "podman"
+                ? .podmanSave(account: key, value: value, serverURL: credential.serverURL, username: credential.username)
+                : .dockerSave(account: key, value: value, serverURL: credential.serverURL, username: credential.username)
             handleMutation(
-                .dockerSave(account: key, value: value, serverURL: credential.serverURL, username: credential.username),
+                mutation,
                 on: peer,
                 message: message,
                 cancellation: cancellation,
@@ -5486,8 +5509,11 @@ private final class ApprovalServer: @unchecked Sendable {
         }
         do {
             let parent = try dockerCredentialParent(for: caller.identity)
+            let mutation: SecretMutation = credentialHelperTool(parent) == "podman"
+                ? .podmanDelete(account: key, serverURL: serverURL)
+                : .dockerDelete(account: key, serverURL: serverURL)
             handleMutation(
-                .dockerDelete(account: key, serverURL: serverURL),
+                mutation,
                 on: peer,
                 message: message,
                 cancellation: cancellation,
@@ -5974,6 +6000,7 @@ private final class ApprovalServer: @unchecked Sendable {
                  .saveProject(let account, _, _, _, _),
                  .saveIfAbsentOrEqual(let account, _, _),
                  .dockerSave(let account, _, _, _),
+                 .podmanSave(let account, _, _, _),
                  .goatSave(let account, _, _),
                  .ordercliSave(let account, _, _),
                  .openhueSave(let account, _, _),
@@ -5993,6 +6020,7 @@ private final class ApprovalServer: @unchecked Sendable {
                     )
                 }
             case .delete(let account), .dockerDelete(let account, _),
+                 .podmanDelete(let account, _),
                  .goatDelete(let account, _),
                  .ordercliDelete(let account, _),
                  .uaaDelete(let account, _),
@@ -6111,6 +6139,11 @@ private final class ApprovalServer: @unchecked Sendable {
             throw AppError("Docker registry Secret Name does not match its address")
         }
         let parent = try dockerCredentialParent(for: helperIdentity)
+        let tool = credentialHelperTool(parent)
+        guard tool == "docker" || tool == "podman" else {
+            throw AppError("registry credential helper parent is not a supported Target")
+        }
+        let displayName = tool == "podman" ? "Podman" : "Docker"
         return ApprovalRequest(
             op: request.op,
             keys: [secretName],
@@ -6122,9 +6155,9 @@ private final class ApprovalServer: @unchecked Sendable {
             envConflicts: [],
             shebangScript: nil,
             scriptData: nil,
-            tool: "docker",
-            title: "Use Docker credential for \(serverURL)?",
-            detail: "The verified Docker Target will receive the usable registry credential in plaintext, as required by Docker's credential-helper protocol.",
+            tool: tool,
+            title: "Use \(displayName) credential for \(serverURL)?",
+            detail: "The verified \(displayName) Target will receive the usable registry credential in plaintext, as required by the credential-helper protocol.",
             credentialScope: serverURL,
             credentialParent: parent
         )
@@ -6142,8 +6175,10 @@ private final class ApprovalServer: @unchecked Sendable {
               !arguments.isEmpty
         else { throw AppError("Docker credential helper has no live parent") }
         let target = pathString(parentIdentity)
-        guard dockerTargetIdentityValid(pid: parentPID, path: target) else {
-            throw AppError("Docker credential helper parent is not an eligible Docker Target")
+        guard dockerTargetIdentityValid(pid: parentPID, path: target)
+                || podmanTargetIdentityValid(pid: parentPID, path: target)
+        else {
+            throw AppError("registry credential helper parent is not an eligible Docker or Podman Target")
         }
         return CredentialHelperParent(
             pid: parentPID,
@@ -6178,6 +6213,18 @@ private final class ApprovalServer: @unchecked Sendable {
             && signing.teamIdentifier == "9BNSXJN65R"
             && signing.isDeveloperID
             && signing.runtimeProtection.allowsSecretGateAccess
+    }
+
+    private func podmanTargetIdentityValid(pid: pid_t, path: String) -> Bool {
+        guard configuredSecretGateTarget("podman", matches: path),
+              let signing = liveSigningInfo(pid: pid),
+              signing.mainExecutable == path
+        else { return false }
+        return signing.identifier == "podman"
+            && signing.teamIdentifier == "HYSCB8KRL2"
+            && signing.isDeveloperID
+            && signing.runtimeProtection == .hardened
+            && liveProcessHasNoEntitlements(pid: pid)
     }
 
     private func goatCredentialRequest(
@@ -6859,6 +6906,7 @@ private final class ApprovalServer: @unchecked Sendable {
         case "ordercli": "ordercli"
         case "oxide": "oxide-cli"
         case "plumber": "plumber"
+        case "podman": "podman"
         case "railway": "railway"
         case "rclone": "rclone"
         case "kubectl": "kubectl"
@@ -6886,6 +6934,7 @@ private final class ApprovalServer: @unchecked Sendable {
             return credentialHelperTool(parent) == tool
                 && aliyunTargetIdentityValid(pid: parent.pid, path: parent.target)
         case "docker": return dockerTargetIdentityValid(pid: parent.pid, path: parent.target)
+        case "podman": return podmanTargetIdentityValid(pid: parent.pid, path: parent.target)
         case "goat":
             return credentialHelperTool(parent) == tool
                 && goatTargetIdentityValid(pid: parent.pid, path: parent.target)
@@ -7966,7 +8015,7 @@ private func classifySecretGateRequest(
         return .localWrite
     case "gh":
         return ghRequestClassification(request.args)
-    case "docker":
+    case "docker", "podman":
         return dockerRequestClassification(request.args)
     case "goat":
         return goatRequestClassification(request.args)

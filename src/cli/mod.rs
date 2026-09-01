@@ -379,6 +379,10 @@ where
                 let result = hardeners::docker::run(stdout, yes);
                 return finish_hardening(result, "docker", stdout, stderr);
             }
+            if target == "podman" {
+                let result = hardeners::podman::run(stdout, yes);
+                return finish_hardening(result, "podman", stdout, stderr);
+            }
             if target == "terraform" || target == "terraform-core" {
                 let result =
                     hardeners::terraform::run(hardeners::terraform::Tool::Terraform, stdout, yes);

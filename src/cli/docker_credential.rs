@@ -14,7 +14,7 @@ const MAX_SERVER_URL_BYTES: usize = 2048;
 const SECRET_PREFIX: &str = "DOCKER_REGISTRY_CREDENTIAL_";
 const CREDENTIALS_NOT_FOUND: &str = "credentials not found in native keychain";
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct DockerCredential {
     pub(crate) server_url: String,
     pub(crate) username: String,
