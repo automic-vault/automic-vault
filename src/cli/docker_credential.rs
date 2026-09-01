@@ -51,17 +51,21 @@ fn run_flavor(
     match run_with_io(flavor, args, &mut stdin, stdout) {
         Ok(()) => 0,
         Err(error) => {
-            write_error(&error, stdout, stderr);
+            write_error(flavor, &error, stdout, stderr);
             1
         }
     }
 }
 
-fn write_error(error: &str, stdout: &mut dyn Write, stderr: &mut dyn Write) {
+fn write_error(flavor: Flavor, error: &str, stdout: &mut dyn Write, stderr: &mut dyn Write) {
     if error == CREDENTIALS_NOT_FOUND {
         let _ = writeln!(stdout, "{error}");
     } else {
-        let _ = writeln!(stderr, "docker-credential-av: {error}");
+        let helper = match flavor {
+            Flavor::Docker => "docker-credential-av",
+            Flavor::Podman => "docker-credential-av-podman",
+        };
+        let _ = writeln!(stderr, "{helper}: {error}");
     }
 }
 
@@ -81,7 +85,11 @@ fn run_with_io(
     }
     args.remove(0);
     let [action] = args.as_slice() else {
-        return Err("usage: docker-credential-av <store|get|erase>".into());
+        return Err(match flavor {
+            Flavor::Docker => "usage: docker-credential-av <store|get|erase>",
+            Flavor::Podman => "usage: docker-credential-av-podman <store|get|erase|list>",
+        }
+        .into());
     };
     let action = action
         .to_str()
@@ -122,16 +130,14 @@ fn run_with_io(
             })?;
             let credential = parse_credential(&stored)?;
             if credential.server_url != server_url {
-                return Err(
-                    "stored Docker credential does not match the requested registry".into(),
-                );
+                return Err("stored credential does not match the requested registry".into());
             }
             writeln!(
                 output,
                 "{}",
                 json!({"Username": credential.username, "Secret": credential.secret})
             )
-            .map_err(|error| format!("failed to return Docker credential: {error}"))
+            .map_err(|error| format!("failed to return registry credential: {error}"))
         }
         "erase" => {
             let server_url = parse_server_url(&read_limited(input)?)?;
@@ -358,11 +364,11 @@ mod tests {
         .unwrap_err();
         assert_eq!(error, CREDENTIALS_NOT_FOUND);
         let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
-        write_error(&error, &mut stdout, &mut stderr);
+        write_error(Flavor::Docker, &error, &mut stdout, &mut stderr);
         assert_eq!(stdout, b"credentials not found in native keychain\n");
         assert!(stderr.is_empty());
         stdout.clear();
-        write_error("approval denied", &mut stdout, &mut stderr);
+        write_error(Flavor::Docker, "approval denied", &mut stdout, &mut stderr);
         assert!(stdout.is_empty());
         assert_eq!(stderr, b"docker-credential-av: approval denied\n");
         unsafe {

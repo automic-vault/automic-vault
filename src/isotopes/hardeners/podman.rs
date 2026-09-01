@@ -617,7 +617,7 @@ fn read_json(path: &Path) -> Result<(bool, Value), String> {
         || metadata.permissions().mode() & 0o022 != 0
     {
         return Err(format!(
-            "refusing unsafe Podman auth file {}",
+            "refusing unsafe registry auth file {}",
             path.display()
         ));
     }
@@ -626,11 +626,11 @@ fn read_json(path: &Path) -> Result<(bool, Value), String> {
         .read_to_end(&mut bytes)
         .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
     if bytes.len() as u64 > MAX_CONFIG_BYTES {
-        return Err("Podman auth file exceeds 1 MiB".into());
+        return Err("registry auth file exceeds 1 MiB".into());
     }
     serde_json::from_slice(&bytes)
         .map(|value| (true, value))
-        .map_err(|error| format!("invalid Podman auth file {}: {error}", path.display()))
+        .map_err(|error| format!("invalid registry auth file {}: {error}", path.display()))
 }
 
 fn write_json(path: &Path, value: &Value) -> Result<(), String> {

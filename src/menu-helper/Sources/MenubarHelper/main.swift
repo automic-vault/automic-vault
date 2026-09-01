@@ -6117,7 +6117,7 @@ private final class ApprovalServer: @unchecked Sendable {
     ) throws -> ApprovalRequest {
         guard request.op == "docker-get" else {
             guard request.tool != "docker" && request.tool != "podman" else {
-                throw AppError("Docker credentials require the Docker helper protocol")
+                throw AppError("registry credentials require the credential-helper protocol")
             }
             return request
         }
@@ -6132,11 +6132,11 @@ private final class ApprovalServer: @unchecked Sendable {
               request.shebangScript == nil,
               request.scriptData == nil,
               let serverPointer = xpc_dictionary_get_string(message, "docker_server_url")
-        else { throw AppError("invalid Docker credential request") }
+        else { throw AppError("invalid registry credential request") }
         let serverURL = String(cString: serverPointer)
         let secretName = dockerCredentialSecretName(serverURL)
         guard validDockerServerURL(serverURL), request.keys == [secretName] else {
-            throw AppError("Docker registry Secret Name does not match its address")
+            throw AppError("registry Secret Name does not match its address")
         }
         let parent = try dockerCredentialParent(for: helperIdentity)
         let tool = credentialHelperTool(parent)
