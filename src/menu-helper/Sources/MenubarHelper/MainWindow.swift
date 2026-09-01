@@ -225,7 +225,7 @@ final class DashboardModel: ObservableObject {
                     kind: issue.command == nil || issue.command == issue.hardener ? nil : issue.hardener,
                     subtitle: issue.message,
                     detail: ([issue.message, "Remediation: \(issue.remediation)"] + paths)
-                        .joined(separator: "\n")
+                        .joined(separator: "\n\n")
                 )
             }
         case .hardenedTools:
@@ -1754,7 +1754,7 @@ func runDashboardSearchSelfCheck() -> Int32 {
     guard model.selectedItem?.title == "aws",
           model.selectedItem?.kind == nil,
           model.selectedItem?.detail.contains("Resolved: /opt/homebrew/bin/aws") == true,
-          model.selectedItem?.detail.contains("Remediation:") == true
+          model.selectedItem?.detail.contains("\n\nRemediation:") == true
     else { return 1 }
     model.showAccessRequest(id: accessRequest.id, records: [accessRequest])
     guard model.selectedSection == .secretUsage,
