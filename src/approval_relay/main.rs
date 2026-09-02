@@ -74,9 +74,12 @@ struct RegistrationStatus {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct Publication {
     message: Value,
     notification: Value,
+    #[serde(rename = "collapseID")]
+    collapse_id: Option<String>,
 }
 
 #[derive(Clone)]
@@ -315,6 +318,13 @@ async fn publish(
     }
     let publication: Publication =
         serde_json::from_slice(&body).map_err(|_| StatusCode::BAD_REQUEST)?;
+    if publication
+        .collapse_id
+        .as_deref()
+        .is_some_and(|value| !valid_identifier(value))
+    {
+        return Err(StatusCode::BAD_REQUEST);
+    }
     let message = serde_json::to_vec(&publication.message).map_err(|_| StatusCode::BAD_REQUEST)?;
     let notification =
         serde_json::to_vec(&publication.notification).map_err(|_| StatusCode::BAD_REQUEST)?;
@@ -339,7 +349,12 @@ async fn publish(
     if let Some(apns) = &state.apns {
         for (_, token, environment) in registrations {
             let _ = apns
-                .push(&token, environment, publication.notification.clone())
+                .push(
+                    &token,
+                    environment,
+                    publication.notification.clone(),
+                    publication.collapse_id.as_deref(),
+                )
                 .await;
         }
     }
@@ -437,9 +452,10 @@ impl ApnsClients {
         token: &str,
         environment: ApnsEnvironment,
         notification: Value,
+        collapse_id: Option<&str>,
     ) -> Result<(), ()> {
         self.client(environment)
-            .push(token, environment, notification)
+            .push(token, environment, notification, collapse_id)
             .await
     }
 
@@ -479,17 +495,23 @@ impl ApnsClient {
         token: &str,
         environment: ApnsEnvironment,
         notification: Value,
+        collapse_id: Option<&str>,
     ) -> Result<(), ()> {
         let host = match environment {
             ApnsEnvironment::Sandbox => "https://api.sandbox.push.apple.com",
             ApnsEnvironment::Production => "https://api.push.apple.com",
         };
-        let response = self.client
+        let mut request = self
+            .client
             .post(format!("{host}/3/device/{token}"))
             .bearer_auth(self.bearer_token().map_err(|_| ())?)
             .header("apns-topic", self.topic.as_ref())
             .header("apns-push-type", "alert")
-            .header("apns-priority", "10")
+            .header("apns-priority", "10");
+        if let Some(collapse_id) = collapse_id {
+            request = request.header("apns-collapse-id", collapse_id);
+        }
+        let response = request
             .json(&json!({
                 "aps": {
                     "alert": { "title": "Approval waiting", "body": "Open Automic Vault to review" },
@@ -498,7 +520,9 @@ impl ApnsClient {
                 },
                 "av": notification
             }))
-            .send().await.map_err(|_| ())?;
+            .send()
+            .await
+            .map_err(|_| ())?;
         if response.status().is_success() {
             Ok(())
         } else {
@@ -637,6 +661,25 @@ mod tests {
         assert!(!valid_peer_id("two phones"));
         assert!(valid_device_token(&"0a".repeat(32)));
         assert!(!valid_device_token(&"zz".repeat(32)));
+    }
+
+    #[test]
+    fn publications_accept_keyed_collapse_identifiers_and_legacy_clients() {
+        let id = "a".repeat(43);
+        let current: Publication = serde_json::from_value(json!({
+            "message": {},
+            "notification": {},
+            "collapseID": id,
+        }))
+        .unwrap();
+        let legacy: Publication = serde_json::from_value(json!({
+            "message": {},
+            "notification": {},
+        }))
+        .unwrap();
+
+        assert_eq!(current.collapse_id.as_deref(), Some(id.as_str()));
+        assert_eq!(legacy.collapse_id, None);
     }
 
     #[test]

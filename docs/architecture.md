@@ -524,6 +524,12 @@ APNs delivery is a wake-up mechanism rather than proof that a notification was
 shown. The phone is the sole allow surface until the feature is deliberately
 disabled or recovered.
 
+After the Mac accepts a response or completes the request through Touch ID, it
+publishes an authenticated, encrypted cancellation under the request's opaque
+APNs collapse identifier. The notification service removes the delivered
+request and suppresses the cancellation alert. This cleanup carries no Approval
+or Decision authority; the Mac remains authoritative for terminal request state.
+
 Notification Approvals bind the same exact request as the full app. Requests
 with Unknown operation risk, Secret Disclosure, Unconstrained Secret
 Application, or a security warning require review in the full iPhone app.

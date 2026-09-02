@@ -44,6 +44,28 @@ import Testing
     #expect(crypto.registrationProof(deviceID: "a") != crypto.registrationProof(deviceID: "b"))
 }
 
+@Test func notificationCancellationIsAuthenticatedAndOpaque() throws {
+    let requestID = UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")!
+    let crypto = try ApprovalCrypto(rootKeyData: Data(repeating: 9, count: 32))
+    let identifier = crypto.notificationIdentifier(requestID: requestID)
+    let cancellation = PhoneApprovalCancellation(requestID: requestID)
+    let plaintext = try JSONEncoder().encode(cancellation)
+    let envelope = try crypto.seal(plaintext, purpose: "notification")
+
+    #expect(identifier.count == 43)
+    #expect(!identifier.contains("AAAAAAAA"))
+    #expect(try JSONDecoder().decode(
+        PhoneApprovalCancellation.self,
+        from: crypto.open(envelope, purpose: "notification")
+    ) == cancellation)
+    #expect(throws: (any Error).self) {
+        try JSONDecoder().decode(
+            PhoneApprovalCancellation.self,
+            from: Data(#"{"version":2,"requestID":"AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE"}"#.utf8)
+        )
+    }
+}
+
 @Test func presenceAndSyncRoundTrip() throws {
     let messages: [ApprovalWireMessage] = [
         .sync,

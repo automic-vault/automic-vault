@@ -18,8 +18,19 @@ final class NotificationService: UNNotificationServiceExtension {
             let data = try JSONSerialization.data(withJSONObject: value)
             let envelope = try JSONDecoder().decode(ApprovalCiphertext.self, from: data)
             let key = try ICloudApprovalRootKey().load()
-            let plaintext = try ApprovalCrypto(rootKeyData: key).open(envelope, purpose: "notification")
-            let ticket = try JSONDecoder().decode(PhoneApprovalTicket.self, from: plaintext)
+            let crypto = try ApprovalCrypto(rootKeyData: key)
+            let plaintext = try crypto.open(envelope, purpose: "notification")
+            guard let ticket = try? JSONDecoder().decode(PhoneApprovalTicket.self, from: plaintext) else {
+                let cancellation = try JSONDecoder().decode(PhoneApprovalCancellation.self, from: plaintext)
+                UNUserNotificationCenter.current().removeDeliveredNotifications(
+                    withIdentifiers: [crypto.notificationIdentifier(requestID: cancellation.requestID)]
+                )
+                let empty = UNMutableNotificationContent()
+                self.content = empty
+                contentHandler(empty)
+                handler = nil
+                return
+            }
             content.title = "Approval waiting"
             let preferences = (try? ApprovalNotificationPreferences.load()) ?? .init()
             var details: [String] = []
