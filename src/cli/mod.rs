@@ -7,6 +7,7 @@ mod aws;
 mod bless;
 pub(crate) mod docker_credential;
 pub(crate) mod doctor;
+pub(crate) mod fastly_credential;
 pub(crate) mod goat_credential;
 mod gpg_sign;
 mod inject;
@@ -406,6 +407,10 @@ where
                 let result = hardeners::oxide_cli::run(stdout, yes);
                 return finish_hardening(result, "oxide-cli", stdout, stderr);
             }
+            if target == "fastly" || target == "fastly-cli" {
+                let result = hardeners::fastly_cli::run(stdout, yes);
+                return finish_hardening(result, "fastly-cli", stdout, stderr);
+            }
             if target == "aliyun" || target == "aliyun-cli" {
                 let result = hardeners::aliyun_cli::run(stdout, yes);
                 return finish_hardening(result, "aliyun-cli", stdout, stderr);
@@ -504,6 +509,7 @@ where
         Some("terraform-credential") => terraform_credential::run(rest, stdout, stderr),
         Some("aliyun-credential") => aliyun_credential::run(rest, stdout, stderr),
         Some("oxide-credential") => oxide_credential::run(rest, stdout, stderr),
+        Some("fastly-credential") => fastly_credential::run(rest, stdout, stderr),
         Some("goat-credential") => goat_credential::run(rest, stdout, stderr),
         Some("kubectl-credential") => kubectl_credential::run(rest, stdout, stderr),
         Some("ordercli-credential") => ordercli_credential::run(rest, stdout, stderr),

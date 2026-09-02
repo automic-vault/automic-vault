@@ -2044,6 +2044,8 @@ enum SecretMutation {
     case railwayDelete(account: String, scope: String)
     case oxideSave(account: String, value: String, scope: String)
     case oxideDelete(account: String, scope: String)
+    case fastlySave(account: String, value: String, scope: String)
+    case fastlyDelete(account: String, scope: String)
     case terraformSave(account: String, value: String, hostname: String)
     case terraformDelete(account: String, hostname: String)
     case deleteValue(account: String, source: StoredSecretValueSource)
@@ -2178,6 +2180,18 @@ enum SecretMutation {
                 "Delete Oxide credential?",
                 "Oxide CLI will no longer be able to authenticate with this profile."
             )
+        case .fastlySave(let account, _, let scope):
+            properties = (
+                "fastly-save", [account], ["credential", "store", scope],
+                "Store Fastly API token?",
+                "Fastly CLI will use this named token through its Automic Vault Secret Gate."
+            )
+        case .fastlyDelete(let account, let scope):
+            properties = (
+                "fastly-delete", [account], ["credential", "forget", scope],
+                "Delete Fastly API token?",
+                "Fastly CLI will no longer be able to authenticate with this named token."
+            )
         case .terraformSave(let account, _, let hostname):
             properties = (
                 "terraform-save", [account], ["credential", "store", hostname],
@@ -2220,6 +2234,7 @@ enum SecretMutation {
         case .uaaSave, .uaaDelete: "uaa-cli"
         case .railwaySave, .railwayDelete: "railway"
         case .oxideSave, .oxideDelete: "oxide-cli"
+        case .fastlySave, .fastlyDelete: "fastly-cli"
         case .terraformSave, .terraformDelete: "terraform"
         default: URL(fileURLWithPath: callerPath).lastPathComponent
         }
@@ -2269,6 +2284,10 @@ enum SecretMutation {
             selectedSecretValues = SelectedSecretValues(values: [:])
             credentialScope = scope
         case .oxideSave(_, _, let scope), .oxideDelete(_, let scope):
+            cwd = ""
+            selectedSecretValues = SelectedSecretValues(values: [:])
+            credentialScope = scope
+        case .fastlySave(_, _, let scope), .fastlyDelete(_, let scope):
             cwd = ""
             selectedSecretValues = SelectedSecretValues(values: [:])
             credentialScope = scope
@@ -2370,6 +2389,10 @@ enum SecretMutation {
         case .oxideSave(let account, let value, _):
             return saveStoredSecret(account: account, value: value, accessibility: .whenUnlocked)
         case .oxideDelete(let account, _):
+            return deleteStoredSecretRevokingDirectAccess(account: account)
+        case .fastlySave(let account, let value, _):
+            return saveStoredSecret(account: account, value: value, accessibility: .whenUnlocked)
+        case .fastlyDelete(let account, _):
             return deleteStoredSecretRevokingDirectAccess(account: account)
         case .terraformSave(let account, let value, _):
             return saveStoredSecret(account: account, value: value, accessibility: .whenUnlocked)
@@ -3232,6 +3255,13 @@ private final class ApprovalServer: @unchecked Sendable {
                 return
             }
             reply(peer, to: message, ok: true, error: nil, value: "1")
+        case .fastlyHelperVersion where isTrustedAvCaller(path: callerPath, signing: signing):
+            let requested = xpc_dictionary_get_uint64(message, "requested_version")
+            guard requested == 1 else {
+                reply(peer, to: message, ok: false, error: "Fastly helper protocol upgrade is required")
+                return
+            }
+            reply(peer, to: message, ok: true, error: nil, value: "1")
         case .terraformHelperVersion where isTrustedAvCaller(path: callerPath, signing: signing):
             let requested = xpc_dictionary_get_uint64(message, "requested_version")
             guard requested == 1 else {
@@ -3278,7 +3308,7 @@ private final class ApprovalServer: @unchecked Sendable {
                 signing: signing
             )
         case .inject, .keys, .authorize, .dockerGet, .goatGet, .ordercliGet, .openhueGet, .plumberGet, .uaaGet, .railwayGet,
-             .oxideGet, .terraformGet, .aliyunGet, .wakatimeGet, .rcloneGet, .kubectlGet:
+             .oxideGet, .fastlyGet, .terraformGet, .aliyunGet, .wakatimeGet, .rcloneGet, .kubectlGet:
             handleInject(
                 message,
                 on: peer,
@@ -3338,6 +3368,10 @@ private final class ApprovalServer: @unchecked Sendable {
             handleOxideSave(message, on: peer, cancellation: cancellation, caller: mutationCaller)
         case .oxideDelete where isTrustedAvCaller(path: callerPath, signing: signing):
             handleOxideDelete(message, on: peer, cancellation: cancellation, caller: mutationCaller)
+        case .fastlySave where isTrustedAvCaller(path: callerPath, signing: signing):
+            handleFastlySave(message, on: peer, cancellation: cancellation, caller: mutationCaller)
+        case .fastlyDelete where isTrustedAvCaller(path: callerPath, signing: signing):
+            handleFastlyDelete(message, on: peer, cancellation: cancellation, caller: mutationCaller)
         case .terraformSave where isTrustedAvCaller(path: callerPath, signing: signing):
             handleTerraformSave(message, on: peer, cancellation: cancellation, caller: mutationCaller)
         case .terraformDelete where isTrustedAvCaller(path: callerPath, signing: signing):
@@ -3676,9 +3710,16 @@ private final class ApprovalServer: @unchecked Sendable {
                 helperPath: callerPath,
                 helperSigning: signing
             )
-            let wakatimeRequest = try wakatimeCredentialRequest(
+            let fastlyRequest = try fastlyCredentialRequest(
                 from: message,
                 request: oxideRequest,
+                helperIdentity: identity,
+                helperPath: callerPath,
+                helperSigning: signing
+            )
+            let wakatimeRequest = try wakatimeCredentialRequest(
+                from: message,
+                request: fastlyRequest,
                 helperIdentity: identity,
                 helperPath: callerPath,
                 helperSigning: signing
@@ -5856,6 +5897,56 @@ private final class ApprovalServer: @unchecked Sendable {
         }
     }
 
+    private func handleFastlySave(
+        _ message: xpc_object_t,
+        on peer: xpc_connection_t,
+        cancellation: ApprovalCancellation,
+        caller: MutationCaller
+    ) {
+        guard let scopePointer = xpc_dictionary_get_string(message, "fastly_scope"),
+              let valuePointer = xpc_dictionary_get_string(message, "value"),
+              let scope = parseFastlyCredentialScope(String(cString: scopePointer)),
+              let value = parseFastlyCredential(String(cString: valuePointer))
+        else {
+            reply(peer, to: message, ok: false, error: "invalid Fastly credential store request")
+            return
+        }
+        do {
+            let parent = try fastlyCredentialParent(for: caller.identity)
+            handleMutation(
+                .fastlySave(account: scope.secretName, value: value, scope: scope.canonical),
+                on: peer, message: message, cancellation: cancellation, caller: caller,
+                requiredCredentialParent: parent
+            )
+        } catch {
+            reply(peer, to: message, ok: false, error: error.localizedDescription)
+        }
+    }
+
+    private func handleFastlyDelete(
+        _ message: xpc_object_t,
+        on peer: xpc_connection_t,
+        cancellation: ApprovalCancellation,
+        caller: MutationCaller
+    ) {
+        guard let scopePointer = xpc_dictionary_get_string(message, "fastly_scope"),
+              let scope = parseFastlyCredentialScope(String(cString: scopePointer))
+        else {
+            reply(peer, to: message, ok: false, error: "invalid Fastly credential forget request")
+            return
+        }
+        do {
+            let parent = try fastlyCredentialParent(for: caller.identity)
+            handleMutation(
+                .fastlyDelete(account: scope.secretName, scope: scope.canonical),
+                on: peer, message: message, cancellation: cancellation, caller: caller,
+                requiredCredentialParent: parent
+            )
+        } catch {
+            reply(peer, to: message, ok: false, error: error.localizedDescription)
+        }
+    }
+
     private func handleTerraformSave(
         _ message: xpc_object_t,
         on peer: xpc_connection_t,
@@ -6008,6 +6099,7 @@ private final class ApprovalServer: @unchecked Sendable {
                  .uaaSave(let account, _, _),
                  .railwaySave(let account, _, _),
                  .oxideSave(let account, _, _),
+                 .fastlySave(let account, _, _),
                  .terraformSave(let account, _, _):
                 if status == errSecSuccess {
                     self.reply(peer, to: message, ok: true, error: nil)
@@ -6025,7 +6117,8 @@ private final class ApprovalServer: @unchecked Sendable {
                  .ordercliDelete(let account, _),
                  .uaaDelete(let account, _),
                  .railwayDelete(let account, _),
-                 .oxideDelete(let account, _), .terraformDelete(let account, _):
+                 .oxideDelete(let account, _), .fastlyDelete(let account, _),
+                 .terraformDelete(let account, _):
                 if status == errSecSuccess || status == errSecItemNotFound {
                     self.reply(peer, to: message, ok: true, error: nil)
                 } else {
@@ -6567,6 +6660,72 @@ private final class ApprovalServer: @unchecked Sendable {
         )
     }
 
+    private func fastlyCredentialRequest(
+        from message: xpc_object_t,
+        request: ApprovalRequest,
+        helperIdentity: AVProcessIdentity,
+        helperPath: String,
+        helperSigning: SigningInfo
+    ) throws -> ApprovalRequest {
+        guard request.op == "fastly-get" else { return request }
+        guard request.tool == "fastly-cli",
+              isTrustedAvCaller(path: helperPath, signing: helperSigning),
+              request.target.isEmpty,
+              request.args.isEmpty,
+              request.keys.count == 1,
+              !request.replaceExistingEnv,
+              !request.allowMissingKeys,
+              request.envConflicts.isEmpty,
+              request.shebangScript == nil,
+              request.scriptData == nil,
+              let scopePointer = xpc_dictionary_get_string(message, "fastly_scope"),
+              let scope = parseFastlyCredentialScope(String(cString: scopePointer)),
+              request.keys == [scope.secretName]
+        else { throw AppError("invalid Fastly credential request") }
+        let parent = try fastlyCredentialParent(for: helperIdentity)
+        return ApprovalRequest(
+            op: request.op,
+            keys: request.keys,
+            target: parent.target,
+            args: Array(parent.arguments.dropFirst()),
+            cwd: request.cwd,
+            replaceExistingEnv: false,
+            allowMissingKeys: false,
+            envConflicts: [],
+            shebangScript: nil,
+            scriptData: nil,
+            tool: "fastly-cli",
+            title: "Use Fastly API token \(scope.name)?",
+            detail: "The verified Fastly Target will receive this named token in plaintext for \(scope.endpoint).",
+            credentialScope: scope.canonical,
+            credentialParent: parent
+        )
+    }
+
+    private func fastlyCredentialParent(
+        for helperIdentity: AVProcessIdentity
+    ) throws -> CredentialHelperParent {
+        let parentPID = helperIdentity.ppid
+        var parentIdentity = AVProcessIdentity()
+        guard parentPID > 1,
+              av_process_identity(parentPID, &parentIdentity),
+              parentIdentity.euid == helperIdentity.euid,
+              let arguments = processArguments(parentPID),
+              !arguments.isEmpty
+        else { throw AppError("Fastly credential helper has no live parent") }
+        let target = pathString(parentIdentity)
+        guard fastlyTargetIdentityValid(pid: parentPID, path: target) else {
+            throw AppError("credential helper parent is not an eligible Fastly Target")
+        }
+        return CredentialHelperParent(
+            pid: parentPID,
+            startUsec: parentIdentity.start_usec,
+            euid: parentIdentity.euid,
+            target: target,
+            arguments: arguments
+        )
+    }
+
     private func terraformCredentialRequest(
         from message: xpc_object_t,
         request: ApprovalRequest,
@@ -6905,6 +7064,7 @@ private final class ApprovalServer: @unchecked Sendable {
         case "openhue": "openhue-cli"
         case "ordercli": "ordercli"
         case "oxide": "oxide-cli"
+        case "fastly": "fastly-cli"
         case "plumber": "plumber"
         case "podman": "podman"
         case "railway": "railway"
@@ -6956,6 +7116,9 @@ private final class ApprovalServer: @unchecked Sendable {
         case "oxide-cli":
             return credentialHelperTool(parent) == tool
                 && oxideTargetIdentityValid(pid: parent.pid, path: parent.target)
+        case "fastly-cli":
+            return credentialHelperTool(parent) == tool
+                && fastlyTargetIdentityValid(pid: parent.pid, path: parent.target)
         case "terraform", "opentofu":
             return credentialHelperTool(parent) == tool
                 && terraformTargetIdentityValid(pid: parent.pid, path: parent.target)
@@ -7054,6 +7217,18 @@ private final class ApprovalServer: @unchecked Sendable {
             && liveProcessHasNoEntitlements(pid: pid)
     }
 
+    private func fastlyTargetIdentityValid(pid: pid_t, path: String) -> Bool {
+        guard configuredSecretGateTarget("fastly-cli", matches: path),
+              let signing = liveSigningInfo(pid: pid),
+              signing.mainExecutable == path
+        else { return false }
+        return signing.identifier == "fastly"
+            && signing.teamIdentifier == "ZU76A67LGU"
+            && signing.isDeveloperID
+            && signing.runtimeProtection == .hardened
+            && liveProcessHasNoEntitlements(pid: pid)
+    }
+
     private func terraformTargetIdentityValid(pid: pid_t, path: String) -> Bool {
         let expected: (identifier: String, team: String)? = if configuredSecretGateTarget(
             "terraform", matches: path
@@ -7121,7 +7296,7 @@ private final class ApprovalServer: @unchecked Sendable {
         awsRegistration: AWSRegistrationCandidate?
     ) throws -> AuthorizationFulfillmentTransaction<ApprovedFulfillmentMaterial> {
         let credentialParent: CredentialHelperParent?
-        if ["docker-get", "goat-get", "ordercli-get", "openhue-get", "plumber-get", "uaa-get", "railway-get", "oxide-get", "terraform-get", "aliyun-get", "wakatime-get", "rclone-get", "kubectl-get"]
+        if ["docker-get", "goat-get", "ordercli-get", "openhue-get", "plumber-get", "uaa-get", "railway-get", "oxide-get", "fastly-get", "terraform-get", "aliyun-get", "wakatime-get", "rclone-get", "kubectl-get"]
             .contains(request.op)
         {
             guard let scope = request.credentialScope,
@@ -7154,6 +7329,11 @@ private final class ApprovalServer: @unchecked Sendable {
                     throw AppError("Oxide credential scope changed before Secret Application")
                 }
                 expected = oxide.secretName
+            case "fastly-get":
+                guard let fastly = parseFastlyCredentialScope(scope) else {
+                    throw AppError("Fastly credential scope changed before Secret Application")
+                }
+                expected = fastly.secretName
             case "wakatime-get":
                 guard scope == wakatimeOfficialAPIURL else {
                     throw AppError("WakaTime API endpoint changed before Secret Application")
@@ -7224,6 +7404,11 @@ private final class ApprovalServer: @unchecked Sendable {
                       let value = secrets[scope.secretName],
                       parseOxideCredential(value) != nil
                 else { throw AppError("Oxide credential changed before Secret Application") }
+            } else if request.op == "fastly-get" {
+                guard let scope = parseFastlyCredentialScope(scope),
+                      let value = secrets[scope.secretName],
+                      parseFastlyCredential(value) != nil
+                else { throw AppError("Fastly credential changed before Secret Application") }
             } else if request.op == "aliyun-get" {
                 guard let value = secrets[aliyunCredentialSecretName(scope)],
                       parseAliyunCredential(value)
@@ -7620,7 +7805,7 @@ private final class ApprovalServer: @unchecked Sendable {
         let op = String(cString: opPointer)
         guard op == "inject" || op == "keys" || op == "authorize" || op == "gpg-sign"
             || op == "docker-get" || op == "goat-get" || op == "ordercli-get" || op == "openhue-get" || op == "plumber-get" || op == "uaa-get" || op == "railway-get"
-            || op == "oxide-get" || op == "terraform-get" || op == "aliyun-get" || op == "wakatime-get"
+            || op == "oxide-get" || op == "fastly-get" || op == "terraform-get" || op == "aliyun-get" || op == "wakatime-get"
             || op == "rclone-get" || op == "kubectl-get"
             || op == "proxy-start"
         else { return nil }
@@ -8033,6 +8218,8 @@ private func classifySecretGateRequest(
         return railwayRequestClassification(request.args)
     case "oxide-cli":
         return oxideRequestClassification(request.args)
+    case "fastly-cli":
+        return fastlyRequestClassification(request.args)
     case "terraform", "opentofu":
         return terraformRequestClassification(request.args)
     case "aliyun-cli":
@@ -8217,6 +8404,18 @@ private func oxideRequestClassification(_ args: [String]) -> SecretGateRequestCl
     if ["list", "view", "get"].contains(action) { return .readOnly }
     if ["create", "delete", "edit", "update", "start", "stop", "reboot"].contains(action) {
         return .mutating
+    }
+    return .unknown
+}
+
+private func fastlyRequestClassification(_ args: [String]) -> SecretGateRequestClassification {
+    let words = args.map { $0.lowercased() }
+    guard let authIndex = words.firstIndex(of: "auth"), authIndex + 1 < words.count else {
+        return .unknown
+    }
+    let action = words[authIndex + 1]
+    if action == "token" || (action == "show" && words.contains("--reveal")) {
+        return .secretDump
     }
     return .unknown
 }
@@ -9058,6 +9257,47 @@ private func parseOxideCredential(_ value: String) -> String? {
           !value.unicodeScalars.contains(where: { [0, 10, 13].contains($0.value) })
     else { return nil }
     return value
+}
+
+private let fastlyOfficialAPIEndpoint = "https://api.fastly.com"
+
+private struct StoredFastlyCredentialScope {
+    let name: String
+    let endpoint: String
+    let canonical: String
+
+    var secretName: String {
+        let data = Data((name + "\0" + endpoint).utf8)
+        let hash = SHA256.hash(data: data).map { String(format: "%02X", $0) }.joined()
+        return "FASTLY_API_TOKEN_\(hash)"
+    }
+}
+
+private func parseFastlyCredentialScope(_ value: String) -> StoredFastlyCredentialScope? {
+    guard value.utf8.count <= 4 * 1024,
+          let data = value.data(using: .utf8),
+          let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          Set(object.keys) == Set(["endpoint", "name"]),
+          let name = object["name"] as? String,
+          let endpoint = object["endpoint"] as? String,
+          validFastlyTokenName(name),
+          endpoint == fastlyOfficialAPIEndpoint,
+          let canonicalData = try? JSONSerialization.data(
+              withJSONObject: ["endpoint": endpoint, "name": name],
+              options: [.sortedKeys, .withoutEscapingSlashes]
+          ),
+          let canonical = String(data: canonicalData, encoding: .utf8),
+          canonical == value
+    else { return nil }
+    return StoredFastlyCredentialScope(name: name, endpoint: endpoint, canonical: canonical)
+}
+
+private func validFastlyTokenName(_ name: String) -> Bool {
+    validOxideProfile(name)
+}
+
+private func parseFastlyCredential(_ value: String) -> String? {
+    parseOxideCredential(value)
 }
 
 private func normalizeTerraformHostname(_ hostname: String) -> String? {
@@ -10120,6 +10360,7 @@ private extension ApprovalServiceOperation {
         case .openWindow, .awsHelperVersion, .dockerHelperVersion, .goatHelperVersion,
              .ordercliHelperVersion, .openhueHelperVersion, .plumberHelperVersion, .uaaHelperVersion,
              .railwayHelperVersion, .oxideHelperVersion, .terraformHelperVersion,
+             .fastlyHelperVersion,
              .aliyunHelperVersion, .wakatimeHelperVersion, .rcloneHelperVersion,
              .kubectlHelperVersion: false
         default: true
@@ -13834,6 +14075,25 @@ private func runOxideCredentialSelfCheck() -> Int32 {
     return 0
 }
 
+private func runFastlyCredentialSelfCheck() -> Int32 {
+    let canonical = #"{"endpoint":"https://api.fastly.com","name":"prod"}"#
+    guard fastlyRequestClassification(["service", "list"]) == .unknown,
+          fastlyRequestClassification(["auth", "token"]) == .secretDump,
+          fastlyRequestClassification(["auth", "show", "prod", "--reveal"]) == .secretDump,
+          let scope = parseFastlyCredentialScope(canonical),
+          scope.name == "prod",
+          scope.endpoint == fastlyOfficialAPIEndpoint,
+          scope.secretName
+              == "FASTLY_API_TOKEN_E3A631294416CFFB0B45AFDD0D6160294006526867EF6E5941BB3D4AF97E9CAF",
+          parseFastlyCredential("secret") == "secret",
+          parseFastlyCredential("secret\n") == nil,
+          parseFastlyCredentialScope(
+              #"{"endpoint":"https://example.invalid","name":"prod"}"#
+          ) == nil
+    else { return 1 }
+    return 0
+}
+
 private func runGoatCredentialSelfCheck() -> Int32 {
     let canonical = #"{"did":"did:plc:abc","pds":"https://pds.example"}"#
     guard goatRequestClassification(["account", "check-auth"]) == .readOnly,
@@ -14952,6 +15212,10 @@ if CommandLine.arguments.contains("--self-check-kubectl-credentials") {
 
 if CommandLine.arguments.contains("--self-check-oxide-credentials") {
     exit(runOxideCredentialSelfCheck())
+}
+
+if CommandLine.arguments.contains("--self-check-fastly-credentials") {
+    exit(runFastlyCredentialSelfCheck())
 }
 
 if CommandLine.arguments.contains("--self-check-goat-credentials") {

@@ -4,6 +4,7 @@ const APPROVAL_SERVICE: &str = "com.automicvault.av2.approval";
 const ALIYUN_HELPER_PROTOCOL_VERSION: u64 = 1;
 const REGISTRY_HELPER_PROTOCOL_VERSION: u64 = 3;
 const OXIDE_HELPER_PROTOCOL_VERSION: u64 = 1;
+const FASTLY_HELPER_PROTOCOL_VERSION: u64 = 1;
 const GOAT_HELPER_PROTOCOL_VERSION: u64 = 1;
 const KUBECTL_HELPER_PROTOCOL_VERSION: u64 = 1;
 const ORDERCLI_HELPER_PROTOCOL_VERSION: u64 = 1;
@@ -407,6 +408,65 @@ pub(crate) fn ensure_oxide_helper_ready() -> Result<(), String> {
         )),
         None => Err("the running Automic Vault app returned no Oxide helper version".into()),
     }
+}
+
+pub(crate) fn ensure_fastly_helper_ready() -> Result<(), String> {
+    if crate::test_keychain_dir().is_some() {
+        return Ok(());
+    }
+    let reply = xpc_request(
+        "fastly-helper-version",
+        None,
+        None,
+        None,
+        Some((b"requested_version\0", FASTLY_HELPER_PROTOCOL_VERSION)),
+    )
+    .map_err(|error| {
+        format!(
+            "Fastly credential-helper protocol negotiation failed; update and open the Automic Vault app: {error}"
+        )
+    })?;
+    match reply.value.as_deref() {
+        Some("1") => Ok(()),
+        Some(version) => Err(format!(
+            "the running Automic Vault app reported unsupported Fastly helper version {version}"
+        )),
+        None => Err("the running Automic Vault app returned no Fastly helper version".into()),
+    }
+}
+
+pub(crate) fn store_fastly_credential(scope: &str, value: &str) -> Result<(), String> {
+    let (name, endpoint) = crate::cli::fastly_credential::parse_scope(scope)?;
+    let account = crate::cli::fastly_credential::secret_name(&name, &endpoint);
+    if crate::test_keychain_dir().is_some() {
+        return store_secret(&account, value);
+    }
+    xpc_request(
+        "fastly-save",
+        Some((b"fastly_scope\0", scope)),
+        Some((b"value\0", value)),
+        None,
+        None,
+    )
+    .map(|_| ())
+}
+
+pub(crate) fn delete_fastly_credential(scope: &str, account: &str) -> Result<(), String> {
+    if let Some(dir) = crate::test_keychain_dir() {
+        return match std::fs::remove_file(dir.join(account)) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(format!("failed to delete test Fastly credential: {error}")),
+        };
+    }
+    xpc_request(
+        "fastly-delete",
+        Some((b"fastly_scope\0", scope)),
+        None,
+        None,
+        None,
+    )
+    .map(|_| ())
 }
 
 pub(crate) fn store_oxide_credential(scope: &str, value: &str) -> Result<(), String> {
@@ -956,6 +1016,8 @@ fn xpc_operation_requires_cwd(operation: &str) -> bool {
             | "goat-delete"
             | "oxide-save"
             | "oxide-delete"
+            | "fastly-save"
+            | "fastly-delete"
             | "ordercli-save"
             | "ordercli-delete"
             | "openhue-save"
@@ -997,6 +1059,7 @@ mod tests {
         assert!(xpc_operation_requires_cwd("docker-delete"));
         assert!(xpc_operation_requires_cwd("goat-save"));
         assert!(xpc_operation_requires_cwd("oxide-save"));
+        assert!(xpc_operation_requires_cwd("fastly-save"));
         assert!(xpc_operation_requires_cwd("ordercli-save"));
         assert!(xpc_operation_requires_cwd("openhue-save"));
         assert!(xpc_operation_requires_cwd("plumber-save"));

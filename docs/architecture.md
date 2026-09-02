@@ -273,6 +273,15 @@ operation intent. kubectl operations therefore classify as Unknown and require
 Approval unless a later design introduces independently verified operation
 context.
 
+The Fastly CLI Hardener migrates only named static tokens for the official
+Fastly API endpoint. Its signed Isotope stores a non-secret marker in Fastly's
+config and invokes the `av` Gate Client to load, store, or forget the selected
+token. The menu helper binds Secret Application to the live Developer
+ID-signed, Hardened Runtime Fastly Target, its complete arguments, token name,
+official endpoint, and derived Secret Name. SSO, legacy profiles, alternate
+endpoints, and unknown auth fields fail closed. Fastly API operations classify
+as Unknown; explicit token-reveal operations classify as a Secret Dump.
+
 Podman uses the same registry credential-helper protocol as Docker, but its
 macOS remote client resolves credentials locally before sending an
 `X-Registry-Auth` header to the Linux service. The Podman Hardener keeps Red

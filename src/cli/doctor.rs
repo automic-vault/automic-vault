@@ -1669,6 +1669,7 @@ mod tests {
                                 | "rclone"
                                 | "kubectl"
                                 | "oxide-cli"
+                                | "fastly-cli"
                                 | "stripe"
                                 | "supabase"
                                 | "wakatime-cli"

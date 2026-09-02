@@ -4,6 +4,7 @@ pub(crate) mod aws_release;
 pub(crate) mod codex;
 pub(crate) mod docker;
 pub(crate) mod env_wrapper;
+pub(crate) mod fastly_cli;
 pub(crate) mod gh_cli;
 pub(crate) mod goat;
 pub(crate) mod homebrew;
@@ -316,6 +317,7 @@ pub(crate) fn metadata() -> Vec<HardenerMetadata> {
         gated_hardener!(rclone, "rclone"),
         gated_hardener!(kubectl, "kubectl"),
         gated_hardener!(oxide_cli, "oxide-cli"),
+        gated_hardener!(fastly_cli, "fastly-cli"),
         gated_hardener!(homebrew, "brew"),
         gated_hardener!(gh_cli, "gh"),
         gated_hardener!(stripe_cli, "stripe"),
@@ -355,6 +357,7 @@ pub(crate) fn secret_gates() -> Vec<SecretGateDescriptor> {
         rclone::secret_gate(),
         kubectl::secret_gate(),
         oxide_cli::secret_gate(),
+        fastly_cli::secret_gate(),
         homebrew::secret_gate(),
         gh_cli::secret_gate(),
         stripe_cli::secret_gate(),

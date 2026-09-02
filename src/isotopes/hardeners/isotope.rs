@@ -57,6 +57,14 @@ pub(crate) const OXIDE: Spec = Spec {
     binaries: &["oxide"],
     test_path: "AUTOMIC_VAULT_TEST_OXIDE_TARGET",
 };
+pub(crate) const FASTLY: Spec = Spec {
+    hardener: "fastly-cli",
+    formula: "fastly-cli-isotope",
+    repository: "fastly-cli",
+    primary: "fastly",
+    binaries: &["fastly"],
+    test_path: "AUTOMIC_VAULT_TEST_FASTLY_TARGET",
+};
 pub(crate) const GOAT: Spec = Spec {
     hardener: "goat",
     formula: "goat-isotope",
@@ -345,6 +353,8 @@ pub(crate) fn install_privileged(
         }
         if spec.hardener == OXIDE.hardener {
             super::oxide_cli::verify_target(&stage)?;
+        } else if spec.hardener == FASTLY.hardener {
+            super::fastly_cli::verify_target(&stage)?;
         }
         if spec.hardener == GOAT.hardener {
             super::goat::verify_target(&stage)?;
@@ -749,6 +759,9 @@ fn installed(spec: Spec, path: &Path) -> bool {
     if spec.hardener == OXIDE.hardener {
         return super::oxide_cli::verify_target(path).is_ok();
     }
+    if spec.hardener == FASTLY.hardener {
+        return super::fastly_cli::verify_target(path).is_ok();
+    }
     if spec.hardener == GOAT.hardener {
         return super::goat::verify_target(path).is_ok();
     }
@@ -788,8 +801,8 @@ fn formula_url(spec: Spec) -> String {
 
 fn spec(hardener: &str) -> Option<Spec> {
     [
-        GH, STRIPE, SUPABASE, OPENTOFU, OXIDE, GOAT, RAILWAY, ORDERCLI, OPENHUE, UAA, PLUMBER,
-        ALIYUN, WAKATIME, RCLONE, KUBECTL,
+        GH, STRIPE, SUPABASE, OPENTOFU, OXIDE, FASTLY, GOAT, RAILWAY, ORDERCLI, OPENHUE, UAA,
+        PLUMBER, ALIYUN, WAKATIME, RCLONE, KUBECTL,
     ]
     .into_iter()
     .find(|spec| spec.hardener == hardener)
@@ -897,7 +910,8 @@ mod tests {
     #[test]
     fn every_executable_isotope_is_registered_for_direct_fallback() {
         for expected in [
-            OPENTOFU, OXIDE, GOAT, RAILWAY, ORDERCLI, OPENHUE, UAA, PLUMBER, WAKATIME, RCLONE,
+            OPENTOFU, OXIDE, FASTLY, GOAT, RAILWAY, ORDERCLI, OPENHUE, UAA, PLUMBER, WAKATIME,
+            RCLONE,
         ] {
             assert_eq!(
                 spec(expected.hardener).map(|value| value.hardener),
@@ -911,6 +925,7 @@ mod tests {
         for (isotope, formula, repository) in [
             (OPENTOFU, "opentofu-isotope", "opentofu"),
             (OXIDE, "oxide-cli-isotope", "oxide.rs"),
+            (FASTLY, "fastly-cli-isotope", "fastly-cli"),
             (GOAT, "goat-isotope", "goat"),
             (RAILWAY, "railway-isotope", "railway-cli"),
             (ORDERCLI, "ordercli-isotope", "ordercli"),
@@ -936,8 +951,8 @@ mod tests {
             std::env::set_var("AUTOMIC_VAULT_TEST_ISOTOPE_BREW_PATH", "/test/bin/brew");
         }
         for isotope in [
-            GH, STRIPE, SUPABASE, OPENTOFU, OXIDE, GOAT, RAILWAY, ORDERCLI, OPENHUE, UAA, PLUMBER,
-            WAKATIME, RCLONE,
+            GH, STRIPE, SUPABASE, OPENTOFU, OXIDE, FASTLY, GOAT, RAILWAY, ORDERCLI, OPENHUE, UAA,
+            PLUMBER, WAKATIME, RCLONE,
         ] {
             let missing =
                 std::env::temp_dir().join(format!("av-test-missing-{}-isotope", isotope.hardener));

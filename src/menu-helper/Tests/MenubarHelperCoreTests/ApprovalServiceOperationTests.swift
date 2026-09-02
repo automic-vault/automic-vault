@@ -28,6 +28,13 @@ import Testing
     #expect(ApprovalServiceOperation.oxideDelete.rawValue == "oxide-delete")
 }
 
+@Test func fastlyCredentialsHaveDedicatedWireOperations() {
+    #expect(ApprovalServiceOperation.fastlyHelperVersion.rawValue == "fastly-helper-version")
+    #expect(ApprovalServiceOperation.fastlyGet.rawValue == "fastly-get")
+    #expect(ApprovalServiceOperation.fastlySave.rawValue == "fastly-save")
+    #expect(ApprovalServiceOperation.fastlyDelete.rawValue == "fastly-delete")
+}
+
 @Test func goatCredentialsHaveDedicatedWireOperations() {
     #expect(ApprovalServiceOperation.goatGet.rawValue == "goat-get")
     #expect(ApprovalServiceOperation.wakatimeHelperVersion.rawValue == "wakatime-helper-version")

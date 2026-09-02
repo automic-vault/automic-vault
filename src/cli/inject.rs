@@ -46,6 +46,7 @@ struct ApprovalRequest {
     terraform_hostname: Option<String>,
     aliyun_profile: Option<String>,
     oxide_scope: Option<String>,
+    fastly_scope: Option<String>,
     goat_scope: Option<String>,
     ordercli_scope: Option<String>,
     openhue_scope: Option<String>,
@@ -363,6 +364,7 @@ fn approval_request(
         terraform_hostname: None,
         aliyun_profile: None,
         oxide_scope: None,
+        fastly_scope: None,
         goat_scope: None,
         ordercli_scope: None,
         openhue_scope: None,
@@ -396,6 +398,7 @@ pub(super) fn docker_credential(
         terraform_hostname: None,
         aliyun_profile: None,
         oxide_scope: None,
+        fastly_scope: None,
         goat_scope: None,
         ordercli_scope: None,
         openhue_scope: None,
@@ -432,6 +435,7 @@ pub(super) fn terraform_credential(key: String, hostname: String) -> Result<Stri
         terraform_hostname: Some(hostname),
         aliyun_profile: None,
         oxide_scope: None,
+        fastly_scope: None,
         goat_scope: None,
         ordercli_scope: None,
         openhue_scope: None,
@@ -468,6 +472,7 @@ pub(super) fn aliyun_credential(key: String, profile: String) -> Result<String, 
         terraform_hostname: None,
         aliyun_profile: Some(profile),
         oxide_scope: None,
+        fastly_scope: None,
         goat_scope: None,
         ordercli_scope: None,
         openhue_scope: None,
@@ -504,6 +509,7 @@ pub(super) fn wakatime_credential(key: String, api_url: String) -> Result<String
         terraform_hostname: None,
         aliyun_profile: None,
         oxide_scope: None,
+        fastly_scope: None,
         goat_scope: None,
         ordercli_scope: None,
         openhue_scope: None,
@@ -540,6 +546,7 @@ pub(super) fn rclone_password(key: String) -> Result<String, String> {
         terraform_hostname: None,
         aliyun_profile: None,
         oxide_scope: None,
+        fastly_scope: None,
         goat_scope: None,
         ordercli_scope: None,
         openhue_scope: None,
@@ -576,6 +583,7 @@ pub(super) fn kubectl_credential(key: String, scope: String) -> Result<String, S
         terraform_hostname: None,
         aliyun_profile: None,
         oxide_scope: None,
+        fastly_scope: None,
         goat_scope: None,
         ordercli_scope: None,
         openhue_scope: None,
@@ -612,6 +620,7 @@ pub(super) fn oxide_credential(key: String, scope: String) -> Result<String, Str
         terraform_hostname: None,
         aliyun_profile: None,
         oxide_scope: Some(scope),
+        fastly_scope: None,
         goat_scope: None,
         ordercli_scope: None,
         openhue_scope: None,
@@ -627,6 +636,43 @@ pub(super) fn oxide_credential(key: String, scope: String) -> Result<String, Str
     xpc_approve_injection(&request)?
         .remove(&key)
         .ok_or_else(|| format!("Automic Vault returned no Oxide credential for {key}"))
+}
+
+pub(super) fn fastly_credential(key: String, scope: String) -> Result<String, String> {
+    validate_key_name(&key)?;
+    let request = ApprovalRequest {
+        op: "fastly-get",
+        keys: vec![key.clone()],
+        target: String::new(),
+        args: Vec::new(),
+        cwd: crate::path_security::current_working_directory_utf8()?,
+        replace_existing_env: false,
+        allow_missing_keys: false,
+        env_conflicts: Vec::new(),
+        shebang_script: None,
+        script_data: None,
+        snapshot_incompatible_interpreter: None,
+        tool: Some("fastly-cli"),
+        docker_server_url: None,
+        terraform_hostname: None,
+        aliyun_profile: None,
+        oxide_scope: None,
+        fastly_scope: Some(scope),
+        goat_scope: None,
+        ordercli_scope: None,
+        openhue_scope: None,
+        uaa_scope: None,
+        railway_scope: None,
+        kubectl_scope: None,
+        wakatime_api_url: None,
+    };
+    if crate::test_keychain_dir().is_some() {
+        return load_test_secret_if_present(&key)?
+            .ok_or_else(|| format!("failed to load secret {key}: -25300"));
+    }
+    xpc_approve_injection(&request)?
+        .remove(&key)
+        .ok_or_else(|| format!("Automic Vault returned no Fastly credential for {key}"))
 }
 
 pub(super) fn goat_credential(key: String, scope: String) -> Result<String, String> {
@@ -648,6 +694,7 @@ pub(super) fn goat_credential(key: String, scope: String) -> Result<String, Stri
         terraform_hostname: None,
         aliyun_profile: None,
         oxide_scope: None,
+        fastly_scope: None,
         goat_scope: Some(scope),
         ordercli_scope: None,
         openhue_scope: None,
@@ -684,6 +731,7 @@ pub(super) fn railway_credential(key: String, scope: String) -> Result<String, S
         terraform_hostname: None,
         aliyun_profile: None,
         oxide_scope: None,
+        fastly_scope: None,
         goat_scope: None,
         ordercli_scope: None,
         openhue_scope: None,
@@ -720,6 +768,7 @@ pub(super) fn ordercli_credential(key: String, scope: String) -> Result<String, 
         terraform_hostname: None,
         aliyun_profile: None,
         oxide_scope: None,
+        fastly_scope: None,
         goat_scope: None,
         ordercli_scope: Some(scope),
         openhue_scope: None,
@@ -756,6 +805,7 @@ pub(super) fn uaa_credential(key: String, scope: String) -> Result<String, Strin
         terraform_hostname: None,
         aliyun_profile: None,
         oxide_scope: None,
+        fastly_scope: None,
         goat_scope: None,
         ordercli_scope: None,
         openhue_scope: None,
@@ -792,6 +842,7 @@ pub(super) fn openhue_credential(key: String, scope: String) -> Result<String, S
         terraform_hostname: None,
         aliyun_profile: None,
         oxide_scope: None,
+        fastly_scope: None,
         goat_scope: None,
         ordercli_scope: None,
         openhue_scope: Some(scope),
@@ -829,6 +880,7 @@ pub(super) fn plumber_credential(key: String, scope: String) -> Result<String, S
         terraform_hostname: None,
         aliyun_profile: None,
         oxide_scope: None,
+        fastly_scope: None,
         goat_scope: None,
         ordercli_scope: None,
         openhue_scope: None,
@@ -1089,6 +1141,7 @@ pub(super) fn approve_gpg_signing(
             terraform_hostname: None,
             aliyun_profile: None,
             oxide_scope: None,
+            fastly_scope: None,
             goat_scope: None,
             ordercli_scope: None,
             openhue_scope: None,
@@ -1241,6 +1294,9 @@ fn xpc_approve_request(
         }
         if let Some(scope) = &request.oxide_scope {
             set_string(message, b"oxide_scope\0", scope)?;
+        }
+        if let Some(scope) = &request.fastly_scope {
+            set_string(message, b"fastly_scope\0", scope)?;
         }
         if let Some(scope) = &request.goat_scope {
             set_string(message, b"goat_scope\0", scope)?;

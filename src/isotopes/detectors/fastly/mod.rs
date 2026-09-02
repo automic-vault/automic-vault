@@ -54,7 +54,7 @@ fn line_contains_secret(line: &str) -> bool {
         return false;
     };
     matches!(key.trim(), "token" | "access_token" | "refresh_token")
-        && !toml_string_value(value).unwrap_or_default().is_empty()
+        && !matches!(toml_string_value(value).unwrap_or_default(), "" | "@av")
 }
 
 fn toml_string_value(value: &str) -> Option<&str> {
@@ -80,6 +80,7 @@ mod tests {
             "[profile.user]\naccess_token = \"fake-access-token\"\n"
         ));
         assert!(!config_contains_secret("token = \"\"\n"));
+        assert!(!config_contains_secret("token = \"@av\"\n"));
         assert!(!config_contains_secret("# token = \"fake-token\"\n"));
     }
 
