@@ -47,6 +47,7 @@ struct ApprovalRequest {
     aliyun_profile: Option<String>,
     oxide_scope: Option<String>,
     fastly_scope: Option<String>,
+    sqlcmd_scope: Option<String>,
     goat_scope: Option<String>,
     ordercli_scope: Option<String>,
     openhue_scope: Option<String>,
@@ -365,6 +366,7 @@ fn approval_request(
         aliyun_profile: None,
         oxide_scope: None,
         fastly_scope: None,
+        sqlcmd_scope: None,
         goat_scope: None,
         ordercli_scope: None,
         openhue_scope: None,
@@ -399,6 +401,7 @@ pub(super) fn docker_credential(
         aliyun_profile: None,
         oxide_scope: None,
         fastly_scope: None,
+        sqlcmd_scope: None,
         goat_scope: None,
         ordercli_scope: None,
         openhue_scope: None,
@@ -436,6 +439,7 @@ pub(super) fn terraform_credential(key: String, hostname: String) -> Result<Stri
         aliyun_profile: None,
         oxide_scope: None,
         fastly_scope: None,
+        sqlcmd_scope: None,
         goat_scope: None,
         ordercli_scope: None,
         openhue_scope: None,
@@ -473,6 +477,7 @@ pub(super) fn aliyun_credential(key: String, profile: String) -> Result<String, 
         aliyun_profile: Some(profile),
         oxide_scope: None,
         fastly_scope: None,
+        sqlcmd_scope: None,
         goat_scope: None,
         ordercli_scope: None,
         openhue_scope: None,
@@ -510,6 +515,7 @@ pub(super) fn wakatime_credential(key: String, api_url: String) -> Result<String
         aliyun_profile: None,
         oxide_scope: None,
         fastly_scope: None,
+        sqlcmd_scope: None,
         goat_scope: None,
         ordercli_scope: None,
         openhue_scope: None,
@@ -547,6 +553,7 @@ pub(super) fn rclone_password(key: String) -> Result<String, String> {
         aliyun_profile: None,
         oxide_scope: None,
         fastly_scope: None,
+        sqlcmd_scope: None,
         goat_scope: None,
         ordercli_scope: None,
         openhue_scope: None,
@@ -584,6 +591,7 @@ pub(super) fn kubectl_credential(key: String, scope: String) -> Result<String, S
         aliyun_profile: None,
         oxide_scope: None,
         fastly_scope: None,
+        sqlcmd_scope: None,
         goat_scope: None,
         ordercli_scope: None,
         openhue_scope: None,
@@ -621,6 +629,7 @@ pub(super) fn oxide_credential(key: String, scope: String) -> Result<String, Str
         aliyun_profile: None,
         oxide_scope: Some(scope),
         fastly_scope: None,
+        sqlcmd_scope: None,
         goat_scope: None,
         ordercli_scope: None,
         openhue_scope: None,
@@ -658,6 +667,7 @@ pub(super) fn fastly_credential(key: String, scope: String) -> Result<String, St
         aliyun_profile: None,
         oxide_scope: None,
         fastly_scope: Some(scope),
+        sqlcmd_scope: None,
         goat_scope: None,
         ordercli_scope: None,
         openhue_scope: None,
@@ -694,7 +704,8 @@ pub(super) fn sqlcmd_credential(key: String, scope: String) -> Result<String, St
         terraform_hostname: None,
         aliyun_profile: None,
         oxide_scope: None,
-        fastly_scope: Some(scope),
+        fastly_scope: None,
+        sqlcmd_scope: Some(scope),
         goat_scope: None,
         railway_scope: None,
         ordercli_scope: None,
@@ -732,6 +743,7 @@ pub(super) fn goat_credential(key: String, scope: String) -> Result<String, Stri
         aliyun_profile: None,
         oxide_scope: None,
         fastly_scope: None,
+        sqlcmd_scope: None,
         goat_scope: Some(scope),
         ordercli_scope: None,
         openhue_scope: None,
@@ -769,6 +781,7 @@ pub(super) fn railway_credential(key: String, scope: String) -> Result<String, S
         aliyun_profile: None,
         oxide_scope: None,
         fastly_scope: None,
+        sqlcmd_scope: None,
         goat_scope: None,
         ordercli_scope: None,
         openhue_scope: None,
@@ -806,6 +819,7 @@ pub(super) fn ordercli_credential(key: String, scope: String) -> Result<String, 
         aliyun_profile: None,
         oxide_scope: None,
         fastly_scope: None,
+        sqlcmd_scope: None,
         goat_scope: None,
         ordercli_scope: Some(scope),
         openhue_scope: None,
@@ -843,6 +857,7 @@ pub(super) fn uaa_credential(key: String, scope: String) -> Result<String, Strin
         aliyun_profile: None,
         oxide_scope: None,
         fastly_scope: None,
+        sqlcmd_scope: None,
         goat_scope: None,
         ordercli_scope: None,
         openhue_scope: None,
@@ -880,6 +895,7 @@ pub(super) fn openhue_credential(key: String, scope: String) -> Result<String, S
         aliyun_profile: None,
         oxide_scope: None,
         fastly_scope: None,
+        sqlcmd_scope: None,
         goat_scope: None,
         ordercli_scope: None,
         openhue_scope: Some(scope),
@@ -918,6 +934,7 @@ pub(super) fn plumber_credential(key: String, scope: String) -> Result<String, S
         aliyun_profile: None,
         oxide_scope: None,
         fastly_scope: None,
+        sqlcmd_scope: None,
         goat_scope: None,
         ordercli_scope: None,
         openhue_scope: None,
@@ -1179,6 +1196,7 @@ pub(super) fn approve_gpg_signing(
             aliyun_profile: None,
             oxide_scope: None,
             fastly_scope: None,
+            sqlcmd_scope: None,
             goat_scope: None,
             ordercli_scope: None,
             openhue_scope: None,
@@ -1333,12 +1351,10 @@ fn xpc_approve_request(
             set_string(message, b"oxide_scope\0", scope)?;
         }
         if let Some(scope) = &request.fastly_scope {
-            let field = if request.op == "sqlcmd-get" {
-                b"sqlcmd_scope\0".as_slice()
-            } else {
-                b"fastly_scope\0".as_slice()
-            };
-            set_string(message, field, scope)?;
+            set_string(message, b"fastly_scope\0", scope)?;
+        }
+        if let Some(scope) = &request.sqlcmd_scope {
+            set_string(message, b"sqlcmd_scope\0", scope)?;
         }
         if let Some(scope) = &request.goat_scope {
             set_string(message, b"goat_scope\0", scope)?;

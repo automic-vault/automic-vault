@@ -8615,10 +8615,12 @@ private func fastlyRequestClassification(_ args: [String]) -> SecretGateRequestC
 
 private func sqlcmdRequestClassification(_ args: [String]) -> SecretGateRequestClassification {
     let words = args.map { $0.lowercased() }
-    if words.contains("connection-strings") || words.contains("cs") {
+    guard words.count >= 2, words[0] == "config" else { return .unknown }
+    let action = words[1]
+    if action == "connection-strings" || action == "cs" {
         return .secretDump
     }
-    if (words.contains("view") || words.contains("show")) && words.contains("--raw") {
+    if (action == "view" || action == "show") && words.dropFirst(2).contains("--raw") {
         return .secretDump
     }
     return .unknown
@@ -14350,8 +14352,12 @@ private func runFastlyCredentialSelfCheck() -> Int32 {
 private func runSqlcmdCredentialSelfCheck() -> Int32 {
     let canonical = #"{"address":"db.example.com","port":1433,"profile":"prod"}"#
     guard sqlcmdRequestClassification(["query", "SELECT 1"]) == .unknown,
+          sqlcmdRequestClassification(["query", "cs"]) == .unknown,
+          sqlcmdRequestClassification(["--verbosity", "config", "cs"]) == .unknown,
           sqlcmdRequestClassification(["config", "connection-strings"]) == .secretDump,
+          sqlcmdRequestClassification(["config", "cs"]) == .secretDump,
           sqlcmdRequestClassification(["config", "view", "--raw"]) == .secretDump,
+          sqlcmdRequestClassification(["config", "show", "--raw"]) == .secretDump,
           let scope = parseSqlcmdCredentialScope(canonical),
           scope.profile == "prod",
           scope.address == "db.example.com",
