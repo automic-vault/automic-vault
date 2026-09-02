@@ -35,6 +35,13 @@ import Testing
     #expect(ApprovalServiceOperation.fastlyDelete.rawValue == "fastly-delete")
 }
 
+@Test func sqlcmdCredentialsHaveDedicatedWireOperations() {
+    #expect(ApprovalServiceOperation.sqlcmdHelperVersion.rawValue == "sqlcmd-helper-version")
+    #expect(ApprovalServiceOperation.sqlcmdGet.rawValue == "sqlcmd-get")
+    #expect(ApprovalServiceOperation.sqlcmdSave.rawValue == "sqlcmd-save")
+    #expect(ApprovalServiceOperation.sqlcmdDelete.rawValue == "sqlcmd-delete")
+}
+
 @Test func goatCredentialsHaveDedicatedWireOperations() {
     #expect(ApprovalServiceOperation.goatGet.rawValue == "goat-get")
     #expect(ApprovalServiceOperation.wakatimeHelperVersion.rawValue == "wakatime-helper-version")

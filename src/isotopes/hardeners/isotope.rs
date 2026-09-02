@@ -65,6 +65,14 @@ pub(crate) const FASTLY: Spec = Spec {
     binaries: &["fastly"],
     test_path: "AUTOMIC_VAULT_TEST_FASTLY_TARGET",
 };
+pub(crate) const SQLCMD: Spec = Spec {
+    hardener: "sqlcmd",
+    formula: "sqlcmd-isotope",
+    repository: "go-sqlcmd",
+    primary: "sqlcmd",
+    binaries: &["sqlcmd"],
+    test_path: "AUTOMIC_VAULT_TEST_SQLCMD_TARGET",
+};
 pub(crate) const GOAT: Spec = Spec {
     hardener: "goat",
     formula: "goat-isotope",
@@ -355,6 +363,8 @@ pub(crate) fn install_privileged(
             super::oxide_cli::verify_target(&stage)?;
         } else if spec.hardener == FASTLY.hardener {
             super::fastly_cli::verify_target(&stage)?;
+        } else if spec.hardener == SQLCMD.hardener {
+            super::sqlcmd::verify_target(&stage)?;
         }
         if spec.hardener == GOAT.hardener {
             super::goat::verify_target(&stage)?;
@@ -762,6 +772,9 @@ fn installed(spec: Spec, path: &Path) -> bool {
     if spec.hardener == FASTLY.hardener {
         return super::fastly_cli::verify_target(path).is_ok();
     }
+    if spec.hardener == SQLCMD.hardener {
+        return super::sqlcmd::verify_target(path).is_ok();
+    }
     if spec.hardener == GOAT.hardener {
         return super::goat::verify_target(path).is_ok();
     }
@@ -802,7 +815,7 @@ fn formula_url(spec: Spec) -> String {
 fn spec(hardener: &str) -> Option<Spec> {
     [
         GH, STRIPE, SUPABASE, OPENTOFU, OXIDE, FASTLY, GOAT, RAILWAY, ORDERCLI, OPENHUE, UAA,
-        PLUMBER, ALIYUN, WAKATIME, RCLONE, KUBECTL,
+        PLUMBER, ALIYUN, WAKATIME, RCLONE, KUBECTL, SQLCMD,
     ]
     .into_iter()
     .find(|spec| spec.hardener == hardener)
@@ -911,7 +924,7 @@ mod tests {
     fn every_executable_isotope_is_registered_for_direct_fallback() {
         for expected in [
             OPENTOFU, OXIDE, FASTLY, GOAT, RAILWAY, ORDERCLI, OPENHUE, UAA, PLUMBER, WAKATIME,
-            RCLONE,
+            RCLONE, SQLCMD,
         ] {
             assert_eq!(
                 spec(expected.hardener).map(|value| value.hardener),
@@ -934,6 +947,7 @@ mod tests {
             (PLUMBER, "plumber-isotope", "plumber"),
             (WAKATIME, "wakatime-cli-isotope", "wakatime-cli"),
             (RCLONE, "rclone-isotope", "rclone"),
+            (SQLCMD, "sqlcmd-isotope", "go-sqlcmd"),
         ] {
             assert_eq!(isotope.formula, formula);
             assert_eq!(isotope.repository, repository);
@@ -952,7 +966,7 @@ mod tests {
         }
         for isotope in [
             GH, STRIPE, SUPABASE, OPENTOFU, OXIDE, FASTLY, GOAT, RAILWAY, ORDERCLI, OPENHUE, UAA,
-            PLUMBER, WAKATIME, RCLONE,
+            PLUMBER, WAKATIME, RCLONE, SQLCMD,
         ] {
             let missing =
                 std::env::temp_dir().join(format!("av-test-missing-{}-isotope", isotope.hardener));

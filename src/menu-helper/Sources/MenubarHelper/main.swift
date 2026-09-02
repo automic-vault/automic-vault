@@ -2046,6 +2046,8 @@ enum SecretMutation {
     case oxideDelete(account: String, scope: String)
     case fastlySave(account: String, value: String, scope: String)
     case fastlyDelete(account: String, scope: String)
+    case sqlcmdSave(account: String, value: String, scope: String)
+    case sqlcmdDelete(account: String, scope: String)
     case terraformSave(account: String, value: String, hostname: String)
     case terraformDelete(account: String, hostname: String)
     case deleteValue(account: String, source: StoredSecretValueSource)
@@ -2192,6 +2194,18 @@ enum SecretMutation {
                 "Delete Fastly API token?",
                 "Fastly CLI will no longer be able to authenticate with this named token."
             )
+        case .sqlcmdSave(let account, _, let scope):
+            properties = (
+                "sqlcmd-save", [account], ["credential", "store", scope],
+                "Store sqlcmd password?",
+                "sqlcmd will use this user profile through its Automic Vault Secret Gate."
+            )
+        case .sqlcmdDelete(let account, let scope):
+            properties = (
+                "sqlcmd-delete", [account], ["credential", "forget", scope],
+                "Delete sqlcmd password?",
+                "sqlcmd will no longer be able to authenticate with this user profile."
+            )
         case .terraformSave(let account, _, let hostname):
             properties = (
                 "terraform-save", [account], ["credential", "store", hostname],
@@ -2235,6 +2249,7 @@ enum SecretMutation {
         case .railwaySave, .railwayDelete: "railway"
         case .oxideSave, .oxideDelete: "oxide-cli"
         case .fastlySave, .fastlyDelete: "fastly-cli"
+        case .sqlcmdSave, .sqlcmdDelete: "sqlcmd"
         case .terraformSave, .terraformDelete: "terraform"
         default: URL(fileURLWithPath: callerPath).lastPathComponent
         }
@@ -2288,6 +2303,10 @@ enum SecretMutation {
             selectedSecretValues = SelectedSecretValues(values: [:])
             credentialScope = scope
         case .fastlySave(_, _, let scope), .fastlyDelete(_, let scope):
+            cwd = ""
+            selectedSecretValues = SelectedSecretValues(values: [:])
+            credentialScope = scope
+        case .sqlcmdSave(_, _, let scope), .sqlcmdDelete(_, let scope):
             cwd = ""
             selectedSecretValues = SelectedSecretValues(values: [:])
             credentialScope = scope
@@ -2393,6 +2412,10 @@ enum SecretMutation {
         case .fastlySave(let account, let value, _):
             return saveStoredSecret(account: account, value: value, accessibility: .whenUnlocked)
         case .fastlyDelete(let account, _):
+            return deleteStoredSecretRevokingDirectAccess(account: account)
+        case .sqlcmdSave(let account, let value, _):
+            return saveStoredSecret(account: account, value: value, accessibility: .whenUnlocked)
+        case .sqlcmdDelete(let account, _):
             return deleteStoredSecretRevokingDirectAccess(account: account)
         case .terraformSave(let account, let value, _):
             return saveStoredSecret(account: account, value: value, accessibility: .whenUnlocked)
@@ -3262,6 +3285,13 @@ private final class ApprovalServer: @unchecked Sendable {
                 return
             }
             reply(peer, to: message, ok: true, error: nil, value: "1")
+        case .sqlcmdHelperVersion where isTrustedAvCaller(path: callerPath, signing: signing):
+            let requested = xpc_dictionary_get_uint64(message, "requested_version")
+            guard requested == 1 else {
+                reply(peer, to: message, ok: false, error: "sqlcmd helper protocol upgrade is required")
+                return
+            }
+            reply(peer, to: message, ok: true, error: nil, value: "1")
         case .terraformHelperVersion where isTrustedAvCaller(path: callerPath, signing: signing):
             let requested = xpc_dictionary_get_uint64(message, "requested_version")
             guard requested == 1 else {
@@ -3308,7 +3338,7 @@ private final class ApprovalServer: @unchecked Sendable {
                 signing: signing
             )
         case .inject, .keys, .authorize, .dockerGet, .goatGet, .ordercliGet, .openhueGet, .plumberGet, .uaaGet, .railwayGet,
-             .oxideGet, .fastlyGet, .terraformGet, .aliyunGet, .wakatimeGet, .rcloneGet, .kubectlGet:
+             .oxideGet, .fastlyGet, .sqlcmdGet, .terraformGet, .aliyunGet, .wakatimeGet, .rcloneGet, .kubectlGet:
             handleInject(
                 message,
                 on: peer,
@@ -3372,6 +3402,10 @@ private final class ApprovalServer: @unchecked Sendable {
             handleFastlySave(message, on: peer, cancellation: cancellation, caller: mutationCaller)
         case .fastlyDelete where isTrustedAvCaller(path: callerPath, signing: signing):
             handleFastlyDelete(message, on: peer, cancellation: cancellation, caller: mutationCaller)
+        case .sqlcmdSave where isTrustedAvCaller(path: callerPath, signing: signing):
+            handleSqlcmdSave(message, on: peer, cancellation: cancellation, caller: mutationCaller)
+        case .sqlcmdDelete where isTrustedAvCaller(path: callerPath, signing: signing):
+            handleSqlcmdDelete(message, on: peer, cancellation: cancellation, caller: mutationCaller)
         case .terraformSave where isTrustedAvCaller(path: callerPath, signing: signing):
             handleTerraformSave(message, on: peer, cancellation: cancellation, caller: mutationCaller)
         case .terraformDelete where isTrustedAvCaller(path: callerPath, signing: signing):
@@ -3717,9 +3751,16 @@ private final class ApprovalServer: @unchecked Sendable {
                 helperPath: callerPath,
                 helperSigning: signing
             )
-            let wakatimeRequest = try wakatimeCredentialRequest(
+            let sqlcmdRequest = try sqlcmdCredentialRequest(
                 from: message,
                 request: fastlyRequest,
+                helperIdentity: identity,
+                helperPath: callerPath,
+                helperSigning: signing
+            )
+            let wakatimeRequest = try wakatimeCredentialRequest(
+                from: message,
+                request: sqlcmdRequest,
                 helperIdentity: identity,
                 helperPath: callerPath,
                 helperSigning: signing
@@ -5947,6 +5988,58 @@ private final class ApprovalServer: @unchecked Sendable {
         }
     }
 
+    private func handleSqlcmdSave(
+        _ message: xpc_object_t,
+        on peer: xpc_connection_t,
+        cancellation: ApprovalCancellation,
+        caller: MutationCaller
+    ) {
+        guard let scopePointer = xpc_dictionary_get_string(message, "sqlcmd_scope"),
+              let valuePointer = xpc_dictionary_get_string(message, "value"),
+              let scope = parseSqlcmdCredentialScope(String(cString: scopePointer)),
+              scope.address.isEmpty, scope.port == 0,
+              let value = parseSqlcmdPassword(String(cString: valuePointer))
+        else {
+            reply(peer, to: message, ok: false, error: "invalid sqlcmd credential store request")
+            return
+        }
+        do {
+            let parent = try sqlcmdCredentialParent(for: caller.identity)
+            handleMutation(
+                .sqlcmdSave(account: scope.secretName, value: value, scope: scope.canonical),
+                on: peer, message: message, cancellation: cancellation, caller: caller,
+                requiredCredentialParent: parent
+            )
+        } catch {
+            reply(peer, to: message, ok: false, error: error.localizedDescription)
+        }
+    }
+
+    private func handleSqlcmdDelete(
+        _ message: xpc_object_t,
+        on peer: xpc_connection_t,
+        cancellation: ApprovalCancellation,
+        caller: MutationCaller
+    ) {
+        guard let scopePointer = xpc_dictionary_get_string(message, "sqlcmd_scope"),
+              let scope = parseSqlcmdCredentialScope(String(cString: scopePointer)),
+              scope.address.isEmpty, scope.port == 0
+        else {
+            reply(peer, to: message, ok: false, error: "invalid sqlcmd credential forget request")
+            return
+        }
+        do {
+            let parent = try sqlcmdCredentialParent(for: caller.identity)
+            handleMutation(
+                .sqlcmdDelete(account: scope.secretName, scope: scope.canonical),
+                on: peer, message: message, cancellation: cancellation, caller: caller,
+                requiredCredentialParent: parent
+            )
+        } catch {
+            reply(peer, to: message, ok: false, error: error.localizedDescription)
+        }
+    }
+
     private func handleTerraformSave(
         _ message: xpc_object_t,
         on peer: xpc_connection_t,
@@ -6100,6 +6193,7 @@ private final class ApprovalServer: @unchecked Sendable {
                  .railwaySave(let account, _, _),
                  .oxideSave(let account, _, _),
                  .fastlySave(let account, _, _),
+                 .sqlcmdSave(let account, _, _),
                  .terraformSave(let account, _, _):
                 if status == errSecSuccess {
                     self.reply(peer, to: message, ok: true, error: nil)
@@ -6118,6 +6212,7 @@ private final class ApprovalServer: @unchecked Sendable {
                  .uaaDelete(let account, _),
                  .railwayDelete(let account, _),
                  .oxideDelete(let account, _), .fastlyDelete(let account, _),
+                 .sqlcmdDelete(let account, _),
                  .terraformDelete(let account, _):
                 if status == errSecSuccess || status == errSecItemNotFound {
                     self.reply(peer, to: message, ok: true, error: nil)
@@ -6726,6 +6821,76 @@ private final class ApprovalServer: @unchecked Sendable {
         )
     }
 
+    private func sqlcmdCredentialRequest(
+        from message: xpc_object_t,
+        request: ApprovalRequest,
+        helperIdentity: AVProcessIdentity,
+        helperPath: String,
+        helperSigning: SigningInfo
+    ) throws -> ApprovalRequest {
+        guard request.op == "sqlcmd-get" else { return request }
+        guard request.tool == "sqlcmd",
+              isTrustedAvCaller(path: helperPath, signing: helperSigning),
+              request.target.isEmpty,
+              request.args.isEmpty,
+              request.keys.count == 1,
+              !request.replaceExistingEnv,
+              !request.allowMissingKeys,
+              request.envConflicts.isEmpty,
+              request.shebangScript == nil,
+              request.scriptData == nil,
+              let scopePointer = xpc_dictionary_get_string(message, "sqlcmd_scope"),
+              let scope = parseSqlcmdCredentialScope(String(cString: scopePointer)),
+              request.keys == [scope.secretName]
+        else { throw AppError("invalid sqlcmd credential request") }
+        let parent = try sqlcmdCredentialParent(for: helperIdentity)
+        if scope.address.isEmpty && sqlcmdRequestClassification(Array(parent.arguments.dropFirst())) != .secretDump {
+            throw AppError("sqlcmd endpoint-free credential requests require an explicit Secret Dump command")
+        }
+        let destination = scope.address.isEmpty ? "raw configuration output" : "\(scope.address):\(scope.port)"
+        return ApprovalRequest(
+            op: request.op,
+            keys: request.keys,
+            target: parent.target,
+            args: Array(parent.arguments.dropFirst()),
+            cwd: request.cwd,
+            replaceExistingEnv: false,
+            allowMissingKeys: false,
+            envConflicts: [],
+            shebangScript: nil,
+            scriptData: nil,
+            tool: "sqlcmd",
+            title: "Use sqlcmd password for \(scope.profile)?",
+            detail: "The verified sqlcmd Target will receive this password in plaintext for \(destination).",
+            credentialScope: scope.canonical,
+            credentialParent: parent
+        )
+    }
+
+    private func sqlcmdCredentialParent(
+        for helperIdentity: AVProcessIdentity
+    ) throws -> CredentialHelperParent {
+        let parentPID = helperIdentity.ppid
+        var parentIdentity = AVProcessIdentity()
+        guard parentPID > 1,
+              av_process_identity(parentPID, &parentIdentity),
+              parentIdentity.euid == helperIdentity.euid,
+              let arguments = processArguments(parentPID),
+              !arguments.isEmpty
+        else { throw AppError("sqlcmd credential helper has no live parent") }
+        let target = pathString(parentIdentity)
+        guard sqlcmdTargetIdentityValid(pid: parentPID, path: target) else {
+            throw AppError("credential helper parent is not an eligible sqlcmd Target")
+        }
+        return CredentialHelperParent(
+            pid: parentPID,
+            startUsec: parentIdentity.start_usec,
+            euid: parentIdentity.euid,
+            target: target,
+            arguments: arguments
+        )
+    }
+
     private func terraformCredentialRequest(
         from message: xpc_object_t,
         request: ApprovalRequest,
@@ -7065,6 +7230,7 @@ private final class ApprovalServer: @unchecked Sendable {
         case "ordercli": "ordercli"
         case "oxide": "oxide-cli"
         case "fastly": "fastly-cli"
+        case "sqlcmd": "sqlcmd"
         case "plumber": "plumber"
         case "podman": "podman"
         case "railway": "railway"
@@ -7119,6 +7285,9 @@ private final class ApprovalServer: @unchecked Sendable {
         case "fastly-cli":
             return credentialHelperTool(parent) == tool
                 && fastlyTargetIdentityValid(pid: parent.pid, path: parent.target)
+        case "sqlcmd":
+            return credentialHelperTool(parent) == tool
+                && sqlcmdTargetIdentityValid(pid: parent.pid, path: parent.target)
         case "terraform", "opentofu":
             return credentialHelperTool(parent) == tool
                 && terraformTargetIdentityValid(pid: parent.pid, path: parent.target)
@@ -7229,6 +7398,18 @@ private final class ApprovalServer: @unchecked Sendable {
             && liveProcessHasNoEntitlements(pid: pid)
     }
 
+    private func sqlcmdTargetIdentityValid(pid: pid_t, path: String) -> Bool {
+        guard configuredSecretGateTarget("sqlcmd", matches: path),
+              let signing = liveSigningInfo(pid: pid),
+              signing.mainExecutable == path
+        else { return false }
+        return signing.identifier == "sqlcmd"
+            && signing.teamIdentifier == "ZU76A67LGU"
+            && signing.isDeveloperID
+            && signing.runtimeProtection == .hardened
+            && liveProcessHasNoEntitlements(pid: pid)
+    }
+
     private func terraformTargetIdentityValid(pid: pid_t, path: String) -> Bool {
         let expected: (identifier: String, team: String)? = if configuredSecretGateTarget(
             "terraform", matches: path
@@ -7296,7 +7477,7 @@ private final class ApprovalServer: @unchecked Sendable {
         awsRegistration: AWSRegistrationCandidate?
     ) throws -> AuthorizationFulfillmentTransaction<ApprovedFulfillmentMaterial> {
         let credentialParent: CredentialHelperParent?
-        if ["docker-get", "goat-get", "ordercli-get", "openhue-get", "plumber-get", "uaa-get", "railway-get", "oxide-get", "fastly-get", "terraform-get", "aliyun-get", "wakatime-get", "rclone-get", "kubectl-get"]
+        if ["docker-get", "goat-get", "ordercli-get", "openhue-get", "plumber-get", "uaa-get", "railway-get", "oxide-get", "fastly-get", "sqlcmd-get", "terraform-get", "aliyun-get", "wakatime-get", "rclone-get", "kubectl-get"]
             .contains(request.op)
         {
             guard let scope = request.credentialScope,
@@ -7334,6 +7515,11 @@ private final class ApprovalServer: @unchecked Sendable {
                     throw AppError("Fastly credential scope changed before Secret Application")
                 }
                 expected = fastly.secretName
+            case "sqlcmd-get":
+                guard let sqlcmd = parseSqlcmdCredentialScope(scope) else {
+                    throw AppError("sqlcmd credential scope changed before Secret Application")
+                }
+                expected = sqlcmd.secretName
             case "wakatime-get":
                 guard scope == wakatimeOfficialAPIURL else {
                     throw AppError("WakaTime API endpoint changed before Secret Application")
@@ -7409,6 +7595,11 @@ private final class ApprovalServer: @unchecked Sendable {
                       let value = secrets[scope.secretName],
                       parseFastlyCredential(value) != nil
                 else { throw AppError("Fastly credential changed before Secret Application") }
+            } else if request.op == "sqlcmd-get" {
+                guard let scope = parseSqlcmdCredentialScope(scope),
+                      let value = secrets[scope.secretName],
+                      parseSqlcmdPassword(value) != nil
+                else { throw AppError("sqlcmd credential changed before Secret Application") }
             } else if request.op == "aliyun-get" {
                 guard let value = secrets[aliyunCredentialSecretName(scope)],
                       parseAliyunCredential(value)
@@ -7805,7 +7996,7 @@ private final class ApprovalServer: @unchecked Sendable {
         let op = String(cString: opPointer)
         guard op == "inject" || op == "keys" || op == "authorize" || op == "gpg-sign"
             || op == "docker-get" || op == "goat-get" || op == "ordercli-get" || op == "openhue-get" || op == "plumber-get" || op == "uaa-get" || op == "railway-get"
-            || op == "oxide-get" || op == "fastly-get" || op == "terraform-get" || op == "aliyun-get" || op == "wakatime-get"
+            || op == "oxide-get" || op == "fastly-get" || op == "sqlcmd-get" || op == "terraform-get" || op == "aliyun-get" || op == "wakatime-get"
             || op == "rclone-get" || op == "kubectl-get"
             || op == "proxy-start"
         else { return nil }
@@ -8220,6 +8411,8 @@ private func classifySecretGateRequest(
         return oxideRequestClassification(request.args)
     case "fastly-cli":
         return fastlyRequestClassification(request.args)
+    case "sqlcmd":
+        return sqlcmdRequestClassification(request.args)
     case "terraform", "opentofu":
         return terraformRequestClassification(request.args)
     case "aliyun-cli":
@@ -8415,6 +8608,17 @@ private func fastlyRequestClassification(_ args: [String]) -> SecretGateRequestC
     }
     let action = words[authIndex + 1]
     if action == "token" || (action == "show" && words.contains("--reveal")) {
+        return .secretDump
+    }
+    return .unknown
+}
+
+private func sqlcmdRequestClassification(_ args: [String]) -> SecretGateRequestClassification {
+    let words = args.map { $0.lowercased() }
+    if words.contains("connection-strings") || words.contains("cs") {
+        return .secretDump
+    }
+    if (words.contains("view") || words.contains("show")) && words.contains("--raw") {
         return .secretDump
     }
     return .unknown
@@ -9297,6 +9501,54 @@ private func validFastlyTokenName(_ name: String) -> Bool {
 }
 
 private func parseFastlyCredential(_ value: String) -> String? {
+    parseOxideCredential(value)
+}
+
+private struct StoredSqlcmdCredentialScope {
+    let profile: String
+    let address: String
+    let port: Int
+    let canonical: String
+
+    var secretName: String {
+        let hash = SHA256.hash(data: Data(profile.utf8)).map { String(format: "%02X", $0) }.joined()
+        return "SQLCMD_PASSWORD_\(hash)"
+    }
+}
+
+private func parseSqlcmdCredentialScope(_ value: String) -> StoredSqlcmdCredentialScope? {
+    guard value.utf8.count <= 4 * 1024,
+          let data = value.data(using: .utf8),
+          let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          Set(object.keys) == Set(["address", "port", "profile"]),
+          let profile = object["profile"] as? String,
+          validSqlcmdProfile(profile),
+          let address = object["address"] as? String,
+          validSqlcmdAddress(address),
+          let port = object["port"] as? Int,
+          (0 ... 65_535).contains(port),
+          (address.isEmpty && port == 0) || (!address.isEmpty && port > 0),
+          let canonicalData = try? JSONSerialization.data(
+              withJSONObject: ["address": address, "port": port, "profile": profile],
+              options: [.sortedKeys, .withoutEscapingSlashes]
+          ),
+          let canonical = String(data: canonicalData, encoding: .utf8),
+          canonical == value
+    else { return nil }
+    return StoredSqlcmdCredentialScope(profile: profile, address: address, port: port, canonical: canonical)
+}
+
+private func validSqlcmdProfile(_ value: String) -> Bool {
+    !value.isEmpty && value.utf8.count <= 128 && value == value.trimmingCharacters(in: .whitespacesAndNewlines)
+        && value.unicodeScalars.allSatisfy { $0.isASCII && $0.value >= 0x20 && $0.value <= 0x7e }
+}
+
+private func validSqlcmdAddress(_ value: String) -> Bool {
+    value.utf8.count <= 253 && value == value.trimmingCharacters(in: .whitespacesAndNewlines)
+        && value.unicodeScalars.allSatisfy { $0.isASCII && $0.value >= 0x20 && $0.value <= 0x7e }
+}
+
+private func parseSqlcmdPassword(_ value: String) -> String? {
     parseOxideCredential(value)
 }
 
@@ -10361,6 +10613,7 @@ private extension ApprovalServiceOperation {
              .ordercliHelperVersion, .openhueHelperVersion, .plumberHelperVersion, .uaaHelperVersion,
              .railwayHelperVersion, .oxideHelperVersion, .terraformHelperVersion,
              .fastlyHelperVersion,
+             .sqlcmdHelperVersion,
              .aliyunHelperVersion, .wakatimeHelperVersion, .rcloneHelperVersion,
              .kubectlHelperVersion: false
         default: true
@@ -14094,6 +14347,24 @@ private func runFastlyCredentialSelfCheck() -> Int32 {
     return 0
 }
 
+private func runSqlcmdCredentialSelfCheck() -> Int32 {
+    let canonical = #"{"address":"db.example.com","port":1433,"profile":"prod"}"#
+    guard sqlcmdRequestClassification(["query", "SELECT 1"]) == .unknown,
+          sqlcmdRequestClassification(["config", "connection-strings"]) == .secretDump,
+          sqlcmdRequestClassification(["config", "view", "--raw"]) == .secretDump,
+          let scope = parseSqlcmdCredentialScope(canonical),
+          scope.profile == "prod",
+          scope.address == "db.example.com",
+          scope.port == 1433,
+          scope.secretName
+              == "SQLCMD_PASSWORD_6754AF9632A2745E85C293E5AAC0863370D9BD3330B9938C00CADFD215227D77",
+          parseSqlcmdPassword("secret") == "secret",
+          parseSqlcmdPassword("secret\n") == nil,
+          parseSqlcmdCredentialScope(#"{"address":"","port":1433,"profile":"prod"}"#) == nil
+    else { return 1 }
+    return 0
+}
+
 private func runGoatCredentialSelfCheck() -> Int32 {
     let canonical = #"{"did":"did:plc:abc","pds":"https://pds.example"}"#
     guard goatRequestClassification(["account", "check-auth"]) == .readOnly,
@@ -15216,6 +15487,10 @@ if CommandLine.arguments.contains("--self-check-oxide-credentials") {
 
 if CommandLine.arguments.contains("--self-check-fastly-credentials") {
     exit(runFastlyCredentialSelfCheck())
+}
+
+if CommandLine.arguments.contains("--self-check-sqlcmd-credentials") {
+    exit(runSqlcmdCredentialSelfCheck())
 }
 
 if CommandLine.arguments.contains("--self-check-goat-credentials") {

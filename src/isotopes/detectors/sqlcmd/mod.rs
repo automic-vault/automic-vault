@@ -44,6 +44,9 @@ fn line_has_password_value(line: &str) -> bool {
     !value.is_empty()
         && value != "\"\""
         && value != "''"
+        && value != "@av"
+        && value != "\"@av\""
+        && value != "'@av'"
         && !value.eq_ignore_ascii_case("null")
         && !value.eq_ignore_ascii_case("redacted")
 }
@@ -70,6 +73,7 @@ mod tests {
     fn ignores_empty_or_redacted_passwords() {
         assert!(!sqlconfig_has_password("password: \"\"\n"));
         assert!(!sqlconfig_has_password("password: REDACTED\n"));
+        assert!(!sqlconfig_has_password("password: '@av'\n"));
     }
 
     #[test]

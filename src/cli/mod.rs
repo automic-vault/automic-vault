@@ -25,6 +25,7 @@ pub(crate) mod rclone_password;
 mod save;
 mod scan;
 mod shell_secrets;
+pub(crate) mod sqlcmd_credential;
 pub(crate) mod terraform_credential;
 pub(crate) mod uaa_credential;
 pub(crate) mod wakatime_credential;
@@ -411,6 +412,10 @@ where
                 let result = hardeners::fastly_cli::run(stdout, yes);
                 return finish_hardening(result, "fastly-cli", stdout, stderr);
             }
+            if target == "sqlcmd" {
+                let result = hardeners::sqlcmd::run(stdout, yes);
+                return finish_hardening(result, "sqlcmd", stdout, stderr);
+            }
             if target == "aliyun" || target == "aliyun-cli" {
                 let result = hardeners::aliyun_cli::run(stdout, yes);
                 return finish_hardening(result, "aliyun-cli", stdout, stderr);
@@ -510,6 +515,7 @@ where
         Some("aliyun-credential") => aliyun_credential::run(rest, stdout, stderr),
         Some("oxide-credential") => oxide_credential::run(rest, stdout, stderr),
         Some("fastly-credential") => fastly_credential::run(rest, stdout, stderr),
+        Some("sqlcmd-credential") => sqlcmd_credential::run(rest, stdout, stderr),
         Some("goat-credential") => goat_credential::run(rest, stdout, stderr),
         Some("kubectl-credential") => kubectl_credential::run(rest, stdout, stderr),
         Some("ordercli-credential") => ordercli_credential::run(rest, stdout, stderr),

@@ -8,14 +8,16 @@
 
 - `~/.sqlcmd/sqlconfig`
 
-## Why This is not Yet Hardened
+## Hardened State
 
-The retired `sqlcmd` hardener moved the detected secret to the macOS Keychain,
-then recreated `~/.sqlcmd/sqlconfig` inside a temporary directory for each run.
-We no longer consider a temporary plaintext file a sufficient security boundary,
-so this detector remains report-only.
+Run `av harden sqlcmd` to install the reviewed, signed sqlcmd Isotope and move
+supported basic-auth passwords into Automic Vault custody. The default
+sqlconfig retains only user, context, endpoint, and `@av` marker metadata.
 
-If a narrow environment-variable or credential-helper interface can cover this
-state without writing the secret back to disk, we can reconsider the hardener.
+The Gate binds Secret Application to the verified sqlcmd Target, selected user
+profile, endpoint, and complete command. Credential creation and deletion use
+separate approved mutations. Custom sqlconfig paths, unsupported
+authentication, malformed markers, and missing Secret Values fail closed.
 
-[Open an issue to discuss a safer integration](https://github.com/automic-vault/automic-vault/issues).
+Legacy flags, environment passwords, certificates, and credentials supplied
+outside the default modern sqlconfig remain outside this Hardener's coverage.

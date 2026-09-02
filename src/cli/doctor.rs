@@ -1670,6 +1670,7 @@ mod tests {
                                 | "kubectl"
                                 | "oxide-cli"
                                 | "fastly-cli"
+                                | "sqlcmd"
                                 | "stripe"
                                 | "supabase"
                                 | "wakatime-cli"

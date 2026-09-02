@@ -18,6 +18,7 @@ pub(crate) mod plumber;
 pub(crate) mod podman;
 pub(crate) mod railway;
 pub(crate) mod rclone;
+pub(crate) mod sqlcmd;
 pub(crate) mod stripe_cli;
 pub(crate) mod sudo;
 pub(crate) mod supabase;
@@ -318,6 +319,7 @@ pub(crate) fn metadata() -> Vec<HardenerMetadata> {
         gated_hardener!(kubectl, "kubectl"),
         gated_hardener!(oxide_cli, "oxide-cli"),
         gated_hardener!(fastly_cli, "fastly-cli"),
+        gated_hardener!(sqlcmd, "sqlcmd"),
         gated_hardener!(homebrew, "brew"),
         gated_hardener!(gh_cli, "gh"),
         gated_hardener!(stripe_cli, "stripe"),
@@ -358,6 +360,7 @@ pub(crate) fn secret_gates() -> Vec<SecretGateDescriptor> {
         kubectl::secret_gate(),
         oxide_cli::secret_gate(),
         fastly_cli::secret_gate(),
+        sqlcmd::secret_gate(),
         homebrew::secret_gate(),
         gh_cli::secret_gate(),
         stripe_cli::secret_gate(),
