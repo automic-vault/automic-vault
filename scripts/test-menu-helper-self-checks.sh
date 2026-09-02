@@ -46,6 +46,7 @@ checks=(
   --self-check-aliyun-credentials
   --self-check-wakatime-credentials
   --self-check-kubectl-credentials
+  --self-check-sqlcmd-credentials
   --self-check-oxide-credentials
   --self-check-goat-credentials
   --self-check-railway-credentials

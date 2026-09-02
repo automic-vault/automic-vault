@@ -5,6 +5,7 @@ const ALIYUN_HELPER_PROTOCOL_VERSION: u64 = 1;
 const REGISTRY_HELPER_PROTOCOL_VERSION: u64 = 3;
 const OXIDE_HELPER_PROTOCOL_VERSION: u64 = 1;
 const FASTLY_HELPER_PROTOCOL_VERSION: u64 = 1;
+const SQLCMD_HELPER_PROTOCOL_VERSION: u64 = 1;
 const GOAT_HELPER_PROTOCOL_VERSION: u64 = 1;
 const KUBECTL_HELPER_PROTOCOL_VERSION: u64 = 1;
 const ORDERCLI_HELPER_PROTOCOL_VERSION: u64 = 1;
@@ -433,6 +434,65 @@ pub(crate) fn ensure_fastly_helper_ready() -> Result<(), String> {
         )),
         None => Err("the running Automic Vault app returned no Fastly helper version".into()),
     }
+}
+
+pub(crate) fn ensure_sqlcmd_helper_ready() -> Result<(), String> {
+    if crate::test_keychain_dir().is_some() {
+        return Ok(());
+    }
+    let reply = xpc_request(
+        "sqlcmd-helper-version",
+        None,
+        None,
+        None,
+        Some((b"requested_version\0", SQLCMD_HELPER_PROTOCOL_VERSION)),
+    )
+    .map_err(|error| {
+        format!(
+            "sqlcmd credential-helper protocol negotiation failed; update and open the Automic Vault app: {error}"
+        )
+    })?;
+    match reply.value.as_deref() {
+        Some("1") => Ok(()),
+        Some(version) => Err(format!(
+            "the running Automic Vault app reported unsupported sqlcmd helper version {version}"
+        )),
+        None => Err("the running Automic Vault app returned no sqlcmd helper version".into()),
+    }
+}
+
+pub(crate) fn store_sqlcmd_credential(scope: &str, value: &str) -> Result<(), String> {
+    let (profile, _, _) = crate::cli::sqlcmd_credential::parse_scope(scope)?;
+    let account = crate::cli::sqlcmd_credential::secret_name(&profile);
+    if crate::test_keychain_dir().is_some() {
+        return store_secret(&account, value);
+    }
+    xpc_request(
+        "sqlcmd-save",
+        Some((b"sqlcmd_scope\0", scope)),
+        Some((b"value\0", value)),
+        None,
+        None,
+    )
+    .map(|_| ())
+}
+
+pub(crate) fn delete_sqlcmd_credential(scope: &str, account: &str) -> Result<(), String> {
+    if let Some(dir) = crate::test_keychain_dir() {
+        return match std::fs::remove_file(dir.join(account)) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(format!("failed to delete test sqlcmd credential: {error}")),
+        };
+    }
+    xpc_request(
+        "sqlcmd-delete",
+        Some((b"sqlcmd_scope\0", scope)),
+        None,
+        None,
+        None,
+    )
+    .map(|_| ())
 }
 
 pub(crate) fn store_fastly_credential(scope: &str, value: &str) -> Result<(), String> {
@@ -1018,6 +1078,8 @@ fn xpc_operation_requires_cwd(operation: &str) -> bool {
             | "oxide-delete"
             | "fastly-save"
             | "fastly-delete"
+            | "sqlcmd-save"
+            | "sqlcmd-delete"
             | "ordercli-save"
             | "ordercli-delete"
             | "openhue-save"

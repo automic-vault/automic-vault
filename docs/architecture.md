@@ -282,6 +282,17 @@ official endpoint, and derived Secret Name. SSO, legacy profiles, alternate
 endpoints, and unknown auth fields fail closed. Fastly API operations classify
 as Unknown; explicit token-reveal operations classify as a Secret Dump.
 
+The sqlcmd Hardener migrates basic-auth passwords from the default modern
+`~/.sqlcmd/sqlconfig` into Secret Custody. Its signed Isotope retains only an
+`@av` marker and non-secret user, context, and endpoint metadata, and invokes
+fixed Gate Client operations for password reads, stores, and deletion. The menu
+helper binds Secret Application to the live Developer ID-signed, Hardened
+Runtime sqlcmd Target, its complete arguments, selected user profile, endpoint,
+and derived Secret Name. Custom sqlconfig paths, unsupported authentication,
+unknown fields, malformed markers, and missing Secret Values fail closed. SQL
+execution remains Unknown; raw config and connection-string output classify as
+Secret Dumps.
+
 Podman uses the same registry credential-helper protocol as Docker, but its
 macOS remote client resolves credentials locally before sending an
 `X-Registry-Auth` header to the Linux service. The Podman Hardener keeps Red
