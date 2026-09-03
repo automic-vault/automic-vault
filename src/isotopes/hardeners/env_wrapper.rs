@@ -93,10 +93,7 @@ pub(crate) fn invocation_is_secretless(
         "npm" => npm_invocation_is_secretless(args),
         "pnpm" => pnpm_invocation_is_secretless(args),
         "fly" | "flyctl" => local_command(args, &["completion", "help", "version"]),
-        "k6" => local_command(
-            args,
-            &["archive", "completion", "help", "inspect", "new", "version"],
-        ),
+        "k6" => k6_invocation_is_secretless(args),
         "twine" => local_command(args, &["check"]),
         "vagrant" => local_command(args, &["global-status", "validate", "version"]),
         "hf" => local_command(args, &["cache"]),
@@ -258,6 +255,127 @@ fn pnpm_invocation_is_secretless(args: &[OsString]) -> bool {
                     key == "_authtoken" || key.ends_with(":_authtoken")
                 })
             }))
+}
+
+fn k6_invocation_is_secretless(args: &[OsString]) -> bool {
+    // Only explicit cloud operations receive the token. Config, environment,
+    // extension, and future-command ambiguity must not expose it to scripts.
+    if args
+        .iter()
+        .any(|arg| arg == "--help" || arg == "-h" || arg == "--version")
+    {
+        return true;
+    }
+    let Some(command) = k6_command_index(args, 0) else {
+        return true;
+    };
+    match args[command].to_str() {
+        Some("cloud") => {
+            let Some(subcommand) = k6_command_index(args, command + 1) else {
+                return true;
+            };
+            match args[subcommand].to_str() {
+                Some("run" | "upload") => false,
+                Some("project" | "load-zone" | "test") => {
+                    k6_command_index(args, subcommand + 1).and_then(|index| args[index].to_str())
+                        != Some("list")
+                }
+                _ => true,
+            }
+        }
+        Some("run") => !k6_run_uses_cloud_output(&args[command + 1..]),
+        _ => true,
+    }
+}
+
+fn k6_command_index(args: &[OsString], mut index: usize) -> Option<usize> {
+    while let Some(arg) = args.get(index).and_then(|arg| arg.to_str()) {
+        if matches!(
+            arg,
+            "--no-color"
+                | "--log-ns-timestamps"
+                | "--verbose"
+                | "-v"
+                | "--quiet"
+                | "-q"
+                | "--profiling-enabled"
+        ) {
+            index += 1;
+        } else if matches!(
+            arg,
+            "--secret-source"
+                | "--log-output"
+                | "--log-format"
+                | "--config"
+                | "-c"
+                | "--address"
+                | "-a"
+        ) {
+            args.get(index + 1)?;
+            index += 2;
+        } else if [
+            "--secret-source=",
+            "--log-output=",
+            "--log-format=",
+            "--config=",
+            "--address=",
+        ]
+        .iter()
+        .any(|prefix| arg.starts_with(prefix))
+            || [
+                "--no-color=",
+                "--log-ns-timestamps=",
+                "--verbose=",
+                "--quiet=",
+                "--profiling-enabled=",
+            ]
+            .iter()
+            .any(|prefix| arg.starts_with(prefix))
+            || (arg.starts_with("-c") || arg.starts_with("-a")) && arg.len() > 2
+        {
+            index += 1;
+        } else if arg.starts_with('-') {
+            return None;
+        } else {
+            return Some(index);
+        }
+    }
+    None
+}
+
+fn k6_run_uses_cloud_output(args: &[OsString]) -> bool {
+    let mut index = 0;
+    while let Some(arg) = args.get(index).and_then(|arg| arg.to_str()) {
+        if arg == "--" {
+            return false;
+        }
+        if arg == "--out" || arg == "-o" {
+            if args
+                .get(index + 1)
+                .and_then(|value| value.to_str())
+                .is_some_and(k6_cloud_output)
+            {
+                return true;
+            }
+            index += 2;
+            continue;
+        }
+        if let Some(value) = arg.strip_prefix("--out=") {
+            if k6_cloud_output(value) {
+                return true;
+            }
+        } else if let Some(value) = arg.strip_prefix("-o") {
+            if k6_cloud_output(value.strip_prefix('=').unwrap_or(value)) {
+                return true;
+            }
+        }
+        index += 1;
+    }
+    false
+}
+
+fn k6_cloud_output(value: &str) -> bool {
+    value == "cloud" || value.starts_with("cloud=")
 }
 
 fn secret_gate(wrapper: &EnvWrapper) -> SecretGateDescriptor {
@@ -1132,7 +1250,7 @@ mod tests {
             ("flyctl", "fly", &["deploy", "--help"][..], true),
             ("flyctl", "fly", &["deploy"][..], false),
             ("k6", "k6", &["inspect", "script.js"][..], true),
-            ("k6", "k6", &["run", "script.js"][..], false),
+            ("k6", "k6", &["run", "script.js"][..], true),
             ("twine", "twine", &["check", "dist/*"][..], true),
             ("twine", "twine", &["upload", "dist/*"][..], false),
             ("vagrant", "vagrant", &["validate"][..], true),
@@ -1157,6 +1275,82 @@ mod tests {
                 "{command} {args:?}",
             );
         }
+
+        unsafe { std::env::remove_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR") };
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn k6_requests_secrets_only_for_explicit_cloud_operations() {
+        let _guard = crate::global_test_env_lock().lock().unwrap();
+        let dir = temp_dir("env-wrapper-secretless-k6");
+        unsafe { std::env::set_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR", &dir) };
+        let script_path = dir.join("k6");
+        let script = stub_script(
+            &wrapper("k6").unwrap().primary,
+            Path::new("/opt/homebrew/bin/k6"),
+        );
+        let args = |values: &[&str]| {
+            std::iter::once(script_path.clone().into_os_string())
+                .chain(values.iter().map(OsString::from))
+                .collect::<Vec<_>>()
+        };
+
+        for command in [
+            vec![],
+            vec!["help"],
+            vec!["--help"],
+            vec!["version"],
+            vec!["--version"],
+            vec!["archive", "script.js"],
+            vec!["inspect", "script.js"],
+            vec!["deps", "script.js"],
+            vec!["new", "script.js"],
+            vec!["run", "script.js"],
+            vec!["run", "--out", "json=results.json", "script.js"],
+            vec!["run", "--config", "cloud.json", "script.js"],
+            vec!["run", "--", "script.js", "--out", "cloud"],
+            vec!["cloud"],
+            vec!["cloud", "login"],
+            vec!["cloud", "future-command"],
+            vec!["x", "extension-command"],
+            vec!["future-command"],
+            vec!["--quiet", "run", "script.js"],
+            vec!["--future-option", "cloud", "run", "script.js"],
+            vec!["--quiet", "cloud", "run", "script.js", "--help"],
+        ] {
+            assert!(
+                invocation_is_secretless(&script_path, script.as_bytes(), &args(&command)),
+                "k6 {command:?}",
+            );
+        }
+        for command in [
+            vec!["cloud", "run", "script.js"],
+            vec!["cloud", "upload", "script.js"],
+            vec!["cloud", "project", "list"],
+            vec!["cloud", "load-zone", "list"],
+            vec!["cloud", "test", "list"],
+            vec!["run", "--out", "cloud", "script.js"],
+            vec!["run", "--out=cloud", "script.js"],
+            vec!["run", "--out=cloud=eu", "script.js"],
+            vec!["run", "-o", "cloud", "script.js"],
+            vec!["run", "-ocloud", "script.js"],
+            vec!["--quiet", "cloud", "run", "script.js"],
+            vec!["--quiet=false", "cloud", "run", "script.js"],
+            vec!["--config", "config.json", "cloud", "project", "list"],
+            vec!["-cconfig.json", "cloud", "upload", "script.js"],
+            vec!["cloud", "--quiet", "test", "list"],
+        ] {
+            assert!(
+                !invocation_is_secretless(&script_path, script.as_bytes(), &args(&command)),
+                "k6 {command:?}",
+            );
+        }
+        assert!(!invocation_is_secretless(
+            &script_path,
+            format!("{script}# changed\n").as_bytes(),
+            &args(&["run", "script.js"]),
+        ));
 
         unsafe { std::env::remove_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR") };
         let _ = fs::remove_dir_all(dir);

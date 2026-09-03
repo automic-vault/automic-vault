@@ -30,6 +30,7 @@ public func genericSecretGateRequestClassification(
         }
         return .readOnly
     }
+    if gateID == "k6" { return k6RequestClassification(words) }
     if words == ["help"] || words == ["--help"] || words == ["version"] || words == ["--version"] {
         return .readOnly
     }
@@ -43,6 +44,86 @@ public func genericSecretGateRequestClassification(
         if policy.mutating.contains(candidate) { return .mutating }
     }
     return .unknown
+}
+
+private func k6RequestClassification(_ arguments: [String]) -> SecretGateRequestClassification {
+    // Mirrors the wrapper's positive catalog so future forms stay Unknown.
+    if arguments.contains(where: { $0 == "--help" || $0 == "-h" })
+        || arguments == ["--version"]
+    {
+        return .readOnly
+    }
+    guard let command = k6CommandIndex(arguments, from: 0) else { return .unknown }
+    switch arguments[command] {
+    case "inspect", "version":
+        return .readOnly
+    case "run":
+        return k6RunUsesCloudOutput(Array(arguments.dropFirst(command + 1))) ? .mutating : .unknown
+    case "cloud":
+        guard let subcommand = k6CommandIndex(arguments, from: command + 1) else { return .unknown }
+        switch arguments[subcommand] {
+        case "run", "upload":
+            return .mutating
+        case "project", "load-zone", "test":
+            guard let operation = k6CommandIndex(arguments, from: subcommand + 1) else { return .unknown }
+            return arguments[operation] == "list" ? .readOnly : .unknown
+        default:
+            return .unknown
+        }
+    default:
+        return .unknown
+    }
+}
+
+private func k6CommandIndex(_ arguments: [String], from start: Int) -> Int? {
+    let flags = ["--no-color", "--log-ns-timestamps", "--verbose", "-v", "--quiet", "-q", "--profiling-enabled"]
+    let booleanOptions = ["--no-color=", "--log-ns-timestamps=", "--verbose=", "--quiet=", "--profiling-enabled="]
+    let options = ["--secret-source", "--log-output", "--log-format", "--config", "-c", "--address", "-a"]
+    var index = start
+    while index < arguments.count {
+        let argument = arguments[index]
+        if flags.contains(argument) {
+            index += 1
+        } else if options.contains(argument) {
+            guard index + 1 < arguments.count else { return nil }
+            index += 2
+        } else if booleanOptions.contains(where: { argument.hasPrefix($0) })
+            || options.contains(where: { argument.hasPrefix("\($0)=") })
+            || ((argument.hasPrefix("-c") || argument.hasPrefix("-a")) && argument.count > 2)
+        {
+            index += 1
+        } else if argument.hasPrefix("-") {
+            return nil
+        } else {
+            return index
+        }
+    }
+    return nil
+}
+
+private func k6RunUsesCloudOutput(_ arguments: [String]) -> Bool {
+    var index = 0
+    while index < arguments.count {
+        let argument = arguments[index]
+        if argument == "--" { return false }
+        if argument == "--out" || argument == "-o" {
+            if index + 1 < arguments.count, k6CloudOutput(arguments[index + 1]) { return true }
+            index += 2
+            continue
+        }
+        if argument.hasPrefix("--out=") {
+            if k6CloudOutput(String(argument.dropFirst("--out=".count))) { return true }
+        } else if argument.hasPrefix("-o") {
+            let value = argument.dropFirst(2)
+            if k6CloudOutput(String(value.first == "=" ? value.dropFirst() : value)) { return true }
+        }
+        index += 1
+    }
+    return false
+}
+
+private func k6CloudOutput(_ value: String) -> Bool {
+    value == "cloud" || value.hasPrefix("cloud=")
 }
 
 private func stripeRequestClassification(_ arguments: [String]) -> SecretGateRequestClassification {
@@ -154,7 +235,7 @@ private let secretGateCommandPolicies: [String: SecretGateCommandPolicy] = [
     "hcloud": .init("server list,server describe,network list,network describe", "server create,server delete,network create,network delete"),
     "huggingface-cli": .init("auth whoami,repo list,cache scan", "upload,upload-large-folder,repo create,repo delete"),
     "jfrog-cli": .init("rt search,rt ping,rt build-info", "rt upload,rt delete,rt build-publish", secretDump: "config show,config export"),
-    "k6": .init("inspect", "run,cloud"),
+    "k6": .init("", ""),
     "luarocks": .init("search,show,list,which", "install,remove,upload,publish"),
     "minio-mc": .init("ls,stat,find,du,tree", "cp,mv,rm,mb,rb,mirror", secretDump: "alias export"),
     "netlify-cli": .init("status,sites list,functions list", "deploy,sites create,sites delete,functions create", secretDump: "env list,env get"),

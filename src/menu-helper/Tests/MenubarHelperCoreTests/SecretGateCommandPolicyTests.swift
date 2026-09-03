@@ -138,3 +138,18 @@ import Testing
     #expect(genericSecretGateRequestClassification(gateID: "pnpm", arguments: ["install"]) == .unknown)
     #expect(genericSecretGateRequestClassification(gateID: "pnpm", arguments: ["config", "get", "//registry.example/:_authToken"]) == .secretDump)
 }
+
+@Test func k6PolicyKeepsCloudCredentialRoutingNarrow() {
+    #expect(genericSecretGateRequestClassification(gateID: "k6", arguments: ["cloud", "project", "list"]) == .readOnly)
+    #expect(genericSecretGateRequestClassification(gateID: "k6", arguments: ["--quiet", "cloud", "test", "list"]) == .readOnly)
+    #expect(genericSecretGateRequestClassification(gateID: "k6", arguments: ["--quiet=false", "cloud", "test", "list"]) == .readOnly)
+    #expect(genericSecretGateRequestClassification(gateID: "k6", arguments: ["cloud", "run", "script.js"]) == .mutating)
+    #expect(genericSecretGateRequestClassification(gateID: "k6", arguments: ["cloud", "upload", "script.js"]) == .mutating)
+    #expect(genericSecretGateRequestClassification(gateID: "k6", arguments: ["run", "--out", "cloud", "script.js"]) == .mutating)
+    #expect(genericSecretGateRequestClassification(gateID: "k6", arguments: ["run", "-ocloud", "script.js"]) == .mutating)
+    #expect(genericSecretGateRequestClassification(gateID: "k6", arguments: ["run", "script.js"]) == .unknown)
+    #expect(genericSecretGateRequestClassification(gateID: "k6", arguments: ["run", "--out", "json", "script.js"]) == .unknown)
+    #expect(genericSecretGateRequestClassification(gateID: "k6", arguments: ["cloud", "login"]) == .unknown)
+    #expect(genericSecretGateRequestClassification(gateID: "k6", arguments: ["cloud", "future-command"]) == .unknown)
+    #expect(genericSecretGateRequestClassification(gateID: "k6", arguments: ["--future-option", "cloud", "run"]) == .unknown)
+}
