@@ -153,3 +153,16 @@ import Testing
     #expect(genericSecretGateRequestClassification(gateID: "k6", arguments: ["cloud", "future-command"]) == .unknown)
     #expect(genericSecretGateRequestClassification(gateID: "k6", arguments: ["--future-option", "cloud", "run"]) == .unknown)
 }
+
+@Test func twinePolicyRecognizesOnlyBuiltInCommands() {
+    #expect(genericSecretGateRequestClassification(gateID: "twine", arguments: ["check", "dist/package.whl"]) == .readOnly)
+    #expect(genericSecretGateRequestClassification(gateID: "twine", arguments: ["upload", "dist/package.whl"]) == .mutating)
+    #expect(genericSecretGateRequestClassification(gateID: "twine", arguments: ["--no-color", "check", "dist/package.whl"]) == .readOnly)
+    #expect(genericSecretGateRequestClassification(gateID: "twine", arguments: ["--no-color", "upload", "dist/package.whl"]) == .mutating)
+    #expect(genericSecretGateRequestClassification(gateID: "twine", arguments: ["--", "upload", "dist/package.whl"]) == .mutating)
+    #expect(genericSecretGateRequestClassification(gateID: "twine", arguments: ["--", "--no-color", "upload"]) == .unknown)
+    #expect(genericSecretGateRequestClassification(gateID: "twine", arguments: ["--", "--", "upload"]) == .unknown)
+    #expect(genericSecretGateRequestClassification(gateID: "twine", arguments: ["register", "dist/package.whl"]) == .unknown)
+    #expect(genericSecretGateRequestClassification(gateID: "twine", arguments: ["plugin-command"]) == .unknown)
+    #expect(genericSecretGateRequestClassification(gateID: "twine", arguments: ["--future-option", "upload"]) == .unknown)
+}

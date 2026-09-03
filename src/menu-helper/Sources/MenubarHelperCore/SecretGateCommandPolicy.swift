@@ -31,6 +31,7 @@ public func genericSecretGateRequestClassification(
         return .readOnly
     }
     if gateID == "k6" { return k6RequestClassification(words) }
+    if gateID == "twine" { return twineRequestClassification(words) }
     if words == ["help"] || words == ["--help"] || words == ["version"] || words == ["--version"] {
         return .readOnly
     }
@@ -124,6 +125,23 @@ private func k6RunUsesCloudOutput(_ arguments: [String]) -> Bool {
 
 private func k6CloudOutput(_ value: String) -> Bool {
     value == "cloud" || value.hasPrefix("cloud=")
+}
+
+private func twineRequestClassification(_ arguments: [String]) -> SecretGateRequestClassification {
+    if arguments.contains(where: { $0 == "--help" || $0 == "-h" })
+        || arguments == ["--version"]
+    {
+        return .readOnly
+    }
+    var index = 0
+    while index < arguments.count, arguments[index] == "--no-color" { index += 1 }
+    if index < arguments.count, arguments[index] == "--" { index += 1 }
+    let command = index < arguments.count ? arguments[index] : nil
+    switch command {
+    case "check": return .readOnly
+    case "upload": return .mutating
+    default: return .unknown
+    }
 }
 
 private func stripeRequestClassification(_ arguments: [String]) -> SecretGateRequestClassification {
@@ -258,7 +276,7 @@ private let secretGateCommandPolicies: [String: SecretGateCommandPolicy] = [
     "snyk": .init("", "monitor,auth"),
     "transifex-cli": .init("status", "pull,push"),
     "travis": .init("whoami,repos,history,show,logs", "restart,cancel,enable,disable", secretDump: "token"),
-    "twine": .init("check", "upload"),
+    "twine": .init("", ""),
     "vagrant": .init("status,global-status,validate,version", "up,destroy,halt,reload,suspend,resume,cloud publish"),
     "vault": .init("status,list,kv list,token lookup", "write,delete,kv put,kv delete", secretDump: "read,kv get,login,token create,token generate"),
     "virustotal-cli": .init("file,url,domain,ip,collection", "scan,upload"),

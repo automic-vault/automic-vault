@@ -94,7 +94,7 @@ pub(crate) fn invocation_is_secretless(
         "pnpm" => pnpm_invocation_is_secretless(args),
         "fly" | "flyctl" => local_command(args, &["completion", "help", "version"]),
         "k6" => k6_invocation_is_secretless(args),
-        "twine" => local_command(args, &["check"]),
+        "twine" => twine_invocation_is_secretless(args),
         "vagrant" => local_command(args, &["global-status", "validate", "version"]),
         "hf" => local_command(args, &["cache"]),
         "composer" => local_command(
@@ -376,6 +376,23 @@ fn k6_run_uses_cloud_output(args: &[OsString]) -> bool {
 
 fn k6_cloud_output(value: &str) -> bool {
     value == "cloud" || value.starts_with("cloud=")
+}
+
+fn twine_invocation_is_secretless(args: &[OsString]) -> bool {
+    if args
+        .iter()
+        .any(|arg| arg == "--help" || arg == "-h" || arg == "--version")
+    {
+        return true;
+    }
+    let mut args = args.iter().skip_while(|arg| *arg == "--no-color");
+    let command = args.next();
+    let command = if command.is_some_and(|arg| arg == "--") {
+        args.next()
+    } else {
+        command
+    };
+    command.is_none_or(|command| command != "upload")
 }
 
 fn secret_gate(wrapper: &EnvWrapper) -> SecretGateDescriptor {
@@ -1350,6 +1367,64 @@ mod tests {
             &script_path,
             format!("{script}# changed\n").as_bytes(),
             &args(&["run", "script.js"]),
+        ));
+
+        unsafe { std::env::remove_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR") };
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn twine_requests_secrets_only_for_uploads() {
+        let _guard = crate::global_test_env_lock().lock().unwrap();
+        let dir = temp_dir("env-wrapper-secretless-twine");
+        unsafe { std::env::set_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR", &dir) };
+        let script_path = dir.join("twine");
+        let script = stub_script(
+            &wrapper("twine").unwrap().primary,
+            Path::new("/opt/homebrew/bin/twine"),
+        );
+        let args = |values: &[&str]| {
+            std::iter::once(script_path.clone().into_os_string())
+                .chain(values.iter().map(OsString::from))
+                .collect::<Vec<_>>()
+        };
+
+        for command in [
+            vec![],
+            vec!["--help"],
+            vec!["--version"],
+            vec!["check", "dist/package.whl"],
+            vec!["check", "--strict", "dist/package.whl"],
+            vec!["register", "dist/package.whl"],
+            vec!["plugin-command", "argument"],
+            vec!["future-command"],
+            vec!["--no-color", "check", "dist/package.whl"],
+            vec!["--future-option", "upload", "dist/package.whl"],
+            vec!["--", "--no-color", "upload", "dist/package.whl"],
+            vec!["--", "--", "upload", "dist/package.whl"],
+            vec!["upload", "--help"],
+        ] {
+            assert!(
+                invocation_is_secretless(&script_path, script.as_bytes(), &args(&command)),
+                "twine {command:?}",
+            );
+        }
+        for command in [
+            vec!["upload", "dist/package.whl"],
+            vec!["upload", "--repository", "testpypi", "dist/package.whl"],
+            vec!["--no-color", "upload", "dist/package.whl"],
+            vec!["--no-color", "--no-color", "upload", "dist/package.whl"],
+            vec!["--", "upload", "dist/package.whl"],
+        ] {
+            assert!(
+                !invocation_is_secretless(&script_path, script.as_bytes(), &args(&command)),
+                "twine {command:?}",
+            );
+        }
+        assert!(!invocation_is_secretless(
+            &script_path,
+            format!("{script}# changed\n").as_bytes(),
+            &args(&["check", "dist/package.whl"]),
         ));
 
         unsafe { std::env::remove_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR") };
