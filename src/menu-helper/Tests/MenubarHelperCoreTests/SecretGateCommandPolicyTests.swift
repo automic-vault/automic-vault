@@ -123,3 +123,18 @@ import Testing
     #expect(genericSecretGateRequestClassification(gateID: "node", arguments: ["stage", "publish"]) == .mutating)
     #expect(genericSecretGateRequestClassification(gateID: "node", arguments: ["ls"]) == .unknown)
 }
+
+@Test func pnpmPolicyKeepsCompoundOperationsNarrow() {
+    #expect(genericSecretGateRequestClassification(gateID: "pnpm", arguments: ["audit"]) == .readOnly)
+    #expect(genericSecretGateRequestClassification(gateID: "pnpm", arguments: ["audit", "signatures"]) == .readOnly)
+    #expect(genericSecretGateRequestClassification(gateID: "pnpm", arguments: ["audit", "--fix"]) == .mutating)
+    #expect(genericSecretGateRequestClassification(gateID: "pnpm", arguments: ["audit", "--fix=override"]) == .mutating)
+    #expect(genericSecretGateRequestClassification(gateID: "pnpm", arguments: ["audit", "future-command"]) == .unknown)
+    #expect(genericSecretGateRequestClassification(gateID: "pnpm", arguments: ["dist-tag", "ls"]) == .readOnly)
+    #expect(genericSecretGateRequestClassification(gateID: "pnpm", arguments: ["dist-tag", "add"]) == .mutating)
+    #expect(genericSecretGateRequestClassification(gateID: "pnpm", arguments: ["stage", "list"]) == .readOnly)
+    #expect(genericSecretGateRequestClassification(gateID: "pnpm", arguments: ["stage", "download"]) == .unknown)
+    #expect(genericSecretGateRequestClassification(gateID: "pnpm", arguments: ["stage", "approve"]) == .mutating)
+    #expect(genericSecretGateRequestClassification(gateID: "pnpm", arguments: ["install"]) == .unknown)
+    #expect(genericSecretGateRequestClassification(gateID: "pnpm", arguments: ["config", "get", "//registry.example/:_authToken"]) == .secretDump)
+}

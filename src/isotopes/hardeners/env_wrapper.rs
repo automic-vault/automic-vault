@@ -91,13 +91,7 @@ pub(crate) fn invocation_is_secretless(
     let args = &args[1..];
     match stub.command {
         "npm" => npm_invocation_is_secretless(args),
-        "pnpm" => {
-            local_command(
-                args,
-                &["bin", "help", "list", "ls", "prefix", "root", "why"],
-            ) || args.first().is_some_and(|arg| arg == "store")
-                && args.get(1).is_some_and(|arg| arg == "path")
-        }
+        "pnpm" => pnpm_invocation_is_secretless(args),
         "fly" | "flyctl" => local_command(args, &["completion", "help", "version"]),
         "k6" => local_command(
             args,
@@ -205,6 +199,65 @@ fn npm_invocation_is_secretless(args: &[OsString]) -> bool {
             | "v"
             | "whoami"
     )
+}
+
+fn pnpm_invocation_is_secretless(args: &[OsString]) -> bool {
+    let Some(command) = args.first().and_then(|arg| arg.to_str()) else {
+        return true;
+    };
+    // Keep this positive list exact. Unknown commands and commands whose
+    // purpose is arbitrary package or project code must not inherit
+    // NODE_AUTH_TOKEN.
+    !matches!(
+        command,
+        "access"
+            | "add"
+            | "audit"
+            | "ci"
+            | "clean-install"
+            | "dedupe"
+            | "deprecate"
+            | "dist-tag"
+            | "dist-tags"
+            | "fetch"
+            | "find"
+            | "i"
+            | "ic"
+            | "info"
+            | "install"
+            | "install-clean"
+            | "logout"
+            | "outdated"
+            | "owner"
+            | "owners"
+            | "ping"
+            | "publish"
+            | "s"
+            | "se"
+            | "search"
+            | "show"
+            | "stage"
+            | "star"
+            | "stars"
+            | "team"
+            | "undeprecate"
+            | "unpublish"
+            | "unstar"
+            | "up"
+            | "update"
+            | "upgrade"
+            | "v"
+            | "view"
+            | "whoami"
+    ) && !(command == "store" && args.get(1).is_some_and(|arg| arg == "add"))
+        && !(command == "config"
+            && args.get(1).is_some_and(|arg| arg == "get")
+            && args.iter().skip(2).any(|arg| {
+                arg.to_str().is_some_and(|arg| {
+                    let key = arg.to_ascii_lowercase();
+                    key == "_authtoken" || key.ends_with(":_authtoken")
+                })
+            }))
 }
 
 fn secret_gate(wrapper: &EnvWrapper) -> SecretGateDescriptor {
@@ -979,6 +1032,87 @@ mod tests {
             format!("{script}# changed\n").as_bytes(),
             &args(&["root"]),
         ));
+
+        unsafe { std::env::remove_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR") };
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn pnpm_requests_secrets_only_for_reviewed_registry_commands() {
+        let _guard = crate::global_test_env_lock().lock().unwrap();
+        let dir = temp_dir("env-wrapper-secretless-pnpm");
+        unsafe { std::env::set_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR", &dir) };
+        let script_path = dir.join("pnpm");
+        let script = stub_script(
+            &wrapper("pnpm").unwrap().primary,
+            Path::new("/opt/homebrew/bin/pnpm"),
+        );
+        let args = |values: &[&str]| {
+            std::iter::once(script_path.clone().into_os_string())
+                .chain(values.iter().map(OsString::from))
+                .collect::<Vec<_>>()
+        };
+
+        for command in [
+            vec![],
+            vec![
+                "--global-dir",
+                "/tmp/pnpm-sem/global",
+                "--global-bin-dir",
+                "/tmp/pnpm-sem/bin",
+                "list",
+                "-g",
+                "--depth=0",
+                "--json",
+            ],
+            vec!["list"],
+            vec!["why", "example"],
+            vec!["root", "-g"],
+            vec!["store", "path"],
+            vec!["store", "prune"],
+            vec!["config", "get", "store-dir"],
+            vec!["login"],
+            vec!["run", "build"],
+            vec!["exec", "example"],
+            vec!["dlx", "example"],
+            vec!["install-test"],
+            vec!["it"],
+            vec!["remove", "example"],
+            vec!["config", "get", "unrelated_authtoken"],
+            vec!["--version"],
+            vec!["future-command"],
+            vec!["--dir", "/tmp", "publish"],
+        ] {
+            assert!(
+                invocation_is_secretless(&script_path, script.as_bytes(), &args(&command)),
+                "pnpm {command:?}",
+            );
+        }
+        for command in [
+            vec!["add", "private-package"],
+            vec!["install"],
+            vec!["ci"],
+            vec!["dedupe"],
+            vec!["fetch"],
+            vec!["audit"],
+            vec!["outdated"],
+            vec!["view", "private-package"],
+            vec!["search", "private-package"],
+            vec!["publish"],
+            vec!["unpublish", "private-package"],
+            vec!["deprecate", "private-package", "message"],
+            vec!["dist-tag", "add", "private-package@1", "latest"],
+            vec!["whoami"],
+            vec!["logout"],
+            vec!["stage", "list", "private-package"],
+            vec!["store", "add", "private-package"],
+            vec!["config", "get", "//registry.example/:_authToken"],
+        ] {
+            assert!(
+                !invocation_is_secretless(&script_path, script.as_bytes(), &args(&command)),
+                "pnpm {command:?}",
+            );
+        }
 
         unsafe { std::env::remove_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR") };
         let _ = fs::remove_dir_all(dir);
