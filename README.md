@@ -49,6 +49,11 @@ av harden gh
 av doctor gh
 ```
 
+Automic Vault has several other mechanisms (Blessed Scripts, Launcher
+Bundles, the Secret Proxy, Direct Secret Access) for situations a Hardener
+doesn't cover. See [Choosing a Mechanism](docs/choosing-a-mechanism.md) for
+which one fits your situation.
+
 [latest release]: https://github.com/automic-vault/automic-vault/releases/latest
 
 > [!IMPORTANT]
@@ -550,6 +555,7 @@ boundary.
 ## Documentation
 
 - [User manual](https://www.automicvault.com/docs/)
+- [Choosing a mechanism](docs/choosing-a-mechanism.md)
 - [Domain language](docs/domain-language.md)
 - [Architecture](docs/architecture.md)
 - [Positioning](docs/positioning.md)
