@@ -95,7 +95,7 @@ pub(crate) fn invocation_is_secretless(
         "fly" | "flyctl" => local_command(args, &["completion", "help", "version"]),
         "k6" => k6_invocation_is_secretless(args),
         "twine" => twine_invocation_is_secretless(args),
-        "vagrant" => local_command(args, &["global-status", "validate", "version"]),
+        "vagrant" => vagrant_invocation_is_secretless(args),
         "hf" => local_command(args, &["cache"]),
         "composer" => local_command(
             args,
@@ -393,6 +393,241 @@ fn twine_invocation_is_secretless(args: &[OsString]) -> bool {
         command
     };
     command.is_none_or(|command| command != "upload")
+}
+
+fn vagrant_invocation_is_secretless(args: &[OsString]) -> bool {
+    let Some(args) = args
+        .iter()
+        .map(|arg| arg.to_str())
+        .collect::<Option<Vec<_>>>()
+    else {
+        return true;
+    };
+    !vagrant_invocation_may_need_secret(&args)
+}
+
+fn vagrant_invocation_may_need_secret(args: &[&str]) -> bool {
+    let separator = args
+        .iter()
+        .position(|arg| *arg == "--")
+        .unwrap_or(args.len());
+    if args[..separator]
+        .iter()
+        .any(|arg| matches!(*arg, "--help" | "-h" | "--version" | "-v"))
+    {
+        return false;
+    }
+
+    // Vagrant removes these flags before dispatch, wherever they occur before `--`.
+    let args = args
+        .iter()
+        .enumerate()
+        .filter_map(|(index, arg)| {
+            (!(index < separator
+                && matches!(
+                    *arg,
+                    "--color"
+                        | "--no-color"
+                        | "--machine-readable"
+                        | "--debug"
+                        | "--timestamp"
+                        | "--debug-timestamp"
+                        | "--no-tty"
+                )))
+            .then_some(*arg)
+        })
+        .collect::<Vec<_>>();
+    let Some((command, args)) = vagrant_subcommand(&args) else {
+        return false;
+    };
+
+    match command {
+        "box" => vagrant_box_may_need_secret(args),
+        "cloud" => vagrant_cloud_may_need_secret(args),
+        "login" => vagrant_login_may_need_secret(args),
+        "up" | "reload" | "resume" => true,
+        "snapshot" => vagrant_subcommand(args).is_some_and(|(command, args)| {
+            matches!(command, "restore" | "pop")
+                && !args
+                    .iter()
+                    .take_while(|arg| **arg != "--")
+                    .any(|arg| *arg == "--no-start")
+        }),
+        _ => false,
+    }
+}
+
+fn vagrant_subcommand<'a>(args: &'a [&'a str]) -> Option<(&'a str, &'a [&'a str])> {
+    let index = args.iter().position(|arg| !arg.starts_with('-'))?;
+    Some((args[index], &args[index + 1..]))
+}
+
+fn vagrant_login_may_need_secret(args: &[&str]) -> bool {
+    let mut index = 0;
+    while index < args.len() {
+        let arg = args[index];
+        if arg == "--" {
+            return index + 1 == args.len();
+        } else if arg == "-c" || arg == "--check" {
+            index += 1;
+        } else if matches!(arg, "-d" | "--description" | "-u" | "--username") {
+            if index + 1 >= args.len() {
+                return false;
+            }
+            index += 2;
+        } else if matches!(arg, "-t" | "--token")
+            || arg.starts_with("--token=")
+            || arg.starts_with("-t") && !arg.starts_with("--") && arg.len() > 2
+        {
+            return false;
+        } else if arg.starts_with("--description=")
+            || arg.starts_with("--username=")
+            || (arg.starts_with("-d") || arg.starts_with("-u"))
+                && !arg.starts_with("--")
+                && arg.len() > 2
+        {
+            index += 1;
+        } else {
+            return false;
+        }
+    }
+    true
+}
+
+fn vagrant_whoami_may_need_secret(args: &[&str]) -> bool {
+    let mut positionals = 0;
+    let mut after_separator = false;
+    for arg in args {
+        if *arg == "--" && !after_separator {
+            after_separator = true;
+        } else if !after_separator && arg.starts_with('-') {
+            return false;
+        } else {
+            positionals += 1;
+        }
+    }
+    positionals == 0
+}
+
+fn vagrant_box_may_need_secret(args: &[&str]) -> bool {
+    let Some((command, args)) = vagrant_subcommand(args) else {
+        return false;
+    };
+    match command {
+        "add" => vagrant_box_add_may_need_secret(args),
+        "outdated" | "update" => true,
+        _ => false,
+    }
+}
+
+fn vagrant_box_add_may_need_secret(args: &[&str]) -> bool {
+    const VALUE_OPTIONS: &[&str] = &[
+        "-a",
+        "--architecture",
+        "--provider",
+        "--box-version",
+        "--checksum",
+        "--checksum-type",
+        "--name",
+        "--cacert",
+        "--capath",
+        "--cert",
+    ];
+    const FLAG_OPTIONS: &[&str] = &[
+        "-c",
+        "--clean",
+        "-f",
+        "--force",
+        "--insecure",
+        "--location-trusted",
+    ];
+
+    let mut positionals = Vec::new();
+    let mut index = 0;
+    while index < args.len() {
+        let arg = args[index];
+        if arg == "--" {
+            positionals.extend_from_slice(&args[index + 1..]);
+            break;
+        } else if VALUE_OPTIONS.contains(&arg) {
+            if index + 1 >= args.len() {
+                return false;
+            }
+            index += 2;
+        } else if VALUE_OPTIONS.iter().any(|option| {
+            arg.strip_prefix(option)
+                .is_some_and(|rest| rest.starts_with('='))
+        }) || arg.starts_with("-a") && !arg.starts_with("--") && arg.len() > 2
+        {
+            index += 1;
+        } else if FLAG_OPTIONS.contains(&arg) {
+            index += 1;
+        } else if arg.starts_with('-') {
+            return false;
+        } else {
+            positionals.push(arg);
+            index += 1;
+        }
+    }
+
+    let target = match positionals.as_slice() {
+        [target] | [_, target] => *target,
+        _ => return false,
+    };
+    if target.starts_with('/')
+        || target.starts_with("./")
+        || target.starts_with("../")
+        || target.starts_with("~/")
+        || !target.contains('/') && (target.ends_with(".box") || target.ends_with(".json"))
+    {
+        return false;
+    }
+    let Ok(target) = url::Url::parse(target) else {
+        return true;
+    };
+    if target.scheme() == "file" {
+        return false;
+    }
+    let Some(host) = target.host_str() else {
+        return false;
+    };
+    if matches!(
+        host,
+        "vagrantcloud.com" | "app.vagrantup.com" | "atlas.hashicorp.com"
+    ) {
+        return true;
+    }
+    std::env::var("VAGRANT_SERVER_URL")
+        .ok()
+        .and_then(|server| url::Url::parse(&server).ok())
+        .and_then(|server| server.host_str().map(str::to_owned))
+        .is_some_and(|server| server == host)
+}
+
+fn vagrant_cloud_may_need_secret(args: &[&str]) -> bool {
+    let Some((command, args)) = vagrant_subcommand(args) else {
+        return false;
+    };
+    match command {
+        "auth" => vagrant_subcommand(args).is_some_and(|(command, args)| match command {
+            "login" => vagrant_login_may_need_secret(args),
+            "whoami" => vagrant_whoami_may_need_secret(args),
+            _ => false,
+        }),
+        "box" => vagrant_subcommand(args)
+            .is_some_and(|(command, _)| matches!(command, "create" | "delete" | "show" | "update")),
+        "provider" => vagrant_subcommand(args).is_some_and(|(command, _)| {
+            matches!(command, "create" | "delete" | "update" | "upload")
+        }),
+        "publish" | "search" => true,
+        "version" => vagrant_subcommand(args).is_some_and(|(command, _)| {
+            matches!(
+                command,
+                "create" | "delete" | "release" | "revoke" | "update"
+            )
+        }),
+        _ => false,
+    }
 }
 
 fn secret_gate(wrapper: &EnvWrapper) -> SecretGateDescriptor {
@@ -1428,6 +1663,130 @@ mod tests {
         ));
 
         unsafe { std::env::remove_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR") };
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn vagrant_requests_secrets_only_for_cloud_capable_commands() {
+        let _guard = crate::global_test_env_lock().lock().unwrap();
+        let dir = temp_dir("env-wrapper-secretless-vagrant");
+        unsafe { std::env::set_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR", &dir) };
+        let previous_server = std::env::var_os("VAGRANT_SERVER_URL");
+        unsafe {
+            std::env::set_var(
+                "VAGRANT_SERVER_URL",
+                "https://private-vagrant.example.invalid",
+            )
+        };
+        let script_path = dir.join("vagrant");
+        let script = stub_script(
+            &wrapper("vagrant").unwrap().primary,
+            Path::new("/opt/homebrew/bin/vagrant"),
+        );
+        let args = |values: &[&str]| {
+            std::iter::once(script_path.clone().into_os_string())
+                .chain(values.iter().map(OsString::from))
+                .collect::<Vec<_>>()
+        };
+
+        for command in [
+            vec![],
+            vec!["--help"],
+            vec!["up", "--help"],
+            vec!["--version"],
+            vec!["up", "--version"],
+            vec!["status"],
+            vec!["global-status"],
+            vec!["validate"],
+            vec!["destroy"],
+            vec!["halt"],
+            vec!["suspend"],
+            vec!["ssh", "--", "printf", "hello"],
+            vec!["provision"],
+            vec!["push", "staging"],
+            vec!["plugin-command", "argument"],
+            vec!["future-command"],
+            vec!["--future-option", "future-command"],
+            vec!["--debug", "status"],
+            vec!["box", "list"],
+            vec!["box", "remove", "local-box"],
+            vec!["box", "prune"],
+            vec!["box", "repackage", "local-box", "virtualbox", "1.0.0"],
+            vec!["box", "add", "./fixtures/base.box"],
+            vec!["box", "add", "base.box"],
+            vec!["box", "add", "file:///tmp/base.box"],
+            vec!["box", "add", "https://downloads.example.invalid/base.box"],
+            vec!["box", "add", "--provider", "virtualbox", "./base.box"],
+            vec!["box", "add", "--future-option", "owner/private-box"],
+            vec!["cloud"],
+            vec!["cloud", "future-command"],
+            vec!["cloud", "auth", "logout"],
+            vec!["cloud", "auth", "login", "--token", "replacement"],
+            vec!["cloud", "auth", "login", "--token=replacement"],
+            vec!["login", "--future-option"],
+            vec!["cloud", "auth", "login", "--future-option"],
+            vec!["cloud", "auth", "whoami", "explicit-token"],
+            vec!["cloud", "auth", "whoami", "--future-option"],
+            vec!["snapshot", "save", "before-upgrade"],
+            vec!["snapshot", "restore", "--no-start", "before-upgrade"],
+            vec!["snapshot", "pop", "--no-start"],
+        ] {
+            assert!(
+                invocation_is_secretless(&script_path, script.as_bytes(), &args(&command)),
+                "vagrant {command:?}",
+            );
+        }
+
+        for command in [
+            vec!["up"],
+            vec!["--debug", "up"],
+            vec!["up", "--machine-readable"],
+            vec!["--future-option", "up"],
+            vec!["--", "up"],
+            vec!["up", "--", "--help"],
+            vec!["reload"],
+            vec!["resume"],
+            vec!["snapshot", "restore", "before-upgrade"],
+            vec!["snapshot", "pop"],
+            vec!["box", "add", "owner/private-box"],
+            vec!["box", "add", "-a", "arm64", "owner/private-box"],
+            vec!["box", "add", "--provider=virtualbox", "owner/private-box"],
+            vec!["box", "add", "https://vagrantcloud.com/owner/private-box"],
+            vec![
+                "box",
+                "add",
+                "https://private-vagrant.example.invalid/owner/private-box",
+            ],
+            vec!["box", "outdated"],
+            vec!["box", "update"],
+            vec!["login"],
+            vec!["login", "--check"],
+            vec!["cloud", "search", "private-box"],
+            vec!["cloud", "auth", "login"],
+            vec!["cloud", "auth", "login", "--check"],
+            vec!["cloud", "auth", "whoami"],
+            vec!["cloud", "box", "show", "owner/private-box"],
+            vec!["cloud", "box", "create", "owner/private-box"],
+            vec!["cloud", "provider", "upload", "owner/private-box"],
+            vec!["cloud", "publish", "owner/private-box"],
+            vec!["cloud", "version", "release", "owner/private-box", "1.0.0"],
+        ] {
+            assert!(
+                !invocation_is_secretless(&script_path, script.as_bytes(), &args(&command)),
+                "vagrant {command:?}",
+            );
+        }
+        assert!(!invocation_is_secretless(
+            &script_path,
+            format!("{script}# changed\n").as_bytes(),
+            &args(&["status"]),
+        ));
+
+        unsafe { std::env::remove_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR") };
+        match previous_server {
+            Some(value) => unsafe { std::env::set_var("VAGRANT_SERVER_URL", value) },
+            None => unsafe { std::env::remove_var("VAGRANT_SERVER_URL") },
+        }
         let _ = fs::remove_dir_all(dir);
     }
 

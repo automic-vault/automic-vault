@@ -32,6 +32,7 @@ public func genericSecretGateRequestClassification(
     }
     if gateID == "k6" { return k6RequestClassification(words) }
     if gateID == "twine" { return twineRequestClassification(words) }
+    if gateID == "vagrant" { return vagrantRequestClassification(words) }
     if words == ["help"] || words == ["--help"] || words == ["version"] || words == ["--version"] {
         return .readOnly
     }
@@ -140,6 +141,60 @@ private func twineRequestClassification(_ arguments: [String]) -> SecretGateRequ
     switch command {
     case "check": return .readOnly
     case "upload": return .mutating
+    default: return .unknown
+    }
+}
+
+private func vagrantRequestClassification(_ arguments: [String]) -> SecretGateRequestClassification {
+    let separator = arguments.firstIndex(of: "--") ?? arguments.endIndex
+    if arguments[..<separator].contains(where: { ["--help", "-h", "--version", "-v"].contains($0) }) {
+        return .readOnly
+    }
+    let globalFlags = Set(["--color", "--no-color", "--machine-readable", "--debug", "--timestamp", "--debug-timestamp", "--no-tty"])
+    let words = arguments.enumerated().compactMap { index, argument in
+        index < separator && globalFlags.contains(argument) ? nil : argument
+    }
+    guard let commandIndex = words.firstIndex(where: { !$0.hasPrefix("-") }) else { return .unknown }
+    let command = words[commandIndex]
+    let arguments = Array(words.dropFirst(commandIndex + 1))
+
+    switch command {
+    case "login": return .readOnly
+    case "up", "reload", "resume": return .mutating
+    case "snapshot":
+        guard let subcommand = arguments.first(where: { !$0.hasPrefix("-") }) else { return .unknown }
+        return ["restore", "pop"].contains(subcommand) ? .mutating : .unknown
+    case "box":
+        guard let subcommand = arguments.first(where: { !$0.hasPrefix("-") }) else { return .unknown }
+        if subcommand == "outdated" { return .readOnly }
+        return ["add", "update"].contains(subcommand) ? .mutating : .unknown
+    case "cloud": return vagrantCloudRequestClassification(arguments)
+    default: return .unknown
+    }
+}
+
+private func vagrantCloudRequestClassification(_ arguments: [String]) -> SecretGateRequestClassification {
+    guard let commandIndex = arguments.firstIndex(where: { !$0.hasPrefix("-") }) else { return .unknown }
+    let command = arguments[commandIndex]
+    let arguments = Array(arguments.dropFirst(commandIndex + 1))
+    let subcommand = arguments.first(where: { !$0.hasPrefix("-") })
+
+    switch command {
+    case "auth":
+        guard let subcommand else { return .unknown }
+        return ["login", "whoami"].contains(subcommand) ? .readOnly : .unknown
+    case "box":
+        guard let subcommand else { return .unknown }
+        if subcommand == "show" { return .readOnly }
+        return ["create", "delete", "update"].contains(subcommand) ? .mutating : .unknown
+    case "provider":
+        guard let subcommand else { return .unknown }
+        return ["create", "delete", "update", "upload"].contains(subcommand) ? .mutating : .unknown
+    case "publish": return .mutating
+    case "search": return .readOnly
+    case "version":
+        guard let subcommand else { return .unknown }
+        return ["create", "delete", "release", "revoke", "update"].contains(subcommand) ? .mutating : .unknown
     default: return .unknown
     }
 }
@@ -277,7 +332,7 @@ private let secretGateCommandPolicies: [String: SecretGateCommandPolicy] = [
     "transifex-cli": .init("status", "pull,push"),
     "travis": .init("whoami,repos,history,show,logs", "restart,cancel,enable,disable", secretDump: "token"),
     "twine": .init("", ""),
-    "vagrant": .init("status,global-status,validate,version", "up,destroy,halt,reload,suspend,resume,cloud publish"),
+    "vagrant": .init("", ""),
     "vault": .init("status,list,kv list,token lookup", "write,delete,kv put,kv delete", secretDump: "read,kv get,login,token create,token generate"),
     "virustotal-cli": .init("file,url,domain,ip,collection", "scan,upload"),
     "vultr": .init("instance list,instance get,region list,plan list", "instance create,instance delete,instance start,instance stop"),

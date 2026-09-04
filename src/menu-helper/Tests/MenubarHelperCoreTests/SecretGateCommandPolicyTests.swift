@@ -40,7 +40,7 @@ import Testing
         "transifex-cli": ["status"],
         "travis": ["whoami"],
         "twine": ["check", "dist/*"],
-        "vagrant": ["status"],
+        "vagrant": ["box", "outdated"],
         "vault": ["token", "lookup"],
         "virustotal-cli": ["domain", "example.com"],
         "vultr": ["instance", "list"],
@@ -165,4 +165,46 @@ import Testing
     #expect(genericSecretGateRequestClassification(gateID: "twine", arguments: ["register", "dist/package.whl"]) == .unknown)
     #expect(genericSecretGateRequestClassification(gateID: "twine", arguments: ["plugin-command"]) == .unknown)
     #expect(genericSecretGateRequestClassification(gateID: "twine", arguments: ["--future-option", "upload"]) == .unknown)
+}
+
+@Test func vagrantPolicyRecognizesOnlyCommandsThatCanUseCloudCredentials() {
+    let readOnly = [
+        ["login"],
+        ["box", "outdated"],
+        ["cloud", "search", "private-box"],
+        ["cloud", "box", "show", "owner/private-box"],
+        ["cloud", "auth", "whoami"],
+        ["--debug", "cloud", "search", "private-box"],
+    ]
+    for arguments in readOnly {
+        #expect(genericSecretGateRequestClassification(gateID: "vagrant", arguments: arguments) == .readOnly)
+    }
+
+    let mutating = [
+        ["up"],
+        ["reload"],
+        ["resume"],
+        ["snapshot", "restore", "before-upgrade"],
+        ["box", "add", "owner/private-box"],
+        ["box", "update"],
+        ["cloud", "publish", "owner/box"],
+        ["cloud", "provider", "upload", "owner/box"],
+        ["--machine-readable", "cloud", "box", "create", "owner/box"],
+    ]
+    for arguments in mutating {
+        #expect(genericSecretGateRequestClassification(gateID: "vagrant", arguments: arguments) == .mutating)
+    }
+
+    for arguments in [
+        ["destroy"],
+        ["halt"],
+        ["suspend"],
+        ["ssh"],
+        ["plugin-command"],
+        ["future-command"],
+        ["cloud", "future-command"],
+        ["box", "list"],
+    ] {
+        #expect(genericSecretGateRequestClassification(gateID: "vagrant", arguments: arguments) == .unknown)
+    }
 }
