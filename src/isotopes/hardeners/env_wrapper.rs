@@ -1,9 +1,9 @@
 use std::ffi::OsString;
 use std::fs;
-use std::io::{self, IsTerminal, Write};
+use std::io::{self, IsTerminal, Read, Write};
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use super::{
     HardenerCommand, HardenerDetection, HardenerMetadata, RequiredExecutable, RequiredIdentity,
@@ -116,6 +116,7 @@ pub(crate) fn invocation_is_secretless(
                 "validate",
             ],
         ),
+        "circleci" => circleci_invocation_is_secretless(args),
         _ => false,
     }
 }
@@ -205,6 +206,311 @@ fn npm_invocation_is_secretless(args: &[OsString]) -> bool {
             | "v"
             | "whoami"
     )
+}
+
+// Reviewed against circleci-cli v1.0.49592 and the final v0.1 release,
+// v0.1.47860. Keep this positive: v0.1 `run` executes arbitrary plugins, and
+// v1 loads arbitrary extensions and MCP tools.
+fn circleci_invocation_is_secretless(args: &[OsString]) -> bool {
+    if args.is_empty()
+        || args.iter().any(|arg| arg.to_str().is_none())
+        || args.iter().any(|arg| arg == "--")
+        || args.iter().any(|arg| {
+            matches!(
+                arg.to_str(),
+                Some("--help" | "-h" | "--version" | "-V" | "-v")
+            )
+        })
+        || circleci_has_nonempty_option(args, "--token")
+        || std::env::var_os("CIRCLECI_CLI_TOKEN").is_some()
+        || ["CIRCLE_TOKEN", "CIRCLE_CLI_TOKEN"]
+            .iter()
+            .any(|name| std::env::var_os(name).is_some_and(|value| !value.is_empty()))
+    {
+        return true;
+    }
+
+    let Some((command_index, explicit_config)) = circleci_command(args) else {
+        return true;
+    };
+    let command = args[command_index].to_str().unwrap();
+    let subcommand = circleci_subcommand(args, command_index + 1);
+    let requests_token = match command {
+        "admin" | "api" | "artifact" | "certificate" | "component-version" | "context"
+        | "deploy" | "diagnostic" | "dlc" | "follow" | "info" | "job" | "my" | "namespace"
+        | "org" | "pipeline" | "project" | "query" | "runner" | "signing-config"
+        | "test-result" | "trigger" | "workflow" => true,
+        "auth" => subcommand == Some("me"),
+        "config" => {
+            matches!(subcommand, Some("validate" | "check" | "process"))
+                && circleci_has_private_org(args)
+        }
+        "orb" => matches!(
+            subcommand,
+            Some(
+                "add-to-category"
+                    | "create"
+                    | "diff"
+                    | "get"
+                    | "info"
+                    | "init"
+                    | "list"
+                    | "list-categories"
+                    | "process"
+                    | "publish"
+                    | "remove-from-category"
+                    | "source"
+                    | "unlist"
+                    | "validate"
+            )
+        ),
+        "policy" => match subcommand {
+            Some("bundle" | "compile") => false,
+            Some("test") => circleci_has_private_org(args),
+            Some("eval") => {
+                !circleci_has_flag(args, "--no-compile")
+                    && (!circleci_has_nonempty_option(args, "--context")
+                        || circleci_option_equals(args, "--context", "config"))
+            }
+            Some("decide" | "diff" | "fetch" | "logs" | "push" | "settings") => true,
+            _ => false,
+        },
+        // v0.1 `run` and local execution hand the environment to arbitrary
+        // plugins or job code. Never route the protected token to them.
+        "build" | "local" | "mcp" | "run" | "tests" => false,
+        _ => false,
+    };
+    !requests_token
+        || circleci_config_has_token(explicit_config.as_deref())
+        || (test_stub_dir().is_none() && circleci_keychain_has_token(explicit_config.as_deref()))
+}
+
+fn circleci_command(args: &[OsString]) -> Option<(usize, Option<PathBuf>)> {
+    let mut explicit_config = None;
+    let mut index = 0;
+    while index < args.len() {
+        let argument = args[index].to_str()?;
+        if matches!(argument, "--config" | "-c") {
+            let value = args.get(index + 1)?.to_str()?;
+            if value.is_empty() {
+                return None;
+            }
+            explicit_config = Some(PathBuf::from(value));
+            index += 2;
+        } else if let Some(value) = argument.strip_prefix("--config=") {
+            if value.is_empty() {
+                return None;
+            }
+            explicit_config = Some(PathBuf::from(value));
+            index += 1;
+        } else if circleci_option_takes_value(argument) {
+            if args.get(index + 1)?.is_empty() {
+                return None;
+            }
+            index += 2;
+        } else if circleci_inline_option_has_value(argument) {
+            index += 1;
+        } else if circleci_global_flag(argument) {
+            index += 1;
+        } else if argument.starts_with('-') {
+            return None;
+        } else {
+            return Some((index, explicit_config));
+        }
+    }
+    None
+}
+
+fn circleci_subcommand(args: &[OsString], mut index: usize) -> Option<&str> {
+    while index < args.len() {
+        let argument = args[index].to_str()?;
+        if circleci_option_takes_value(argument)
+            || matches!(argument, "--org" | "--org-id" | "--org-slug" | "-o")
+        {
+            index += 2;
+        } else if circleci_inline_option_has_value(argument) {
+            index += 1;
+        } else if circleci_global_flag(argument)
+            || matches!(argument, "--json" | "--private" | "--uncertified")
+        {
+            index += 1;
+        } else if argument.starts_with('-') {
+            return None;
+        } else {
+            return Some(argument);
+        }
+    }
+    None
+}
+
+fn circleci_option_takes_value(argument: &str) -> bool {
+    matches!(
+        argument,
+        "--endpoint" | "--github-api" | "--host" | "--mock-telemetry" | "--theme" | "--token"
+    )
+}
+
+fn circleci_inline_option_has_value(argument: &str) -> bool {
+    [
+        "--endpoint",
+        "--github-api",
+        "--host",
+        "--mock-telemetry",
+        "--org",
+        "--org-id",
+        "--org-slug",
+        "--theme",
+        "--token",
+    ]
+    .iter()
+    .any(|name| {
+        argument
+            .strip_prefix(name)
+            .and_then(|argument| argument.strip_prefix('='))
+            .is_some_and(|value| !value.is_empty())
+    })
+}
+
+fn circleci_global_flag(argument: &str) -> bool {
+    matches!(
+        argument,
+        "--debug"
+            | "--insecure-storage"
+            | "--json"
+            | "--no-color"
+            | "--quiet"
+            | "--skip-update-check"
+            | "--trace"
+    )
+}
+
+fn circleci_has_flag(args: &[OsString], name: &str) -> bool {
+    args.iter()
+        .take_while(|arg| *arg != "--")
+        .any(|arg| arg == name)
+}
+
+fn circleci_has_nonempty_option(args: &[OsString], name: &str) -> bool {
+    args.iter()
+        .take_while(|arg| *arg != "--")
+        .enumerate()
+        .any(|(index, arg)| {
+            if arg == name {
+                return args.get(index + 1).is_some_and(|value| !value.is_empty());
+            }
+            arg.to_str()
+                .and_then(|arg| arg.strip_prefix(name))
+                .and_then(|arg| arg.strip_prefix('='))
+                .is_some_and(|value| !value.is_empty())
+        })
+}
+
+fn circleci_option_equals(args: &[OsString], name: &str, expected: &str) -> bool {
+    args.iter()
+        .take_while(|arg| *arg != "--")
+        .enumerate()
+        .any(|(index, arg)| {
+            arg == name && args.get(index + 1).is_some_and(|value| value == expected)
+                || arg
+                    .to_str()
+                    .and_then(|arg| arg.strip_prefix(name))
+                    .and_then(|arg| arg.strip_prefix('='))
+                    == Some(expected)
+        })
+}
+
+fn circleci_has_private_org(args: &[OsString]) -> bool {
+    ["--org", "--org-id", "--org-slug", "-o"]
+        .iter()
+        .any(|name| circleci_has_nonempty_option(args, name))
+}
+
+fn circleci_config_has_token(explicit: Option<&Path>) -> bool {
+    circleci_config_paths(explicit)
+        .into_iter()
+        .any(|path| circleci_config_value(&path, "token").is_some_and(|token| token != "token"))
+}
+
+fn circleci_config_paths(explicit: Option<&Path>) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    if let Some(path) = explicit {
+        paths.push(path.to_path_buf());
+    }
+    if let Some(base) = std::env::var_os("XDG_CONFIG_HOME") {
+        paths.push(PathBuf::from(base).join("circleci/config.yml"));
+    } else if let Some(home) = std::env::var_os("HOME") {
+        paths.push(PathBuf::from(&home).join(".config/circleci/config.yml"));
+    }
+    if let Some(home) = std::env::var_os("HOME") {
+        paths.push(PathBuf::from(home).join(".circleci/cli.yml"));
+    }
+    paths
+}
+
+fn circleci_config_value(path: &Path, key: &str) -> Option<String> {
+    if !path.metadata().ok()?.is_file() {
+        return None;
+    }
+    let mut contents = String::new();
+    fs::File::open(path)
+        .ok()?
+        .take(64 * 1024)
+        .read_to_string(&mut contents)
+        .ok()?;
+    contents.lines().find_map(|line| {
+        if line.starts_with(char::is_whitespace) {
+            return None;
+        }
+        let (name, value) = line.split_once(':')?;
+        if name.trim() != key {
+            return None;
+        }
+        let value = value
+            .split_once(" #")
+            .map_or(value, |(value, _)| value)
+            .trim();
+        if value.is_empty() || value.starts_with('#') {
+            return None;
+        }
+        let value = value
+            .strip_prefix('"')
+            .and_then(|value| value.strip_suffix('"'))
+            .or_else(|| {
+                value
+                    .strip_prefix('\'')
+                    .and_then(|value| value.strip_suffix('\''))
+            })
+            .unwrap_or(value)
+            .trim();
+        (!value.is_empty()).then(|| value.to_string())
+    })
+}
+
+fn circleci_keychain_has_token(explicit_config: Option<&Path>) -> bool {
+    let host = std::env::var("CIRCLE_HOST")
+        .ok()
+        .filter(|host| !host.is_empty())
+        .or_else(|| {
+            circleci_config_paths(explicit_config)
+                .into_iter()
+                .find_map(|path| circleci_config_value(&path, "host"))
+        })
+        .unwrap_or_else(|| "https://circleci.com".to_string());
+    let mut command = Command::new("/usr/bin/security");
+    command.args([
+        "find-generic-password",
+        "-s",
+        &format!("com.circleci.cli:{host}"),
+    ]);
+    circleci_keychain_query_succeeds(&mut command)
+}
+
+fn circleci_keychain_query_succeeds(command: &mut Command) -> bool {
+    command
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
 }
 
 fn secret_gate(wrapper: &EnvWrapper) -> SecretGateDescriptor {
@@ -470,6 +776,20 @@ original='{}'\n",
         script.push_str(&format!(
             "if [ -n \"${{{key}:-}}\" ]; then\n  old_ifs=\"$IFS\"\n  IFS='\n'\n  for assignment in ${{{key}-}}; do\n    [ -n \"$assignment\" ] || continue\n    export \"$assignment\"\n  done\n  IFS=\"$old_ifs\"\nfi\n"
         ));
+    }
+    if stub.command == "circleci" {
+        script.push_str(
+            "if [ -n \"${CIRCLE_TOKEN:-}\" ]; then\n\
+  [ \"${CIRCLECI_CLI_TOKEN+x}\" = x ] || export CIRCLECI_CLI_TOKEN=\"$CIRCLE_TOKEN\"\n\
+  [ \"${CIRCLE_CLI_TOKEN+x}\" = x ] || export CIRCLE_CLI_TOKEN=\"$CIRCLE_TOKEN\"\n\
+elif [ -n \"${CIRCLE_CLI_TOKEN:-}\" ]; then\n\
+  [ \"${CIRCLECI_CLI_TOKEN+x}\" = x ] || export CIRCLECI_CLI_TOKEN=\"$CIRCLE_CLI_TOKEN\"\n\
+  [ \"${CIRCLE_TOKEN+x}\" = x ] || export CIRCLE_TOKEN=\"$CIRCLE_CLI_TOKEN\"\n\
+elif [ -n \"${CIRCLECI_CLI_TOKEN:-}\" ]; then\n\
+  [ \"${CIRCLE_TOKEN+x}\" = x ] || export CIRCLE_TOKEN=\"$CIRCLECI_CLI_TOKEN\"\n\
+  [ \"${CIRCLE_CLI_TOKEN+x}\" = x ] || export CIRCLE_CLI_TOKEN=\"$CIRCLECI_CLI_TOKEN\"\n\
+fi\n",
+        );
     }
     script.push_str("exec \"$original\" \"$@\"\n");
     script
@@ -791,6 +1111,7 @@ const fn stub(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::ffi::OsStringExt;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
@@ -1026,6 +1347,214 @@ mod tests {
 
         unsafe { std::env::remove_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR") };
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn circleci_requests_its_token_only_for_reviewed_api_commands() {
+        let _guard = crate::global_test_env_lock().lock().unwrap();
+        let dir = temp_dir("env-wrapper-secretless-circleci");
+        let stub_dir = dir.join("stubs");
+        let xdg = dir.join("xdg");
+        let legacy_config = dir.join(".circleci/cli.yml");
+        let current_config = xdg.join("circleci/config.yml");
+        let explicit_config = dir.join("explicit.yml");
+        fs::create_dir_all(&stub_dir).unwrap();
+        fs::create_dir_all(legacy_config.parent().unwrap()).unwrap();
+        fs::create_dir_all(current_config.parent().unwrap()).unwrap();
+
+        let env_names = [
+            "AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR",
+            "CIRCLECI_CLI_TOKEN",
+            "CIRCLE_CLI_TOKEN",
+            "CIRCLE_HOST",
+            "CIRCLE_TOKEN",
+            "HOME",
+            "XDG_CONFIG_HOME",
+        ];
+        let previous = env_names.map(|name| (name, std::env::var_os(name)));
+        unsafe {
+            std::env::set_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR", &stub_dir);
+            std::env::set_var("HOME", &dir);
+            std::env::set_var("XDG_CONFIG_HOME", &xdg);
+            for name in &env_names[1..5] {
+                std::env::remove_var(name);
+            }
+        }
+
+        let script_path = stub_dir.join("circleci");
+        let target = dir.join("target/circleci");
+        fs::create_dir_all(target.parent().unwrap()).unwrap();
+        fs::write(
+            &target,
+            "#!/bin/sh\nprintf '%s|%s|%s\\n' \"${CIRCLECI_CLI_TOKEN-}\" \"${CIRCLE_TOKEN-}\" \"${CIRCLE_CLI_TOKEN-}\"\n",
+        )
+        .unwrap();
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o755)).unwrap();
+        let stub = &wrapper("circleci").unwrap().primary;
+        let script = stub_script(stub, &target);
+        assert!(script.contains("export CIRCLE_TOKEN=\"$CIRCLECI_CLI_TOKEN\""));
+        assert!(script.contains("export CIRCLECI_CLI_TOKEN=\"$CIRCLE_TOKEN\""));
+        fs::write(&script_path, &script).unwrap();
+        let output = Command::new("/bin/sh")
+            .arg(&script_path)
+            .env("CIRCLECI_CLI_TOKEN", "vaulted")
+            .env_remove("CIRCLE_TOKEN")
+            .env_remove("CIRCLE_CLI_TOKEN")
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        assert_eq!(output.stdout, b"vaulted|vaulted|vaulted\n");
+        let invocation = |values: Vec<OsString>| {
+            std::iter::once(script_path.clone().into_os_string())
+                .chain(values)
+                .collect::<Vec<_>>()
+        };
+        let args = |values: &[&str]| values.iter().map(OsString::from).collect::<Vec<_>>();
+
+        for values in [
+            vec![],
+            vec!["--help"],
+            vec!["--debug", "--version"],
+            vec!["version"],
+            vec!["help", "pipeline"],
+            vec!["future-command"],
+            vec!["extension", "install", "example"],
+            vec!["mcp", "start"],
+            vec!["run", "arbitrary-plugin", "--write"],
+            vec!["local", "execute", "build"],
+            vec!["build", "--job", "build"],
+            vec!["tests", "split"],
+            vec!["config", "validate"],
+            vec!["config", "process", ".circleci/config.yml"],
+            vec!["config", "pack", ".circleci"],
+            vec!["policy", "bundle", "policies"],
+            vec!["policy", "compile", "policies"],
+            vec!["policy", "eval", "policies", "--no-compile"],
+            vec!["policy", "eval", "policies", "--context", "other"],
+            vec!["policy", "test", "policies"],
+            vec!["auth", "login"],
+            vec!["auth", "logout"],
+            vec!["setup"],
+            vec!["pipeline", "list", "--", "anything"],
+        ] {
+            assert!(
+                invocation_is_secretless(
+                    &script_path,
+                    script.as_bytes(),
+                    &invocation(args(&values)),
+                ),
+                "circleci {values:?}",
+            );
+        }
+        assert!(invocation_is_secretless(
+            &script_path,
+            script.as_bytes(),
+            &invocation(vec![OsString::from_vec(vec![0xff])]),
+        ));
+
+        for values in [
+            vec!["pipeline", "list"],
+            vec!["pipeline", "run", "main"],
+            vec!["project", "list"],
+            vec!["context", "list"],
+            vec!["context", "create", "production"],
+            vec!["auth", "me"],
+            vec!["config", "validate", "--org", "gh/example"],
+            vec![
+                "config",
+                "process",
+                "--org-slug=github/example",
+                "config.yml",
+            ],
+            vec!["orb", "validate", "orb.yml"],
+            vec!["orb", "publish", "orb.yml", "example/orb@dev:first"],
+            vec!["policy", "eval", "policies", "--input", "config.yml"],
+            vec!["policy", "push", "policies", "--org", "gh/example"],
+            vec!["api", "get", "/api/v2/me"],
+            vec!["diagnostic"],
+            vec!["workflow", "list"],
+            vec![
+                "--host=https://circleci.example",
+                "--json",
+                "pipeline",
+                "list",
+            ],
+        ] {
+            assert!(
+                !invocation_is_secretless(
+                    &script_path,
+                    script.as_bytes(),
+                    &invocation(args(&values)),
+                ),
+                "circleci {values:?}",
+            );
+        }
+
+        for values in [
+            vec!["--token", "explicit", "pipeline", "list"],
+            vec!["pipeline", "list", "--token=explicit"],
+        ] {
+            assert!(invocation_is_secretless(
+                &script_path,
+                script.as_bytes(),
+                &invocation(args(&values)),
+            ));
+        }
+
+        unsafe { std::env::set_var("CIRCLE_TOKEN", "existing") };
+        assert!(invocation_is_secretless(
+            &script_path,
+            script.as_bytes(),
+            &invocation(args(&["pipeline", "list"])),
+        ));
+        unsafe {
+            std::env::remove_var("CIRCLE_TOKEN");
+            std::env::set_var("CIRCLECI_CLI_TOKEN", "");
+        }
+        assert!(invocation_is_secretless(
+            &script_path,
+            script.as_bytes(),
+            &invocation(args(&["pipeline", "list"])),
+        ));
+        unsafe { std::env::remove_var("CIRCLECI_CLI_TOKEN") };
+
+        fs::write(&legacy_config, "host: https://circleci.com\ntoken: fresh\n").unwrap();
+        assert!(invocation_is_secretless(
+            &script_path,
+            script.as_bytes(),
+            &invocation(args(&["pipeline", "list"])),
+        ));
+        fs::remove_file(&legacy_config).unwrap();
+
+        fs::write(&explicit_config, "token: fresh\n").unwrap();
+        assert!(invocation_is_secretless(
+            &script_path,
+            script.as_bytes(),
+            &invocation(args(&[
+                "--config",
+                explicit_config.to_str().unwrap(),
+                "pipeline",
+                "list",
+            ])),
+        ));
+
+        assert!(circleci_keychain_query_succeeds(&mut Command::new(
+            "/usr/bin/true"
+        )));
+        assert!(!circleci_keychain_query_succeeds(&mut Command::new(
+            "/usr/bin/false"
+        )));
+
+        for (name, value) in previous {
+            unsafe {
+                if let Some(value) = value {
+                    std::env::set_var(name, value);
+                } else {
+                    std::env::remove_var(name);
+                }
+            }
+        }
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

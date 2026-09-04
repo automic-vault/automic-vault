@@ -72,6 +72,47 @@ import Testing
     #expect(genericSecretGateRequestClassification(gateID: "flyctl", arguments: []) == .unknown)
 }
 
+@Test func circleCIPolicyClassifiesReviewedAPIEffects() {
+    let readOnly = [
+        ["pipeline", "list"],
+        ["--host", "https://circleci.example", "--json", "project", "list"],
+        ["config", "validate", "--org", "gh/example"],
+        ["context", "list"],
+        ["auth", "me"],
+        ["orb", "validate", "orb.yml"],
+        ["policy", "eval", "policies", "--input", "config.yml"],
+        ["workflow", "list"],
+    ]
+    for arguments in readOnly {
+        #expect(genericSecretGateRequestClassification(gateID: "circleci", arguments: arguments) == .readOnly)
+    }
+
+    let mutating = [
+        ["pipeline", "run", "main"],
+        ["context", "create", "production"],
+        ["context", "secret", "store", "production", "TOKEN"],
+        ["context", "store-secret", "production", "TOKEN"],
+        ["orb", "publish", "orb.yml", "example/orb@dev:first"],
+        ["policy", "push", "policies", "--org", "gh/example"],
+        ["project", "create"],
+        ["workflow", "cancel", "workflow-id"],
+    ]
+    for arguments in mutating {
+        #expect(genericSecretGateRequestClassification(gateID: "circleci", arguments: arguments) == .mutating)
+    }
+
+    for arguments in [
+        ["api", "get", "/api/v2/me"],
+        ["run", "arbitrary-plugin"],
+        ["extension", "example"],
+        ["mcp", "start"],
+        ["future-command"],
+        ["pipeline", "list", "--", "anything"],
+    ] {
+        #expect(genericSecretGateRequestClassification(gateID: "circleci", arguments: arguments) == .unknown)
+    }
+}
+
 @Test func stripePolicyClassifiesGeneratedBuiltInAndPluginCommands() {
     let readOnly = [
         ["customers", "list"],
