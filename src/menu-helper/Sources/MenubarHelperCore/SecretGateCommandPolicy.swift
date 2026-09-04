@@ -20,11 +20,49 @@ public func genericSecretGateRequestClassification(
 ) -> SecretGateRequestClassification {
     let words = arguments.map { $0.lowercased() }
     guard !words.isEmpty else { return .unknown }
+    if gateID == "algolia" { return algoliaRequestClassification(words) }
     if gateID == "stripe" { return stripeRequestClassification(words) }
     if words == ["help"] || words == ["--help"] || words == ["version"] || words == ["--version"] {
         return .readOnly
     }
     guard let policy = secretGateCommandPolicies[gateID] else { return .unknown }
+    let candidates = (1...min(3, words.count)).reversed().map {
+        words.prefix($0).joined(separator: " ")
+    }
+    for candidate in candidates {
+        if policy.secretDump.contains(candidate) { return .secretDump }
+        if policy.readOnly.contains(candidate) { return .readOnly }
+        if policy.mutating.contains(candidate) { return .mutating }
+    }
+    return .unknown
+}
+
+private func algoliaRequestClassification(_ arguments: [String]) -> SecretGateRequestClassification {
+    for (index, argument) in arguments.prefix(while: { $0 != "--" }).enumerated() {
+        if ["--help", "-h", "--version", "-v"].contains(argument),
+           index == 0 || !arguments[index - 1].hasPrefix("-") {
+            return .readOnly
+        }
+    }
+
+    let optionsWithValues = ["--profile", "-p", "--application-id", "--api-key", "--admin-api-key", "--search-hosts"]
+    var index = 0
+    while index < arguments.count {
+        let argument = arguments[index]
+        if optionsWithValues.contains(argument) {
+            guard index + 1 < arguments.count else { return .unknown }
+            index += 2
+        } else if optionsWithValues.contains(where: { argument.hasPrefix("\($0)=") }) {
+            index += 1
+        } else if argument.hasPrefix("-") {
+            return .unknown
+        } else {
+            break
+        }
+    }
+    guard index < arguments.count,
+          let policy = secretGateCommandPolicies["algolia"] else { return .unknown }
+    let words = Array(arguments[index...])
     let candidates = (1...min(3, words.count)).reversed().map {
         words.prefix($0).joined(separator: " ")
     }
@@ -125,7 +163,11 @@ accept,acknowledge_confirmation_of_payee,activate,add_lines,advance,apply_custom
 
 private let secretGateCommandPolicies: [String: SecretGateCommandPolicy] = [
     "akamai": .init("config list", "config set,config remove", secretDump: "config show"),
-    "algolia": .init("profile list", "objects import,objects delete,indices delete", secretDump: "profile get"),
+    "algolia": .init(
+        "search,indices list,index list,indices analyze,index analyze,indices config export,index config export,objects browse,records browse,settings get,rules browse,rule browse,synonyms browse,synonym browse,dictionary entries browse,dictionaries entries browse,dict entries browse,dictionary settings get,dictionaries settings get,dict settings get,events tail,crawler list,crawlers list,crawler get,crawlers get,crawler stats,crawlers stats,crawler test,crawlers test,compositions list,compositions get,compositions search,compositions rules list,compositions rules get,auth status,completion,describe,schema,open,profile list,profiles list,application list,app list,application current,app current,application plans,app plans",
+        "indices clear,index clear,indices copy,index copy,indices delete,index delete,indices move,index move,indices config import,index config import,objects import,records import,objects delete,records delete,objects update,records update,objects operations,records operations,apikeys create,api-key create,api-keys create,apikey create,apikeys delete,api-key delete,api-keys delete,apikey delete,apikeys rotate,api-key rotate,api-keys rotate,apikey rotate,settings set,settings import,rules import,rule import,rules delete,rule delete,synonyms import,synonym import,synonyms delete,synonym delete,synonyms save,synonym save,dictionary entries clear,dictionaries entries clear,dict entries clear,dictionary entries delete,dictionaries entries delete,dict entries delete,dictionary entries import,dictionaries entries import,dict entries import,dictionary settings set,dictionaries settings set,dict settings set,crawler crawl,crawlers crawl,crawler create,crawlers create,crawler pause,crawlers pause,crawler reindex,crawlers reindex,crawler run,crawlers run,crawler unblock,crawlers unblock,compositions delete,compositions upsert,compositions sorting-strategy,compositions rules delete,compositions rules upsert,profile add,profiles add,profile remove,profiles remove,profile setdefault,profiles setdefault,application create,app create,application select,app select,application update,app update,application upgrade,app upgrade,application downgrade,app downgrade",
+        secretDump: "apikeys list,api-key list,api-keys list,apikey list,apikeys get,api-key get,api-keys get,apikey get,auth get --with-access-token"
+    ),
     "argocd": .init("app get,app list,app diff,cluster get,cluster list,account get-user-info", "app create,app set,app sync,app delete,app rollback", secretDump: "account generate-token"),
     "ast-cli": .init("scan list,scan show,project list,project show", "scan create,scan cancel,project create,project delete"),
     "buf": .init("repository list,module list,organization list", "push,repository create,repository delete"),

@@ -72,6 +72,45 @@ import Testing
     #expect(genericSecretGateRequestClassification(gateID: "flyctl", arguments: []) == .unknown)
 }
 
+@Test func algoliaPolicyMatchesVersion116CommandAuthority() {
+    let readOnly = [
+        ["search", "INDEX"],
+        ["index", "analyze", "INDEX"],
+        ["records", "browse", "INDEX"],
+        ["dictionary", "entries", "browse"],
+        ["compositions", "rules", "get", "rule-id"],
+        ["crawler", "test", "crawler-id", "--url", "https://example.com"],
+        ["auth", "status"],
+        ["--profile", "work", "indices", "list"],
+        ["--application-id=APP", "--api-key=caller-key", "settings", "get", "INDEX"],
+        ["describe", "objects", "browse"],
+        ["objects", "delete", "--help"],
+    ]
+    for arguments in readOnly {
+        #expect(genericSecretGateRequestClassification(gateID: "algolia", arguments: arguments) == .readOnly)
+    }
+
+    let mutating = [
+        ["indices", "delete", "INDEX"],
+        ["objects", "operations", "INDEX"],
+        ["objects", "delete", "INDEX", "--output", "--help"],
+        ["--api-key", "--help", "objects", "delete", "INDEX"],
+        ["api-keys", "rotate"],
+        ["dictionary", "settings", "set"],
+        ["crawler", "run", "crawler-id"],
+        ["compositions", "rules", "upsert", "rule-id"],
+    ]
+    for arguments in mutating {
+        #expect(genericSecretGateRequestClassification(gateID: "algolia", arguments: arguments) == .mutating)
+    }
+
+    #expect(genericSecretGateRequestClassification(gateID: "algolia", arguments: ["apikeys", "list"]) == .secretDump)
+    #expect(genericSecretGateRequestClassification(gateID: "algolia", arguments: ["api-key", "get", "key"]) == .secretDump)
+    #expect(genericSecretGateRequestClassification(gateID: "algolia", arguments: ["future-command"]) == .unknown)
+    #expect(genericSecretGateRequestClassification(gateID: "algolia", arguments: ["indices", "future-operation"]) == .unknown)
+    #expect(genericSecretGateRequestClassification(gateID: "algolia", arguments: ["--future-global", "indices", "list"]) == .unknown)
+}
+
 @Test func stripePolicyClassifiesGeneratedBuiltInAndPluginCommands() {
     let readOnly = [
         ["customers", "list"],
