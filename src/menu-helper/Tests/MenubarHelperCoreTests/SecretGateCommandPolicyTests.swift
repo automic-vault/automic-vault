@@ -123,3 +123,70 @@ import Testing
     #expect(genericSecretGateRequestClassification(gateID: "node", arguments: ["stage", "publish"]) == .mutating)
     #expect(genericSecretGateRequestClassification(gateID: "node", arguments: ["ls"]) == .unknown)
 }
+
+@Test func wskPolicyClassifiesItsReviewedCommandMap() {
+    let readOnly = [
+        ["list"],
+        ["action", "list"],
+        ["action", "get", "example", "--summary"],
+        ["activation", "list"],
+        ["api", "get"],
+        ["namespace", "get"],
+        ["package", "get", "example", "-s"],
+        ["property", "get", "--namespace"],
+        ["property", "get", "--cliversion"],
+        ["rule", "status"],
+        ["trigger", "get", "example", "--summary"],
+        ["--debug", "action", "list"],
+        ["action", "--insecure", "list"],
+        ["action", "list", "--help"],
+    ]
+    for arguments in readOnly {
+        #expect(genericSecretGateRequestClassification(gateID: "wsk", arguments: arguments) == .readOnly)
+    }
+
+    let localWrites = [
+        ["sdk", "install", "docker"],
+        ["property", "set", "--auth", "caller"],
+        ["property", "unset", "--auth"],
+        ["project", "export"],
+    ]
+    for arguments in localWrites {
+        #expect(genericSecretGateRequestClassification(gateID: "wsk", arguments: arguments) == .localWrite)
+    }
+
+    let mutations = [
+        ["action", "create"],
+        ["action", "invoke"],
+        ["api", "delete"],
+        ["package", "bind"],
+        ["project", "deploy"],
+        ["rule", "enable"],
+        ["trigger", "fire"],
+        ["action", "create", "name", "--param", "key", "-h"],
+    ]
+    for arguments in mutations {
+        #expect(genericSecretGateRequestClassification(gateID: "wsk", arguments: arguments) == .mutating)
+    }
+
+    let secretDisclosures = [
+        ["action", "get", "example"],
+        ["activation", "get", "id"],
+        ["activation", "list", "--full"],
+        ["action", "invoke", "example", "--result"],
+        ["package", "get", "example"],
+        ["property", "get"],
+        ["property", "get", "--all"],
+        ["property", "get", "--auth"],
+        ["trigger", "get", "example"],
+    ]
+    for arguments in secretDisclosures {
+        #expect(genericSecretGateRequestClassification(gateID: "wsk", arguments: arguments) == .secretDump)
+    }
+
+    #expect(genericSecretGateRequestClassification(gateID: "wsk", arguments: ["action"]) == .unknown)
+    #expect(genericSecretGateRequestClassification(gateID: "wsk", arguments: ["action", "future"]) == .unknown)
+    #expect(genericSecretGateRequestClassification(
+        gateID: "wsk", arguments: ["property", "get", "--future"]
+    ) == .unknown)
+}

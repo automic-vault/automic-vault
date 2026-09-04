@@ -21,6 +21,7 @@ public func genericSecretGateRequestClassification(
     let words = arguments.map { $0.lowercased() }
     guard !words.isEmpty else { return .unknown }
     if gateID == "stripe" { return stripeRequestClassification(words) }
+    if gateID == "wsk" { return wskRequestClassification(words) }
     if words == ["help"] || words == ["--help"] || words == ["version"] || words == ["--version"] {
         return .readOnly
     }
@@ -34,6 +35,119 @@ public func genericSecretGateRequestClassification(
         if policy.mutating.contains(candidate) { return .mutating }
     }
     return .unknown
+}
+
+// Reviewed against Apache OpenWhisk CLI 1.2.0 (7c47ef1). Unknown commands
+// remain Unknown until their authority is reviewed.
+private func wskRequestClassification(_ arguments: [String]) -> SecretGateRequestClassification {
+    var index = 0
+    while index < arguments.count {
+        if ["help", "--help", "-h", "version", "--version"].contains(arguments[index]) {
+            return .readOnly
+        }
+        guard let next = wskIndexAfterGlobalOption(arguments, index) else { break }
+        index = next
+    }
+    guard index < arguments.count else { return .unknown }
+    let root = arguments[index]
+    guard !root.hasPrefix("-") else { return .unknown }
+    index += 1
+    if root == "list" { return .readOnly }
+
+    while index < arguments.count, let next = wskIndexAfterGlobalOption(arguments, index) {
+        index = next
+    }
+    guard index < arguments.count else { return .unknown }
+    let operation = arguments[index]
+    if ["help", "--help", "-h"].contains(operation) { return .readOnly }
+    index += 1
+    if index < arguments.count, ["help", "--help", "-h"].contains(arguments[index]) {
+        return .readOnly
+    }
+    let command = "\(root) \(operation)"
+    let trailing = Array(arguments.dropFirst(index))
+
+    switch command {
+    case "action get", "package get", "trigger get":
+        return trailing.contains("--summary") || trailing.contains("-s") ? .readOnly : .secretDump
+    case "activation get", "activation logs", "activation poll", "activation result":
+        return .secretDump
+    case "activation list":
+        return trailing.contains("--full") || trailing.contains("-f") ? .secretDump : .readOnly
+    case "action invoke":
+        return trailing.contains("--result") || trailing.contains("-r") ? .secretDump : .mutating
+    case "property get":
+        return wskPropertyGetClassification(trailing)
+    case "property set", "property unset", "sdk install", "project export":
+        return .localWrite
+    case "action list", "api get", "api list", "namespace get", "namespace list", "package list",
+         "rule get", "rule list", "rule status", "trigger list":
+        return .readOnly
+    case "action create", "action delete", "action update", "api create", "api delete", "package bind",
+         "package create", "package delete", "package refresh", "package update", "project deploy",
+         "project sync", "project undeploy", "rule create", "rule delete", "rule disable", "rule enable",
+         "rule update", "trigger create", "trigger delete", "trigger fire", "trigger update":
+        return .mutating
+    default:
+        return .unknown
+    }
+}
+
+private func wskIndexAfterGlobalOption(_ arguments: [String], _ index: Int) -> Int? {
+    let argument = arguments[index]
+    if ["--debug", "-d", "--insecure", "-i", "--verbose", "-v"].contains(argument) {
+        return index + 1
+    }
+    if ["--cert", "--key", "--auth", "-u", "--apihost", "--apiversion"].contains(argument) {
+        return index + 1 < arguments.count ? index + 2 : nil
+    }
+    if ["--cert=", "--key=", "--auth=", "--apihost=", "--apiversion="].contains(where: {
+        argument.hasPrefix($0)
+    }) || argument.hasPrefix("-u") && argument.count > 2 {
+        return index + 1
+    }
+    return nil
+}
+
+private func wskPropertyGetClassification(_ arguments: [String]) -> SecretGateRequestClassification {
+    guard !arguments.isEmpty else { return .secretDump }
+    var selectedProperty = false
+    var index = 0
+    while index < arguments.count {
+        let argument = arguments[index]
+        if ["--auth", "--all"].contains(argument)
+            || ["--auth=", "--all="].contains(where: { argument.hasPrefix($0) })
+        {
+            return .secretDump
+        }
+        if argument == "--namespace" || argument.hasPrefix("--namespace=") {
+            selectedProperty = true
+            index += 1
+            continue
+        }
+        if ["--cert", "--key", "--apihost", "--apiversion", "--apibuild", "--apibuildno", "--cliversion"]
+            .contains(argument)
+        {
+            selectedProperty = true
+            index += 1
+            continue
+        }
+        if ["--debug", "-d", "--insecure", "-i", "--verbose", "-v"].contains(argument) {
+            index += 1
+            continue
+        }
+        if ["--output", "-o"].contains(argument) {
+            guard index + 1 < arguments.count else { return .unknown }
+            index += 2
+            continue
+        }
+        if argument.hasPrefix("--output=") {
+            index += 1
+            continue
+        }
+        return .unknown
+    }
+    return selectedProperty ? .readOnly : .secretDump
 }
 
 private func stripeRequestClassification(_ arguments: [String]) -> SecretGateRequestClassification {
@@ -169,7 +283,7 @@ private let secretGateCommandPolicies: [String: SecretGateCommandPolicy] = [
     "vault": .init("status,list,kv list,token lookup", "write,delete,kv put,kv delete", secretDump: "read,kv get,login,token create,token generate"),
     "virustotal-cli": .init("file,url,domain,ip,collection", "scan,upload"),
     "vultr": .init("instance list,instance get,region list,plan list", "instance create,instance delete,instance start,instance stop"),
-    "wsk": .init("action list,action get,namespace list,package list,trigger list", "action create,action update,action delete,action invoke", secretDump: "property get"),
+    "wsk": .init("", ""),
     "stripe": .init("", ""),
     "supabase": .init("projects list,functions list,status,inspect", "link,unlink,db push,db reset,functions deploy,secrets set,secrets unset"),
 ]
