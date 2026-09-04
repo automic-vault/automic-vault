@@ -186,6 +186,20 @@ av inject +DOTENV_PRIVATE_KEY -- dotenvx run -- npm test
 dotenvx decrypts the project file only after Automic Vault authorizes applying
 its project-selected key to that operation.
 
+Mise supports external secret managers that populate its environment. Keep
+Secret Values out of `mise.toml` and apply them only while running a task or
+command:
+
+```sh
+av save --project-directory=. DATABASE_URL
+av inject +DATABASE_URL -- mise run dev
+av inject +DATABASE_URL -- mise exec -- npm test
+```
+
+The complete Authorization Request names `mise` as the Target. After Secret
+Application, mise controls the Secret in the selected task or command and its
+child processes.
+
 ## Secret Proxy
 
 For an application that reads a credential from its environment:
