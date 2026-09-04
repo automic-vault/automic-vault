@@ -90,6 +90,7 @@ pub(crate) fn invocation_is_secretless(
     }
     let args = &args[1..];
     match stub.command {
+        "cx" => ast_cli_invocation_is_secretless(args),
         "npm" => npm_invocation_is_secretless(args),
         "pnpm" => {
             local_command(
@@ -118,6 +119,240 @@ pub(crate) fn invocation_is_secretless(
         ),
         _ => false,
     }
+}
+
+fn ast_cli_invocation_is_secretless(args: &[OsString]) -> bool {
+    if ast_cli_help_requested(args) {
+        return true;
+    }
+    let words = ast_cli_command_words(args);
+    !ast_cli_command_needs_credentials(&words) || ast_cli_credentials_are_supplied(args)
+}
+
+// Reviewed against Checkmarx One CLI v2.3.63. Keep this positive: unknown
+// commands must not receive CX_APIKEY or CX_CLIENT_SECRET.
+fn ast_cli_command_needs_credentials(words: &[&str]) -> bool {
+    const COMMANDS: &str = "auth validate,
+chat kics,chat sast,dast-environments list,mcp bridge,
+project branches,project create,project delete,project list,project show,project tags,
+results bfl,results codebashing,results exit-code,results risk-management,results show,
+scan cancel,scan create,scan delete,scan kics-realtime,scan list,scan logs,scan sca-realtime,scan show,scan tags,scan workflow,
+telemetry ai,triage get-states,triage show,triage update,
+utils import,utils learn-more,utils tenant,utils pr azure,utils pr bitbucket,utils pr github,utils pr gitlab,
+hooks check-auth,hooks pre-commit secrets-ignore,hooks pre-commit secrets-install-git-hook,hooks pre-commit secrets-scan,hooks pre-commit secrets-update-git-hook,hooks pre-receive validate,
+hooks claude-stop,hooks claude-pre-tool-use,hooks claude-pre-file-write,hooks claude-user-prompt-submit,
+hooks cursor-stop,hooks cursor-before-shell,hooks cursor-before-mcp,hooks cursor-before-file-write,hooks cursor-before-file-read,hooks cursor-after-file-edit,hooks cursor-before-submit-prompt,
+hooks windsurf-pre-run-command,hooks windsurf-pre-mcp-tool-use,hooks windsurf-pre-user-prompt,hooks windsurf-pre-write-code,hooks windsurf-post-cascade-response,
+hooks droid-stop,hooks droid-pre-tool-use,hooks droid-pre-file-write,hooks droid-user-prompt-submit,
+hooks gemini-before-agent,hooks gemini-before-tool,hooks gemini-before-file-tool,hooks gemini-after-agent,
+hooks copilot-cli-stop,hooks copilot-cli-pre-tool-use,hooks copilot-cli-pre-file-write,hooks copilot-cli-user-prompt-submit";
+
+    words == ["mcp"]
+        || (2..=words.len().min(3)).rev().any(|length| {
+            let candidate = words[..length].join(" ");
+            COMMANDS.split(',').any(|known| known.trim() == candidate)
+        })
+}
+
+fn ast_cli_help_requested(args: &[OsString]) -> bool {
+    for (index, argument) in args.iter().enumerate() {
+        if argument == "--" {
+            break;
+        }
+        if matches!(argument.to_str(), Some("--help" | "-h" | "--version"))
+            && index
+                .checked_sub(1)
+                .and_then(|previous| args[previous].to_str())
+                .is_none_or(|previous| !previous.starts_with('-'))
+        {
+            return true;
+        }
+    }
+    false
+}
+
+fn ast_cli_command_words(args: &[OsString]) -> Vec<&str> {
+    const OPTIONS_WITH_VALUES: &[&str] = &[
+        "--client-id",
+        "--client-secret",
+        "--proxy",
+        "--proxy-auth-type",
+        "--proxy-ntlm-domain",
+        "--proxy-kerberos-spn",
+        "--proxy-kerberos-krb5-conf",
+        "--proxy-kerberos-ccache",
+        "--timeout",
+        "--base-uri",
+        "--base-auth-uri",
+        "--apikey",
+        "--agent",
+        "--tenant",
+        "--retry",
+        "--retry-delay",
+        "--config-file-path",
+        "--optional-flags",
+        "--log-file",
+        "--log-file-console",
+    ];
+    const BOOLEAN_OPTIONS: &[&str] = &[
+        "--debug",
+        "--insecure",
+        "--ignore-proxy",
+        "--apikey-override",
+    ];
+
+    let mut words = Vec::new();
+    let mut index = 0;
+    while index < args.len() {
+        let Some(argument) = args[index].to_str() else {
+            return words;
+        };
+        if argument == "--" {
+            break;
+        }
+        if OPTIONS_WITH_VALUES.contains(&argument) {
+            index += 2;
+            continue;
+        }
+        if OPTIONS_WITH_VALUES
+            .iter()
+            .any(|option| argument.starts_with(&format!("{option}=")))
+            || BOOLEAN_OPTIONS.contains(&argument)
+            || BOOLEAN_OPTIONS
+                .iter()
+                .any(|option| argument.starts_with(&format!("{option}=")))
+        {
+            index += 1;
+            continue;
+        }
+        if argument.starts_with('-') {
+            break;
+        }
+        words.push(argument);
+        index += 1;
+    }
+    words
+}
+
+#[derive(Default)]
+struct AstCliCredentials {
+    api_key: bool,
+    client_id: bool,
+    client_secret: bool,
+}
+
+fn ast_cli_credentials_are_supplied(args: &[OsString]) -> bool {
+    let config = ast_cli_config_credentials(args);
+    let (api_key_set, api_key) = ast_cli_option_value(args, "--apikey");
+    let (client_id_set, client_id) = ast_cli_option_value(args, "--client-id");
+    let (client_secret_set, client_secret) = ast_cli_option_value(args, "--client-secret");
+
+    let api_key = if api_key_set {
+        api_key.is_some_and(|value| !value.is_empty())
+    } else {
+        config.api_key
+    };
+    let client_id = if client_id_set {
+        client_id.is_some_and(|value| !value.is_empty())
+    } else {
+        std::env::var_os("CX_CLIENT_ID").is_some_and(|value| !value.is_empty()) || config.client_id
+    };
+    // Protected ambient variables are deliberately excluded: they may be the
+    // Secret this gate is deciding whether to inject.
+    let client_secret = if client_secret_set {
+        client_secret.is_some_and(|value| !value.is_empty())
+    } else {
+        config.client_secret
+    };
+
+    api_key || client_id && client_secret
+}
+
+fn ast_cli_option_value(args: &[OsString], option: &str) -> (bool, Option<OsString>) {
+    let equals = format!("{option}=");
+    let mut found = (false, None);
+    let mut index = 0;
+    while index < args.len() {
+        let argument = &args[index];
+        if argument == "--" {
+            break;
+        }
+        if argument == option {
+            found = (true, args.get(index + 1).cloned());
+            index += 2;
+            continue;
+        }
+        if let Some(value) = argument
+            .to_str()
+            .and_then(|argument| argument.strip_prefix(&equals))
+        {
+            found = (true, Some(OsString::from(value)));
+        }
+        index += 1;
+    }
+    found
+}
+
+fn ast_cli_config_credentials(args: &[OsString]) -> AstCliCredentials {
+    let path = ast_cli_config_path(args);
+    let Some(contents) = path.and_then(|path| fs::read_to_string(path).ok()) else {
+        return AstCliCredentials::default();
+    };
+    let mut credentials = AstCliCredentials::default();
+    for line in contents.lines() {
+        if line.len() != line.trim_start().len() {
+            continue;
+        }
+        let Some((key, value)) = line.split_once(':') else {
+            continue;
+        };
+        let present = ast_cli_yaml_scalar_is_present(value);
+        match key.trim() {
+            "cx_apikey" => credentials.api_key = present,
+            "cx_client_id" => credentials.client_id = present,
+            "cx_client_secret" => credentials.client_secret = present,
+            _ => {}
+        }
+    }
+    credentials
+}
+
+fn ast_cli_config_path(args: &[OsString]) -> Option<PathBuf> {
+    let (explicit, path) = ast_cli_option_value(args, "--config-file-path");
+    if explicit {
+        return path
+            .filter(|path| !path.is_empty())
+            .map(PathBuf::from)
+            .or_else(ast_cli_default_config_path);
+    }
+    std::env::var_os("CX_CONFIG_FILE_PATH")
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from)
+        .or_else(ast_cli_default_config_path)
+}
+
+fn ast_cli_default_config_path() -> Option<PathBuf> {
+    std::env::var_os("HOME")
+        .filter(|home| !home.is_empty())
+        .map(PathBuf::from)
+        .map(|home| home.join(".checkmarx/checkmarxcli.yaml"))
+}
+
+fn ast_cli_yaml_scalar_is_present(value: &str) -> bool {
+    let value = value.trim();
+    if value.is_empty() || value.starts_with('#') || matches!(value, "null" | "Null" | "NULL" | "~")
+    {
+        return false;
+    }
+    if value.len() >= 2 {
+        let bytes = value.as_bytes();
+        if (bytes[0] == b'"' && bytes[value.len() - 1] == b'"')
+            || (bytes[0] == b'\'' && bytes[value.len() - 1] == b'\'')
+        {
+            return !value[1..value.len() - 1].trim().is_empty();
+        }
+    }
+    true
 }
 
 fn local_command(args: &[OsString], commands: &[&str]) -> bool {
@@ -981,6 +1216,159 @@ mod tests {
         ));
 
         unsafe { std::env::remove_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR") };
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn ast_cli_requests_secrets_only_for_reviewed_authenticated_commands() {
+        let _guard = crate::global_test_env_lock().lock().unwrap();
+        let previous = [
+            ("HOME", std::env::var_os("HOME")),
+            (
+                "AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR",
+                std::env::var_os("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR"),
+            ),
+            (
+                "CX_CONFIG_FILE_PATH",
+                std::env::var_os("CX_CONFIG_FILE_PATH"),
+            ),
+            ("CX_CLIENT_ID", std::env::var_os("CX_CLIENT_ID")),
+            ("CX_APIKEY", std::env::var_os("CX_APIKEY")),
+            ("CX_CLIENT_SECRET", std::env::var_os("CX_CLIENT_SECRET")),
+        ];
+        let dir = temp_dir("env-wrapper-secretless-ast-cli");
+        let home = dir.join("home");
+        let config_dir = home.join(".checkmarx");
+        fs::create_dir_all(&config_dir).unwrap();
+        unsafe {
+            std::env::set_var("HOME", &home);
+            std::env::set_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR", &dir);
+            std::env::remove_var("CX_CONFIG_FILE_PATH");
+            std::env::remove_var("CX_CLIENT_ID");
+            std::env::remove_var("CX_APIKEY");
+            std::env::remove_var("CX_CLIENT_SECRET");
+        }
+
+        let script_path = dir.join("cx");
+        let script = stub_script(
+            &wrapper("ast-cli").unwrap().primary,
+            Path::new("/opt/homebrew/bin/cx"),
+        );
+        let secretless = |values: &[&str]| {
+            let invocation = std::iter::once(script_path.clone().into_os_string())
+                .chain(values.iter().map(OsString::from))
+                .collect::<Vec<_>>();
+            invocation_is_secretless(&script_path, script.as_bytes(), &invocation)
+        };
+
+        for command in [
+            &[][..],
+            &["--help"],
+            &["version"],
+            &["future-command"],
+            &["scan", "future-command"],
+            &["configure"],
+            &["configure", "show"],
+            &["auth", "login"],
+            &["auth", "logout"],
+            &["auth", "register"],
+            &["utils", "env"],
+            &["utils", "mask"],
+            &["utils", "remediation", "sca"],
+            &["utils", "contributor-count", "github"],
+            &["hooks", "agenthooks", "install"],
+            &["hooks", "pre-commit", "secrets-uninstall-git-hook"],
+            &["hooks", "pre-receive", "secrets-scan"],
+            &["scan", "create", "--help"],
+        ] {
+            assert!(secretless(command), "cx {command:?}");
+        }
+        for command in [
+            &["auth", "validate"][..],
+            &["scan", "list"],
+            &["scan", "create"],
+            &["project", "show"],
+            &["results", "show"],
+            &["triage", "update"],
+            &["utils", "tenant"],
+            &["utils", "pr", "github"],
+            &["hooks", "check-auth"],
+            &["hooks", "pre-commit", "secrets-scan"],
+            &["hooks", "claude-pre-tool-use"],
+            &["mcp"],
+            &["mcp", "bridge"],
+            &[
+                "--debug",
+                "--base-uri",
+                "https://example.invalid",
+                "scan",
+                "list",
+            ],
+        ] {
+            assert!(!secretless(command), "cx {command:?}");
+        }
+
+        assert!(secretless(&["--apikey", "direct", "scan", "list"]));
+        assert!(secretless(&["--apikey=direct", "scan", "create"]));
+        assert!(secretless(&[
+            "--client-id",
+            "client",
+            "--client-secret=direct",
+            "project",
+            "list",
+        ]));
+        unsafe { std::env::set_var("CX_CLIENT_ID", "ambient-client") };
+        assert!(secretless(&[
+            "--client-secret",
+            "direct",
+            "auth",
+            "validate",
+        ]));
+
+        unsafe {
+            std::env::set_var("CX_APIKEY", "ambient-protected");
+            std::env::set_var("CX_CLIENT_SECRET", "ambient-protected");
+            std::env::remove_var("CX_CLIENT_ID");
+        }
+        assert!(!secretless(&["scan", "list"]));
+
+        let config = config_dir.join("checkmarxcli.yaml");
+        fs::write(&config, "cx_apikey: login-refresh-token\n").unwrap();
+        assert!(secretless(&["scan", "list"]));
+        fs::write(
+            &config,
+            "cx_client_id: configured-client\ncx_client_secret: configured-secret\n",
+        )
+        .unwrap();
+        assert!(secretless(&["project", "branches"]));
+        assert!(!secretless(&["--client-secret=", "project", "branches"]));
+
+        let selected = dir.join("selected.yaml");
+        fs::write(&selected, "cx_apikey: selected-token\n").unwrap();
+        assert!(secretless(&[
+            "--config-file-path",
+            selected.to_str().unwrap(),
+            "mcp",
+            "bridge",
+        ]));
+
+        let invocation = std::iter::once(script_path.clone().into_os_string())
+            .chain(["version"].into_iter().map(OsString::from))
+            .collect::<Vec<_>>();
+        assert!(!invocation_is_secretless(
+            &script_path,
+            format!("{script}# changed\n").as_bytes(),
+            &invocation,
+        ));
+
+        unsafe {
+            for (key, value) in previous {
+                match value {
+                    Some(value) => std::env::set_var(key, value),
+                    None => std::env::remove_var(key),
+                }
+            }
+        }
         let _ = fs::remove_dir_all(dir);
     }
 
