@@ -123,3 +123,22 @@ import Testing
     #expect(genericSecretGateRequestClassification(gateID: "node", arguments: ["stage", "publish"]) == .mutating)
     #expect(genericSecretGateRequestClassification(gateID: "node", arguments: ["ls"]) == .unknown)
 }
+
+@Test func virustotalPolicyClassifiesReviewedCommandsFlagsAndAliases() {
+    let classify = { genericSecretGateRequestClassification(gateID: "virustotal-cli", arguments: $0) }
+
+    #expect(classify(["version"]) == .readOnly)
+    #expect(classify(["--format", "json", "file", "hash"]) == .readOnly)
+    #expect(classify(["collection", "create", "ioc"]) == .mutating)
+    #expect(classify(["ht", "ruleset", "enable", "id"]) == .mutating)
+    #expect(classify(["rh", "matches", "id"]) == .readOnly)
+    #expect(classify(["download", "hash"]) == .localWrite)
+    #expect(classify(["monitor", "download", "id"]) == .localWrite)
+    #expect(classify(["-sv", "file", "hash"]) == .secretDump)
+    #expect(classify(["file", "hash", "--verbose"]) == .secretDump)
+    #expect(classify(["file", "hash", "--host=private.example"]) == .secretDump)
+    #expect(classify(["--verbose=false", "file", "hash"]) == .readOnly)
+    #expect(classify(["-sv=false", "file", "hash"]) == .readOnly)
+    #expect(classify(["--verbose", "file", "--help"]) == .readOnly)
+    #expect(classify(["future-command"]) == .unknown)
+}
