@@ -242,8 +242,12 @@ fn exec(mut options: Options, stderr: &mut dyn Write) -> i32 {
             .as_ref()
             .and_then(|script| script.path.file_name())
             .is_some_and(|name| name == "s3cmd");
-        resolve_target(&options.target)
-            .map(|target| (target, secretless_environment(&options, substitute_empty, s3cmd)))
+        resolve_target(&options.target).map(|target| {
+            (
+                target,
+                secretless_environment(&options, substitute_empty, s3cmd),
+            )
+        })
     } else {
         prepare_injection(
             &options,
