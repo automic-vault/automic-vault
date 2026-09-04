@@ -186,7 +186,6 @@ fn vultr_invocation_is_secretless(args: &[OsString]) -> bool {
     );
     !authenticated_root
         || !vultr_command_path_requires_api_key(command, &args[command_index + 1..])
-        || std::env::var_os("VULTR_API_KEY").is_some_and(|value| !value.is_empty())
         || super::migrations::vultr_config_has_api_key(vultr_config_argument(args))
 }
 
@@ -1368,7 +1367,7 @@ mod tests {
         ));
 
         unsafe { std::env::set_var("VULTR_API_KEY", "caller-key") };
-        assert!(invocation_is_secretless(
+        assert!(!invocation_is_secretless(
             &script_path,
             script.as_bytes(),
             &args(&["instance", "list"]),
