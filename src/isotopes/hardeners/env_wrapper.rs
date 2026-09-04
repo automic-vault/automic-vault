@@ -90,6 +90,7 @@ pub(crate) fn invocation_is_secretless(
     }
     let args = &args[1..];
     match stub.command {
+        "akamai" => akamai_invocation_is_secretless(args),
         "npm" => npm_invocation_is_secretless(args),
         "pnpm" => {
             local_command(
@@ -118,6 +119,103 @@ pub(crate) fn invocation_is_secretless(
         ),
         _ => false,
     }
+}
+
+fn akamai_invocation_is_secretless(args: &[OsString]) -> bool {
+    let args = args
+        .iter()
+        .map(|arg| arg.to_str())
+        .collect::<Option<Vec<_>>>();
+    let Some(args) = args else { return true };
+    let mut index = 0;
+    let mut edgerc = None;
+    let mut section = std::env::var("AKAMAI_EDGERC_SECTION")
+        .ok()
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "default".to_string());
+    while index < args.len() {
+        let argument = args[index];
+        if matches!(argument, "--help" | "-h" | "--version") {
+            return true;
+        }
+        if argument == "--" {
+            index += 1;
+            break;
+        }
+        if matches!(argument, "--bash" | "--zsh" | "--generate-bash-completion") {
+            index += 1;
+            continue;
+        }
+        match argument {
+            "--edgerc" | "-e" => {
+                let Some(value) = args.get(index + 1) else {
+                    return true;
+                };
+                edgerc = Some(PathBuf::from(value));
+                index += 2;
+            }
+            "--section" | "-s" => {
+                let Some(value) = args.get(index + 1) else {
+                    return true;
+                };
+                section = (*value).to_string();
+                index += 2;
+            }
+            "--accountkey" | "--account-key" | "--proxy" => {
+                if args.get(index + 1).is_none() {
+                    return true;
+                }
+                index += 2;
+            }
+            "--daemon" => return true,
+            _ if argument.starts_with("--edgerc=") || argument.starts_with("-e=") => {
+                edgerc = argument
+                    .split_once('=')
+                    .map(|(_, value)| PathBuf::from(value));
+                index += 1;
+            }
+            _ if argument.starts_with("--section=") || argument.starts_with("-s=") => {
+                section = argument
+                    .split_once('=')
+                    .map(|(_, value)| value.to_string())
+                    .unwrap_or_default();
+                index += 1;
+            }
+            _ if ["--accountkey=", "--account-key=", "--proxy="]
+                .iter()
+                .any(|option| argument.starts_with(option)) =>
+            {
+                index += 1;
+            }
+            _ if argument.starts_with('-') => return true,
+            _ => break,
+        }
+    }
+    let Some(command) = args.get(index).copied() else {
+        return true;
+    };
+    if matches!(
+        command,
+        "config"
+            | "get"
+            | "help"
+            | "install"
+            | "list"
+            | "search"
+            | "uninstall"
+            | "update"
+            | "upgrade"
+    ) {
+        return true;
+    }
+    if args
+        .get(index + 1)
+        .is_some_and(|argument| matches!(*argument, "help" | "--help" | "-h" | "--version"))
+    {
+        return true;
+    }
+    !super::migrations::akamai_command_is_installed(command)
+        || super::migrations::akamai_caller_has_credentials(edgerc.as_deref(), &section)
 }
 
 fn local_command(args: &[OsString], commands: &[&str]) -> bool {
@@ -915,6 +1013,140 @@ mod tests {
         assert!(script.contains("+AKAMAI_ENV_ASSIGNMENTS"));
         assert!(script.contains("for assignment in ${AKAMAI_ENV_ASSIGNMENTS-}"));
         assert!(script.contains("export \"$assignment\""));
+    }
+
+    #[test]
+    fn akamai_requests_secrets_only_for_installed_plugin_commands() {
+        let _guard = crate::global_test_env_lock().lock().unwrap();
+        let dir = temp_dir("env-wrapper-secretless-akamai");
+        let home = dir.join("home");
+        let package = home.join(".akamai-cli/src/cli-property");
+        fs::create_dir_all(&package).unwrap();
+        fs::write(
+            package.join("cli.json"),
+            r#"{"commands":[{"name":"property-manager","aliases":["pm"]}]}"#,
+        )
+        .unwrap();
+        let env_keys = [
+            "HOME",
+            "AKAMAI_CLI_HOME",
+            "AKAMAI_EDGERC",
+            "AKAMAI_EDGERC_SECTION",
+            "AKAMAI_ENV_ASSIGNMENTS",
+            "AKAMAI_CLIENT_TOKEN",
+            "AKAMAI_CLIENT_SECRET",
+            "AKAMAI_ACCESS_TOKEN",
+            "AKAMAI_PROD_CLIENT_TOKEN",
+            "AKAMAI_PROD_CLIENT_SECRET",
+            "AKAMAI_PROD_ACCESS_TOKEN",
+        ];
+        let previous = env_keys.map(|key| (key, std::env::var_os(key)));
+        unsafe {
+            std::env::set_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR", &dir);
+            for key in env_keys {
+                std::env::remove_var(key);
+            }
+            std::env::set_var("HOME", &home);
+            std::env::set_var("AKAMAI_ENV_ASSIGNMENTS", "AKAMAI_CLIENT_TOKEN=protected");
+        }
+        let script_path = dir.join("akamai");
+        let script = stub_script(
+            &wrapper("akamai").unwrap().primary,
+            Path::new("/opt/homebrew/bin/akamai"),
+        );
+        let secretless = |values: &[&str]| {
+            let args = std::iter::once(script_path.clone().into_os_string())
+                .chain(values.iter().map(OsString::from))
+                .collect::<Vec<_>>();
+            invocation_is_secretless(&script_path, script.as_bytes(), &args)
+        };
+
+        for command in [
+            vec![],
+            vec!["help"],
+            vec!["--help"],
+            vec!["--version"],
+            vec!["--bash"],
+            vec!["config", "list"],
+            vec!["config", "get", "cli.cache-path"],
+            vec!["config", "set", "cli.color", "true"],
+            vec!["config", "unset", "cli.color"],
+            vec!["get", "property-manager"],
+            vec!["install", "property-manager"],
+            vec!["list", "--remote"],
+            vec!["search", "property"],
+            vec!["uninstall", "property-manager"],
+            vec!["update", "property-manager"],
+            vec!["upgrade"],
+            vec!["future-command"],
+            vec!["property-manager", "--help"],
+        ] {
+            assert!(secretless(&command), "akamai {command:?}");
+        }
+
+        for command in [
+            vec!["property-manager", "list"],
+            vec!["pm", "list"],
+            vec!["property/property-manager", "list"],
+            vec!["--section", "prod", "property-manager", "list"],
+            vec!["--proxy=https://proxy.example", "property-manager", "list"],
+            vec!["property-manager", "action", "--param", "key", "-h"],
+            vec!["property-manager", "--", "payload"],
+        ] {
+            assert!(!secretless(&command), "akamai {command:?}");
+        }
+
+        let caller_edgerc = home.join("caller.edgerc");
+        fs::write(
+            &caller_edgerc,
+            "[prod]\nhost = example.luna.akamaiapis.net\nclient_token = caller\nclient_secret = caller\naccess_token = caller\n",
+        )
+        .unwrap();
+        let caller_edgerc = caller_edgerc.to_str().unwrap();
+        assert!(secretless(&[
+            "--edgerc",
+            caller_edgerc,
+            "--section",
+            "prod",
+            "property-manager",
+            "list",
+        ]));
+        unsafe {
+            std::env::set_var("AKAMAI_CLIENT_TOKEN", "caller");
+            std::env::set_var("AKAMAI_CLIENT_SECRET", "caller");
+            std::env::set_var("AKAMAI_ACCESS_TOKEN", "caller");
+        }
+        assert!(secretless(&["property-manager", "list"]));
+        unsafe {
+            std::env::set_var("AKAMAI_PROD_CLIENT_TOKEN", "caller");
+            std::env::set_var("AKAMAI_PROD_CLIENT_SECRET", "caller");
+            std::env::set_var("AKAMAI_PROD_ACCESS_TOKEN", "caller");
+        }
+        assert!(secretless(&[
+            "--account-key",
+            "acct",
+            "--section=prod",
+            "property-manager",
+            "list",
+        ]));
+
+        let invocation = [script_path.clone().into_os_string(), OsString::from("help")];
+        assert!(!invocation_is_secretless(
+            &script_path,
+            format!("{script}# changed\n").as_bytes(),
+            &invocation,
+        ));
+
+        unsafe {
+            std::env::remove_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR");
+            for (key, value) in previous {
+                match value {
+                    Some(value) => std::env::set_var(key, value),
+                    None => std::env::remove_var(key),
+                }
+            }
+        }
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
