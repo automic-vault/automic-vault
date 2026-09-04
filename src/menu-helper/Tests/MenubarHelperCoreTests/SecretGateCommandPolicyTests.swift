@@ -40,7 +40,7 @@ import Testing
         "transifex-cli": ["status"],
         "travis": ["whoami"],
         "twine": ["check", "dist/*"],
-        "vagrant": ["status"],
+        "vagrant": ["box", "outdated"],
         "vault": ["token", "lookup"],
         "virustotal-cli": ["domain", "example.com"],
         "vultr": ["instance", "list"],
@@ -122,6 +122,132 @@ import Testing
     #expect(genericSecretGateRequestClassification(gateID: "node", arguments: ["stage", "list"]) == .readOnly)
     #expect(genericSecretGateRequestClassification(gateID: "node", arguments: ["stage", "publish"]) == .mutating)
     #expect(genericSecretGateRequestClassification(gateID: "node", arguments: ["ls"]) == .unknown)
+}
+
+@Test func pnpmPolicyKeepsCompoundOperationsNarrow() {
+    #expect(genericSecretGateRequestClassification(gateID: "pnpm", arguments: ["audit"]) == .readOnly)
+    #expect(genericSecretGateRequestClassification(gateID: "pnpm", arguments: ["audit", "signatures"]) == .readOnly)
+    #expect(genericSecretGateRequestClassification(gateID: "pnpm", arguments: ["audit", "--fix"]) == .mutating)
+    #expect(genericSecretGateRequestClassification(gateID: "pnpm", arguments: ["audit", "--fix=override"]) == .mutating)
+    #expect(genericSecretGateRequestClassification(gateID: "pnpm", arguments: ["audit", "future-command"]) == .unknown)
+    #expect(genericSecretGateRequestClassification(gateID: "pnpm", arguments: ["dist-tag", "ls"]) == .readOnly)
+    #expect(genericSecretGateRequestClassification(gateID: "pnpm", arguments: ["dist-tag", "add"]) == .mutating)
+    #expect(genericSecretGateRequestClassification(gateID: "pnpm", arguments: ["stage", "list"]) == .readOnly)
+    #expect(genericSecretGateRequestClassification(gateID: "pnpm", arguments: ["stage", "download"]) == .unknown)
+    #expect(genericSecretGateRequestClassification(gateID: "pnpm", arguments: ["stage", "approve"]) == .mutating)
+    #expect(genericSecretGateRequestClassification(gateID: "pnpm", arguments: ["install"]) == .unknown)
+    #expect(genericSecretGateRequestClassification(gateID: "pnpm", arguments: ["config", "get", "//registry.example/:_authToken"]) == .secretDump)
+}
+
+@Test func k6PolicyKeepsCloudCredentialRoutingNarrow() {
+    #expect(genericSecretGateRequestClassification(gateID: "k6", arguments: ["cloud", "project", "list"]) == .readOnly)
+    #expect(genericSecretGateRequestClassification(gateID: "k6", arguments: ["--quiet", "cloud", "test", "list"]) == .readOnly)
+    #expect(genericSecretGateRequestClassification(gateID: "k6", arguments: ["--quiet=false", "cloud", "test", "list"]) == .readOnly)
+    #expect(genericSecretGateRequestClassification(gateID: "k6", arguments: ["cloud", "run", "script.js"]) == .mutating)
+    #expect(genericSecretGateRequestClassification(gateID: "k6", arguments: ["cloud", "upload", "script.js"]) == .mutating)
+    #expect(genericSecretGateRequestClassification(gateID: "k6", arguments: ["run", "--out", "cloud", "script.js"]) == .mutating)
+    #expect(genericSecretGateRequestClassification(gateID: "k6", arguments: ["run", "-ocloud", "script.js"]) == .mutating)
+    #expect(genericSecretGateRequestClassification(gateID: "k6", arguments: ["run", "script.js"]) == .unknown)
+    #expect(genericSecretGateRequestClassification(gateID: "k6", arguments: ["run", "--out", "json", "script.js"]) == .unknown)
+    #expect(genericSecretGateRequestClassification(gateID: "k6", arguments: ["cloud", "login"]) == .unknown)
+    #expect(genericSecretGateRequestClassification(gateID: "k6", arguments: ["cloud", "future-command"]) == .unknown)
+    #expect(genericSecretGateRequestClassification(gateID: "k6", arguments: ["--future-option", "cloud", "run"]) == .unknown)
+}
+
+@Test func twinePolicyRecognizesOnlyBuiltInCommands() {
+    #expect(genericSecretGateRequestClassification(gateID: "twine", arguments: ["check", "dist/package.whl"]) == .readOnly)
+    #expect(genericSecretGateRequestClassification(gateID: "twine", arguments: ["upload", "dist/package.whl"]) == .mutating)
+    #expect(genericSecretGateRequestClassification(gateID: "twine", arguments: ["--no-color", "check", "dist/package.whl"]) == .readOnly)
+    #expect(genericSecretGateRequestClassification(gateID: "twine", arguments: ["--no-color", "upload", "dist/package.whl"]) == .mutating)
+    #expect(genericSecretGateRequestClassification(gateID: "twine", arguments: ["--", "upload", "dist/package.whl"]) == .mutating)
+    #expect(genericSecretGateRequestClassification(gateID: "twine", arguments: ["--", "--no-color", "upload"]) == .unknown)
+    #expect(genericSecretGateRequestClassification(gateID: "twine", arguments: ["--", "--", "upload"]) == .unknown)
+    #expect(genericSecretGateRequestClassification(gateID: "twine", arguments: ["register", "dist/package.whl"]) == .unknown)
+    #expect(genericSecretGateRequestClassification(gateID: "twine", arguments: ["plugin-command"]) == .unknown)
+    #expect(genericSecretGateRequestClassification(gateID: "twine", arguments: ["--future-option", "upload"]) == .unknown)
+}
+
+@Test func vagrantPolicyRecognizesOnlyCommandsThatCanUseCloudCredentials() {
+    let readOnly = [
+        ["login"],
+        ["box", "outdated"],
+        ["cloud", "search", "private-box"],
+        ["cloud", "box", "show", "owner/private-box"],
+        ["cloud", "auth", "whoami"],
+        ["--debug", "cloud", "search", "private-box"],
+    ]
+    for arguments in readOnly {
+        #expect(genericSecretGateRequestClassification(gateID: "vagrant", arguments: arguments) == .readOnly)
+    }
+
+    let mutating = [
+        ["up"],
+        ["reload"],
+        ["resume"],
+        ["snapshot", "restore", "before-upgrade"],
+        ["box", "add", "owner/private-box"],
+        ["box", "update"],
+        ["cloud", "publish", "owner/box"],
+        ["cloud", "provider", "upload", "owner/box"],
+        ["--machine-readable", "cloud", "box", "create", "owner/box"],
+    ]
+    for arguments in mutating {
+        #expect(genericSecretGateRequestClassification(gateID: "vagrant", arguments: arguments) == .mutating)
+    }
+
+    for arguments in [
+        ["destroy"],
+        ["halt"],
+        ["suspend"],
+        ["ssh"],
+        ["plugin-command"],
+        ["future-command"],
+        ["cloud", "future-command"],
+        ["box", "list"],
+    ] {
+        #expect(genericSecretGateRequestClassification(gateID: "vagrant", arguments: arguments) == .unknown)
+    }
+}
+
+@Test func huggingFacePolicyClassifiesReviewedHubCommands() {
+    for arguments in [
+        ["auth", "whoami"],
+        ["cache", "verify", "private/repo"],
+        ["download", "private/repo"],
+        ["datasets", "info", "private/repo"],
+        ["jobs", "scheduled", "inspect", "job-id"],
+        ["repos", "tag", "list", "private/repo"],
+        ["spaces", "secrets", "list", "private/space"],
+    ] {
+        #expect(genericSecretGateRequestClassification(
+            gateID: "huggingface-cli",
+            arguments: arguments
+        ) == .readOnly)
+    }
+
+    for arguments in [
+        ["upload", "private/repo", "."],
+        ["collections", "add-item", "owner/collection"],
+        ["endpoints", "catalog", "deploy"],
+        ["jobs", "scheduled", "uv", "run", "script.py"],
+        ["repo", "branch", "create", "private/repo", "new"],
+        ["sandbox", "exec", "sandbox-id", "--", "command"],
+        ["webhooks", "delete", "webhook-id"],
+    ] {
+        #expect(genericSecretGateRequestClassification(
+            gateID: "huggingface-cli",
+            arguments: arguments
+        ) == .mutating)
+    }
+
+    #expect(genericSecretGateRequestClassification(
+        gateID: "huggingface-cli",
+        arguments: ["auth", "token"]
+    ) == .secretDump)
+    #expect(genericSecretGateRequestClassification(
+        gateID: "huggingface-cli",
+        arguments: ["cp", "hf://private/repo/file", "."]
+    ) == .unknown)
 }
 
 @Test func composerPolicyClassifiesOnlyCredentialedBuiltIns() {

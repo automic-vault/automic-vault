@@ -22,6 +22,18 @@ public func genericSecretGateRequestClassification(
     let words = arguments.map { $0.lowercased() }
     guard !words.isEmpty else { return .unknown }
     if gateID == "stripe" { return stripeRequestClassification(words) }
+    if gateID == "pnpm", words.first == "audit" {
+        if words.dropFirst().contains(where: { $0 == "--fix" || $0.hasPrefix("--fix=") }) {
+            return .mutating
+        }
+        if words.dropFirst().contains(where: { !$0.hasPrefix("-") && $0 != "signatures" }) {
+            return .unknown
+        }
+        return .readOnly
+    }
+    if gateID == "k6" { return k6RequestClassification(words) }
+    if gateID == "twine" { return twineRequestClassification(words) }
+    if gateID == "vagrant" { return vagrantRequestClassification(words) }
     if words == ["help"] || words == ["--help"] || words == ["version"] || words == ["--version"] {
         return .readOnly
     }
@@ -35,6 +47,157 @@ public func genericSecretGateRequestClassification(
         if policy.mutating.contains(candidate) { return .mutating }
     }
     return .unknown
+}
+
+private func k6RequestClassification(_ arguments: [String]) -> SecretGateRequestClassification {
+    // Mirrors the wrapper's positive catalog so future forms stay Unknown.
+    if arguments.contains(where: { $0 == "--help" || $0 == "-h" })
+        || arguments == ["--version"]
+    {
+        return .readOnly
+    }
+    guard let command = k6CommandIndex(arguments, from: 0) else { return .unknown }
+    switch arguments[command] {
+    case "inspect", "version":
+        return .readOnly
+    case "run":
+        return k6RunUsesCloudOutput(Array(arguments.dropFirst(command + 1))) ? .mutating : .unknown
+    case "cloud":
+        guard let subcommand = k6CommandIndex(arguments, from: command + 1) else { return .unknown }
+        switch arguments[subcommand] {
+        case "run", "upload":
+            return .mutating
+        case "project", "load-zone", "test":
+            guard let operation = k6CommandIndex(arguments, from: subcommand + 1) else { return .unknown }
+            return arguments[operation] == "list" ? .readOnly : .unknown
+        default:
+            return .unknown
+        }
+    default:
+        return .unknown
+    }
+}
+
+private func k6CommandIndex(_ arguments: [String], from start: Int) -> Int? {
+    let flags = ["--no-color", "--log-ns-timestamps", "--verbose", "-v", "--quiet", "-q", "--profiling-enabled"]
+    let booleanOptions = ["--no-color=", "--log-ns-timestamps=", "--verbose=", "--quiet=", "--profiling-enabled="]
+    let options = ["--secret-source", "--log-output", "--log-format", "--config", "-c", "--address", "-a"]
+    var index = start
+    while index < arguments.count {
+        let argument = arguments[index]
+        if flags.contains(argument) {
+            index += 1
+        } else if options.contains(argument) {
+            guard index + 1 < arguments.count else { return nil }
+            index += 2
+        } else if booleanOptions.contains(where: { argument.hasPrefix($0) })
+            || options.contains(where: { argument.hasPrefix("\($0)=") })
+            || ((argument.hasPrefix("-c") || argument.hasPrefix("-a")) && argument.count > 2)
+        {
+            index += 1
+        } else if argument.hasPrefix("-") {
+            return nil
+        } else {
+            return index
+        }
+    }
+    return nil
+}
+
+private func k6RunUsesCloudOutput(_ arguments: [String]) -> Bool {
+    var index = 0
+    while index < arguments.count {
+        let argument = arguments[index]
+        if argument == "--" { return false }
+        if argument == "--out" || argument == "-o" {
+            if index + 1 < arguments.count, k6CloudOutput(arguments[index + 1]) { return true }
+            index += 2
+            continue
+        }
+        if argument.hasPrefix("--out=") {
+            if k6CloudOutput(String(argument.dropFirst("--out=".count))) { return true }
+        } else if argument.hasPrefix("-o") {
+            let value = argument.dropFirst(2)
+            if k6CloudOutput(String(value.first == "=" ? value.dropFirst() : value)) { return true }
+        }
+        index += 1
+    }
+    return false
+}
+
+private func k6CloudOutput(_ value: String) -> Bool {
+    value == "cloud" || value.hasPrefix("cloud=")
+}
+
+private func twineRequestClassification(_ arguments: [String]) -> SecretGateRequestClassification {
+    if arguments.contains(where: { $0 == "--help" || $0 == "-h" })
+        || arguments == ["--version"]
+    {
+        return .readOnly
+    }
+    var index = 0
+    while index < arguments.count, arguments[index] == "--no-color" { index += 1 }
+    if index < arguments.count, arguments[index] == "--" { index += 1 }
+    let command = index < arguments.count ? arguments[index] : nil
+    switch command {
+    case "check": return .readOnly
+    case "upload": return .mutating
+    default: return .unknown
+    }
+}
+
+private func vagrantRequestClassification(_ arguments: [String]) -> SecretGateRequestClassification {
+    let separator = arguments.firstIndex(of: "--") ?? arguments.endIndex
+    if arguments[..<separator].contains(where: { ["--help", "-h", "--version", "-v"].contains($0) }) {
+        return .readOnly
+    }
+    let globalFlags = Set(["--color", "--no-color", "--machine-readable", "--debug", "--timestamp", "--debug-timestamp", "--no-tty"])
+    let words = arguments.enumerated().compactMap { index, argument in
+        index < separator && globalFlags.contains(argument) ? nil : argument
+    }
+    guard let commandIndex = words.firstIndex(where: { !$0.hasPrefix("-") }) else { return .unknown }
+    let command = words[commandIndex]
+    let arguments = Array(words.dropFirst(commandIndex + 1))
+
+    switch command {
+    case "login": return .readOnly
+    case "up", "reload", "resume": return .mutating
+    case "snapshot":
+        guard let subcommand = arguments.first(where: { !$0.hasPrefix("-") }) else { return .unknown }
+        return ["restore", "pop"].contains(subcommand) ? .mutating : .unknown
+    case "box":
+        guard let subcommand = arguments.first(where: { !$0.hasPrefix("-") }) else { return .unknown }
+        if subcommand == "outdated" { return .readOnly }
+        return ["add", "update"].contains(subcommand) ? .mutating : .unknown
+    case "cloud": return vagrantCloudRequestClassification(arguments)
+    default: return .unknown
+    }
+}
+
+private func vagrantCloudRequestClassification(_ arguments: [String]) -> SecretGateRequestClassification {
+    guard let commandIndex = arguments.firstIndex(where: { !$0.hasPrefix("-") }) else { return .unknown }
+    let command = arguments[commandIndex]
+    let arguments = Array(arguments.dropFirst(commandIndex + 1))
+    let subcommand = arguments.first(where: { !$0.hasPrefix("-") })
+
+    switch command {
+    case "auth":
+        guard let subcommand else { return .unknown }
+        return ["login", "whoami"].contains(subcommand) ? .readOnly : .unknown
+    case "box":
+        guard let subcommand else { return .unknown }
+        if subcommand == "show" { return .readOnly }
+        return ["create", "delete", "update"].contains(subcommand) ? .mutating : .unknown
+    case "provider":
+        guard let subcommand else { return .unknown }
+        return ["create", "delete", "update", "upload"].contains(subcommand) ? .mutating : .unknown
+    case "publish": return .mutating
+    case "search": return .readOnly
+    case "version":
+        guard let subcommand else { return .unknown }
+        return ["create", "delete", "release", "revoke", "update"].contains(subcommand) ? .mutating : .unknown
+    default: return .unknown
+    }
 }
 
 private func composerRequestClassification(
@@ -290,9 +453,13 @@ private let secretGateCommandPolicies: [String: SecretGateCommandPolicy] = [
     "grafanactl": .init("resources get,resources list", "resources create,resources delete,resources apply"),
     "heroku": .init("apps,apps info,ps,addons", "apps create,apps destroy,config set,config unset,ps scale", secretDump: "auth token,config"),
     "hcloud": .init("server list,server describe,network list,network describe", "server create,server delete,network create,network delete"),
-    "huggingface-cli": .init("auth whoami,repo list,cache scan", "upload,upload-large-folder,repo create,repo delete"),
+    "huggingface-cli": .init(
+        "auth whoami,cache verify,env,download,buckets list,buckets ls,buckets info,collections list,collections ls,collections info,datasets list,datasets ls,datasets leaderboard,datasets info,datasets parquet,datasets sql,datasets card,discussions list,discussions ls,discussions info,discussions diff,endpoints list,endpoints ls,endpoints hardware,endpoints describe,endpoints catalog list,endpoints catalog ls,endpoints list-catalog,jobs logs,jobs stats,jobs list,jobs ls,jobs ps,jobs hardware,jobs inspect,jobs wait,jobs scheduled list,jobs scheduled ls,jobs scheduled ps,jobs scheduled inspect,models list,models ls,models info,models card,papers list,papers ls,papers search,papers info,papers read,repo list,repo ls,repos list,repos ls,repo tag list,repo tag ls,repos tag list,repos tag ls,sandbox pool ls,sandbox pool list,sandbox process ls,sandbox process list,spaces list,spaces ls,spaces info,spaces card,spaces templates,spaces search,spaces wait,spaces hardware,spaces logs,spaces volumes list,spaces volumes ls,spaces secrets list,spaces secrets ls,spaces variables list,spaces variables ls,webhooks list,webhooks ls,webhooks info",
+        "upload,upload-large-folder,buckets create,buckets delete,buckets remove,buckets rm,buckets move,buckets settings,buckets sync,collections create,collections update,collections delete,collections add-item,collections update-item,collections delete-item,discussions create,discussions comment,discussions edit,discussions close,discussions reopen,discussions rename,discussions merge,endpoints deploy,endpoints catalog deploy,endpoints update,endpoints delete,endpoints pause,endpoints resume,endpoints scale-to-zero,jobs run,jobs cancel,jobs labels,jobs ssh,jobs uv run,jobs scheduled run,jobs scheduled delete,jobs scheduled suspend,jobs scheduled resume,jobs scheduled trigger,jobs scheduled labels,jobs scheduled uv,repo create,repo duplicate,repo delete,repo move,repo settings,repo delete-files,repo branch create,repo branch delete,repo tag create,repo tag delete,repos create,repos duplicate,repos delete,repos move,repos settings,repos delete-files,repos branch create,repos branch delete,repos tag create,repos tag delete,repo-files delete,sandbox create,sandbox exec,sandbox spawn,sandbox cp,sandbox kill,sandbox pool create,sandbox pool delete,sandbox pool rm,sandbox process kill,spaces dev-mode,spaces ssh,spaces pause,spaces restart,spaces settings,spaces hot-reload,spaces volumes set,spaces volumes delete,spaces secrets add,spaces secrets delete,spaces variables add,spaces variables delete,webhooks create,webhooks update,webhooks enable,webhooks disable,webhooks delete",
+        secretDump: "auth token"
+    ),
     "jfrog-cli": .init("rt search,rt ping,rt build-info", "rt upload,rt delete,rt build-publish", secretDump: "config show,config export"),
-    "k6": .init("inspect", "run,cloud"),
+    "k6": .init("", ""),
     "luarocks": .init("search,show,list,which", "install,remove,upload,publish"),
     "minio-mc": .init("ls,stat,find,du,tree", "cp,mv,rm,mb,rb,mirror", secretDump: "alias export"),
     "netlify-cli": .init("status,sites list,functions list", "deploy,sites create,sites delete,functions create", secretDump: "env list,env get"),
@@ -301,7 +468,11 @@ private let secretGateCommandPolicies: [String: SecretGateCommandPolicy] = [
         "access,audit fix,ci,clean-install,ic,install-clean,isntall-clean,deprecate,dist-tag,dist-tags,install,add,i,in,ins,inst,insta,instal,isnt,isnta,isntal,isntall,install-ci-test,cit,clean-install-test,sit,install-test,it,logout,org,ogr,owner,author,profile,publish,stage,star,team,token,trust,undeprecate,unpublish,unstar,update,u,up,upgrade,udpate",
         secretDump: "config get"
     ),
-    "pnpm": .init("view,info,search,audit,outdated,why,list", "publish,unpublish,deprecate,add,remove,update", secretDump: "config get"),
+    "pnpm": .init(
+        "view,info,show,v,search,s,se,find,outdated,why,list,ls,dist-tag ls,dist-tags ls,stage list,stage view,whoami,ping,stars",
+        "publish,unpublish,deprecate,undeprecate,add,remove,update,up,upgrade,dist-tag add,dist-tag rm,dist-tags add,dist-tags rm,stage publish,stage approve,stage reject,star,unstar",
+        secretDump: "config get"
+    ),
     "pulumi": .init("whoami,stack ls,preview,about,config get", "up,destroy,refresh,import,cancel", secretDump: "config get --show-secrets,stack export --show-secrets"),
     "qwen-code": .init("", "chat,run"),
     "runpodctl": .init("get,list", "create,remove,start,stop", secretDump: "config view"),
@@ -311,8 +482,8 @@ private let secretGateCommandPolicies: [String: SecretGateCommandPolicy] = [
     "snyk": .init("", "monitor,auth"),
     "transifex-cli": .init("status", "pull,push"),
     "travis": .init("whoami,repos,history,show,logs", "restart,cancel,enable,disable", secretDump: "token"),
-    "twine": .init("check", "upload"),
-    "vagrant": .init("status,global-status,validate,version", "up,destroy,halt,reload,suspend,resume,cloud publish"),
+    "twine": .init("", ""),
+    "vagrant": .init("", ""),
     "vault": .init("status,list,kv list,token lookup", "write,delete,kv put,kv delete", secretDump: "read,kv get,login,token create,token generate"),
     "virustotal-cli": .init("file,url,domain,ip,collection", "scan,upload"),
     "vultr": .init("instance list,instance get,region list,plan list", "instance create,instance delete,instance start,instance stop"),
