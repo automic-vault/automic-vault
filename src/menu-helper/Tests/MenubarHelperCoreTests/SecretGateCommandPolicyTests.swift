@@ -32,7 +32,7 @@ import Testing
         "pnpm": ["view", "example"],
         "pulumi": ["stack", "ls"],
         "qwen-code": ["--version"],
-        "runpodctl": ["get", "pod"],
+        "runpodctl": ["pod", "list"],
         "s3cmd": ["ls", "s3://bucket"],
         "sentry-cli": ["projects", "list"],
         "snowflake-cli": ["object", "list"],
@@ -57,6 +57,33 @@ import Testing
             "missing read-only policy for \(gateID)"
         )
     }
+}
+
+@Test func runpodctlPolicyUsesNounVerbCommandsAndLeadingOutputOptions() {
+    for arguments in [
+        ["pod", "list"],
+        ["--output", "yaml", "pod", "get", "pod-id"],
+        ["-oyaml", "ssh", "info", "pod-id"],
+        ["get", "models"],
+        ["me"],
+    ] {
+        #expect(genericSecretGateRequestClassification(gateID: "runpodctl", arguments: arguments) == .readOnly)
+    }
+
+    for arguments in [
+        ["pod", "create", "--image", "runpod/base"],
+        ["--output=json", "serverless", "delete", "endpoint-id"],
+        ["ssh", "add-key", "--key-file", "id.pub"],
+        ["exec", "python", "script.py"],
+        ["project", "deploy"],
+        ["remove", "model"],
+    ] {
+        #expect(genericSecretGateRequestClassification(gateID: "runpodctl", arguments: arguments) == .mutating)
+    }
+
+    #expect(genericSecretGateRequestClassification(gateID: "runpodctl", arguments: ["config", "view"]) == .unknown)
+    #expect(genericSecretGateRequestClassification(gateID: "runpodctl", arguments: ["registry", "update"]) == .unknown)
+    #expect(genericSecretGateRequestClassification(gateID: "runpodctl", arguments: ["--future", "pod", "list"]) == .unknown)
 }
 
 @Test func genericPoliciesClassifyMutationsSecretsAndUnknowns() {

@@ -91,6 +91,7 @@ pub(crate) fn invocation_is_secretless(
     let args = &args[1..];
     match stub.command {
         "npm" => npm_invocation_is_secretless(args),
+        "runpodctl" => runpodctl_invocation_is_secretless(args),
         "pnpm" => {
             local_command(
                 args,
@@ -116,6 +117,201 @@ pub(crate) fn invocation_is_secretless(
                 "validate",
             ],
         ),
+        _ => false,
+    }
+}
+
+// Reviewed against runpodctl 2.8.0. Unknown commands stay tokenless because
+// Cobra rejects them; only commands that construct a RunPod API client receive
+// the migrated API key.
+fn runpodctl_invocation_is_secretless(args: &[OsString]) -> bool {
+    if args.is_empty() || runpodctl_help_request(args) {
+        return true;
+    }
+    let Some(words) = runpodctl_command_words(args) else {
+        return true;
+    };
+    !runpodctl_needs_api_key(&words)
+}
+
+fn runpodctl_help_request(args: &[OsString]) -> bool {
+    args.iter()
+        .take_while(|arg| arg.as_os_str() != "--")
+        .enumerate()
+        .any(|(index, arg)| {
+            let Some(arg) = arg.to_str() else {
+                return false;
+            };
+            let enabled = matches!(arg, "--help" | "-h" | "--help=true" | "-h=true");
+            if !enabled || arg.contains('=') || index == 0 {
+                return enabled;
+            }
+            let Some(previous) = args[index - 1].to_str() else {
+                return false;
+            };
+            !previous.starts_with('-')
+                || previous.contains('=')
+                || runpodctl_boolean_option(previous)
+        })
+}
+
+fn runpodctl_command_words(args: &[OsString]) -> Option<Vec<&str>> {
+    let mut words = Vec::with_capacity(2);
+    let mut index = 0;
+    while index < args.len() && words.len() < 2 {
+        let arg = args[index].to_str()?;
+        if arg == "--" {
+            break;
+        }
+        if matches!(
+            arg,
+            "--version" | "-v" | "--version=true" | "-v=true" | "--version=false" | "-v=false"
+        ) && words.is_empty()
+        {
+            return Some(vec!["version"]);
+        }
+        if matches!(arg, "--output" | "-o") {
+            index += 2;
+            continue;
+        }
+        if arg.starts_with("--output=")
+            || arg.starts_with("-o=")
+            || arg.starts_with("-o") && arg.len() > 2
+        {
+            index += 1;
+            continue;
+        }
+        if arg.starts_with('-') {
+            if words.is_empty() && matches!(arg, "--help=false" | "-h=false") {
+                index += 1;
+                continue;
+            }
+            return None;
+        }
+        words.push(arg);
+        index += 1;
+    }
+    Some(words)
+}
+
+fn runpodctl_boolean_option(arg: &str) -> bool {
+    matches!(
+        arg.split_once('=').map_or(arg, |(flag, _)| flag),
+        "--all"
+            | "-a"
+            | "--allfields"
+            | "--clear-models"
+            | "--community"
+            | "-c"
+            | "--communityCloud"
+            | "--create-upload"
+            | "--flash-boot"
+            | "--global-networking"
+            | "--include-env"
+            | "--include-machine"
+            | "--include-network-volume"
+            | "--include-template"
+            | "--include-unavailable"
+            | "--include-workers"
+            | "--init"
+            | "-i"
+            | "--prefix-pod-logs"
+            | "--public-ip"
+            | "--secure"
+            | "-s"
+            | "--secureCloud"
+            | "--select-volume"
+            | "--serverless"
+            | "--ssh"
+            | "--startSSH"
+            | "--verbose"
+            | "-v"
+            | "--wait-for-hash"
+    )
+}
+
+fn runpodctl_needs_api_key(words: &[&str]) -> bool {
+    let Some(command) = words.first().copied() else {
+        return false;
+    };
+    let subcommand = words.get(1).copied();
+    match command {
+        "doctor" | "user" | "account" | "me" => true,
+        "pod" | "pods" => subcommand.is_some_and(|subcommand| {
+            matches!(
+                subcommand,
+                "list"
+                    | "get"
+                    | "create"
+                    | "update"
+                    | "start"
+                    | "stop"
+                    | "restart"
+                    | "reset"
+                    | "delete"
+                    | "rm"
+                    | "remove"
+            )
+        }),
+        "serverless" | "sls" => subcommand.is_some_and(|subcommand| {
+            matches!(
+                subcommand,
+                "list" | "get" | "create" | "update" | "delete" | "rm" | "remove"
+            )
+        }),
+        "template" | "tpl" | "templates" => subcommand.is_some_and(|subcommand| {
+            matches!(
+                subcommand,
+                "list" | "search" | "get" | "create" | "update" | "delete" | "rm" | "remove"
+            )
+        }),
+        "model" => subcommand.is_some_and(|subcommand| {
+            matches!(
+                subcommand,
+                "list" | "ls" | "add" | "remove" | "rm" | "delete"
+            )
+        }),
+        "network-volume" | "nv" => subcommand.is_some_and(|subcommand| {
+            matches!(
+                subcommand,
+                "list" | "get" | "create" | "update" | "delete" | "rm" | "remove"
+            )
+        }),
+        "registry" | "reg" => subcommand.is_some_and(|subcommand| {
+            matches!(
+                subcommand,
+                "list" | "get" | "create" | "delete" | "rm" | "remove"
+            )
+        }),
+        "hub" => {
+            subcommand.is_some_and(|subcommand| matches!(subcommand, "list" | "search" | "get"))
+        }
+        "gpu" | "gpus" | "datacenter" | "dc" | "datacenters" => subcommand == Some("list"),
+        "billing" => subcommand.is_some_and(|subcommand| {
+            matches!(
+                subcommand,
+                "pods" | "serverless" | "sls" | "endpoints" | "network-volume" | "nv"
+            )
+        }),
+        "ssh" => subcommand.is_some_and(|subcommand| {
+            matches!(
+                subcommand,
+                "list-keys" | "add-key" | "remove-key" | "info" | "connect"
+            )
+        }),
+        "exec" => subcommand == Some("python"),
+        "project" => {
+            subcommand.is_some_and(|subcommand| matches!(subcommand, "dev" | "start" | "deploy"))
+        }
+        "get" => subcommand
+            .is_some_and(|subcommand| matches!(subcommand, "cloud" | "pod" | "models" | "model")),
+        "create" => {
+            subcommand.is_some_and(|subcommand| matches!(subcommand, "pod" | "pods" | "model"))
+        }
+        "remove" => {
+            subcommand.is_some_and(|subcommand| matches!(subcommand, "pod" | "pods" | "model"))
+        }
+        "start" | "stop" => subcommand == Some("pod"),
         _ => false,
     }
 }
@@ -978,6 +1174,90 @@ mod tests {
             &script_path,
             format!("{script}# changed\n").as_bytes(),
             &args(&["root"]),
+        ));
+
+        unsafe { std::env::remove_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR") };
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn runpodctl_requests_secrets_only_for_reviewed_api_commands() {
+        let _guard = crate::global_test_env_lock().lock().unwrap();
+        let dir = temp_dir("env-wrapper-secretless-runpodctl");
+        unsafe { std::env::set_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR", &dir) };
+        let script_path = dir.join("runpodctl");
+        let script = stub_script(
+            &wrapper("runpodctl").unwrap().primary,
+            Path::new("/opt/homebrew/bin/runpodctl"),
+        );
+        let invocation = |values: &[&str]| {
+            std::iter::once(script_path.clone().into_os_string())
+                .chain(values.iter().map(OsString::from))
+                .collect::<Vec<_>>()
+        };
+
+        for args in [
+            vec![],
+            vec!["help"],
+            vec!["--help"],
+            vec!["--help=true"],
+            vec!["version"],
+            vec!["--version"],
+            vec!["--version=false", "pod", "list"],
+            vec!["completion", "generate", "zsh"],
+            vec!["send", "archive.tar"],
+            vec!["receive", "1234-example"],
+            vec!["update"],
+            vec!["config", "--apiKey", "explicit-key"],
+            vec!["project", "create", "--name", "example"],
+            vec!["project", "build", "--include-env"],
+            vec!["pod"],
+            vec!["registry", "update"],
+            vec!["future-command"],
+            vec!["--future-option", "pod", "list"],
+            vec!["pod", "list", "--all", "--help"],
+        ] {
+            assert!(
+                invocation_is_secretless(&script_path, script.as_bytes(), &invocation(&args)),
+                "runpodctl {args:?}",
+            );
+        }
+
+        for args in [
+            vec!["pod", "list"],
+            vec!["--output", "yaml", "pod", "get", "pod-id"],
+            vec!["-oyaml", "pods", "create", "--image", "runpod/base"],
+            vec!["--help=false", "pod", "list"],
+            vec!["pod", "create", "--name", "--help"],
+            vec!["serverless", "update", "endpoint-id"],
+            vec!["tpl", "search", "pytorch"],
+            vec!["model", "add", "owner/model"],
+            vec!["nv", "delete", "volume-id"],
+            vec!["reg", "create"],
+            vec!["hub", "list"],
+            vec!["gpus", "list"],
+            vec!["dc", "list"],
+            vec!["billing", "endpoints"],
+            vec!["me"],
+            vec!["doctor"],
+            vec!["ssh", "connect", "pod-id"],
+            vec!["exec", "python", "script.py"],
+            vec!["project", "dev"],
+            vec!["get", "cloud"],
+            vec!["create", "pod"],
+            vec!["remove", "model"],
+            vec!["start", "pod"],
+        ] {
+            assert!(
+                !invocation_is_secretless(&script_path, script.as_bytes(), &invocation(&args)),
+                "runpodctl {args:?}",
+            );
+        }
+
+        assert!(!invocation_is_secretless(
+            &script_path,
+            format!("{script}# changed\n").as_bytes(),
+            &invocation(&["--version"]),
         ));
 
         unsafe { std::env::remove_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR") };
