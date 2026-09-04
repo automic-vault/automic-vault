@@ -1365,6 +1365,7 @@ mod tests {
                 "example",
             ],
             vec!["kubernetes", "config", "example", "--save"],
+            vec!["kubernetes", "config", "example", "-s=true"],
             vec!["kubernetes", "update-kubeconfig", "example"],
             vec!["kubernetes", "create", "example", "--save", "--merge"],
             vec![
@@ -1453,6 +1454,21 @@ mod tests {
             &script_path,
             script.as_bytes(),
             &invocation(args(&["instance", "list"])),
+        ));
+        fs::write(
+            &environment_config,
+            r#"{"apikeys":{"work":"fresh-key"},"meta":{"current_apikey":"missing"}}"#,
+        )
+        .unwrap();
+        assert!(!invocation_is_secretless(
+            &script_path,
+            script.as_bytes(),
+            &invocation(args(&[
+                "--config",
+                explicit_config.to_str().unwrap(),
+                "instance",
+                "list",
+            ])),
         ));
 
         assert!(!invocation_is_secretless(
