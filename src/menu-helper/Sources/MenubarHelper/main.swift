@@ -1723,7 +1723,7 @@ private func automaticAccessRecord(_ record: AccessRequestRecord) -> AutoApprova
     return AutoApprovalRecord(
         accessRequestID: record.id,
         date: record.date,
-        launcher: record.launcher ?? "Unknown app",
+        launcher: record.launcher ?? "Launcher unavailable",
         launcherIconPath: "",
         tool: record.tool,
         displayCommand: record.commandForDisplay,
@@ -2682,7 +2682,7 @@ private func performApprovedSecretMutation(
         reason: "Approved in prompt",
         launcher: launcher
     )) else {
-        return (nil, "approval audit log is unavailable")
+        return (nil, "Authorization History is unavailable")
     }
     return (perform?(mutation) ?? mutation.perform(), nil)
 }
@@ -3595,8 +3595,8 @@ private final class ApprovalServer: @unchecked Sendable {
             tool: "av",
             title: "List saved secret names?",
             detail: globalOnly
-                ? "Secret values will remain hidden. The requesting app will receive every saved Global Value name."
-                : "Secret values will remain hidden. The requesting app will receive every saved secret name."
+                ? "Secret values will remain hidden. av will receive every saved Global Value name."
+                : "Secret values will remain hidden. av will receive every saved Secret Name."
         )
         if allowedLauncher != nil
         {
@@ -3717,7 +3717,7 @@ private final class ApprovalServer: @unchecked Sendable {
             reason: reason,
             launcher: launcher
         )) else {
-            reply(peer, to: message, ok: false, error: "approval audit log is unavailable")
+            reply(peer, to: message, ok: false, error: "Authorization History is unavailable")
             return
         }
         reply(peer, to: message, ok: true, error: nil, names: names)
@@ -4004,7 +4004,7 @@ private final class ApprovalServer: @unchecked Sendable {
                         )
                     }
                 ) else {
-                    reply(peer, to: message, ok: false, error: "approval audit log is unavailable")
+                    reply(peer, to: message, ok: false, error: "Authorization History is unavailable")
                     return
                 }
             } catch {
@@ -4191,7 +4191,7 @@ private final class ApprovalServer: @unchecked Sendable {
                         )
                     }
                 ) else {
-                    reply(peer, to: message, ok: false, error: "approval audit log is unavailable")
+                    reply(peer, to: message, ok: false, error: "Authorization History is unavailable")
                     return
                 }
             } catch {
@@ -4268,7 +4268,7 @@ private final class ApprovalServer: @unchecked Sendable {
                         )
                     }
                 ) else {
-                    reply(peer, to: message, ok: false, error: "approval audit log is unavailable")
+                    reply(peer, to: message, ok: false, error: "Authorization History is unavailable")
                     return
                 }
             } catch {
@@ -4430,7 +4430,7 @@ private final class ApprovalServer: @unchecked Sendable {
                             )
                         }
                     ) else {
-                        self.reply(peer, to: message, ok: false, error: "approval audit log is unavailable")
+                        self.reply(peer, to: message, ok: false, error: "Authorization History is unavailable")
                         return
                     }
                 } catch {
@@ -4587,7 +4587,7 @@ private final class ApprovalServer: @unchecked Sendable {
                             peer,
                             to: message,
                             ok: false,
-                            error: "approval audit log is unavailable",
+                            error: "Authorization History is unavailable",
                             humanApprovalDecision: "approved"
                         )
                         return
@@ -4657,7 +4657,7 @@ private final class ApprovalServer: @unchecked Sendable {
                         peer,
                         to: message,
                         ok: false,
-                        error: "approval audit log is unavailable",
+                        error: "Authorization History is unavailable",
                         humanApprovalDecision: "approved"
                     )
                     return
@@ -4752,7 +4752,7 @@ private final class ApprovalServer: @unchecked Sendable {
                         }
                     )
                     if !committed {
-                        reply(peer, to: message, ok: false, error: "approval audit log is unavailable")
+                        reply(peer, to: message, ok: false, error: "Authorization History is unavailable")
                         return true
                     }
                     return true
@@ -4993,7 +4993,7 @@ private final class ApprovalServer: @unchecked Sendable {
                             )
                         }
                     ) else {
-                        throw AppError("approval audit log is unavailable")
+                        throw AppError("Authorization History is unavailable")
                     }
                 } catch {
                     _ = self.onAccessRequest(accessRequestRecord(
@@ -5144,7 +5144,7 @@ private final class ApprovalServer: @unchecked Sendable {
                 reason: "Proxy Session approved once",
                 launcher: launcher
             )) else {
-                self.reply(peer, to: message, ok: false, error: "approval audit log is unavailable")
+                self.reply(peer, to: message, ok: false, error: "Authorization History is unavailable")
                 return
             }
             let launch = ProxySessionLaunch(
@@ -5359,7 +5359,7 @@ private final class ApprovalServer: @unchecked Sendable {
                     )
                 }
             ) else {
-                reply(peer, to: message, ok: false, error: "approval audit log is unavailable")
+                reply(peer, to: message, ok: false, error: "Authorization History is unavailable")
                 return true
             }
         } catch {
@@ -6949,7 +6949,7 @@ private final class ApprovalServer: @unchecked Sendable {
         else { throw AppError("invalid sqlcmd credential request") }
         let parent = try sqlcmdCredentialParent(for: helperIdentity)
         if scope.address.isEmpty && sqlcmdRequestClassification(Array(parent.arguments.dropFirst())) != .secretDump {
-            throw AppError("sqlcmd endpoint-free credential requests require an explicit Secret Dump command")
+            throw AppError("sqlcmd endpoint-free credential requests require an explicit Secret Disclosure command")
         }
         let destination = scope.address.isEmpty ? "raw configuration output" : "\(scope.address):\(scope.port)"
         return ApprovalRequest(
@@ -11513,12 +11513,12 @@ private func approvalPromptSections(
     let chainRows = chain.map { [ApprovalPromptRow("Process chain", $0)] } ?? []
     sections.append(ApprovalPromptSection("Execution Origin", "app.badge", launcher.map {
         [
-            ApprovalPromptRow("App", "\($0.identifier) (pid \($0.pid))"),
+            ApprovalPromptRow("Verified Launcher", "\($0.identifier) (pid \($0.pid))"),
             ApprovalPromptRow("Path", $0.path),
             ApprovalPromptRow("Signed", "\($0.identifier) / \($0.teamIdentifier)"),
         ] + chainRows
     } ?? [
-        ApprovalPromptRow("Status", "unavailable; persistent auto-approve disabled"),
+        ApprovalPromptRow("Status", "unavailable; automic authorization disabled"),
     ] + chainRows))
 
     if let scriptApproval {

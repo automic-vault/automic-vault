@@ -90,35 +90,75 @@ pub(crate) fn invocation_is_secretless(
     }
     let args = &args[1..];
     match stub.command {
+        "gptcommit" => gptcommit_invocation_is_secretless(args),
         "grafanactl" => grafanactl_invocation_is_secretless(args),
         "npm" => npm_invocation_is_secretless(args),
-        "pnpm" => {
-            local_command(
-                args,
-                &["bin", "help", "list", "ls", "prefix", "root", "why"],
-            ) || args.first().is_some_and(|arg| arg == "store")
-                && args.get(1).is_some_and(|arg| arg == "path")
-        }
-        "fly" | "flyctl" => local_command(args, &["completion", "help", "version"]),
-        "k6" => local_command(
-            args,
-            &["archive", "completion", "help", "inspect", "new", "version"],
-        ),
-        "twine" => local_command(args, &["check"]),
-        "vagrant" => local_command(args, &["global-status", "validate", "version"]),
-        "hf" => local_command(args, &["cache"]),
-        "composer" => local_command(
-            args,
-            &[
-                "clear-cache",
-                "clearcache",
-                "licenses",
-                "status",
-                "validate",
-            ],
-        ),
+        "gotify" => gotify_invocation_is_secretless(args),
+        "glab" => glab_invocation_is_secretless(args),
+        "pnpm" => pnpm_invocation_is_secretless(args),
+        "doctl" => doctl_invocation_is_secretless(args),
+        "fly" | "flyctl" => flyctl_invocation_is_secretless(args),
+        "k6" => k6_invocation_is_secretless(args),
+        "twine" => twine_invocation_is_secretless(args),
+        "vagrant" => vagrant_invocation_is_secretless(args),
+        "hf" => hf_invocation_is_secretless(args),
+        "composer" => composer_invocation_is_secretless(args),
         _ => false,
     }
+}
+
+// Reviewed against zurawiki/gptcommit v0.5.17. Configuration and hook
+// management never consume the OpenAI key. The hook only reaches its LLM
+// client for a new commit or an amend enabled by configuration.
+fn gptcommit_invocation_is_secretless(args: &[OsString]) -> bool {
+    let Some(args) = args
+        .iter()
+        .map(|arg| arg.to_str())
+        .collect::<Option<Vec<_>>>()
+    else {
+        return true;
+    };
+    let option_end = args
+        .iter()
+        .position(|arg| *arg == "--")
+        .unwrap_or(args.len());
+    let args = &args[..option_end];
+    if args
+        .iter()
+        .any(|arg| matches!(*arg, "--help" | "-h" | "--version" | "-V"))
+        || ["GPTCOMMIT__OPENAI__API_KEY", "OPENAI_API_KEY"]
+            .iter()
+            .any(|key| std::env::var_os(key).is_some_and(|value| !value.is_empty()))
+        || std::env::var_os("GPTCOMMIT__MODEL_PROVIDER")
+            .is_some_and(|value| value == "tester-foobar")
+    {
+        return true;
+    }
+
+    let Some(command_index) = args
+        .iter()
+        .position(|arg| !matches!(*arg, "--verbose" | "-v"))
+    else {
+        return true;
+    };
+    if args[command_index] != "prepare-commit-msg" {
+        return true;
+    }
+    let args = &args[command_index + 1..];
+    let has_commit_message_file = option_value(args, "--commit-msg-file").is_some();
+    let commit_source = option_value(args, "--commit-source");
+    !(has_commit_message_file && matches!(commit_source, Some("" | "commit")))
+}
+
+fn option_value<'a>(args: &'a [&str], option: &str) -> Option<&'a str> {
+    args.iter().enumerate().find_map(|(index, argument)| {
+        if *argument == option {
+            return args.get(index + 1).copied();
+        }
+        argument
+            .strip_prefix(option)
+            .and_then(|value| value.strip_prefix('='))
+    })
 }
 
 // Reviewed against grafana/grafanactl v0.1.10. Keep this as a positive list:
@@ -212,19 +252,6 @@ fn grafanactl_uses_another_context(args: &[&str]) -> bool {
     })
 }
 
-fn local_command(args: &[OsString], commands: &[&str]) -> bool {
-    args.is_empty()
-        || args.iter().any(|arg| arg == "--help" || arg == "-h")
-        || args.len() == 1
-            && args
-                .first()
-                .is_some_and(|arg| arg == "--version" || arg == "-V" || arg == "-v")
-        || args.first().is_some_and(|arg| {
-            arg.to_str()
-                .is_some_and(|command| commands.contains(&command))
-        })
-}
-
 fn npm_invocation_is_secretless(args: &[OsString]) -> bool {
     let Some(command) = args.first().and_then(|arg| arg.to_str()) else {
         return true;
@@ -297,6 +324,1367 @@ fn npm_invocation_is_secretless(args: &[OsString]) -> bool {
             | "v"
             | "whoami"
     )
+}
+
+fn pnpm_invocation_is_secretless(args: &[OsString]) -> bool {
+    let Some(command) = args.first().and_then(|arg| arg.to_str()) else {
+        return true;
+    };
+    // Keep this positive list exact. Unknown commands and commands whose
+    // purpose is arbitrary package or project code must not inherit
+    // NODE_AUTH_TOKEN.
+    !matches!(
+        command,
+        "access"
+            | "add"
+            | "audit"
+            | "ci"
+            | "clean-install"
+            | "dedupe"
+            | "deprecate"
+            | "dist-tag"
+            | "dist-tags"
+            | "fetch"
+            | "find"
+            | "i"
+            | "ic"
+            | "info"
+            | "install"
+            | "install-clean"
+            | "logout"
+            | "outdated"
+            | "owner"
+            | "owners"
+            | "ping"
+            | "publish"
+            | "s"
+            | "se"
+            | "search"
+            | "show"
+            | "stage"
+            | "star"
+            | "stars"
+            | "team"
+            | "undeprecate"
+            | "unpublish"
+            | "unstar"
+            | "up"
+            | "update"
+            | "upgrade"
+            | "v"
+            | "view"
+            | "whoami"
+    ) && !(command == "store" && args.get(1).is_some_and(|arg| arg == "add"))
+        && !(command == "config"
+            && args.get(1).is_some_and(|arg| arg == "get")
+            && args.iter().skip(2).any(|arg| {
+                arg.to_str().is_some_and(|arg| {
+                    let key = arg.to_ascii_lowercase();
+                    key == "_authtoken" || key.ends_with(":_authtoken")
+                })
+            }))
+}
+
+fn k6_invocation_is_secretless(args: &[OsString]) -> bool {
+    // Only explicit cloud operations receive the token. Config, environment,
+    // extension, and future-command ambiguity must not expose it to scripts.
+    if args
+        .iter()
+        .any(|arg| arg == "--help" || arg == "-h" || arg == "--version")
+    {
+        return true;
+    }
+    let Some(command) = k6_command_index(args, 0) else {
+        return true;
+    };
+    match args[command].to_str() {
+        Some("cloud") => {
+            let Some(subcommand) = k6_command_index(args, command + 1) else {
+                return true;
+            };
+            match args[subcommand].to_str() {
+                Some("run" | "upload") => false,
+                Some("project" | "load-zone" | "test") => {
+                    k6_command_index(args, subcommand + 1).and_then(|index| args[index].to_str())
+                        != Some("list")
+                }
+                _ => true,
+            }
+        }
+        Some("run") => !k6_run_uses_cloud_output(&args[command + 1..]),
+        _ => true,
+    }
+}
+
+fn k6_command_index(args: &[OsString], mut index: usize) -> Option<usize> {
+    while let Some(arg) = args.get(index).and_then(|arg| arg.to_str()) {
+        if matches!(
+            arg,
+            "--no-color"
+                | "--log-ns-timestamps"
+                | "--verbose"
+                | "-v"
+                | "--quiet"
+                | "-q"
+                | "--profiling-enabled"
+        ) {
+            index += 1;
+        } else if matches!(
+            arg,
+            "--secret-source"
+                | "--log-output"
+                | "--log-format"
+                | "--config"
+                | "-c"
+                | "--address"
+                | "-a"
+        ) {
+            args.get(index + 1)?;
+            index += 2;
+        } else if [
+            "--secret-source=",
+            "--log-output=",
+            "--log-format=",
+            "--config=",
+            "--address=",
+        ]
+        .iter()
+        .any(|prefix| arg.starts_with(prefix))
+            || [
+                "--no-color=",
+                "--log-ns-timestamps=",
+                "--verbose=",
+                "--quiet=",
+                "--profiling-enabled=",
+            ]
+            .iter()
+            .any(|prefix| arg.starts_with(prefix))
+            || (arg.starts_with("-c") || arg.starts_with("-a")) && arg.len() > 2
+        {
+            index += 1;
+        } else if arg.starts_with('-') {
+            return None;
+        } else {
+            return Some(index);
+        }
+    }
+    None
+}
+
+fn k6_run_uses_cloud_output(args: &[OsString]) -> bool {
+    let mut index = 0;
+    while let Some(arg) = args.get(index).and_then(|arg| arg.to_str()) {
+        if arg == "--" {
+            return false;
+        }
+        if arg == "--out" || arg == "-o" {
+            if args
+                .get(index + 1)
+                .and_then(|value| value.to_str())
+                .is_some_and(k6_cloud_output)
+            {
+                return true;
+            }
+            index += 2;
+            continue;
+        }
+        if let Some(value) = arg.strip_prefix("--out=") {
+            if k6_cloud_output(value) {
+                return true;
+            }
+        } else if let Some(value) = arg.strip_prefix("-o") {
+            if k6_cloud_output(value.strip_prefix('=').unwrap_or(value)) {
+                return true;
+            }
+        }
+        index += 1;
+    }
+    false
+}
+
+fn k6_cloud_output(value: &str) -> bool {
+    value == "cloud" || value.starts_with("cloud=")
+}
+
+fn twine_invocation_is_secretless(args: &[OsString]) -> bool {
+    if args
+        .iter()
+        .any(|arg| arg == "--help" || arg == "-h" || arg == "--version")
+    {
+        return true;
+    }
+    let mut args = args.iter().skip_while(|arg| *arg == "--no-color");
+    let command = args.next();
+    let command = if command.is_some_and(|arg| arg == "--") {
+        args.next()
+    } else {
+        command
+    };
+    command.is_none_or(|command| command != "upload")
+}
+
+fn vagrant_invocation_is_secretless(args: &[OsString]) -> bool {
+    let Some(args) = args
+        .iter()
+        .map(|arg| arg.to_str())
+        .collect::<Option<Vec<_>>>()
+    else {
+        return true;
+    };
+    !vagrant_invocation_may_need_secret(&args)
+}
+
+fn vagrant_invocation_may_need_secret(args: &[&str]) -> bool {
+    let separator = args
+        .iter()
+        .position(|arg| *arg == "--")
+        .unwrap_or(args.len());
+    if args[..separator]
+        .iter()
+        .any(|arg| matches!(*arg, "--help" | "-h" | "--version" | "-v"))
+    {
+        return false;
+    }
+
+    // Vagrant removes these flags before dispatch, wherever they occur before `--`.
+    let args = args
+        .iter()
+        .enumerate()
+        .filter_map(|(index, arg)| {
+            (!(index < separator
+                && matches!(
+                    *arg,
+                    "--color"
+                        | "--no-color"
+                        | "--machine-readable"
+                        | "--debug"
+                        | "--timestamp"
+                        | "--debug-timestamp"
+                        | "--no-tty"
+                )))
+            .then_some(*arg)
+        })
+        .collect::<Vec<_>>();
+    let Some((command, args)) = vagrant_subcommand(&args) else {
+        return false;
+    };
+
+    match command {
+        "box" => vagrant_box_may_need_secret(args),
+        "cloud" => vagrant_cloud_may_need_secret(args),
+        "login" => vagrant_login_may_need_secret(args),
+        "up" | "reload" | "resume" => true,
+        "snapshot" => vagrant_subcommand(args).is_some_and(|(command, args)| {
+            matches!(command, "restore" | "pop")
+                && !args
+                    .iter()
+                    .take_while(|arg| **arg != "--")
+                    .any(|arg| *arg == "--no-start")
+        }),
+        _ => false,
+    }
+}
+
+fn vagrant_subcommand<'a>(args: &'a [&'a str]) -> Option<(&'a str, &'a [&'a str])> {
+    let index = args.iter().position(|arg| !arg.starts_with('-'))?;
+    Some((args[index], &args[index + 1..]))
+}
+
+fn vagrant_login_may_need_secret(args: &[&str]) -> bool {
+    let mut index = 0;
+    while index < args.len() {
+        let arg = args[index];
+        if arg == "--" {
+            return index + 1 == args.len();
+        } else if arg == "-c" || arg == "--check" {
+            index += 1;
+        } else if matches!(arg, "-d" | "--description" | "-u" | "--username") {
+            if index + 1 >= args.len() {
+                return false;
+            }
+            index += 2;
+        } else if matches!(arg, "-t" | "--token")
+            || arg.starts_with("--token=")
+            || arg.starts_with("-t") && !arg.starts_with("--") && arg.len() > 2
+        {
+            return false;
+        } else if arg.starts_with("--description=")
+            || arg.starts_with("--username=")
+            || (arg.starts_with("-d") || arg.starts_with("-u"))
+                && !arg.starts_with("--")
+                && arg.len() > 2
+        {
+            index += 1;
+        } else {
+            return false;
+        }
+    }
+    true
+}
+
+fn vagrant_whoami_may_need_secret(args: &[&str]) -> bool {
+    let mut positionals = 0;
+    let mut after_separator = false;
+    for arg in args {
+        if *arg == "--" && !after_separator {
+            after_separator = true;
+        } else if !after_separator && arg.starts_with('-') {
+            return false;
+        } else {
+            positionals += 1;
+        }
+    }
+    positionals == 0
+}
+
+fn vagrant_box_may_need_secret(args: &[&str]) -> bool {
+    let Some((command, args)) = vagrant_subcommand(args) else {
+        return false;
+    };
+    match command {
+        "add" => vagrant_box_add_may_need_secret(args),
+        "outdated" | "update" => true,
+        _ => false,
+    }
+}
+
+fn vagrant_box_add_may_need_secret(args: &[&str]) -> bool {
+    const VALUE_OPTIONS: &[&str] = &[
+        "-a",
+        "--architecture",
+        "--provider",
+        "--box-version",
+        "--checksum",
+        "--checksum-type",
+        "--name",
+        "--cacert",
+        "--capath",
+        "--cert",
+    ];
+    const FLAG_OPTIONS: &[&str] = &[
+        "-c",
+        "--clean",
+        "-f",
+        "--force",
+        "--insecure",
+        "--location-trusted",
+    ];
+
+    let mut positionals = Vec::new();
+    let mut index = 0;
+    while index < args.len() {
+        let arg = args[index];
+        if arg == "--" {
+            positionals.extend_from_slice(&args[index + 1..]);
+            break;
+        } else if VALUE_OPTIONS.contains(&arg) {
+            if index + 1 >= args.len() {
+                return false;
+            }
+            index += 2;
+        } else if VALUE_OPTIONS.iter().any(|option| {
+            arg.strip_prefix(option)
+                .is_some_and(|rest| rest.starts_with('='))
+        }) || arg.starts_with("-a") && !arg.starts_with("--") && arg.len() > 2
+        {
+            index += 1;
+        } else if FLAG_OPTIONS.contains(&arg) {
+            index += 1;
+        } else if arg.starts_with('-') {
+            return false;
+        } else {
+            positionals.push(arg);
+            index += 1;
+        }
+    }
+
+    let target = match positionals.as_slice() {
+        [target] | [_, target] => *target,
+        _ => return false,
+    };
+    if target.starts_with('/')
+        || target.starts_with("./")
+        || target.starts_with("../")
+        || target.starts_with("~/")
+        || !target.contains('/') && (target.ends_with(".box") || target.ends_with(".json"))
+    {
+        return false;
+    }
+    let Ok(target) = url::Url::parse(target) else {
+        return true;
+    };
+    if target.scheme() == "file" {
+        return false;
+    }
+    let Some(host) = target.host_str() else {
+        return false;
+    };
+    if matches!(
+        host,
+        "vagrantcloud.com" | "app.vagrantup.com" | "atlas.hashicorp.com"
+    ) {
+        return true;
+    }
+    std::env::var("VAGRANT_SERVER_URL")
+        .ok()
+        .and_then(|server| url::Url::parse(&server).ok())
+        .and_then(|server| server.host_str().map(str::to_owned))
+        .is_some_and(|server| server == host)
+}
+
+fn vagrant_cloud_may_need_secret(args: &[&str]) -> bool {
+    let Some((command, args)) = vagrant_subcommand(args) else {
+        return false;
+    };
+    match command {
+        "auth" => vagrant_subcommand(args).is_some_and(|(command, args)| match command {
+            "login" => vagrant_login_may_need_secret(args),
+            "whoami" => vagrant_whoami_may_need_secret(args),
+            _ => false,
+        }),
+        "box" => vagrant_subcommand(args)
+            .is_some_and(|(command, _)| matches!(command, "create" | "delete" | "show" | "update")),
+        "provider" => vagrant_subcommand(args).is_some_and(|(command, _)| {
+            matches!(command, "create" | "delete" | "update" | "upload")
+        }),
+        "publish" | "search" => true,
+        "version" => vagrant_subcommand(args).is_some_and(|(command, _)| {
+            matches!(
+                command,
+                "create" | "delete" | "release" | "revoke" | "update"
+            )
+        }),
+        _ => false,
+    }
+}
+
+fn hf_invocation_is_secretless(args: &[OsString]) -> bool {
+    let Some(args) = args
+        .iter()
+        .map(|arg| arg.to_str())
+        .collect::<Option<Vec<_>>>()
+    else {
+        return true;
+    };
+    !hf_invocation_may_need_secret(&args)
+}
+
+fn hf_invocation_may_need_secret(args: &[&str]) -> bool {
+    let args = &args[..args
+        .iter()
+        .position(|arg| *arg == "--")
+        .unwrap_or(args.len())];
+    let Some(command) = args.first().copied() else {
+        return false;
+    };
+    if command.starts_with('-')
+        || args.contains(&"--help")
+        || args.contains(&"--token")
+        || args.iter().any(|arg| arg.starts_with("--token="))
+    {
+        return false;
+    }
+    let subcommand = args.get(1).copied().unwrap_or_default();
+    if args.contains(&"-h")
+        && !matches!(
+            (command, subcommand),
+            ("datasets" | "models" | "spaces", "list" | "ls")
+        )
+    {
+        return false;
+    }
+
+    // Reviewed against huggingface_hub c804cddf. Only first-party commands
+    // that can consume HF_TOKEN belong here; extensions and future commands
+    // remain tokenless until their credential boundary is reviewed.
+    match command {
+        "cp" | "download" | "sync" | "upload" | "upload-large-folder" => !subcommand.is_empty(),
+        "env" => true,
+        "auth" => matches!(subcommand, "token" | "whoami"),
+        "cache" => subcommand == "verify",
+        "buckets" => matches!(
+            subcommand,
+            "cp" | "create"
+                | "list"
+                | "ls"
+                | "info"
+                | "delete"
+                | "remove"
+                | "rm"
+                | "move"
+                | "settings"
+                | "sync"
+        ),
+        "collections" => matches!(
+            subcommand,
+            "list"
+                | "ls"
+                | "info"
+                | "create"
+                | "update"
+                | "delete"
+                | "add-item"
+                | "update-item"
+                | "delete-item"
+        ),
+        "datasets" => matches!(
+            subcommand,
+            "list" | "ls" | "leaderboard" | "info" | "parquet" | "sql" | "card"
+        ),
+        "discussions" => matches!(
+            subcommand,
+            "list"
+                | "ls"
+                | "info"
+                | "create"
+                | "comment"
+                | "edit"
+                | "close"
+                | "reopen"
+                | "rename"
+                | "merge"
+                | "diff"
+        ),
+        "models" => matches!(subcommand, "list" | "ls" | "info" | "card"),
+        "papers" => matches!(subcommand, "list" | "ls" | "search" | "info" | "read"),
+        "repo" | "repos" => hf_repo_invocation_may_need_secret(&args[1..]),
+        "repo-files" => subcommand == "delete",
+        "jobs" => hf_jobs_invocation_may_need_secret(&args[1..]),
+        "sandbox" => hf_sandbox_invocation_may_need_secret(&args[1..]),
+        "spaces" => hf_spaces_invocation_may_need_secret(&args[1..]),
+        "webhooks" => matches!(
+            subcommand,
+            "list" | "ls" | "info" | "create" | "update" | "enable" | "disable" | "delete"
+        ),
+        "endpoints" => match subcommand {
+            "list" | "ls" | "hardware" | "deploy" | "describe" | "update" | "delete" | "pause"
+            | "resume" | "scale-to-zero" | "list-catalog" => true,
+            "catalog" => matches!(args.get(2), Some(&"deploy" | &"list" | &"ls")),
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
+fn hf_repo_invocation_may_need_secret(args: &[&str]) -> bool {
+    match args.first().copied().unwrap_or_default() {
+        "cp" | "list" | "ls" | "create" | "duplicate" | "delete" | "move" | "settings"
+        | "delete-files" => true,
+        "branch" => matches!(args.get(1), Some(&"create" | &"delete")),
+        "tag" => matches!(args.get(1), Some(&"create" | &"list" | &"ls" | &"delete")),
+        _ => false,
+    }
+}
+
+fn hf_jobs_invocation_may_need_secret(args: &[&str]) -> bool {
+    match args.first().copied().unwrap_or_default() {
+        "run" | "logs" | "stats" | "list" | "ls" | "ps" | "hardware" | "inspect" | "cancel"
+        | "wait" | "labels" | "ssh" => true,
+        "uv" => args.get(1) == Some(&"run"),
+        "scheduled" => match args.get(1).copied().unwrap_or_default() {
+            "run" | "list" | "ls" | "ps" | "inspect" | "delete" | "suspend" | "resume"
+            | "trigger" | "labels" => true,
+            "uv" => args.get(2) == Some(&"run"),
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
+fn hf_sandbox_invocation_may_need_secret(args: &[&str]) -> bool {
+    match args.first().copied().unwrap_or_default() {
+        "create" | "exec" | "spawn" | "cp" | "kill" => true,
+        "pool" => matches!(
+            args.get(1),
+            Some(&"create" | &"ls" | &"list" | &"delete" | &"rm")
+        ),
+        "process" => matches!(args.get(1), Some(&"ls" | &"list" | &"kill")),
+        _ => false,
+    }
+}
+
+fn hf_spaces_invocation_may_need_secret(args: &[&str]) -> bool {
+    match args.first().copied().unwrap_or_default() {
+        "list" | "ls" | "info" | "card" | "templates" | "search" | "wait" | "dev-mode" | "ssh"
+        | "pause" | "restart" | "hardware" | "settings" | "logs" | "hot-reload" => true,
+        "volumes" => matches!(args.get(1), Some(&"list" | &"ls" | &"set" | &"delete")),
+        "secrets" | "variables" => {
+            matches!(args.get(1), Some(&"list" | &"ls" | &"add" | &"delete"))
+        }
+        _ => false,
+    }
+}
+
+const COMPOSER_COMMANDS: &[(&str, &[&str])] = &[
+    ("about", &["about"]),
+    ("archive", &["archive"]),
+    ("audit", &["audit"]),
+    ("browse", &["browse", "home"]),
+    ("bump", &["bump"]),
+    ("check-platform-reqs", &["check-platform-reqs"]),
+    ("clear-cache", &["clear-cache", "clearcache", "cc"]),
+    ("completion", &["completion", "_complete"]),
+    ("config", &["config"]),
+    ("create-project", &["create-project"]),
+    ("depends", &["depends", "why"]),
+    ("diagnose", &["diagnose"]),
+    ("dump-autoload", &["dump-autoload", "dumpautoload"]),
+    ("exec", &["exec"]),
+    ("fund", &["fund"]),
+    ("global", &["global"]),
+    ("help", &["help"]),
+    ("init", &["init"]),
+    ("install", &["install", "i"]),
+    ("licenses", &["licenses"]),
+    ("list", &["list"]),
+    ("outdated", &["outdated"]),
+    ("policy", &["policy"]),
+    ("prohibits", &["prohibits", "why-not"]),
+    ("reinstall", &["reinstall"]),
+    ("remove", &["remove", "rm", "uninstall"]),
+    ("repository", &["repository", "repo"]),
+    ("require", &["require", "r"]),
+    ("run-script", &["run-script", "run"]),
+    ("search", &["search"]),
+    ("self-update", &["self-update", "selfupdate"]),
+    ("show", &["show", "info"]),
+    ("status", &["status"]),
+    ("suggests", &["suggests"]),
+    ("update", &["update", "u", "upgrade"]),
+    ("validate", &["validate"]),
+];
+
+fn composer_invocation_is_secretless(args: &[OsString]) -> bool {
+    let Some(args) = args
+        .iter()
+        .map(|arg| arg.to_str())
+        .collect::<Option<Vec<_>>>()
+    else {
+        return true;
+    };
+    !composer_invocation_may_need_secret(&args)
+}
+
+fn composer_invocation_may_need_secret(args: &[&str]) -> bool {
+    composer_invocation_may_need_secret_with_options(args, false)
+}
+
+fn composer_invocation_may_need_secret_with_options(
+    args: &[&str],
+    inherited_non_interactive: bool,
+) -> bool {
+    let option_end = args
+        .iter()
+        .position(|arg| *arg == "--")
+        .unwrap_or(args.len());
+    let option_args = &args[..option_end];
+    if option_args
+        .iter()
+        .any(|arg| matches!(*arg, "--help" | "-h" | "--version" | "-V"))
+    {
+        return false;
+    }
+    let non_interactive = inherited_non_interactive
+        || option_args
+            .iter()
+            .any(|arg| matches!(*arg, "--no-interaction" | "-n"));
+    let Some((command, args)) = composer_command_and_args(args) else {
+        return false;
+    };
+    let network_enabled = std::env::var_os("COMPOSER_DISABLE_NETWORK")
+        .is_none_or(|value| value.is_empty() || value == "0");
+
+    // Reviewed against Composer 85ae025. Script aliases, plugin commands,
+    // vendored binaries, and future commands stay tokenless so arbitrary code
+    // never inherits COMPOSER_AUTH merely because Composer launched it.
+    match command {
+        "install" | "create-project" | "update" | "search" | "audit" | "reinstall" | "outdated"
+        | "fund" | "diagnose" | "prohibits" => network_enabled,
+        "require" => composer_require_may_need_secret(args, non_interactive, network_enabled),
+        "remove" => network_enabled && !args.contains(&"--no-update"),
+        "archive" | "browse" => network_enabled && composer_has_positional(args),
+        "config" => composer_config_reads_auth(args),
+        "global" => composer_invocation_may_need_secret_with_options(args, non_interactive),
+        "init" => {
+            network_enabled
+                && !non_interactive
+                && args
+                    .iter()
+                    .any(|arg| *arg == "--repository" || arg.starts_with("--repository="))
+        }
+        "show" => {
+            network_enabled
+                && args[..args
+                    .iter()
+                    .position(|arg| *arg == "--")
+                    .unwrap_or(args.len())]
+                    .iter()
+                    .any(|arg| {
+                        matches!(
+                            *arg,
+                            "--all"
+                                | "--available"
+                                | "-a"
+                                | "--latest"
+                                | "-l"
+                                | "--outdated"
+                                | "-o"
+                        )
+                    })
+        }
+        _ => false,
+    }
+}
+
+fn composer_command_and_args<'a>(args: &'a [&'a str]) -> Option<(&'static str, &'a [&'a str])> {
+    let mut index = 0;
+    while let Some(argument) = args.get(index).copied() {
+        if matches!(
+            argument,
+            "--profile"
+                | "--no-plugins"
+                | "--no-scripts"
+                | "--no-cache"
+                | "--quiet"
+                | "-q"
+                | "--verbose"
+                | "-v"
+                | "-vv"
+                | "-vvv"
+                | "--ansi"
+                | "--no-ansi"
+                | "--no-interaction"
+                | "-n"
+        ) {
+            index += 1;
+        } else if matches!(argument, "--working-dir" | "-d") {
+            index += 2;
+        } else if argument.starts_with("--working-dir=")
+            || (argument.starts_with("-d") && argument.len() > 2)
+        {
+            index += 1;
+        } else if argument.starts_with('-') {
+            return None;
+        } else {
+            return composer_command(argument).map(|command| (command, &args[index + 1..]));
+        }
+    }
+    None
+}
+
+fn composer_command(argument: &str) -> Option<&'static str> {
+    if let Some((command, _)) = COMPOSER_COMMANDS
+        .iter()
+        .find(|(_, aliases)| aliases.contains(&argument))
+    {
+        return Some(command);
+    }
+    let mut matches = COMPOSER_COMMANDS
+        .iter()
+        .filter(|(_, aliases)| aliases.iter().any(|alias| alias.starts_with(argument)))
+        .map(|(command, _)| *command);
+    let command = matches.next()?;
+    matches
+        .all(|candidate| candidate == command)
+        .then_some(command)
+}
+
+fn composer_has_positional(args: &[&str]) -> bool {
+    !composer_positionals(
+        args,
+        &["--working-dir", "-d", "--format", "-f", "--dir", "--file"],
+    )
+    .is_empty()
+}
+
+fn composer_positionals<'a>(args: &[&'a str], options_with_values: &[&str]) -> Vec<&'a str> {
+    let mut positionals = Vec::new();
+    let mut skip_value = false;
+    let mut options_ended = false;
+    for argument in args {
+        if skip_value {
+            skip_value = false;
+        } else if *argument == "--" {
+            options_ended = true;
+        } else if options_with_values.contains(argument) {
+            skip_value = true;
+        } else if options_ended || !argument.starts_with('-') {
+            positionals.push(*argument);
+        }
+    }
+    positionals
+}
+
+fn composer_require_may_need_secret(
+    args: &[&str],
+    non_interactive: bool,
+    network_enabled: bool,
+) -> bool {
+    if !network_enabled {
+        return false;
+    }
+    if !args.contains(&"--no-update") || !non_interactive {
+        return true;
+    }
+    composer_positionals(
+        args,
+        &[
+            "--working-dir",
+            "-d",
+            "--prefer-install",
+            "--audit-format",
+            "--ignore-platform-req",
+            "--apcu-autoloader-prefix",
+        ],
+    )
+    .iter()
+    .any(|package| !package.contains(':') && !package.contains('=') && !package.contains(' '))
+}
+
+fn composer_config_reads_auth(args: &[&str]) -> bool {
+    if args.iter().any(|arg| matches!(*arg, "--list" | "-l")) {
+        return true;
+    }
+    if args
+        .iter()
+        .any(|arg| matches!(*arg, "--editor" | "-e" | "--unset"))
+    {
+        return false;
+    }
+    let positionals = composer_positionals(args, &["--working-dir", "-d", "--file", "-f"]);
+    positionals.len() == 1
+        && matches!(
+            positionals[0].split('.').next(),
+            Some(
+                "bitbucket-oauth"
+                    | "github-oauth"
+                    | "gitlab-oauth"
+                    | "gitlab-token"
+                    | "http-basic"
+                    | "custom-headers"
+                    | "bearer"
+                    | "client-certificate"
+                    | "forgejo-token"
+            )
+        )
+}
+
+// Reviewed against doctl v1.168.0. Runnable-only names and context-checked
+// ambiguous aliases cross from the tokenless command tree into a credentialed leaf.
+const DOCTL_ROOTS: &str = "1-click,account,apps,app,a,auth,balance,billing-history,bh,compute,databases,db,dbs,d,database,dedicated-inference,di,dedicated-inferences,gradient,ai,genai,gradientai,invoice,kubernetes,kube,k8s,k,monitoring,network,nfs,projects,registries,regs,rs,registry,reg,r,secrets,security,serverless,sandbox,sbx,sls,serverless-inference,inference,si,spaces,sp,vector-databases,vdb,vdbs,version,vpcs";
+const DOCTL_GROUP_ONLY: &str = "1-click,access-point,account,action,activation,activations,actv,agent,agents,ai,alert,alerts,apikeys,apk,app,apps,async,async-invoke,attachment,auth,autoscale,backup-policies,balance,bh,billing-history,byoip-prefix,byoip-prefixes,cdn,certificate,cfg,chat,chat-completions,chatcompletion,cluster,clusters,compute,configuration,da,das,database,databases,db,dbs,dedicated-inference,dedicated-inferences,dev,di,domain,droplet,droplet-action,droplet-autoscale,embeddings,events,fip,fipa,firewall,firewalls,floating-ip,floating-ip-action,floating-ip-actions,floating-ips,fn,fr,function,functionroute,functions,fw,garbage-collection,genai,gradient,gradientai,image,image-action,images,indexes,inference,instance-size,invoice,k8scfg,kb,key,keys,knowledge-base,kube,kubecfg,kubeconfig,kubernetes,lb,load-balancer,main,maintenance,maintenance-window,messages,monitoring,mw,namespace,namespaces,network,nfs,node-pool,node-pools,nodepool,nodepools,np,ns,o,ok,openai-key,options,opts,peerings,plugin,pool,pools,projects,records,reg,region,registries,registry,regs,rep,replica,repo,repository,reserved-ip,reserved-ip-action,reserved-ip-actions,reserved-ips,reserved-ipv6,reserved-ipv6s,responses,route,routes,sandbox,sbx,scan,scans,scenario-library,scenario-set,scenario-sets,secrets,security,serverless,serverless-inference,si,sim,simulation-run,simulation-runs,size,sl,sls,sm,sp,spaces,spec,sql-mode,ss,ssh-key,storage,storage-autoscale,tier,topics,trig,trigger,triggers,uptime,user,vdb,vdbs,vector-databases,vng,volume,volume-action,vpc-nat-gateway,vpcs";
+const DOCTL_RUNNABLE_ONLY: &str = "actions,add,add-datasource,add-droplets,add-ds,add-forwarding-rules,add-rules,add-tags,affected-resources,append,apply,ar,assign,ath,attach,available-regions,b,backups,bu,build,c-ss,cancel,cancel-event,cancel-indexing-job,cancel-job,cancel-job-invocation,cd,ce,change-backup-policy,change-kernel,cji,conn,connect,connection,console,create,create-deployment,create-scenario-set,create-token,credentials,creds,cs,csv,ct,d-ds,del,delete,delete-dangerous,delete-datasource,delete-manifest,delete-node,delete-selective,delete-tag,deploy,detach,detach-by-droplet-id,disable,disable-backups,dl-url,dm,docker-config,download-url,ds,dt,dth,enable,enable-backups,enable-ipv6,enable-private-networking,eng,engines,exec-credential,f,fc,flush,fork,g-bgp-auth-key,g-j,g-service-key,g-t,g-t-url,ga,gd,ge,gen,generate,get,get-active,get-agents,get-bgp-auth-key,get-ca,get-deployment,get-event,get-gpu-model-config,get-indexing-job,get-job,get-job-invocation,get-journey,get-metadata,get-service-key,get-sizes,get-trajectory,get-trajectory-url,get-upgrades,ggmc,gji,gs,gu,i,import,in,init,install,invoke,kernels,kubernetes-manifest,l,la,latest,list,list-accelerators,list-alerts,list-application,list-associated-resources,list-buildpacks,list-by-droplet,list-datasources,list-deployments,list-distribution,list-events,list-history,list-indexing-job-data-sources,list-indexing-jobs,list-instances,list-job-invocations,list-journeys,list-manifests,list-members,list-models,list-regions,list-routes,list-scenarios,list-supported,list-tags,list-tokens,list-user,list-v2,list-versions,lm,login,logout,logs,lr,ls,ls-ds,ls-j,ls-job-ds,ls-jobs,ls-routes,ls-s,ls2,lsd,lse,lsji,lt,lv,m,migrate,n,neighbors,partitions,password-reset,pdf,power-cycle,power-off,power-on,promote,propose,purge-cache,ratelimit,reassign,reboot,rebuild,recycle,regen-api-key,regen-service-key,regenerate,regenerate-service-key,regions,remove,remove-droplets,remove-forwarding-rules,remove-rules,remove-tags,rename,replace,replace-node,reset,resize,resource,restart,restore,restore-status,result,revoke-token,rl,rm,rs-status,rt,run,save,set,show,shutdown,sizes,slugs,snapshots,ssh,start,status,subscription-tiers,summary,switch,switch-performance-tier,t,tags,tiers,token,transfer,uad,unassign,undeploy,uninstall,unset,untag,update,update-alert-destinations,update-vis,update-visibility,upgrade,upgrade-buildpack,uv,v,validate,version,versions,w,wait,watch";
+const DOCTL_AMBIGUOUS: &str = "a,c,config,d,g,gc,k,k8s,models,p,r,resources,rs,s,snapshot,tag,u";
+
+fn doctl_invocation_is_secretless(args: &[OsString]) -> bool {
+    let Some(args) = args
+        .iter()
+        .map(|arg| arg.to_str())
+        .collect::<Option<Vec<_>>>()
+    else {
+        return true;
+    };
+    let option_end = args
+        .iter()
+        .position(|arg| *arg == "--")
+        .unwrap_or(args.len());
+    let option_args = &args[..option_end];
+    if option_args
+        .iter()
+        .any(|arg| matches!(*arg, "--help" | "-h" | "--version"))
+        || doctl_uses_another_token(option_args)
+    {
+        return true;
+    }
+
+    let mut path = Vec::new();
+    let mut index = 0;
+    while index < option_end {
+        let argument = args[index];
+        if doctl_flag_takes_value(argument) {
+            if index + 1 >= option_end {
+                return true;
+            }
+            index += 2;
+            continue;
+        }
+        if doctl_attached_value(argument)
+            || matches!(argument, "--interactive" | "--trace" | "--verbose" | "-v")
+        {
+            index += 1;
+            continue;
+        }
+        if argument.starts_with('-') {
+            return true;
+        }
+        if path.is_empty() {
+            if !doctl_name_in(DOCTL_ROOTS, argument) || argument == "version" {
+                return true;
+            }
+            path.push(argument);
+            index += 1;
+            continue;
+        }
+        if doctl_local_leaf(&path, argument) {
+            return true;
+        }
+        if doctl_name_in(DOCTL_GROUP_ONLY, argument) || doctl_ambiguous_group(&path, argument) {
+            path.push(argument);
+            index += 1;
+            continue;
+        }
+        return !doctl_name_in(DOCTL_RUNNABLE_ONLY, argument)
+            && !doctl_name_in(DOCTL_AMBIGUOUS, argument);
+    }
+    true
+}
+
+fn doctl_uses_another_token(args: &[&str]) -> bool {
+    let mut context = None;
+    for (index, argument) in args.iter().enumerate() {
+        if matches!(*argument, "--access-token" | "-t")
+            || argument.starts_with("--access-token=")
+            || argument.starts_with("-t") && argument.len() > 2
+        {
+            return true;
+        }
+        if *argument == "--context" {
+            context = args.get(index + 1).copied();
+        } else if let Some(value) = argument.strip_prefix("--context=") {
+            context = Some(value);
+        }
+    }
+    match context.filter(|value| !value.is_empty()) {
+        Some(value) => !value.eq_ignore_ascii_case("default"),
+        None => std::env::var_os("DIGITALOCEAN_CONTEXT")
+            .is_some_and(|value| !value.is_empty() && value != "default"),
+    }
+}
+
+fn doctl_flag_takes_value(argument: &str) -> bool {
+    matches!(
+        argument,
+        "--access-token"
+            | "-t"
+            | "--api-url"
+            | "-u"
+            | "--config"
+            | "-c"
+            | "--context"
+            | "--http-retry-max"
+            | "--http-retry-wait-max"
+            | "--http-retry-wait-min"
+            | "--output"
+            | "-o"
+    )
+}
+
+fn doctl_attached_value(argument: &str) -> bool {
+    [
+        "--access-token=",
+        "--api-url=",
+        "--config=",
+        "--context=",
+        "--http-retry-max=",
+        "--http-retry-wait-max=",
+        "--http-retry-wait-min=",
+        "--output=",
+    ]
+    .iter()
+    .any(|prefix| argument.starts_with(prefix))
+        || ["-t", "-u", "-c", "-o"]
+            .iter()
+            .any(|prefix| argument.starts_with(prefix) && argument.len() > prefix.len())
+}
+
+fn doctl_local_leaf(path: &[&str], leaf: &str) -> bool {
+    let root = path[0];
+    (root == "auth" && matches!(leaf, "list" | "ls" | "remove" | "switch"))
+        || (matches!(root, "apps" | "app" | "a")
+            && path.get(1).is_some_and(|command| *command == "spec")
+            && leaf == "validate")
+        || (matches!(root, "serverless" | "sandbox" | "sbx" | "sls") && leaf == "get-metadata")
+        || (matches!(root, "serverless" | "sandbox" | "sbx" | "sls")
+            && leaf == "install"
+            && (std::env::var_os("SNAP_SANDBOX_INSTALL").is_some()
+                || std::env::var_os("DOCKER_SANDBOX_INSTALL").is_some()))
+}
+
+fn doctl_ambiguous_group(path: &[&str], command: &str) -> bool {
+    let parent = path.last().copied().unwrap_or_default();
+    (parent == "dev" && matches!(command, "config" | "c"))
+        || (parent == "compute"
+            && matches!(
+                command,
+                "droplet" | "d" | "plugin" | "p" | "snapshot" | "s" | "ssh-key" | "k" | "tag"
+            ))
+        || (matches!(parent, "databases" | "db" | "dbs" | "d" | "database")
+            && matches!(
+                command,
+                "configuration"
+                    | "cfg"
+                    | "config"
+                    | "pool"
+                    | "p"
+                    | "replica"
+                    | "rep"
+                    | "r"
+                    | "user"
+                    | "u"
+            ))
+        || (matches!(parent, "gradient" | "ai" | "genai" | "gradientai")
+            && matches!(command, "agent" | "agents" | "a"))
+        || (matches!(parent, "agent" | "agents" | "a")
+            && matches!(command, "route" | "routes" | "r"))
+        || (matches!(parent, "kubernetes" | "kube" | "k8s" | "k")
+            && matches!(command, "cluster" | "clusters" | "c"))
+        || (matches!(parent, "cluster" | "clusters" | "c")
+            && matches!(
+                command,
+                "kubeconfig"
+                    | "kubecfg"
+                    | "k8scfg"
+                    | "config"
+                    | "cfg"
+                    | "node-pool"
+                    | "node-pools"
+                    | "nodepool"
+                    | "nodepools"
+                    | "pool"
+                    | "pools"
+                    | "np"
+                    | "p"
+            ))
+        || (parent == "monitoring" && matches!(command, "alert" | "alerts" | "a"))
+        || (parent == "nfs" && command == "snapshot")
+        || (parent == "projects" && command == "resources")
+        || (matches!(
+            parent,
+            "registries" | "regs" | "rs" | "registry" | "reg" | "r"
+        ) && matches!(
+            command,
+            "garbage-collection" | "gc" | "g" | "repository" | "repo" | "r"
+        ))
+        || (matches!(parent, "serverless-inference" | "inference" | "si") && command == "models")
+        || (matches!(parent, "spaces" | "sp") && matches!(command, "keys" | "k"))
+}
+
+fn doctl_name_in(names: &str, candidate: &str) -> bool {
+    names.split(',').any(|name| name == candidate)
+}
+
+// Reviewed against flyctl v0.4.99. Unknown commands stay tokenless until their
+// authority is audited; the current runnable command and alias vocabulary gates
+// every authenticated leaf while local exceptions remain explicit below.
+const FLYCTL_ROOT_GROUPS: &str = "agent,apps,app,auth,certs,checks,config,consul,create,extensions,ext,history,image,img,incidents,info,ips,ip,litefs-cloud,lfsc,machine,machines,m,mcp,metrics,mpg,orgs,platform,postgres,pg,redis,regions,registry,resume,scale,secrets,services,settings,sftp,ssh,storage,tigris,suspend,synthetics,tokens,volumes,volume,vol,v,wireguard,wg";
+const FLYCTL_ROOT_RUNNABLE: &str = "console,curl,dashboard,dash,deploy,destroy,dig,doctor,launch,logs,move,open,ping,proxy,releases,status";
+const FLYCTL_GROUP_ONLY: &str = "3p,app,apps,arcjet,auth,backups,barman,certs,checks,clusters,config,consul,cross-network-replays,database,databases,db,dbs,egress-ip,events,ext,extension,extensions,history,hosts,image,img,incidents,info,ip,ips,k8s,keys,kubernetes,lease,leases,lfsc,m,machine,machines,mcp,mpg,orgs,pg,plan,platform,registry,replay-sources,resume,scale,secrets,sentry,services,settings,sftp,snaps,snapshot,snapshots,storage,third-party,tokens,user,users,v,vector,vol,volumes,waf,wafris,wg";
+const FLYCTL_RUNNABLE_ONLY: &str = "add,add-discharge,add_flycast,allocate,allocate-egress,allocate-v4,allocate-v6,analytics,api-proxy,attach,attenuate,autoupdate,check,clear,clone,connect,console,cordon,count,curl,daemon-start,dash,dashboard,debug,del,delete,deploy,destroy,detach,diag,dig,disable,discharge,display,docker,docs,doctor,enable,env,errors,exec,export,extend,failover,files,find,fork,gen,generate,get,import,inspect,invite,issue,jobs,kill,kubectl-token,launch,list,list-backup,log,login,logout,logs,ls,machine-exec,memory,move,open,org,ping,place,plans,private,promote,propose,proxy,put,readonly,recover,release,release-egress,releases,remove,renew-certs,reset,restart,restore,revoke,rm,run,save,save-install,save-kubeconfig,sbom,send,server,set,set-role,setup,shell,show,show-backup,signup,start,status,stop,switch-wal,sync,ticket,token,uncordon,unset,update,update-role,upgrade,validate,version,view,vm,vm-sizes,vulns,vulnsummary,wait,websockets,whoami,wrap";
+const FLYCTL_AMBIGUOUS: &str = "agent,backup,create,litefs-cloud,metrics,postgres,redis,regions,ssh,suspend,synthetics,tigris,volume,wireguard";
+
+fn flyctl_invocation_is_secretless(args: &[OsString]) -> bool {
+    let Some(args) = args
+        .iter()
+        .map(|arg| arg.to_str())
+        .collect::<Option<Vec<_>>>()
+    else {
+        return true;
+    };
+    let option_end = args
+        .iter()
+        .position(|arg| *arg == "--")
+        .unwrap_or(args.len());
+    let option_args = &args[..option_end];
+    if option_args
+        .iter()
+        .any(|arg| matches!(*arg, "--help" | "-h" | "--version"))
+        || args.len() == 1 && args[0] == "-v"
+        || flyctl_uses_another_token(option_args)
+    {
+        return true;
+    }
+
+    let mut path = Vec::new();
+    let mut current_runnable = false;
+    let mut index = 0;
+    while index < option_end {
+        let argument = args[index];
+        if matches!(argument, "--access-token" | "-t") {
+            return true;
+        }
+        if argument.starts_with("--access-token=")
+            || argument.starts_with("-t") && argument.len() > 2
+            || matches!(argument, "--verbose" | "--debug")
+        {
+            index += 1;
+            continue;
+        }
+        if argument.starts_with('-') {
+            return !current_runnable;
+        }
+        if path.is_empty() {
+            if matches!(argument, "docs" | "jobs" | "version" | "settings") {
+                return true;
+            }
+            if flyctl_name_in(FLYCTL_ROOT_RUNNABLE, argument) {
+                current_runnable = true;
+            } else if !flyctl_name_in(FLYCTL_ROOT_GROUPS, argument) {
+                return true;
+            }
+            path.push(argument);
+            index += 1;
+            continue;
+        }
+        if flyctl_local_leaf(&path, argument) {
+            return true;
+        }
+        if flyctl_name_in(FLYCTL_GROUP_ONLY, argument) || flyctl_ambiguous_group(&path, argument) {
+            path.push(argument);
+            current_runnable = false;
+            index += 1;
+            continue;
+        }
+        if flyctl_name_in(FLYCTL_RUNNABLE_ONLY, argument)
+            || flyctl_name_in(FLYCTL_AMBIGUOUS, argument)
+        {
+            return false;
+        }
+        return !current_runnable;
+    }
+    !current_runnable
+}
+
+fn flyctl_uses_another_token(args: &[&str]) -> bool {
+    args.iter().any(|argument| {
+        matches!(*argument, "--access-token" | "-t")
+            || argument.starts_with("--access-token=")
+            || argument.starts_with("-t") && argument.len() > 2
+    }) || std::env::var_os("FLY_API_TOKEN").is_some_and(|value| !value.is_empty())
+}
+
+fn flyctl_local_leaf(path: &[&str], leaf: &str) -> bool {
+    let root = path[0];
+    (root == "agent" && matches!(leaf, "ping" | "stop"))
+        || (root == "auth" && matches!(leaf, "login" | "signup"))
+        || (root == "platform" && leaf == "status")
+        || (root == "mcp" && matches!(leaf, "list" | "proxy" | "inspect" | "wrap"))
+}
+
+fn flyctl_ambiguous_group(path: &[&str], command: &str) -> bool {
+    let parent = path.last().copied().unwrap_or_default();
+    (matches!(parent, "apps" | "app") && command == "suspend")
+        || (matches!(parent, "extensions" | "ext") && matches!(command, "storage" | "tigris"))
+        || (matches!(parent, "mpg" | "postgres" | "pg") && matches!(command, "backup" | "backups"))
+        || (parent == "tokens" && command == "create")
+}
+
+fn flyctl_name_in(names: &str, candidate: &str) -> bool {
+    names.split(',').any(|name| name == candidate)
+}
+
+// Reviewed against glab v1.116.0-24-g7ee9692c. This is the exact canonical
+// runnable vocabulary that can consume GitLab credentials. Parent, unknown,
+// user-alias, and passthrough forms stay tokenless until audited.
+const GLAB_AUTHENTICATED_COMMANDS: &str = "api,artifact-registry get-token,artifact-registry login,artifact-registry status,attestation verify,changelog generate,ci artifact,ci cancel job,ci cancel pipeline,ci ci lint,ci ci trace,ci ci view,ci config compile,ci delete,ci get,ci lint,ci list,ci retry,ci run,ci run-trig,ci status,ci trace,ci trigger,ci view,cluster agent bootstrap,cluster agent check-manifest-usage,cluster agent get-token,cluster agent list,cluster agent token list,cluster agent token revoke,cluster agent token-cache clear,cluster agent token-cache list,cluster agent update-kubeconfig,cluster graph,container-registry repository delete,container-registry repository list,container-registry repository view,container-registry tag delete,container-registry tag list,container-registry tag view,dependency-firewall ci-summary,deploy-key add,deploy-key delete,deploy-key get,deploy-key list,gpg-key add,gpg-key delete,gpg-key get,gpg-key list,incident close,incident list,incident note,incident reopen,incident subscribe,incident unsubscribe,incident view,issue board create,issue board view,issue close,issue create,issue delete,issue list,issue note,issue reopen,issue subscribe,issue unsubscribe,issue update,issue view,iteration list,job artifact,label create,label delete,label edit,label get,label list,mcp serve,milestone create,milestone delete,milestone edit,milestone get,milestone list,mr approve,mr approvers,mr checkout,mr close,mr create,mr delete,mr diff,mr for,mr issues,mr list,mr merge,mr note,mr note create,mr note delete,mr note list,mr note reopen,mr note resolve,mr note update,mr rebase,mr reopen,mr revoke,mr subscribe,mr todo,mr unsubscribe,mr update,mr view,opentofu init,opentofu state delete,opentofu state download,opentofu state list,opentofu state lock,opentofu state unlock,packages delete,packages download,packages list,packages upload,release create,release delete,release download,release list,release upload,release view,repo archive,repo clone,repo contributors,repo create,repo delete,repo fork,repo list,repo members add,repo members remove,repo mirror,repo prune,repo publish catalog,repo remote add,repo search,repo transfer,repo update,repo view,runner assign,runner delete,runner jobs,runner list,runner managers,runner unassign,runner update,runner-controller create,runner-controller delete,runner-controller get,runner-controller list,runner-controller scope create,runner-controller scope delete,runner-controller scope list,runner-controller token create,runner-controller token list,runner-controller token revoke,runner-controller token rotate,runner-controller update,schedule create,schedule delete,schedule list,schedule run,schedule update,search semantic,securefile create,securefile download,securefile get,securefile list,securefile remove,securefile update,security config disable,security config enable,security config status,snippet create,ssh-key add,ssh-key delete,ssh-key get,ssh-key list,todo done,todo list,token create,token list,token revoke,token rotate,user events,variable delete,variable export,variable get,variable import,variable list,variable set,variable update,work-items create,work-items delete,work-items list,work-items update";
+
+fn glab_invocation_is_secretless(args: &[OsString]) -> bool {
+    let Some(args) = args
+        .iter()
+        .map(|arg| arg.to_str())
+        .collect::<Option<Vec<_>>>()
+    else {
+        return true;
+    };
+    let option_end = args
+        .iter()
+        .position(|arg| *arg == "--")
+        .unwrap_or(args.len());
+    let option_args = &args[..option_end];
+    if option_args
+        .iter()
+        .any(|arg| matches!(*arg, "--help" | "-h" | "--version"))
+        || args.len() == 1 && args[0] == "-v"
+        || glab_uses_another_credential()
+    {
+        return true;
+    }
+
+    let mut path = Vec::new();
+    let mut index = 0;
+    while index < option_end {
+        let argument = args[index];
+        let parent = path.join(" ");
+        let config_get = parent == "config get";
+        if matches!(argument, "--repo" | "-R") || config_get && argument == "--host" {
+            if index + 1 >= option_end {
+                return true;
+            }
+            index += 2;
+            continue;
+        }
+        if argument.starts_with("--repo=")
+            || config_get && argument.starts_with("--host=")
+            || parent.starts_with("config ") && matches!(argument, "--global" | "-g")
+            || parent == "orbit" && matches!(argument, "--yes" | "-y")
+        {
+            index += 1;
+            continue;
+        }
+        if argument.starts_with('-') {
+            return true;
+        }
+
+        path.push(glab_canonical_command(&path, argument));
+        let command = path.join(" ");
+        if matches!(
+            command.as_str(),
+            "auth status"
+                | "auth credential-helper"
+                | "auth git-credential get"
+                | "auth docker-helper get"
+                | "duo ask"
+                | "orbit remote"
+                | "stack sync"
+                | "stack reorder"
+        ) || matches!(
+            command.as_str(),
+            "config get token" | "config get gitlab_token" | "config get oauth_token"
+        ) || command == "auth dpop-gen" && !glab_has_option(option_args, "--pat")
+        {
+            return false;
+        }
+        if GLAB_AUTHENTICATED_COMMANDS
+            .split(',')
+            .any(|candidate| candidate == command)
+        {
+            return false;
+        }
+        index += 1;
+    }
+    true
+}
+
+fn glab_canonical_command(parent: &[String], argument: &str) -> String {
+    let argument = argument.to_ascii_lowercase();
+    let parent = parent.join(" ");
+    match (parent.as_str(), argument.as_str()) {
+        ("", "ar") => "artifact-registry",
+        ("", "conf") => "config",
+        ("", "cr") => "container-registry",
+        ("", "df") => "dependency-firewall",
+        ("", "pipe" | "pipeline") => "ci",
+        ("", "project") => "repo",
+        ("", "rc") => "runner-controller",
+        ("", "sched" | "skd") => "schedule",
+        ("", "stacks") => "stack",
+        ("", "terraform" | "tf") => "opentofu",
+        ("", "var") => "variable",
+        ("ci", "artifact" | "push") => "artifact",
+        ("ci", "create") => "run",
+        ("ci", "stats") => "status",
+        ("cluster agent", "bs") => "bootstrap",
+        ("cluster agent", "check_manifest_usage") => "check-manifest-usage",
+        ("container-registry", "tags") => "tag",
+        ("incident", "resolve") => "close",
+        ("job", "push") => "artifact",
+        ("mr", "accept") => "merge",
+        ("mr", "add-todo") => "todo",
+        ("mr", "create-for" | "for-issue" | "new-for") => "for",
+        ("mr", "issue") => "issues",
+        ("mr", "unapprove") => "revoke",
+        ("packages", "dl") => "download",
+        ("packages", "rm") => "delete",
+        ("packages", "ul") => "upload",
+        ("repo", "find" | "lookup") => "search",
+        ("repo", "users") => "contributors",
+        ("securefile", "delete" | "rm") => "remove",
+        ("securefile", "overwrite") => "update",
+        ("securefile", "show") => "get",
+        ("securefile", "upload") => "create",
+        ("token", "rm") => "revoke",
+        ("token", "rot") => "rotate",
+        ("variable", "create" | "new") => "set",
+        ("variable", "ex") => "export",
+        ("variable", "im") => "import",
+        ("variable", "remove") => "delete",
+        (_, "comment") => "note",
+        (_, "del") => "delete",
+        (_, "ls") => "list",
+        (_, "new") => "create",
+        (_, "open") => "reopen",
+        (_, "show") => "view",
+        (_, "sub") => "subscribe",
+        (_, "unsub") => "unsubscribe",
+        _ => argument.as_str(),
+    }
+    .to_string()
+}
+
+fn glab_has_option(args: &[&str], option: &str) -> bool {
+    args.iter().enumerate().any(|(index, argument)| {
+        if *argument == option {
+            return args.get(index + 1).is_some_and(|value| !value.is_empty());
+        }
+        argument
+            .strip_prefix(option)
+            .and_then(|value| value.strip_prefix('='))
+            .is_some_and(|value| !value.is_empty())
+    })
+}
+
+fn glab_uses_another_credential() -> bool {
+    [
+        "GITLAB_TOKEN",
+        "GITLAB_ACCESS_TOKEN",
+        "OAUTH_TOKEN",
+        "JOB_TOKEN",
+    ]
+    .iter()
+    .any(|name| std::env::var_os(name).is_some_and(|value| !value.is_empty()))
+        || std::env::var_os("GLAB_ENABLE_CI_AUTOLOGIN").is_some_and(|value| value == "true")
+            && std::env::var_os("GITLAB_CI").is_some_and(|value| value == "true")
+            && std::env::var_os("CI_JOB_TOKEN").is_some_and(|value| !value.is_empty())
+}
+
+// Reviewed against gotify/cli v2.4.0. Only message delivery consumes the
+// application token. `watch` remains credentialed because it delivers changes;
+// arguments after `--` do not alter the routing decision.
+fn gotify_invocation_is_secretless(args: &[OsString]) -> bool {
+    let Some(args) = args
+        .iter()
+        .map(|arg| arg.to_str())
+        .collect::<Option<Vec<_>>>()
+    else {
+        return true;
+    };
+    let option_end = args
+        .iter()
+        .position(|arg| *arg == "--")
+        .unwrap_or(args.len());
+    let option_args = &args[..option_end];
+    if option_args
+        .iter()
+        .any(|arg| matches!(*arg, "--help" | "-h" | "--version" | "-v"))
+        || std::env::var_os("GOTIFY_TOKEN").is_some_and(|value| !value.is_empty())
+    {
+        return true;
+    }
+
+    match option_args.first().copied() {
+        Some("push" | "p" | "watch") => gotify_has_token_option(option_args),
+        _ => true,
+    }
+}
+
+fn gotify_has_token_option(args: &[&str]) -> bool {
+    args.iter().enumerate().any(|(index, argument)| {
+        if *argument == "--token" {
+            return args.get(index + 1).is_some_and(|value| !value.is_empty());
+        }
+        argument
+            .strip_prefix("--token=")
+            .is_some_and(|value| !value.is_empty())
+    })
 }
 
 fn secret_gate(wrapper: &EnvWrapper) -> SecretGateDescriptor {
@@ -1077,6 +2465,651 @@ mod tests {
     }
 
     #[test]
+    fn pnpm_requests_secrets_only_for_reviewed_registry_commands() {
+        let _guard = crate::global_test_env_lock().lock().unwrap();
+        let dir = temp_dir("env-wrapper-secretless-pnpm");
+        unsafe { std::env::set_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR", &dir) };
+        let script_path = dir.join("pnpm");
+        let script = stub_script(
+            &wrapper("pnpm").unwrap().primary,
+            Path::new("/opt/homebrew/bin/pnpm"),
+        );
+        let args = |values: &[&str]| {
+            std::iter::once(script_path.clone().into_os_string())
+                .chain(values.iter().map(OsString::from))
+                .collect::<Vec<_>>()
+        };
+
+        for command in [
+            vec![],
+            vec![
+                "--global-dir",
+                "/tmp/pnpm-sem/global",
+                "--global-bin-dir",
+                "/tmp/pnpm-sem/bin",
+                "list",
+                "-g",
+                "--depth=0",
+                "--json",
+            ],
+            vec!["list"],
+            vec!["why", "example"],
+            vec!["root", "-g"],
+            vec!["store", "path"],
+            vec!["store", "prune"],
+            vec!["config", "get", "store-dir"],
+            vec!["login"],
+            vec!["run", "build"],
+            vec!["exec", "example"],
+            vec!["dlx", "example"],
+            vec!["install-test"],
+            vec!["it"],
+            vec!["remove", "example"],
+            vec!["config", "get", "unrelated_authtoken"],
+            vec!["--version"],
+            vec!["future-command"],
+            vec!["--dir", "/tmp", "publish"],
+        ] {
+            assert!(
+                invocation_is_secretless(&script_path, script.as_bytes(), &args(&command)),
+                "pnpm {command:?}",
+            );
+        }
+        for command in [
+            vec!["add", "private-package"],
+            vec!["install"],
+            vec!["ci"],
+            vec!["dedupe"],
+            vec!["fetch"],
+            vec!["audit"],
+            vec!["outdated"],
+            vec!["view", "private-package"],
+            vec!["search", "private-package"],
+            vec!["publish"],
+            vec!["unpublish", "private-package"],
+            vec!["deprecate", "private-package", "message"],
+            vec!["dist-tag", "add", "private-package@1", "latest"],
+            vec!["whoami"],
+            vec!["logout"],
+            vec!["stage", "list", "private-package"],
+            vec!["store", "add", "private-package"],
+            vec!["config", "get", "//registry.example/:_authToken"],
+        ] {
+            assert!(
+                !invocation_is_secretless(&script_path, script.as_bytes(), &args(&command)),
+                "pnpm {command:?}",
+            );
+        }
+
+        unsafe { std::env::remove_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR") };
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn doctl_requests_token_only_for_audited_runnable_commands() {
+        let _guard = crate::global_test_env_lock().lock().unwrap();
+        let dir = temp_dir("env-wrapper-secretless-doctl");
+        unsafe { std::env::set_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR", &dir) };
+        let previous_context = std::env::var_os("DIGITALOCEAN_CONTEXT");
+        let previous_sandbox = std::env::var_os("SNAP_SANDBOX_INSTALL");
+        unsafe {
+            std::env::remove_var("DIGITALOCEAN_CONTEXT");
+            std::env::remove_var("SNAP_SANDBOX_INSTALL");
+        }
+        let script_path = dir.join("doctl");
+        let script = stub_script(
+            &wrapper("doctl").unwrap().primary,
+            Path::new("/opt/homebrew/bin/doctl"),
+        );
+        let args = |values: &[&str]| {
+            std::iter::once(script_path.clone().into_os_string())
+                .chain(values.iter().map(OsString::from))
+                .collect::<Vec<_>>()
+        };
+
+        for command in [
+            vec![],
+            vec!["--help"],
+            vec!["version"],
+            vec!["completion", "zsh"],
+            vec!["__complete", "auth"],
+            vec!["compute"],
+            vec!["compute", "droplet"],
+            vec!["k8s", "c"],
+            vec!["apps", "dev", "config"],
+            vec!["apps", "spec", "validate", "app.yaml"],
+            vec!["auth", "list"],
+            vec!["auth", "ls"],
+            vec!["auth", "switch", "--context", "team"],
+            vec!["auth", "remove", "--context", "team"],
+            vec!["serverless", "get-metadata", "."],
+            vec!["future-command"],
+            vec!["compute", "future-command"],
+            vec!["--access-token", "caller-token", "account", "get"],
+            vec!["-tcaller-token", "account", "get"],
+            vec!["--context", "team", "account", "get"],
+        ] {
+            assert!(
+                invocation_is_secretless(&script_path, script.as_bytes(), &args(&command)),
+                "doctl {command:?}",
+            );
+        }
+
+        for command in [
+            vec!["account", "get"],
+            vec!["compute", "droplet", "list"],
+            vec!["compute", "d", "g", "123"],
+            vec!["k8s", "c", "ls"],
+            vec!["--output", "json", "account", "get"],
+            vec!["account", "get", "--output=json"],
+            vec!["--context", "default", "account", "get"],
+            vec!["--context=DEFAULT", "account", "get"],
+            vec!["auth", "init"],
+            vec!["auth", "token"],
+            vec!["serverless", "install"],
+            vec!["serverless", "status"],
+        ] {
+            assert!(
+                !invocation_is_secretless(&script_path, script.as_bytes(), &args(&command)),
+                "doctl {command:?}",
+            );
+        }
+
+        unsafe { std::env::set_var("DIGITALOCEAN_CONTEXT", "team") };
+        assert!(invocation_is_secretless(
+            &script_path,
+            script.as_bytes(),
+            &args(&["account", "get"]),
+        ));
+        unsafe {
+            std::env::remove_var("DIGITALOCEAN_CONTEXT");
+            std::env::set_var("SNAP_SANDBOX_INSTALL", "1");
+        }
+        assert!(invocation_is_secretless(
+            &script_path,
+            script.as_bytes(),
+            &args(&["serverless", "install"]),
+        ));
+        assert!(!invocation_is_secretless(
+            &script_path,
+            format!("{script}# changed\n").as_bytes(),
+            &args(&["version"]),
+        ));
+
+        unsafe {
+            std::env::remove_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR");
+            match previous_context {
+                Some(value) => std::env::set_var("DIGITALOCEAN_CONTEXT", value),
+                None => std::env::remove_var("DIGITALOCEAN_CONTEXT"),
+            }
+            match previous_sandbox {
+                Some(value) => std::env::set_var("SNAP_SANDBOX_INSTALL", value),
+                None => std::env::remove_var("SNAP_SANDBOX_INSTALL"),
+            }
+        }
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn flyctl_requests_token_only_for_audited_authenticated_commands() {
+        let _guard = crate::global_test_env_lock().lock().unwrap();
+        let dir = temp_dir("env-wrapper-secretless-flyctl");
+        unsafe { std::env::set_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR", &dir) };
+        let previous_api_token = std::env::var_os("FLY_API_TOKEN");
+        unsafe { std::env::remove_var("FLY_API_TOKEN") };
+        let stub = &wrapper("flyctl").unwrap().primary;
+        let script_path = dir.join("flyctl");
+        let script = stub_script(stub, Path::new("/opt/homebrew/bin/flyctl"));
+        let args = |values: &[&str]| {
+            std::iter::once(script_path.clone().into_os_string())
+                .chain(values.iter().map(OsString::from))
+                .collect::<Vec<_>>()
+        };
+
+        for command in [
+            vec![],
+            vec!["--help"],
+            vec!["--version"],
+            vec!["deploy", "--help"],
+            vec!["completion", "zsh"],
+            vec!["docs"],
+            vec!["jobs"],
+            vec!["jobs", "open"],
+            vec!["version", "upgrade"],
+            vec!["settings", "analytics"],
+            vec!["settings", "autoupdate", "disable"],
+            vec!["agent"],
+            vec!["agent", "ping"],
+            vec!["agent", "stop"],
+            vec!["auth", "login"],
+            vec!["auth", "signup"],
+            vec!["platform", "status", "--json"],
+            vec!["mcp", "list"],
+            vec!["mcp", "inspect", "--url", "http://localhost:8080"],
+            vec!["mcp", "proxy", "--url", "http://localhost:8080"],
+            vec!["mcp", "wrap", "--mcp", "server"],
+            vec!["launch", "plan"],
+            vec!["apps", "suspend"],
+            vec!["tokens", "create"],
+            vec!["future-command"],
+            vec!["apps", "future-command"],
+            vec!["--access-token", "caller-token", "apps", "list"],
+            vec!["-tcaller-token", "apps", "list"],
+        ] {
+            assert!(
+                invocation_is_secretless(&script_path, script.as_bytes(), &args(&command)),
+                "flyctl {command:?}",
+            );
+        }
+
+        for command in [
+            vec!["apps", "list"],
+            vec!["deploy"],
+            vec!["dashboard"],
+            vec!["--verbose", "apps", "list"],
+            vec!["launch", "plan", "create", "manifest.json"],
+            vec!["agent", "run"],
+            vec!["auth", "logout"],
+            vec!["auth", "token"],
+            vec!["platform", "regions"],
+            vec!["postgres", "list"],
+            vec!["metrics", "send"],
+            vec!["tokens", "debug"],
+            vec!["mcp", "server"],
+            vec!["mcp", "add"],
+        ] {
+            assert!(
+                !invocation_is_secretless(&script_path, script.as_bytes(), &args(&command)),
+                "flyctl {command:?}",
+            );
+        }
+
+        unsafe { std::env::set_var("FLY_API_TOKEN", "caller-token") };
+        assert!(invocation_is_secretless(
+            &script_path,
+            script.as_bytes(),
+            &args(&["apps", "list"]),
+        ));
+        assert!(!invocation_is_secretless(
+            &script_path,
+            format!("{script}# changed\n").as_bytes(),
+            &args(&["version"]),
+        ));
+
+        let fly_stub = stubs(wrapper("flyctl").unwrap())
+            .find(|candidate| candidate.command == "fly")
+            .unwrap();
+        let fly_path = dir.join("fly");
+        let fly_script = stub_script(fly_stub, Path::new("/opt/homebrew/bin/fly"));
+        let fly_args = [fly_path.clone().into_os_string(), OsString::from("version")];
+        assert!(invocation_is_secretless(
+            &fly_path,
+            fly_script.as_bytes(),
+            &fly_args,
+        ));
+
+        unsafe {
+            std::env::remove_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR");
+            match previous_api_token {
+                Some(value) => std::env::set_var("FLY_API_TOKEN", value),
+                None => std::env::remove_var("FLY_API_TOKEN"),
+            }
+        }
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn glab_requests_secrets_only_for_reviewed_commands() {
+        let _guard = crate::global_test_env_lock().lock().unwrap();
+        let dir = temp_dir("env-wrapper-secretless-glab");
+        unsafe { std::env::set_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR", &dir) };
+        let credential_vars = [
+            "GITLAB_TOKEN",
+            "GITLAB_ACCESS_TOKEN",
+            "OAUTH_TOKEN",
+            "JOB_TOKEN",
+            "GLAB_ENABLE_CI_AUTOLOGIN",
+            "GITLAB_CI",
+            "CI_JOB_TOKEN",
+        ];
+        let previous_credentials = credential_vars.map(|name| std::env::var_os(name));
+        for name in credential_vars {
+            unsafe { std::env::remove_var(name) };
+        }
+
+        let script_path = dir.join("glab");
+        let script = stub_script(
+            &wrapper("glab").unwrap().primary,
+            Path::new("/opt/homebrew/bin/glab"),
+        );
+        let args = |values: &[&str]| {
+            std::iter::once(script_path.clone().into_os_string())
+                .chain(values.iter().map(OsString::from))
+                .collect::<Vec<_>>()
+        };
+
+        for command in [
+            vec![],
+            vec!["--help"],
+            vec!["--version"],
+            vec!["-R", "group/project", "--help"],
+            vec!["alias", "list"],
+            vec!["config", "path"],
+            vec!["config", "get", "editor"],
+            vec!["config", "set", "editor", "vim"],
+            vec!["auth", "login"],
+            vec!["auth", "logout", "--hostname", "gitlab.com"],
+            vec!["auth", "configure-docker"],
+            vec!["auth", "docker-helper", "erase"],
+            vec!["completion", "zsh"],
+            vec!["version"],
+            vec!["check-update"],
+            vec!["whatsnew"],
+            vec!["skills", "list"],
+            vec!["stack", "list"],
+            vec!["duo", "cli", "run", "--goal", "summarize"],
+            vec!["orbit", "local", "sql", "select 1"],
+            vec!["issue"],
+            vec!["issue", "future-command"],
+            vec!["my-shell-alias", "anything"],
+            vec!["-g", "issue", "list"],
+            vec!["--", "shell-passthrough"],
+        ] {
+            assert!(
+                invocation_is_secretless(&script_path, script.as_bytes(), &args(&command)),
+                "glab {command:?}",
+            );
+        }
+        for command in [
+            vec!["issue", "list"],
+            vec!["project", "ls"],
+            vec!["-R", "group/project", "mr", "view", "1"],
+            vec!["--repo=group/project", "issue", "view", "1"],
+            vec!["auth", "status"],
+            vec!["auth", "credential-helper"],
+            vec!["auth", "git-credential", "get"],
+            vec!["auth", "docker-helper", "get"],
+            vec!["auth", "dpop-gen", "--private-key", "/tmp/id"],
+            vec!["auth", "dpop-gen", "--private-key", "/tmp/id", "--pat="],
+            vec!["auth", "dpop-gen", "--private-key", "/tmp/id", "--pat", ""],
+            vec!["config", "get", "token"],
+            vec!["config", "get", "--host", "gitlab.com", "token"],
+            vec!["conf", "get", "GITLAB_TOKEN"],
+            vec!["artifact-registry", "get-token"],
+            vec!["stack", "sync"],
+            vec!["stacks", "reorder"],
+            vec!["duo", "ask", "summarize"],
+            vec!["orbit", "remote", "status"],
+            vec!["orbit", "--yes", "remote", "status"],
+        ] {
+            assert!(
+                !invocation_is_secretless(&script_path, script.as_bytes(), &args(&command)),
+                "glab {command:?}",
+            );
+        }
+        assert!(invocation_is_secretless(
+            &script_path,
+            script.as_bytes(),
+            &args(&[
+                "auth",
+                "dpop-gen",
+                "--private-key",
+                "/tmp/id",
+                "--pat=given"
+            ]),
+        ));
+
+        for name in [
+            "GITLAB_TOKEN",
+            "GITLAB_ACCESS_TOKEN",
+            "OAUTH_TOKEN",
+            "JOB_TOKEN",
+        ] {
+            unsafe { std::env::set_var(name, "already-provided") };
+            assert!(invocation_is_secretless(
+                &script_path,
+                script.as_bytes(),
+                &args(&["issue", "list"]),
+            ));
+            unsafe { std::env::remove_var(name) };
+        }
+        unsafe {
+            std::env::set_var("GLAB_ENABLE_CI_AUTOLOGIN", "true");
+            std::env::set_var("GITLAB_CI", "true");
+            std::env::set_var("CI_JOB_TOKEN", "already-provided");
+        }
+        assert!(invocation_is_secretless(
+            &script_path,
+            script.as_bytes(),
+            &args(&["issue", "list"]),
+        ));
+        assert!(!invocation_is_secretless(
+            &script_path,
+            format!("{script}# changed\n").as_bytes(),
+            &args(&["issue", "list"]),
+        ));
+
+        for (name, value) in credential_vars.into_iter().zip(previous_credentials) {
+            unsafe {
+                match value {
+                    Some(value) => std::env::set_var(name, value),
+                    None => std::env::remove_var(name),
+                }
+            }
+        }
+        unsafe { std::env::remove_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR") };
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn gotify_requests_secrets_only_for_message_delivery() {
+        let _guard = crate::global_test_env_lock().lock().unwrap();
+        let dir = temp_dir("env-wrapper-secretless-gotify");
+        let previous_token = std::env::var_os("GOTIFY_TOKEN");
+        unsafe {
+            std::env::set_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR", &dir);
+            std::env::remove_var("GOTIFY_TOKEN");
+        }
+        let script_path = dir.join("gotify");
+        let script = stub_script(
+            &wrapper("gotify").unwrap().primary,
+            Path::new("/opt/homebrew/bin/gotify"),
+        );
+        let args = |values: &[&str]| {
+            std::iter::once(script_path.clone().into_os_string())
+                .chain(values.iter().map(OsString::from))
+                .collect::<Vec<_>>()
+        };
+
+        for command in [
+            vec![],
+            vec!["--help"],
+            vec!["--version"],
+            vec!["help", "push"],
+            vec!["init"],
+            vec!["config"],
+            vec!["version"],
+            vec!["v"],
+            vec!["future-command"],
+            vec!["push", "--help"],
+            vec!["watch", "--help"],
+            vec!["--future-option", "push", "message"],
+            vec!["push", "--token", "provided", "message"],
+            vec!["p", "--token=provided", "message"],
+            vec!["watch", "--token=provided", "--", "sh", "script.sh"],
+        ] {
+            assert!(
+                invocation_is_secretless(&script_path, script.as_bytes(), &args(&command)),
+                "gotify {command:?}",
+            );
+        }
+        for command in [
+            vec!["push", "message"],
+            vec!["p", "message"],
+            vec!["push", "--token=", "message"],
+            vec!["push", "--token", "", "message"],
+            vec!["watch", "date"],
+            vec!["watch", "--", "sh", "script.sh"],
+        ] {
+            assert!(
+                !invocation_is_secretless(&script_path, script.as_bytes(), &args(&command)),
+                "gotify {command:?}",
+            );
+        }
+
+        unsafe { std::env::set_var("GOTIFY_TOKEN", "already-provided") };
+        assert!(invocation_is_secretless(
+            &script_path,
+            script.as_bytes(),
+            &args(&["push", "message"]),
+        ));
+        assert!(!invocation_is_secretless(
+            &script_path,
+            format!("{script}# changed\n").as_bytes(),
+            &args(&["push", "message"]),
+        ));
+
+        unsafe {
+            match previous_token {
+                Some(value) => std::env::set_var("GOTIFY_TOKEN", value),
+                None => std::env::remove_var("GOTIFY_TOKEN"),
+            }
+            std::env::remove_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR");
+        }
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn gptcommit_requests_secrets_only_when_the_hook_can_call_the_llm() {
+        let _guard = crate::global_test_env_lock().lock().unwrap();
+        let dir = temp_dir("env-wrapper-secretless-gptcommit");
+        let previous_gptcommit_key = std::env::var_os("GPTCOMMIT__OPENAI__API_KEY");
+        let previous_openai_key = std::env::var_os("OPENAI_API_KEY");
+        let previous_model_provider = std::env::var_os("GPTCOMMIT__MODEL_PROVIDER");
+        unsafe {
+            std::env::set_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR", &dir);
+            std::env::remove_var("GPTCOMMIT__OPENAI__API_KEY");
+            std::env::remove_var("OPENAI_API_KEY");
+            std::env::remove_var("GPTCOMMIT__MODEL_PROVIDER");
+        }
+        let script_path = dir.join("gptcommit");
+        let script = stub_script(
+            &wrapper("gptcommit").unwrap().primary,
+            Path::new("/opt/homebrew/bin/gptcommit"),
+        );
+        let args = |values: &[&str]| {
+            std::iter::once(script_path.clone().into_os_string())
+                .chain(values.iter().map(OsString::from))
+                .collect::<Vec<_>>()
+        };
+
+        for command in [
+            vec![],
+            vec!["--help"],
+            vec!["--version"],
+            vec!["help", "prepare-commit-msg"],
+            vec!["install"],
+            vec!["uninstall"],
+            vec!["config", "keys"],
+            vec!["config", "get", "openai.api_key"],
+            vec!["config", "set", "output.lang", "fr"],
+            vec!["future-command"],
+            vec!["--verbose", "config", "list"],
+            vec!["prepare-commit-msg", "--help"],
+            vec!["prepare-commit-msg", "--commit-source", "message"],
+            vec![
+                "-v",
+                "prepare-commit-msg",
+                "--commit-msg-file=/tmp/message",
+                "--commit-source=merge",
+            ],
+            vec![
+                "prepare-commit-msg",
+                "--commit-msg-file",
+                "/tmp/message",
+                "--commit-source",
+                "squash",
+            ],
+            vec![
+                "config",
+                "set",
+                "prompt.commit_title",
+                "--",
+                "arbitrary text",
+            ],
+        ] {
+            assert!(
+                invocation_is_secretless(&script_path, script.as_bytes(), &args(&command)),
+                "gptcommit {command:?}",
+            );
+        }
+        for command in [
+            vec![
+                "prepare-commit-msg",
+                "--commit-msg-file",
+                "/tmp/message",
+                "--commit-source",
+                "",
+            ],
+            vec![
+                "--verbose",
+                "prepare-commit-msg",
+                "--commit-source=commit",
+                "--commit-msg-file=/tmp/message",
+            ],
+        ] {
+            assert!(
+                !invocation_is_secretless(&script_path, script.as_bytes(), &args(&command)),
+                "gptcommit {command:?}",
+            );
+        }
+
+        unsafe { std::env::set_var("OPENAI_API_KEY", "already-provided") };
+        let credentialed = args(&[
+            "prepare-commit-msg",
+            "--commit-msg-file=/tmp/message",
+            "--commit-source=commit",
+        ]);
+        assert!(invocation_is_secretless(
+            &script_path,
+            script.as_bytes(),
+            &credentialed,
+        ));
+        assert!(!invocation_is_secretless(
+            &script_path,
+            format!("{script}# changed\n").as_bytes(),
+            &credentialed,
+        ));
+
+        unsafe {
+            std::env::remove_var("OPENAI_API_KEY");
+            std::env::set_var("GPTCOMMIT__MODEL_PROVIDER", "tester-foobar");
+        }
+        assert!(invocation_is_secretless(
+            &script_path,
+            script.as_bytes(),
+            &credentialed,
+        ));
+
+        unsafe {
+            match previous_gptcommit_key {
+                Some(value) => std::env::set_var("GPTCOMMIT__OPENAI__API_KEY", value),
+                None => std::env::remove_var("GPTCOMMIT__OPENAI__API_KEY"),
+            }
+            match previous_openai_key {
+                Some(value) => std::env::set_var("OPENAI_API_KEY", value),
+                None => std::env::remove_var("OPENAI_API_KEY"),
+            }
+            match previous_model_provider {
+                Some(value) => std::env::set_var("GPTCOMMIT__MODEL_PROVIDER", value),
+                None => std::env::remove_var("GPTCOMMIT__MODEL_PROVIDER"),
+            }
+            std::env::remove_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR");
+        }
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn grafanactl_requests_secrets_only_for_default_context_remote_commands() {
         let _guard = crate::global_test_env_lock().lock().unwrap();
         let dir = temp_dir("env-wrapper-secretless-grafanactl");
@@ -1199,7 +3232,7 @@ mod tests {
             ("flyctl", "fly", &["deploy", "--help"][..], true),
             ("flyctl", "fly", &["deploy"][..], false),
             ("k6", "k6", &["inspect", "script.js"][..], true),
-            ("k6", "k6", &["run", "script.js"][..], false),
+            ("k6", "k6", &["run", "script.js"][..], true),
             ("twine", "twine", &["check", "dist/*"][..], true),
             ("twine", "twine", &["upload", "dist/*"][..], false),
             ("vagrant", "vagrant", &["validate"][..], true),
@@ -1226,6 +3259,516 @@ mod tests {
         }
 
         unsafe { std::env::remove_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR") };
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn k6_requests_secrets_only_for_explicit_cloud_operations() {
+        let _guard = crate::global_test_env_lock().lock().unwrap();
+        let dir = temp_dir("env-wrapper-secretless-k6");
+        unsafe { std::env::set_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR", &dir) };
+        let script_path = dir.join("k6");
+        let script = stub_script(
+            &wrapper("k6").unwrap().primary,
+            Path::new("/opt/homebrew/bin/k6"),
+        );
+        let args = |values: &[&str]| {
+            std::iter::once(script_path.clone().into_os_string())
+                .chain(values.iter().map(OsString::from))
+                .collect::<Vec<_>>()
+        };
+
+        for command in [
+            vec![],
+            vec!["help"],
+            vec!["--help"],
+            vec!["version"],
+            vec!["--version"],
+            vec!["archive", "script.js"],
+            vec!["inspect", "script.js"],
+            vec!["deps", "script.js"],
+            vec!["new", "script.js"],
+            vec!["run", "script.js"],
+            vec!["run", "--out", "json=results.json", "script.js"],
+            vec!["run", "--config", "cloud.json", "script.js"],
+            vec!["run", "--", "script.js", "--out", "cloud"],
+            vec!["cloud"],
+            vec!["cloud", "login"],
+            vec!["cloud", "future-command"],
+            vec!["x", "extension-command"],
+            vec!["future-command"],
+            vec!["--quiet", "run", "script.js"],
+            vec!["--future-option", "cloud", "run", "script.js"],
+            vec!["--quiet", "cloud", "run", "script.js", "--help"],
+        ] {
+            assert!(
+                invocation_is_secretless(&script_path, script.as_bytes(), &args(&command)),
+                "k6 {command:?}",
+            );
+        }
+        for command in [
+            vec!["cloud", "run", "script.js"],
+            vec!["cloud", "upload", "script.js"],
+            vec!["cloud", "project", "list"],
+            vec!["cloud", "load-zone", "list"],
+            vec!["cloud", "test", "list"],
+            vec!["run", "--out", "cloud", "script.js"],
+            vec!["run", "--out=cloud", "script.js"],
+            vec!["run", "--out=cloud=eu", "script.js"],
+            vec!["run", "-o", "cloud", "script.js"],
+            vec!["run", "-ocloud", "script.js"],
+            vec!["--quiet", "cloud", "run", "script.js"],
+            vec!["--quiet=false", "cloud", "run", "script.js"],
+            vec!["--config", "config.json", "cloud", "project", "list"],
+            vec!["-cconfig.json", "cloud", "upload", "script.js"],
+            vec!["cloud", "--quiet", "test", "list"],
+        ] {
+            assert!(
+                !invocation_is_secretless(&script_path, script.as_bytes(), &args(&command)),
+                "k6 {command:?}",
+            );
+        }
+        assert!(!invocation_is_secretless(
+            &script_path,
+            format!("{script}# changed\n").as_bytes(),
+            &args(&["run", "script.js"]),
+        ));
+
+        unsafe { std::env::remove_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR") };
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn twine_requests_secrets_only_for_uploads() {
+        let _guard = crate::global_test_env_lock().lock().unwrap();
+        let dir = temp_dir("env-wrapper-secretless-twine");
+        unsafe { std::env::set_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR", &dir) };
+        let script_path = dir.join("twine");
+        let script = stub_script(
+            &wrapper("twine").unwrap().primary,
+            Path::new("/opt/homebrew/bin/twine"),
+        );
+        let args = |values: &[&str]| {
+            std::iter::once(script_path.clone().into_os_string())
+                .chain(values.iter().map(OsString::from))
+                .collect::<Vec<_>>()
+        };
+
+        for command in [
+            vec![],
+            vec!["--help"],
+            vec!["--version"],
+            vec!["check", "dist/package.whl"],
+            vec!["check", "--strict", "dist/package.whl"],
+            vec!["register", "dist/package.whl"],
+            vec!["plugin-command", "argument"],
+            vec!["future-command"],
+            vec!["--no-color", "check", "dist/package.whl"],
+            vec!["--future-option", "upload", "dist/package.whl"],
+            vec!["--", "--no-color", "upload", "dist/package.whl"],
+            vec!["--", "--", "upload", "dist/package.whl"],
+            vec!["upload", "--help"],
+        ] {
+            assert!(
+                invocation_is_secretless(&script_path, script.as_bytes(), &args(&command)),
+                "twine {command:?}",
+            );
+        }
+        for command in [
+            vec!["upload", "dist/package.whl"],
+            vec!["upload", "--repository", "testpypi", "dist/package.whl"],
+            vec!["--no-color", "upload", "dist/package.whl"],
+            vec!["--no-color", "--no-color", "upload", "dist/package.whl"],
+            vec!["--", "upload", "dist/package.whl"],
+        ] {
+            assert!(
+                !invocation_is_secretless(&script_path, script.as_bytes(), &args(&command)),
+                "twine {command:?}",
+            );
+        }
+        assert!(!invocation_is_secretless(
+            &script_path,
+            format!("{script}# changed\n").as_bytes(),
+            &args(&["check", "dist/package.whl"]),
+        ));
+
+        unsafe { std::env::remove_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR") };
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn vagrant_requests_secrets_only_for_cloud_capable_commands() {
+        let _guard = crate::global_test_env_lock().lock().unwrap();
+        let dir = temp_dir("env-wrapper-secretless-vagrant");
+        unsafe { std::env::set_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR", &dir) };
+        let previous_server = std::env::var_os("VAGRANT_SERVER_URL");
+        unsafe {
+            std::env::set_var(
+                "VAGRANT_SERVER_URL",
+                "https://private-vagrant.example.invalid",
+            )
+        };
+        let script_path = dir.join("vagrant");
+        let script = stub_script(
+            &wrapper("vagrant").unwrap().primary,
+            Path::new("/opt/homebrew/bin/vagrant"),
+        );
+        let args = |values: &[&str]| {
+            std::iter::once(script_path.clone().into_os_string())
+                .chain(values.iter().map(OsString::from))
+                .collect::<Vec<_>>()
+        };
+
+        for command in [
+            vec![],
+            vec!["--help"],
+            vec!["up", "--help"],
+            vec!["--version"],
+            vec!["up", "--version"],
+            vec!["status"],
+            vec!["global-status"],
+            vec!["validate"],
+            vec!["destroy"],
+            vec!["halt"],
+            vec!["suspend"],
+            vec!["ssh", "--", "printf", "hello"],
+            vec!["provision"],
+            vec!["push", "staging"],
+            vec!["plugin-command", "argument"],
+            vec!["future-command"],
+            vec!["--future-option", "future-command"],
+            vec!["--debug", "status"],
+            vec!["box", "list"],
+            vec!["box", "remove", "local-box"],
+            vec!["box", "prune"],
+            vec!["box", "repackage", "local-box", "virtualbox", "1.0.0"],
+            vec!["box", "add", "./fixtures/base.box"],
+            vec!["box", "add", "base.box"],
+            vec!["box", "add", "file:///tmp/base.box"],
+            vec!["box", "add", "https://downloads.example.invalid/base.box"],
+            vec!["box", "add", "--provider", "virtualbox", "./base.box"],
+            vec!["box", "add", "--future-option", "owner/private-box"],
+            vec!["cloud"],
+            vec!["cloud", "future-command"],
+            vec!["cloud", "auth", "logout"],
+            vec!["cloud", "auth", "login", "--token", "replacement"],
+            vec!["cloud", "auth", "login", "--token=replacement"],
+            vec!["login", "--future-option"],
+            vec!["cloud", "auth", "login", "--future-option"],
+            vec!["cloud", "auth", "whoami", "explicit-token"],
+            vec!["cloud", "auth", "whoami", "--future-option"],
+            vec!["snapshot", "save", "before-upgrade"],
+            vec!["snapshot", "restore", "--no-start", "before-upgrade"],
+            vec!["snapshot", "pop", "--no-start"],
+        ] {
+            assert!(
+                invocation_is_secretless(&script_path, script.as_bytes(), &args(&command)),
+                "vagrant {command:?}",
+            );
+        }
+
+        for command in [
+            vec!["up"],
+            vec!["--debug", "up"],
+            vec!["up", "--machine-readable"],
+            vec!["--future-option", "up"],
+            vec!["--", "up"],
+            vec!["up", "--", "--help"],
+            vec!["reload"],
+            vec!["resume"],
+            vec!["snapshot", "restore", "before-upgrade"],
+            vec!["snapshot", "pop"],
+            vec!["box", "add", "owner/private-box"],
+            vec!["box", "add", "-a", "arm64", "owner/private-box"],
+            vec!["box", "add", "--provider=virtualbox", "owner/private-box"],
+            vec!["box", "add", "https://vagrantcloud.com/owner/private-box"],
+            vec![
+                "box",
+                "add",
+                "https://private-vagrant.example.invalid/owner/private-box",
+            ],
+            vec!["box", "outdated"],
+            vec!["box", "update"],
+            vec!["login"],
+            vec!["login", "--check"],
+            vec!["cloud", "search", "private-box"],
+            vec!["cloud", "auth", "login"],
+            vec!["cloud", "auth", "login", "--check"],
+            vec!["cloud", "auth", "whoami"],
+            vec!["cloud", "box", "show", "owner/private-box"],
+            vec!["cloud", "box", "create", "owner/private-box"],
+            vec!["cloud", "provider", "upload", "owner/private-box"],
+            vec!["cloud", "publish", "owner/private-box"],
+            vec!["cloud", "version", "release", "owner/private-box", "1.0.0"],
+        ] {
+            assert!(
+                !invocation_is_secretless(&script_path, script.as_bytes(), &args(&command)),
+                "vagrant {command:?}",
+            );
+        }
+        assert!(!invocation_is_secretless(
+            &script_path,
+            format!("{script}# changed\n").as_bytes(),
+            &args(&["status"]),
+        ));
+
+        unsafe { std::env::remove_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR") };
+        match previous_server {
+            Some(value) => unsafe { std::env::set_var("VAGRANT_SERVER_URL", value) },
+            None => unsafe { std::env::remove_var("VAGRANT_SERVER_URL") },
+        }
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn huggingface_requests_secrets_only_for_reviewed_hub_commands() {
+        let _guard = crate::global_test_env_lock().lock().unwrap();
+        let dir = temp_dir("env-wrapper-secretless-huggingface");
+        unsafe { std::env::set_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR", &dir) };
+        let script_path = dir.join("hf");
+        let script = stub_script(
+            &wrapper("huggingface-cli").unwrap().primary,
+            Path::new("/opt/homebrew/bin/hf"),
+        );
+        let args = |values: &[&str]| {
+            std::iter::once(script_path.clone().into_os_string())
+                .chain(values.iter().map(OsString::from))
+                .collect::<Vec<_>>()
+        };
+
+        for command in [
+            vec![],
+            vec!["--help"],
+            vec!["-v"],
+            vec!["--install-completion"],
+            vec!["version"],
+            vec!["update"],
+            vec!["auth", "list"],
+            vec!["auth", "login"],
+            vec!["cache", "ls"],
+            vec!["cache", "rm", "model/repo"],
+            vec!["cache", "prune"],
+            vec!["skills", "update"],
+            vec!["lfs-enable-largefiles", "."],
+            vec!["lfs-multipart-upload"],
+            vec!["extensions", "exec", "custom", "--", "--token"],
+            vec!["custom-extension", "--token", "extension-value"],
+            vec!["future-command", "argument"],
+            vec!["models", "future-command"],
+            vec!["download"],
+            vec!["download", "private/repo", "--token", "replacement"],
+            vec!["upload", "private/repo", "--token=replacement"],
+            vec!["jobs", "run", "image", "--token", "replacement", "command"],
+        ] {
+            assert!(
+                invocation_is_secretless(&script_path, script.as_bytes(), &args(&command)),
+                "hf {command:?}",
+            );
+        }
+
+        for command in [
+            vec!["auth", "whoami"],
+            vec!["auth", "token"],
+            vec!["env"],
+            vec!["cache", "verify", "private/repo"],
+            vec!["download", "private/repo"],
+            vec!["upload", "private/repo", "."],
+            vec!["buckets", "ls"],
+            vec!["buckets", "cp", "hf://buckets/owner/private/file", "."],
+            vec!["collections", "info", "owner/collection"],
+            vec!["datasets", "info", "private/repo"],
+            vec!["discussions", "diff", "private/repo", "1"],
+            vec!["endpoints", "describe", "private-endpoint"],
+            vec!["endpoints", "catalog", "ls"],
+            vec!["jobs", "run", "image", "command", "--", "--token"],
+            vec!["models", "ls", "private/repo", "-h"],
+            vec!["papers", "read", "1234.5678"],
+            vec!["repo", "branch", "create", "private/repo", "new"],
+            vec!["repos", "cp", "hf://private/repo/file", "."],
+            vec!["repo-files", "delete", "private/repo", "file"],
+            vec!["sandbox", "exec", "sandbox-id", "--", "command"],
+            vec!["spaces", "secrets", "ls", "private/space"],
+            vec!["webhooks", "ls"],
+        ] {
+            assert!(
+                !invocation_is_secretless(&script_path, script.as_bytes(), &args(&command)),
+                "hf {command:?}",
+            );
+        }
+
+        assert!(!invocation_is_secretless(
+            &script_path,
+            format!("{script}# changed\n").as_bytes(),
+            &args(&["version"]),
+        ));
+        assert!(!invocation_is_secretless(
+            &script_path,
+            script.as_bytes(),
+            &[Path::new("/tmp/not-hf").into(), OsString::from("version")],
+        ));
+
+        unsafe { std::env::remove_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR") };
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn composer_requests_auth_only_for_private_repository_capable_commands() {
+        let _guard = crate::global_test_env_lock().lock().unwrap();
+        let dir = temp_dir("env-wrapper-secretless-composer");
+        unsafe { std::env::set_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR", &dir) };
+        let previous_disable_network = std::env::var_os("COMPOSER_DISABLE_NETWORK");
+        unsafe { std::env::remove_var("COMPOSER_DISABLE_NETWORK") };
+        let script_path = dir.join("composer");
+        let script = stub_script(
+            &wrapper("composer").unwrap().primary,
+            Path::new("/opt/homebrew/bin/composer"),
+        );
+        let args = |values: &[&str]| {
+            std::iter::once(script_path.clone().into_os_string())
+                .chain(values.iter().map(OsString::from))
+                .collect::<Vec<_>>()
+        };
+
+        for command in [
+            vec![],
+            vec!["--help"],
+            vec!["-V"],
+            vec!["install", "--help"],
+            vec!["--profile", "--working-dir", "/tmp", "validate"],
+            vec!["about"],
+            vec!["archive"],
+            vec!["bump"],
+            vec!["check-platform-reqs"],
+            vec!["cc"],
+            vec!["completion"],
+            vec!["config", "preferred-install"],
+            vec![
+                "config",
+                "http-basic.private.example",
+                "user",
+                "replacement",
+            ],
+            vec!["config", "--unset", "bearer.private.example"],
+            vec!["config", "--auth", "--editor"],
+            vec!["depends", "private/package"],
+            vec!["dumpautoload"],
+            vec!["exec", "vendor/bin/tool", "install"],
+            vec!["home"],
+            vec!["-n", "init"],
+            vec!["init"],
+            vec!["-n", "global", "init"],
+            vec!["-n", "require", "--no-update", "private/package:^1"],
+            vec!["-n", "global", "req", "--no-update", "private/package=^1"],
+            vec!["licenses"],
+            vec![
+                "policy",
+                "add-source",
+                "custom",
+                "url",
+                "https://example.invalid/list.json",
+            ],
+            vec!["repo", "list"],
+            vec!["remove", "--no-update", "private/package"],
+            vec!["run-script", "deploy", "--", "install"],
+            vec!["self-update"],
+            vec!["show"],
+            vec!["show", "private/package"],
+            vec!["show", "--", "--available"],
+            vec!["status"],
+            vec!["suggests"],
+            vec!["validate"],
+            vec!["deploy"],
+            vec!["plugin-command", "install"],
+            vec!["future-command"],
+        ] {
+            assert!(
+                invocation_is_secretless(&script_path, script.as_bytes(), &args(&command)),
+                "composer {command:?}",
+            );
+        }
+
+        for command in [
+            vec!["install"],
+            vec!["i"],
+            vec!["ins"],
+            vec!["create-project", "private/package"],
+            vec!["update"],
+            vec!["up"],
+            vec!["search", "private"],
+            vec!["audit"],
+            vec!["require", "private/package:^1"],
+            vec!["req", "private/package:^1"],
+            vec!["-n", "require", "--no-update", "private/package"],
+            vec!["remove", "private/package"],
+            vec!["reinstall", "private/package"],
+            vec!["outdated"],
+            vec!["fund"],
+            vec!["diagnose"],
+            vec!["why-not", "private/package", "2"],
+            vec!["archive", "private/package"],
+            vec!["archive", "--", "private/package"],
+            vec!["browse", "private/package"],
+            vec!["browse", "--", "private/package"],
+            vec![
+                "init",
+                "--repository",
+                "https://private.example.invalid/packages.json",
+            ],
+            vec!["show", "--available", "private/package"],
+            vec!["show", "--latest"],
+            vec!["config", "--list"],
+            vec!["config", "http-basic.private.example"],
+            vec!["config", "--source", "bearer.private.example"],
+            vec!["config", "client-certificate.private.example"],
+            vec!["config", "--", "bearer.private.example"],
+            vec!["global", "require", "private/package:^1"],
+            vec!["--profile", "-d", "/tmp", "require", "private/package:^1"],
+            vec!["install", "--", "--help"],
+        ] {
+            assert!(
+                !invocation_is_secretless(&script_path, script.as_bytes(), &args(&command)),
+                "composer {command:?}",
+            );
+        }
+
+        unsafe { std::env::set_var("COMPOSER_DISABLE_NETWORK", "1") };
+        assert!(invocation_is_secretless(
+            &script_path,
+            script.as_bytes(),
+            &args(&["install"]),
+        ));
+        assert!(!invocation_is_secretless(
+            &script_path,
+            script.as_bytes(),
+            &args(&["config", "github-oauth.github.com"]),
+        ));
+        unsafe { std::env::set_var("COMPOSER_DISABLE_NETWORK", "0") };
+        assert!(!invocation_is_secretless(
+            &script_path,
+            script.as_bytes(),
+            &args(&["install"]),
+        ));
+        assert!(!invocation_is_secretless(
+            &script_path,
+            format!("{script}# changed\n").as_bytes(),
+            &args(&["validate"]),
+        ));
+        assert!(!invocation_is_secretless(
+            &script_path,
+            script.as_bytes(),
+            &[
+                Path::new("/tmp/not-composer").into(),
+                OsString::from("validate")
+            ],
+        ));
+
+        unsafe {
+            std::env::remove_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR");
+            match previous_disable_network {
+                Some(value) => std::env::set_var("COMPOSER_DISABLE_NETWORK", value),
+                None => std::env::remove_var("COMPOSER_DISABLE_NETWORK"),
+            }
+        }
         let _ = fs::remove_dir_all(dir);
     }
 
