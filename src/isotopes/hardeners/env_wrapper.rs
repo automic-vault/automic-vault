@@ -91,6 +91,7 @@ pub(crate) fn invocation_is_secretless(
     let args = &args[1..];
     match stub.command {
         "npm" => npm_invocation_is_secretless(args),
+        "travis" => travis_invocation_is_secretless(args),
         "pnpm" => {
             local_command(
                 args,
@@ -205,6 +206,119 @@ fn npm_invocation_is_secretless(args: &[OsString]) -> bool {
             | "v"
             | "whoami"
     )
+}
+
+fn travis_invocation_is_secretless(args: &[OsString]) -> bool {
+    let Some(args) = args
+        .iter()
+        .map(|argument| argument.to_str())
+        .collect::<Option<Vec<_>>>()
+    else {
+        return true;
+    };
+    let Some(command) = args.first() else {
+        return true;
+    };
+    let command = command.strip_prefix("--").unwrap_or(command);
+    if matches!(command, "help" | "version") || matches!(command, "-h" | "-?" | "-v") {
+        return true;
+    }
+
+    let options = args[1..]
+        .split(|argument| *argument == "--")
+        .next()
+        .unwrap_or_default();
+    if options
+        .iter()
+        .any(|argument| matches!(*argument, "-h" | "--help"))
+        || options.iter().any(|argument| {
+            matches!(*argument, "--token")
+                || argument.starts_with("--token=")
+                || command != "settings" && (*argument == "-t" || argument.starts_with("-t"))
+        })
+        || std::env::var_os("TRAVIS_TOKEN").is_some_and(|value| !value.is_empty())
+        || travis_invocation_selects_custom_authority(options)
+    {
+        return true;
+    }
+
+    // Travis loads plugins from the user's config directory. Keep this list
+    // exact so an unreviewed plugin cannot inherit the protected token.
+    let requires_token = matches!(
+        command,
+        "accounts"
+            | "branches"
+            | "cache"
+            | "cancel"
+            | "console"
+            | "disable"
+            | "enable"
+            | "encrypt"
+            | "encrypt-file"
+            | "env"
+            | "history"
+            | "init"
+            | "lint"
+            | "logs"
+            | "monitor"
+            | "open"
+            | "pubkey"
+            | "raw"
+            | "repos"
+            | "requests"
+            | "restart"
+            | "settings"
+            | "setup"
+            | "show"
+            | "sshkey"
+            | "status"
+            | "sync"
+            | "token"
+            | "whatsup"
+            | "whoami"
+    );
+    !requires_token || !super::migrations::travis_default_config_is_safe_for_token()
+}
+
+fn travis_invocation_selects_custom_authority(options: &[&str]) -> bool {
+    const OFFICIAL: &str = "https://api.travis-ci.com/";
+    if std::env::var_os("TRAVIS_CONFIG_PATH").is_some_and(|value| !value.is_empty())
+        || std::env::var_os("TRAVIS_ENDPOINT")
+            .is_some_and(|value| !value.is_empty() && value != OFFICIAL)
+    {
+        return true;
+    }
+    let mut index = 0;
+    while let Some(argument) = options.get(index) {
+        if matches!(*argument, "-I" | "--insecure" | "-X" | "--enterprise")
+            || argument.starts_with("-X")
+            || argument.starts_with("--enterprise=")
+        {
+            return true;
+        }
+        if matches!(*argument, "-e" | "--api-endpoint") {
+            if options
+                .get(index + 1)
+                .is_none_or(|value| *value != OFFICIAL)
+            {
+                return true;
+            }
+            index += 2;
+            continue;
+        }
+        if let Some(value) = argument.strip_prefix("--api-endpoint=")
+            && value != OFFICIAL
+        {
+            return true;
+        }
+        if let Some(value) = argument.strip_prefix("-e").filter(|_| *argument != "-E")
+            && value != OFFICIAL
+        {
+            return true;
+        }
+        index += 1;
+    }
+    false
 }
 
 fn secret_gate(wrapper: &EnvWrapper) -> SecretGateDescriptor {
@@ -981,6 +1095,201 @@ mod tests {
         ));
 
         unsafe { std::env::remove_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR") };
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn travis_requests_its_token_only_for_reviewed_official_api_commands() {
+        let _guard = crate::global_test_env_lock().lock().unwrap();
+        let previous_home = std::env::var_os("HOME");
+        let previous_stub_dir = std::env::var_os("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR");
+        let previous_values = ["TRAVIS_TOKEN", "TRAVIS_ENDPOINT", "TRAVIS_CONFIG_PATH"]
+            .map(|key| (key, std::env::var_os(key)));
+        let dir = temp_dir("env-wrapper-secretless-travis");
+        let config_dir = dir.join(".travis");
+        fs::create_dir_all(&config_dir).unwrap();
+        fs::write(
+            config_dir.join("config.yml"),
+            "endpoints:\n  https://api.travis-ci.com/:\n    access_token: ''\n",
+        )
+        .unwrap();
+        unsafe {
+            std::env::set_var("HOME", &dir);
+            std::env::set_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR", &dir);
+            for (key, _) in &previous_values {
+                std::env::remove_var(key);
+            }
+        }
+        let script_path = dir.join("travis");
+        let script = stub_script(
+            &wrapper("travis").unwrap().primary,
+            Path::new("/opt/homebrew/bin/travis"),
+        );
+        let args = |values: &[&str]| {
+            std::iter::once(script_path.clone().into_os_string())
+                .chain(values.iter().map(OsString::from))
+                .collect::<Vec<_>>()
+        };
+
+        for command in [
+            vec![],
+            vec!["help"],
+            vec!["version"],
+            vec!["--version"],
+            vec!["whoami", "--help"],
+            vec!["endpoint"],
+            vec!["login"],
+            vec!["logout"],
+            vec!["regenerate-token"],
+            vec!["remove-token"],
+            vec!["report"],
+            vec!["plugin-command", "--", "payload"],
+            vec!["future-command"],
+            vec!["whoami", "--api-endpoint", "https://enterprise.example/api"],
+            vec![
+                "whoami",
+                "--api-endpoint",
+                "https://api.travis-ci.com/",
+                "--api-endpoint",
+                "https://enterprise.example/api",
+            ],
+            vec!["whoami", "-ehttps://enterprise.example/api"],
+            vec!["whoami", "--insecure"],
+            vec!["whoami", "-Xenterprise"],
+            vec!["whoami", "--token=caller-token"],
+            vec!["whoami", "-tcaller-token"],
+            vec!["settings", "--token=caller-token"],
+        ] {
+            assert!(
+                invocation_is_secretless(&script_path, script.as_bytes(), &args(&command)),
+                "travis {command:?}",
+            );
+        }
+        for command in [
+            "accounts",
+            "branches",
+            "cache",
+            "cancel",
+            "console",
+            "disable",
+            "enable",
+            "encrypt",
+            "encrypt-file",
+            "env",
+            "history",
+            "init",
+            "lint",
+            "logs",
+            "monitor",
+            "open",
+            "pubkey",
+            "raw",
+            "repos",
+            "requests",
+            "restart",
+            "settings",
+            "setup",
+            "show",
+            "sshkey",
+            "status",
+            "sync",
+            "token",
+            "whatsup",
+            "whoami",
+        ] {
+            assert!(
+                !invocation_is_secretless(&script_path, script.as_bytes(), &args(&[command])),
+                "travis {command}",
+            );
+        }
+        assert!(!invocation_is_secretless(
+            &script_path,
+            script.as_bytes(),
+            &args(&["settings", "-t"]),
+        ));
+        assert!(!invocation_is_secretless(
+            &script_path,
+            script.as_bytes(),
+            &args(&["whoami", "--skip-version-check"]),
+        ));
+        for command in [
+            vec!["whoami", "--com"],
+            vec!["whoami", "--pro"],
+            vec!["whoami", "--api-endpoint", "https://api.travis-ci.com/"],
+            vec!["whoami", "-ehttps://api.travis-ci.com/"],
+        ] {
+            assert!(!invocation_is_secretless(
+                &script_path,
+                script.as_bytes(),
+                &args(&command),
+            ));
+        }
+
+        unsafe { std::env::set_var("TRAVIS_TOKEN", "caller-token") };
+        assert!(invocation_is_secretless(
+            &script_path,
+            script.as_bytes(),
+            &args(&["whoami"]),
+        ));
+        unsafe { std::env::remove_var("TRAVIS_TOKEN") };
+        for key in ["TRAVIS_ENDPOINT", "TRAVIS_CONFIG_PATH"] {
+            unsafe { std::env::set_var(key, "caller-value") };
+            assert!(invocation_is_secretless(
+                &script_path,
+                script.as_bytes(),
+                &args(&["whoami"]),
+            ));
+            unsafe { std::env::remove_var(key) };
+        }
+        unsafe { std::env::set_var("TRAVIS_ENDPOINT", "https://api.travis-ci.com/") };
+        assert!(!invocation_is_secretless(
+            &script_path,
+            script.as_bytes(),
+            &args(&["whoami"]),
+        ));
+        unsafe { std::env::remove_var("TRAVIS_ENDPOINT") };
+        fs::write(
+            config_dir.join("config.yml"),
+            "endpoints:\n  https://api.travis-ci.com/:\n",
+        )
+        .unwrap();
+        assert!(invocation_is_secretless(
+            &script_path,
+            script.as_bytes(),
+            &args(&["whoami"]),
+        ));
+        fs::write(
+            config_dir.join("config.yml"),
+            "endpoints:\n  https://enterprise.example/api:\n    access_token: ''\n",
+        )
+        .unwrap();
+        assert!(invocation_is_secretless(
+            &script_path,
+            script.as_bytes(),
+            &args(&["whoami"]),
+        ));
+        assert!(!invocation_is_secretless(
+            &script_path,
+            format!("{script}# changed\n").as_bytes(),
+            &args(&["help"]),
+        ));
+
+        unsafe {
+            match previous_home {
+                Some(value) => std::env::set_var("HOME", value),
+                None => std::env::remove_var("HOME"),
+            }
+            match previous_stub_dir {
+                Some(value) => std::env::set_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR", value),
+                None => std::env::remove_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR"),
+            }
+            for (key, value) in previous_values {
+                match value {
+                    Some(value) => std::env::set_var(key, value),
+                    None => std::env::remove_var(key),
+                }
+            }
+        }
         let _ = fs::remove_dir_all(dir);
     }
 

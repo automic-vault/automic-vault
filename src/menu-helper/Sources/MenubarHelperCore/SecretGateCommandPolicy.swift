@@ -18,6 +18,7 @@ public func genericSecretGateRequestClassification(
     gateID: String,
     arguments: [String]
 ) -> SecretGateRequestClassification {
+    if gateID == "travis" { return travisRequestClassification(arguments) }
     let words = arguments.map { $0.lowercased() }
     guard !words.isEmpty else { return .unknown }
     if gateID == "stripe" { return stripeRequestClassification(words) }
@@ -34,6 +35,46 @@ public func genericSecretGateRequestClassification(
         if policy.mutating.contains(candidate) { return .mutating }
     }
     return .unknown
+}
+
+private func travisRequestClassification(_ arguments: [String]) -> SecretGateRequestClassification {
+    guard let first = arguments.first else { return .unknown }
+    let command = (first.hasPrefix("--") ? String(first.dropFirst(2)) : first).lowercased()
+    let options = arguments.dropFirst().prefix { $0 != "--" }
+    if options.contains("--debug-http") { return .secretDump }
+    if ["help", "version", "-h", "-?", "-v"].contains(command)
+        || options.contains(where: { ["-h", "--help"].contains($0) })
+    {
+        return .readOnly
+    }
+
+    switch command {
+    case "accounts", "branches", "history", "lint", "logs", "monitor", "open", "pubkey", "raw",
+         "repos", "requests", "show", "status", "whatsup", "whoami":
+        return .readOnly
+    case "cancel", "console", "disable", "enable", "encrypt", "encrypt-file", "init", "restart",
+         "setup", "sync":
+        return .mutating
+    case "token":
+        return .secretDump
+    case "cache":
+        return options.contains("-d") || options.contains("--delete") ? .mutating : .readOnly
+    case "env":
+        if !Set(options).isDisjoint(with: ["set", "unset", "copy", "clear"]) { return .mutating }
+        return options.contains("list") ? .readOnly : .unknown
+    case "settings":
+        return options.contains(where: {
+            ["-t", "--enable", "-f", "--disable", "-s", "--set", "-c", "--configure"].contains($0)
+                || $0.hasPrefix("--set=")
+        }) ? .mutating : .readOnly
+    case "sshkey":
+        return options.contains(where: {
+            ["-D", "--delete", "-u", "--upload", "-s", "--stdin", "-g", "--generate"].contains($0)
+                || $0.hasPrefix("--upload=")
+        }) ? .mutating : .readOnly
+    default:
+        return .unknown
+    }
 }
 
 private func stripeRequestClassification(_ arguments: [String]) -> SecretGateRequestClassification {
@@ -163,7 +204,7 @@ private let secretGateCommandPolicies: [String: SecretGateCommandPolicy] = [
     "snowflake-cli": .init("object list,object describe,connection test", "object create,object drop,stage copy"),
     "snyk": .init("", "monitor,auth"),
     "transifex-cli": .init("status", "pull,push"),
-    "travis": .init("whoami,repos,history,show,logs", "restart,cancel,enable,disable", secretDump: "token"),
+    "travis": .init("", ""),
     "twine": .init("check", "upload"),
     "vagrant": .init("status,global-status,validate,version", "up,destroy,halt,reload,suspend,resume,cloud publish"),
     "vault": .init("status,list,kv list,token lookup", "write,delete,kv put,kv delete", secretDump: "read,kv get,login,token create,token generate"),

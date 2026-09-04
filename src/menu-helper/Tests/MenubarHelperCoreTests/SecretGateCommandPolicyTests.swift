@@ -72,6 +72,39 @@ import Testing
     #expect(genericSecretGateRequestClassification(gateID: "flyctl", arguments: []) == .unknown)
 }
 
+@Test func travisPolicyClassifiesReviewedCommandShapes() {
+    for arguments in [
+        ["accounts"],
+        ["whoami", "--skip-version-check"],
+        ["cache", "--branch", "main"],
+        ["env", "-r", "owner/repo", "list"],
+        ["settings", "--keys"],
+        ["sshkey", "-d", "deployment key"],
+        ["restart", "--help"],
+    ] {
+        #expect(genericSecretGateRequestClassification(gateID: "travis", arguments: arguments) == .readOnly)
+    }
+
+    for arguments in [
+        ["restart"],
+        ["cache", "--delete", "--force"],
+        ["env", "-r", "owner/repo", "set", "NAME", "value"],
+        ["settings", "--set=2", "maximum_number_of_builds"],
+        ["sshkey", "-D"],
+        ["sshkey", "--upload", "key.pem"],
+    ] {
+        #expect(genericSecretGateRequestClassification(gateID: "travis", arguments: arguments) == .mutating)
+    }
+
+    #expect(genericSecretGateRequestClassification(gateID: "travis", arguments: ["token"]) == .secretDump)
+    #expect(genericSecretGateRequestClassification(
+        gateID: "travis",
+        arguments: ["whoami", "--debug-http"]
+    ) == .secretDump)
+    #expect(genericSecretGateRequestClassification(gateID: "travis", arguments: ["plugin-command"]) == .unknown)
+    #expect(genericSecretGateRequestClassification(gateID: "travis", arguments: []) == .unknown)
+}
+
 @Test func stripePolicyClassifiesGeneratedBuiltInAndPluginCommands() {
     let readOnly = [
         ["customers", "list"],

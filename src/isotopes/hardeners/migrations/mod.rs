@@ -101,6 +101,10 @@ pub(super) fn names() -> impl Iterator<Item = &'static str> {
     MIGRATIONS.iter().map(|(name, _)| *name)
 }
 
+pub(super) fn travis_default_config_is_safe_for_token() -> bool {
+    travis::default_config_is_safe_for_token()
+}
+
 #[unsafe(no_mangle)]
 unsafe extern "C" fn isotope_store_generic_password_json(
     service: *const std::ffi::c_char,
