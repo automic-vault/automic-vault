@@ -146,7 +146,7 @@ private let secretGateCommandPolicies: [String: SecretGateCommandPolicy] = [
     "huggingface-cli": .init("auth whoami,repo list,cache scan", "upload,upload-large-folder,repo create,repo delete"),
     "jfrog-cli": .init("rt search,rt ping,rt build-info", "rt upload,rt delete,rt build-publish", secretDump: "config show,config export"),
     "k6": .init("inspect", "run,cloud"),
-    "luarocks": .init("search,show,list,which", "install,remove,upload,publish"),
+    "luarocks": .init("", "upload"),
     "minio-mc": .init("ls,stat,find,du,tree", "cp,mv,rm,mb,rb,mirror", secretDump: "alias export"),
     "netlify-cli": .init("status,sites list,functions list", "deploy,sites create,sites delete,functions create", secretDump: "env list,env get"),
     "node": .init(

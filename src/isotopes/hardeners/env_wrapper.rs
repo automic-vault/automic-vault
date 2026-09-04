@@ -116,8 +116,105 @@ pub(crate) fn invocation_is_secretless(
                 "validate",
             ],
         ),
+        "luarocks" => luarocks_invocation_is_secretless(args),
         _ => false,
     }
+}
+
+fn luarocks_invocation_is_secretless(args: &[OsString]) -> bool {
+    let Some(args) = args
+        .iter()
+        .map(|argument| argument.to_str())
+        .collect::<Option<Vec<_>>>()
+    else {
+        return true;
+    };
+    let option_end = args
+        .iter()
+        .position(|argument| *argument == "--")
+        .unwrap_or(args.len());
+    let option_args = &args[..option_end];
+    if option_args
+        .iter()
+        .any(|argument| matches!(*argument, "--help" | "-h" | "--version"))
+        || ["--api-key", "--temp-key", "--server", "--from"]
+            .iter()
+            .any(|flag| luarocks_flag_value(option_args, flag).is_some())
+    {
+        return true;
+    }
+
+    const FLAGS: &[&str] = &[
+        "--dev",
+        "--local",
+        "--global",
+        "--no-project",
+        "--force-lock",
+        "--verbose",
+    ];
+    const OPTIONS: &[&str] = &[
+        "--only-server",
+        "--only-from",
+        "--only-sources",
+        "--only-sources-from",
+        "--namespace",
+        "--lua-dir",
+        "--lua-version",
+        "--tree",
+        "--to",
+        "--timeout",
+        "--project-tree",
+    ];
+    let mut index = 0;
+    while index < option_args.len() {
+        let argument = option_args[index];
+        if luarocks_assignment(argument) || FLAGS.contains(&argument) {
+            index += 1;
+        } else if OPTIONS.contains(&argument) {
+            if option_args.get(index + 1).is_none() {
+                return true;
+            }
+            index += 2;
+        } else if OPTIONS
+            .iter()
+            .any(|option| argument.starts_with(&format!("{option}=")))
+        {
+            index += 1;
+        } else if argument.starts_with('-') {
+            return true;
+        } else {
+            return argument != "upload";
+        }
+    }
+    true
+}
+
+fn luarocks_flag_value<'a>(args: &'a [&str], flag: &str) -> Option<&'a str> {
+    for (index, argument) in args.iter().enumerate() {
+        if *argument == flag {
+            return args
+                .get(index + 1)
+                .copied()
+                .filter(|value| !value.is_empty());
+        }
+        if let Some(value) = argument.strip_prefix(&format!("{flag}=")) {
+            return (!value.is_empty()).then_some(value);
+        }
+    }
+    None
+}
+
+fn luarocks_assignment(argument: &str) -> bool {
+    let Some((name, _)) = argument.split_once('=') else {
+        return false;
+    };
+    let mut chars = name.chars();
+    chars
+        .next()
+        .is_some_and(|character| character == '_' || character.is_ascii_uppercase())
+        && chars.all(|character| {
+            character == '_' || character.is_ascii_uppercase() || character.is_ascii_digit()
+        })
 }
 
 fn local_command(args: &[OsString], commands: &[&str]) -> bool {
@@ -1023,6 +1120,85 @@ mod tests {
                 "{command} {args:?}",
             );
         }
+
+        unsafe { std::env::remove_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR") };
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn luarocks_requests_its_api_key_only_for_upload() {
+        let _guard = crate::global_test_env_lock().lock().unwrap();
+        let dir = temp_dir("env-wrapper-secretless-luarocks");
+        unsafe { std::env::set_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR", &dir) };
+        let stub = &wrapper("luarocks").unwrap().primary;
+        let script_path = dir.join("luarocks");
+        let script = stub_script(stub, Path::new("/opt/homebrew/bin/luarocks"));
+        let invocation = |values: &[&str]| {
+            std::iter::once(script_path.clone().into_os_string())
+                .chain(values.iter().map(OsString::from))
+                .collect::<Vec<_>>()
+        };
+        let secretless = |values: &[&str]| {
+            invocation_is_secretless(&script_path, script.as_bytes(), &invocation(values))
+        };
+
+        for args in [
+            &[][..],
+            &["--help"][..],
+            &["--version"][..],
+            &["help", "upload"][..],
+            &["completion", "zsh"][..],
+            &["build", "example.rockspec"][..],
+            &["config", "lua_version"][..],
+            &["doc", "example"][..],
+            &["download", "example"][..],
+            &["init", "example"][..],
+            &["install", "example"][..],
+            &["lint", "example.rockspec"][..],
+            &["new_version", "example.rockspec"][..],
+            &["pack", "example.rockspec"][..],
+            &["path"][..],
+            &["purge"][..],
+            &["remove", "example"][..],
+            &["search", "example"][..],
+            &["show", "example"][..],
+            &["test", "example"][..],
+            &["unpack", "example.src.rock"][..],
+            &["which", "example"][..],
+            &["write_rockspec", "example"][..],
+            &["--lua-version=5.4", "list"][..],
+            &["CC=clang", "--tree", "vendor", "make"][..],
+            &["future-command"][..],
+            &["external-command", "upload"][..],
+            &["upload", "example.rockspec", "--api-key=caller-key"][..],
+            &["--temp-key", "caller-key", "upload", "example.rockspec"][..],
+            &[
+                "upload",
+                "example.rockspec",
+                "--server=https://other.example",
+            ][..],
+        ] {
+            assert!(secretless(args), "luarocks {args:?}");
+        }
+        for args in [
+            &["upload", "example.rockspec"][..],
+            &["--verbose", "upload", "example.rockspec"][..],
+            &["--lua-version", "5.4", "upload", "example.rockspec"][..],
+            &["CC=clang", "upload", "example.rockspec"][..],
+            &["upload", "--", "--help"][..],
+        ] {
+            assert!(!secretless(args), "luarocks {args:?}");
+        }
+        assert!(!invocation_is_secretless(
+            &script_path,
+            format!("{script}# changed\n").as_bytes(),
+            &invocation(&["search", "example"]),
+        ));
+        assert!(!invocation_is_secretless(
+            &script_path,
+            script.as_bytes(),
+            &[PathBuf::from("/tmp/not-the-stub").into_os_string()],
+        ));
 
         unsafe { std::env::remove_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR") };
         let _ = fs::remove_dir_all(dir);

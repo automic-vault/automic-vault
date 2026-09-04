@@ -25,7 +25,7 @@ import Testing
         "huggingface-cli": ["auth", "whoami"],
         "jfrog-cli": ["rt", "ping"],
         "k6": ["inspect", "script.js"],
-        "luarocks": ["search", "example"],
+        "luarocks": ["--version"],
         "minio-mc": ["ls", "alias/bucket"],
         "netlify-cli": ["sites", "list"],
         "node": ["view", "example"],
@@ -122,4 +122,10 @@ import Testing
     #expect(genericSecretGateRequestClassification(gateID: "node", arguments: ["stage", "list"]) == .readOnly)
     #expect(genericSecretGateRequestClassification(gateID: "node", arguments: ["stage", "publish"]) == .mutating)
     #expect(genericSecretGateRequestClassification(gateID: "node", arguments: ["ls"]) == .unknown)
+}
+
+@Test func luarocksPolicyOnlyClassifiesUploadBecauseOtherCommandsAreTokenless() {
+    #expect(genericSecretGateRequestClassification(gateID: "luarocks", arguments: ["upload", "example.rockspec"]) == .mutating)
+    #expect(genericSecretGateRequestClassification(gateID: "luarocks", arguments: ["install", "example"]) == .unknown)
+    #expect(genericSecretGateRequestClassification(gateID: "luarocks", arguments: ["search", "example"]) == .unknown)
 }
