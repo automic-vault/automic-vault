@@ -958,6 +958,30 @@ func protectionPolicyMatrix(
     #expect(gate.authorizationGateName == "npm Authorization Gate")
 }
 
+@Test func secretGateDefaultPolicyLabelsVerifiedLaunchers() {
+    let gate = SecretGate(
+        id: "aws",
+        keyPatterns: [],
+        routes: [],
+        defaultProtection: .readOnly,
+        appPolicies: []
+    )
+    let overriddenGate = SecretGate(
+        id: gate.id,
+        keyPatterns: gate.keyPatterns,
+        routes: gate.routes,
+        defaultProtection: gate.defaultProtection,
+        appPolicies: [SecretGatePolicy(
+            bundleIdentifier: "com.example.app",
+            requirement: #"identifier "com.example.app""#,
+            protection: .readOnly
+        )]
+    )
+
+    #expect(gate.defaultPolicyLabel == "All Verified Launchers")
+    #expect(overriddenGate.defaultPolicyLabel == "All Other Verified Launchers")
+}
+
 @Test(.enabled(if: dataProtectionKeychainAvailable(), "requires an entitled Keychain test host"))
 func secretGatePoliciesPersistAndResolveOverrides() throws {
     let service = "com.automicvault.tests.\(UUID().uuidString)"
@@ -966,8 +990,8 @@ func secretGatePoliciesPersistAndResolveOverrides() throws {
     let metadata = testGateMetadata()
     var gate = try #require(loadSecretGates(hardeners: [metadata], service: service, account: account).first)
     let requirement = #"identifier "com.example.app""#
-    #expect(gate.defaultPolicyLabel == "All Apps")
-    #expect(secretGateProtection(for: nil, in: gate).source == "All Apps")
+    #expect(gate.defaultPolicyLabel == "All Verified Launchers")
+    #expect(secretGateProtection(for: nil, in: gate).source == "All Verified Launchers")
 
     #expect(setSecretGateDefaultProtection(.fullExceptSecretDumps, for: gate, service: service, account: account) == errSecSuccess)
     gate = try #require(loadSecretGates(hardeners: [metadata], service: service, account: account).first)
@@ -986,7 +1010,7 @@ func secretGatePoliciesPersistAndResolveOverrides() throws {
     #expect(appPolicy.protection == .noAccess)
     #expect(appPolicy.requiresHardenedRuntime)
     #expect(appPolicy.runtimeRequirement == .hardenedAllowingLibraryValidationDisabled)
-    #expect(gate.defaultPolicyLabel == "All Other Apps")
+    #expect(gate.defaultPolicyLabel == "All Other Verified Launchers")
     #expect(secretGateProtection(for: requirement, in: gate).protection == .noAccess)
     #expect(secretGateProtection(for: #"identifier "com.other.app""#, in: gate).protection == .fullExceptSecretDumps)
 
@@ -1004,7 +1028,7 @@ func secretGatePoliciesPersistAndResolveOverrides() throws {
     #expect(removeSecretGateAppPolicy(appPolicy, from: gate, service: service, account: account) == errSecSuccess)
     gate = try #require(loadSecretGates(hardeners: [metadata], service: service, account: account).first)
     #expect(gate.appPolicies.isEmpty)
-    #expect(gate.defaultPolicyLabel == "All Apps")
+    #expect(gate.defaultPolicyLabel == "All Verified Launchers")
     #expect(secretGateProtection(for: requirement, in: gate).protection == .fullExceptSecretDumps)
 }
 
