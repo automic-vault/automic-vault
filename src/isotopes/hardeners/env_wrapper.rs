@@ -91,6 +91,7 @@ pub(crate) fn invocation_is_secretless(
     let args = &args[1..];
     match stub.command {
         "npm" => npm_invocation_is_secretless(args),
+        "snyk" => snyk_invocation_is_secretless(args),
         "pnpm" => {
             local_command(
                 args,
@@ -205,6 +206,197 @@ fn npm_invocation_is_secretless(args: &[OsString]) -> bool {
             | "v"
             | "whoami"
     )
+}
+
+fn snyk_invocation_is_secretless(args: &[OsString]) -> bool {
+    let Some(args) = args
+        .iter()
+        .map(|arg| arg.to_str())
+        .collect::<Option<Vec<_>>>()
+    else {
+        return true;
+    };
+    let args = &args[..args
+        .iter()
+        .position(|arg| *arg == "--")
+        .unwrap_or(args.len())];
+
+    if args
+        .iter()
+        .any(|arg| matches!(*arg, "--help" | "-h" | "--version" | "-v" | "--about"))
+    {
+        return true;
+    }
+    let Some(command_index) = snyk_root_command_index(args) else {
+        return true;
+    };
+    let words = &args[command_index..];
+
+    // A caller-supplied credential is authoritative for this invocation. Do
+    // not replace it with, or request approval for, the migrated credential.
+    if ["SNYK_TOKEN", "SNYK_OAUTH_TOKEN", "SNYK_CFG_API"]
+        .iter()
+        .any(|name| std::env::var_os(name).is_some_and(|value| !value.is_empty()))
+        || words.first() == Some(&"mcp")
+            && std::env::var_os("IDE_CONFIG_PATH").is_some_and(|value| !value.is_empty())
+        || snyk_docker_token_applies(words, args)
+    {
+        return true;
+    }
+
+    !snyk_command_requires_secret(words)
+}
+
+// Reviewed against Snyk CLI v1.1307.0. The CLI combines Cobra workflows with
+// a legacy command parser; unknown and unaudited extension paths stay
+// tokenless until their use of the migrated Snyk credential is reviewed.
+fn snyk_command_requires_secret(words: &[&str]) -> bool {
+    let Some(command) = words.first().copied() else {
+        return false;
+    };
+    if snyk_alias(command, "test", 1) {
+        return true;
+    }
+    if snyk_alias(command, "monitor", 1)
+        || snyk_alias(command, "fix", 1)
+        || snyk_alias(command, "ignore", 1)
+    {
+        return true;
+    }
+
+    match command {
+        "whoami" | "sbom" | "aibom" | "agent-scan" | "mcp-scan" => true,
+        "language-server" => !words
+            .iter()
+            .any(|argument| matches!(*argument, "--licenses" | "--protocolVersion" | "-p" | "--v")),
+        "doctor" => snyk_doctor_requires_secret(words),
+        "mcp" => snyk_subcommand(words, 1).is_none_or(|command| command != "configure"),
+        "apps" | "app" | "ap" => snyk_subcommand(words, 1) == Some("create"),
+        "container" => snyk_subcommand(words, 1).is_some_and(|command| {
+            snyk_alias(command, "test", 1) || snyk_alias(command, "monitor", 1) || command == "sbom"
+        }),
+        "unmanaged" => snyk_subcommand(words, 1).is_some_and(|command| {
+            snyk_alias(command, "test", 1) || snyk_alias(command, "monitor", 1)
+        }),
+        "code" => snyk_subcommand(words, 1).is_some_and(|command| snyk_alias(command, "test", 1)),
+        "iac" => snyk_iac_requires_secret(words),
+        "secrets" => snyk_subcommand(words, 1) == Some("test"),
+        "tools" => snyk_subcommand(words, 1) == Some("connectivity-check"),
+        "agent" => matches!(snyk_subcommand(words, 1), Some("feedback" | "test")),
+        "cos" => snyk_cos_requires_secret(words),
+        _ => false,
+    }
+}
+
+fn snyk_root_command_index(args: &[&str]) -> Option<usize> {
+    const VALUE_OPTIONS: &[&str] = &[
+        "--integration-name",
+        "--json-file-output",
+        "--log-level",
+        "--max-attempts",
+        "--org",
+        "--sarif-file-output",
+        "--severity-threshold",
+    ];
+    const FLAGS: &[&str] = &[
+        "--DISABLE_ANALYTICS",
+        "--debug",
+        "-d",
+        "--include-ignores",
+        "--insecure",
+        "--json",
+        "--proxy-noauth",
+        "--sarif",
+    ];
+    let mut index = 0;
+    while index < args.len() {
+        let argument = args[index];
+        if VALUE_OPTIONS.contains(&argument) {
+            if index + 1 >= args.len() {
+                return None;
+            }
+            index += 2;
+        } else if VALUE_OPTIONS
+            .iter()
+            .any(|option| argument.starts_with(&format!("{option}=")))
+            || FLAGS.contains(&argument)
+        {
+            index += 1;
+        } else if argument.starts_with('-') {
+            return None;
+        } else {
+            return Some(index);
+        }
+    }
+    None
+}
+
+fn snyk_subcommand<'a>(words: &'a [&str], index: usize) -> Option<&'a str> {
+    words
+        .get(index)
+        .copied()
+        .filter(|word| !word.starts_with('-'))
+}
+
+fn snyk_alias(argument: &str, command: &str, minimum: usize) -> bool {
+    argument.len() >= minimum && command.starts_with(argument)
+}
+
+fn snyk_doctor_requires_secret(words: &[&str]) -> bool {
+    let has_input = words.iter().any(|argument| {
+        matches!(*argument, "--input" | "--stdin") || argument.starts_with("--input=")
+    });
+    let live = words.iter().any(|argument| {
+        *argument == "--live"
+            || argument
+                .strip_prefix("--live=")
+                .is_some_and(|value| matches!(value, "1" | "t" | "T" | "true" | "TRUE" | "True"))
+    });
+    live || !has_input
+}
+
+fn snyk_iac_requires_secret(words: &[&str]) -> bool {
+    let Some(command) = snyk_subcommand(words, 1) else {
+        return false;
+    };
+    if snyk_alias(command, "test", 1)
+        || snyk_alias(command, "describe", 1)
+        || snyk_alias(command, "update-exclude-policy", 1)
+        || command == "capture"
+    {
+        return true;
+    }
+    command == "rules" && snyk_subcommand(words, 2) == Some("push")
+}
+
+fn snyk_cos_requires_secret(words: &[&str]) -> bool {
+    matches!(
+        (snyk_subcommand(words, 1), snyk_subcommand(words, 2)),
+        (Some("finding"), Some("get" | "list"))
+            | (
+                Some("scan"),
+                Some("cancel" | "list" | "report" | "start" | "status")
+            )
+            | (
+                Some("target"),
+                Some("create" | "delete" | "dump" | "get" | "list" | "update")
+            )
+    )
+}
+
+fn snyk_docker_token_applies(words: &[&str], args: &[&str]) -> bool {
+    if !std::env::var_os("SNYK_DOCKER_TOKEN").is_some_and(|value| !value.is_empty()) {
+        return false;
+    }
+    let Some(command) = words.first().copied() else {
+        return false;
+    };
+    command == "container"
+        && snyk_subcommand(words, 1).is_some_and(|command| snyk_alias(command, "test", 1))
+        || snyk_alias(command, "test", 1)
+            && args
+                .iter()
+                .any(|argument| matches!(*argument, "--docker" | "--container"))
 }
 
 fn secret_gate(wrapper: &EnvWrapper) -> SecretGateDescriptor {
@@ -980,6 +1172,171 @@ mod tests {
             &args(&["root"]),
         ));
 
+        unsafe { std::env::remove_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR") };
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn snyk_requests_secrets_only_for_reviewed_authenticated_commands() {
+        let _guard = crate::global_test_env_lock().lock().unwrap();
+        let dir = temp_dir("env-wrapper-secretless-snyk");
+        unsafe { std::env::set_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR", &dir) };
+        let credential_vars = [
+            "SNYK_TOKEN",
+            "SNYK_OAUTH_TOKEN",
+            "SNYK_CFG_API",
+            "SNYK_DOCKER_TOKEN",
+            "IDE_CONFIG_PATH",
+        ];
+        let previous_credentials = credential_vars.map(|name| std::env::var_os(name));
+        for name in credential_vars {
+            unsafe { std::env::remove_var(name) };
+        }
+
+        let script_path = dir.join("snyk");
+        let script = stub_script(
+            &wrapper("snyk").unwrap().primary,
+            Path::new("/opt/homebrew/bin/snyk"),
+        );
+        let args = |values: &[&str]| {
+            std::iter::once(script_path.clone().into_os_string())
+                .chain(values.iter().map(OsString::from))
+                .collect::<Vec<_>>()
+        };
+
+        for command in [
+            vec![],
+            vec!["--help"],
+            vec!["test", "--help"],
+            vec!["auth"],
+            vec!["auth", "replacement-token"],
+            vec!["config", "get", "api"],
+            vec!["policy"],
+            vec!["protect"],
+            vec!["wizard"],
+            vec!["woof"],
+            vec!["log4shell"],
+            vec!["depgraph"],
+            vec!["container", "depgraph", "alpine:latest"],
+            vec!["iac", "rules", "init"],
+            vec!["iac", "rules", "test"],
+            vec!["iac", "rules", "repl"],
+            vec!["mcp", "configure", "--tool", "cursor"],
+            vec!["tools", "ide-directory-check"],
+            vec!["doctor", "--input", "snyk.log"],
+            vec!["doctor", "--stdin"],
+            vec!["doctor", "--input=snyk.log", "--live=false"],
+            vec!["language-server", "--licenses"],
+            vec!["language-server", "-p"],
+            vec!["agent", "setup", "hooks"],
+            vec!["daemon"],
+            vec!["run", "arbitrary-script"],
+            vec!["future-command"],
+            vec!["--future-option", "test"],
+        ] {
+            assert!(
+                invocation_is_secretless(&script_path, script.as_bytes(), &args(&command)),
+                "snyk {command:?}",
+            );
+        }
+
+        for command in [
+            vec!["test"],
+            vec!["t", "--all-projects"],
+            vec!["monitor"],
+            vec!["mo"],
+            vec!["fix", "--dry-run"],
+            vec!["f"],
+            vec!["ignore", "--id", "SNYK-JS-EXAMPLE"],
+            vec!["apps", "create", "--experimental"],
+            vec!["whoami"],
+            vec!["doctor"],
+            vec!["doctor", "--live"],
+            vec!["doctor", "--input", "snyk.log", "--live=true"],
+            vec!["sbom", "--format", "cyclonedx1.5+json"],
+            vec!["sbom", "monitor", "bom.json"],
+            vec!["aibom"],
+            vec!["aibom", "test"],
+            vec!["agent-scan"],
+            vec!["mcp-scan"],
+            vec!["language-server"],
+            vec!["mcp"],
+            vec!["container", "test", "alpine:latest"],
+            vec!["container", "m", "alpine:latest"],
+            vec!["container", "sbom", "alpine:latest"],
+            vec!["unmanaged", "test"],
+            vec!["code", "t"],
+            vec!["iac", "test"],
+            vec!["iac", "d"],
+            vec!["iac", "u"],
+            vec!["iac", "capture"],
+            vec!["iac", "rules", "push"],
+            vec!["secrets", "test"],
+            vec!["tools", "connectivity-check"],
+            vec!["agent", "feedback"],
+            vec!["agent", "test"],
+            vec!["cos", "finding", "list"],
+            vec!["cos", "scan", "start"],
+            vec!["cos", "target", "create"],
+            vec!["--org", "example", "test"],
+            vec!["--org=example", "monitor"],
+            vec!["-d", "whoami"],
+            vec!["test", "--", "--help"],
+            vec!["monitor", "--", "--offline"],
+        ] {
+            assert!(
+                !invocation_is_secretless(&script_path, script.as_bytes(), &args(&command)),
+                "snyk {command:?}",
+            );
+        }
+
+        for name in ["SNYK_TOKEN", "SNYK_OAUTH_TOKEN", "SNYK_CFG_API"] {
+            unsafe { std::env::set_var(name, "caller-supplied") };
+            assert!(invocation_is_secretless(
+                &script_path,
+                script.as_bytes(),
+                &args(&["whoami"]),
+            ));
+            unsafe { std::env::remove_var(name) };
+        }
+        unsafe { std::env::set_var("SNYK_DOCKER_TOKEN", "caller-supplied") };
+        assert!(invocation_is_secretless(
+            &script_path,
+            script.as_bytes(),
+            &args(&["container", "test", "alpine:latest"]),
+        ));
+        assert!(invocation_is_secretless(
+            &script_path,
+            script.as_bytes(),
+            &args(&["test", "--docker", "alpine:latest"]),
+        ));
+        assert!(!invocation_is_secretless(
+            &script_path,
+            script.as_bytes(),
+            &args(&["whoami"]),
+        ));
+        unsafe { std::env::remove_var("SNYK_DOCKER_TOKEN") };
+        unsafe { std::env::set_var("IDE_CONFIG_PATH", "cursor") };
+        assert!(invocation_is_secretless(
+            &script_path,
+            script.as_bytes(),
+            &args(&["mcp"]),
+        ));
+
+        assert!(!invocation_is_secretless(
+            &script_path,
+            format!("{script}# changed\n").as_bytes(),
+            &args(&["config", "get", "api"]),
+        ));
+
+        for (name, value) in credential_vars.into_iter().zip(previous_credentials) {
+            unsafe {
+                match value {
+                    Some(value) => std::env::set_var(name, value),
+                    None => std::env::remove_var(name),
+                }
+            }
+        }
         unsafe { std::env::remove_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR") };
         let _ = fs::remove_dir_all(dir);
     }

@@ -21,6 +21,7 @@ public func genericSecretGateRequestClassification(
     let words = arguments.map { $0.lowercased() }
     guard !words.isEmpty else { return .unknown }
     if gateID == "stripe" { return stripeRequestClassification(words) }
+    if gateID == "snyk" { return snykRequestClassification(words) }
     if words == ["help"] || words == ["--help"] || words == ["version"] || words == ["--version"] {
         return .readOnly
     }
@@ -34,6 +35,112 @@ public func genericSecretGateRequestClassification(
         if policy.mutating.contains(candidate) { return .mutating }
     }
     return .unknown
+}
+
+private func snykRequestClassification(_ arguments: [String]) -> SecretGateRequestClassification {
+    let optionsWithValues = [
+        "--integration-name", "--json-file-output", "--log-level", "--max-attempts", "--org",
+        "--sarif-file-output", "--severity-threshold",
+    ]
+    let flags = [
+        "--disable_analytics", "--debug", "-d", "--include-ignores", "--insecure", "--json",
+        "--proxy-noauth", "--sarif",
+    ]
+    var words: [String] = []
+    var index = 0
+    while index < arguments.count {
+        let argument = arguments[index]
+        if argument == "--" { break }
+        if optionsWithValues.contains(argument) {
+            guard index + 1 < arguments.count else { return .unknown }
+            index += 2
+        } else if optionsWithValues.contains(where: { argument.hasPrefix("\($0)=") })
+            || flags.contains(argument)
+        {
+            index += 1
+        } else if ["--help", "-h", "--version", "-v", "--about"].contains(argument) {
+            return .readOnly
+        } else if argument.hasPrefix("-") {
+            if words.isEmpty { return .unknown }
+            index += 1
+        } else {
+            words.append(argument)
+            index += 1
+        }
+    }
+    guard let command = words.first else { return .unknown }
+
+    if snykAlias(command, "test", minimum: 1) { return .readOnly }
+    if snykAlias(command, "monitor", minimum: 1)
+        || snykAlias(command, "fix", minimum: 1)
+        || snykAlias(command, "ignore", minimum: 1)
+    {
+        return .mutating
+    }
+
+    switch command {
+    case "whoami", "doctor", "aibom", "agent-scan", "mcp-scan", "language-server":
+        return .readOnly
+    case "sbom":
+        return words.dropFirst().first == "monitor" ? .mutating : .readOnly
+    case "mcp":
+        return .mutating
+    case "apps", "app", "ap":
+        return words.dropFirst().first == "create" ? .mutating : .unknown
+    case "container":
+        guard let subcommand = words.dropFirst().first else { return .unknown }
+        if snykAlias(subcommand, "monitor", minimum: 1) { return .mutating }
+        return snykAlias(subcommand, "test", minimum: 1) || subcommand == "sbom"
+            ? .readOnly : .unknown
+    case "unmanaged":
+        guard let subcommand = words.dropFirst().first else { return .unknown }
+        if snykAlias(subcommand, "monitor", minimum: 1) { return .mutating }
+        return snykAlias(subcommand, "test", minimum: 1) ? .readOnly : .unknown
+    case "code":
+        return words.dropFirst().first.map { snykAlias($0, "test", minimum: 1) } == true
+            ? .readOnly : .unknown
+    case "iac":
+        guard let subcommand = words.dropFirst().first else { return .unknown }
+        if snykAlias(subcommand, "test", minimum: 1)
+            || snykAlias(subcommand, "describe", minimum: 1)
+        {
+            return .readOnly
+        }
+        return .mutating
+    case "secrets":
+        guard words.dropFirst().first == "test" else { return .unknown }
+        return arguments.contains(where: { $0 == "--report" || $0.hasPrefix("--report=") })
+            ? .mutating : .readOnly
+    case "tools":
+        return words.dropFirst().first == "connectivity-check" ? .readOnly : .unknown
+    case "agent":
+        switch words.dropFirst().first {
+        case "test": return .readOnly
+        case "feedback": return .mutating
+        default: return .unknown
+        }
+    case "cos":
+        let path = words.prefix(3).joined(separator: " ")
+        if [
+            "cos finding get", "cos finding list", "cos scan list", "cos scan report",
+            "cos scan status", "cos target dump", "cos target get", "cos target list",
+        ].contains(path) {
+            return .readOnly
+        }
+        if [
+            "cos scan cancel", "cos scan start", "cos target create", "cos target delete",
+            "cos target update",
+        ].contains(path) {
+            return .mutating
+        }
+        return .unknown
+    default:
+        return .unknown
+    }
+}
+
+private func snykAlias(_ argument: String, _ command: String, minimum: Int) -> Bool {
+    argument.count >= minimum && command.hasPrefix(argument)
 }
 
 private func stripeRequestClassification(_ arguments: [String]) -> SecretGateRequestClassification {
@@ -161,7 +268,7 @@ private let secretGateCommandPolicies: [String: SecretGateCommandPolicy] = [
     "s3cmd": .init("ls,la,info,du", "put,get,del,rm,sync,cp,mv,mb,rb", secretDump: "--dump-config"),
     "sentry-cli": .init("projects list,organizations list,releases list", "send-event,releases new,releases deploys new,upload-dif"),
     "snowflake-cli": .init("object list,object describe,connection test", "object create,object drop,stage copy"),
-    "snyk": .init("", "monitor,auth"),
+    "snyk": .init("", ""),
     "transifex-cli": .init("status", "pull,push"),
     "travis": .init("whoami,repos,history,show,logs", "restart,cancel,enable,disable", secretDump: "token"),
     "twine": .init("check", "upload"),

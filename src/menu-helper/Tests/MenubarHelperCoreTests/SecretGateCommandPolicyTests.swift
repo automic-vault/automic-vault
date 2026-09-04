@@ -72,6 +72,56 @@ import Testing
     #expect(genericSecretGateRequestClassification(gateID: "flyctl", arguments: []) == .unknown)
 }
 
+@Test func snykPolicyClassifiesAuditedCredentialUses() {
+    let readOnly = [
+        ["test"],
+        ["t", "--all-projects"],
+        ["--org", "example", "whoami"],
+        ["doctor", "--live"],
+        ["sbom", "test", "bom.json"],
+        ["aibom", "test"],
+        ["container", "test", "alpine:latest"],
+        ["code", "t"],
+        ["iac", "describe"],
+        ["secrets", "test"],
+        ["tools", "connectivity-check"],
+        ["agent", "test"],
+        ["cos", "finding", "list"],
+        ["cos", "scan", "report"],
+        ["cos", "target", "dump"],
+        ["agent-scan"],
+        ["language-server"],
+    ]
+    for arguments in readOnly {
+        #expect(genericSecretGateRequestClassification(gateID: "snyk", arguments: arguments) == .readOnly)
+    }
+
+    let mutating = [
+        ["monitor"],
+        ["mo"],
+        ["fix", "--dry-run"],
+        ["ignore", "--id", "SNYK-JS-EXAMPLE"],
+        ["apps", "create", "--experimental"],
+        ["sbom", "monitor", "bom.json"],
+        ["container", "monitor", "alpine:latest"],
+        ["iac", "capture"],
+        ["iac", "update-exclude-policy"],
+        ["iac", "rules", "push"],
+        ["secrets", "test", "--report"],
+        ["mcp"],
+        ["agent", "feedback"],
+        ["cos", "scan", "start"],
+        ["cos", "target", "create"],
+    ]
+    for arguments in mutating {
+        #expect(genericSecretGateRequestClassification(gateID: "snyk", arguments: arguments) == .mutating)
+    }
+
+    #expect(genericSecretGateRequestClassification(gateID: "snyk", arguments: ["--help"]) == .readOnly)
+    #expect(genericSecretGateRequestClassification(gateID: "snyk", arguments: ["future-command"]) == .unknown)
+    #expect(genericSecretGateRequestClassification(gateID: "snyk", arguments: ["agent", "setup"]) == .unknown)
+}
+
 @Test func stripePolicyClassifiesGeneratedBuiltInAndPluginCommands() {
     let readOnly = [
         ["customers", "list"],
