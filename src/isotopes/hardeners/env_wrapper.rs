@@ -208,6 +208,8 @@ fn npm_invocation_is_secretless(args: &[OsString]) -> bool {
     )
 }
 
+// Reviewed against censys-python v2.3.0 and cencli v1.1.4. Only the former
+// consumes the protected CENSYS_* environment variables.
 fn censys_invocation_is_secretless(target: &Path, args: &[OsString]) -> bool {
     if !censys_target_uses_legacy_environment(target) {
         return true;
