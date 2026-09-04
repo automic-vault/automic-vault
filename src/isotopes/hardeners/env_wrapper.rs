@@ -96,7 +96,7 @@ pub(crate) fn invocation_is_secretless(
         "k6" => k6_invocation_is_secretless(args),
         "twine" => twine_invocation_is_secretless(args),
         "vagrant" => vagrant_invocation_is_secretless(args),
-        "hf" => local_command(args, &["cache"]),
+        "hf" => hf_invocation_is_secretless(args),
         "composer" => local_command(
             args,
             &[
@@ -626,6 +626,163 @@ fn vagrant_cloud_may_need_secret(args: &[&str]) -> bool {
                 "create" | "delete" | "release" | "revoke" | "update"
             )
         }),
+        _ => false,
+    }
+}
+
+fn hf_invocation_is_secretless(args: &[OsString]) -> bool {
+    let Some(args) = args
+        .iter()
+        .map(|arg| arg.to_str())
+        .collect::<Option<Vec<_>>>()
+    else {
+        return true;
+    };
+    !hf_invocation_may_need_secret(&args)
+}
+
+fn hf_invocation_may_need_secret(args: &[&str]) -> bool {
+    let args = &args[..args
+        .iter()
+        .position(|arg| *arg == "--")
+        .unwrap_or(args.len())];
+    let Some(command) = args.first().copied() else {
+        return false;
+    };
+    if command.starts_with('-')
+        || args.contains(&"--help")
+        || args.contains(&"--token")
+        || args.iter().any(|arg| arg.starts_with("--token="))
+    {
+        return false;
+    }
+    let subcommand = args.get(1).copied().unwrap_or_default();
+    if args.contains(&"-h")
+        && !matches!(
+            (command, subcommand),
+            ("datasets" | "models" | "spaces", "list" | "ls")
+        )
+    {
+        return false;
+    }
+
+    // Reviewed against huggingface_hub c804cddf. Only first-party commands
+    // that can consume HF_TOKEN belong here; extensions and future commands
+    // remain tokenless until their credential boundary is reviewed.
+    match command {
+        "cp" | "download" | "sync" | "upload" | "upload-large-folder" => !subcommand.is_empty(),
+        "env" => true,
+        "auth" => matches!(subcommand, "token" | "whoami"),
+        "cache" => subcommand == "verify",
+        "buckets" => matches!(
+            subcommand,
+            "cp" | "create"
+                | "list"
+                | "ls"
+                | "info"
+                | "delete"
+                | "remove"
+                | "rm"
+                | "move"
+                | "settings"
+                | "sync"
+        ),
+        "collections" => matches!(
+            subcommand,
+            "list"
+                | "ls"
+                | "info"
+                | "create"
+                | "update"
+                | "delete"
+                | "add-item"
+                | "update-item"
+                | "delete-item"
+        ),
+        "datasets" => matches!(
+            subcommand,
+            "list" | "ls" | "leaderboard" | "info" | "parquet" | "sql" | "card"
+        ),
+        "discussions" => matches!(
+            subcommand,
+            "list"
+                | "ls"
+                | "info"
+                | "create"
+                | "comment"
+                | "edit"
+                | "close"
+                | "reopen"
+                | "rename"
+                | "merge"
+                | "diff"
+        ),
+        "models" => matches!(subcommand, "list" | "ls" | "info" | "card"),
+        "papers" => matches!(subcommand, "list" | "ls" | "search" | "info" | "read"),
+        "repo" | "repos" => hf_repo_invocation_may_need_secret(&args[1..]),
+        "repo-files" => subcommand == "delete",
+        "jobs" => hf_jobs_invocation_may_need_secret(&args[1..]),
+        "sandbox" => hf_sandbox_invocation_may_need_secret(&args[1..]),
+        "spaces" => hf_spaces_invocation_may_need_secret(&args[1..]),
+        "webhooks" => matches!(
+            subcommand,
+            "list" | "ls" | "info" | "create" | "update" | "enable" | "disable" | "delete"
+        ),
+        "endpoints" => match subcommand {
+            "list" | "ls" | "hardware" | "deploy" | "describe" | "update" | "delete" | "pause"
+            | "resume" | "scale-to-zero" | "list-catalog" => true,
+            "catalog" => matches!(args.get(2), Some(&"deploy" | &"list" | &"ls")),
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
+fn hf_repo_invocation_may_need_secret(args: &[&str]) -> bool {
+    match args.first().copied().unwrap_or_default() {
+        "cp" | "list" | "ls" | "create" | "duplicate" | "delete" | "move" | "settings"
+        | "delete-files" => true,
+        "branch" => matches!(args.get(1), Some(&"create" | &"delete")),
+        "tag" => matches!(args.get(1), Some(&"create" | &"list" | &"ls" | &"delete")),
+        _ => false,
+    }
+}
+
+fn hf_jobs_invocation_may_need_secret(args: &[&str]) -> bool {
+    match args.first().copied().unwrap_or_default() {
+        "run" | "logs" | "stats" | "list" | "ls" | "ps" | "hardware" | "inspect" | "cancel"
+        | "wait" | "labels" | "ssh" => true,
+        "uv" => args.get(1) == Some(&"run"),
+        "scheduled" => match args.get(1).copied().unwrap_or_default() {
+            "run" | "list" | "ls" | "ps" | "inspect" | "delete" | "suspend" | "resume"
+            | "trigger" | "labels" => true,
+            "uv" => args.get(2) == Some(&"run"),
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
+fn hf_sandbox_invocation_may_need_secret(args: &[&str]) -> bool {
+    match args.first().copied().unwrap_or_default() {
+        "create" | "exec" | "spawn" | "cp" | "kill" => true,
+        "pool" => matches!(
+            args.get(1),
+            Some(&"create" | &"ls" | &"list" | &"delete" | &"rm")
+        ),
+        "process" => matches!(args.get(1), Some(&"ls" | &"list" | &"kill")),
+        _ => false,
+    }
+}
+
+fn hf_spaces_invocation_may_need_secret(args: &[&str]) -> bool {
+    match args.first().copied().unwrap_or_default() {
+        "list" | "ls" | "info" | "card" | "templates" | "search" | "wait" | "dev-mode" | "ssh"
+        | "pause" | "restart" | "hardware" | "settings" | "logs" | "hot-reload" => true,
+        "volumes" => matches!(args.get(1), Some(&"list" | &"ls" | &"set" | &"delete")),
+        "secrets" | "variables" => {
+            matches!(args.get(1), Some(&"list" | &"ls" | &"add" | &"delete"))
+        }
         _ => false,
     }
 }
@@ -1787,6 +1944,97 @@ mod tests {
             Some(value) => unsafe { std::env::set_var("VAGRANT_SERVER_URL", value) },
             None => unsafe { std::env::remove_var("VAGRANT_SERVER_URL") },
         }
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn huggingface_requests_secrets_only_for_reviewed_hub_commands() {
+        let _guard = crate::global_test_env_lock().lock().unwrap();
+        let dir = temp_dir("env-wrapper-secretless-huggingface");
+        unsafe { std::env::set_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR", &dir) };
+        let script_path = dir.join("hf");
+        let script = stub_script(
+            &wrapper("huggingface-cli").unwrap().primary,
+            Path::new("/opt/homebrew/bin/hf"),
+        );
+        let args = |values: &[&str]| {
+            std::iter::once(script_path.clone().into_os_string())
+                .chain(values.iter().map(OsString::from))
+                .collect::<Vec<_>>()
+        };
+
+        for command in [
+            vec![],
+            vec!["--help"],
+            vec!["-v"],
+            vec!["--install-completion"],
+            vec!["version"],
+            vec!["update"],
+            vec!["auth", "list"],
+            vec!["auth", "login"],
+            vec!["cache", "ls"],
+            vec!["cache", "rm", "model/repo"],
+            vec!["cache", "prune"],
+            vec!["skills", "update"],
+            vec!["lfs-enable-largefiles", "."],
+            vec!["lfs-multipart-upload"],
+            vec!["extensions", "exec", "custom", "--", "--token"],
+            vec!["custom-extension", "--token", "extension-value"],
+            vec!["future-command", "argument"],
+            vec!["models", "future-command"],
+            vec!["download"],
+            vec!["download", "private/repo", "--token", "replacement"],
+            vec!["upload", "private/repo", "--token=replacement"],
+            vec!["jobs", "run", "image", "--token", "replacement", "command"],
+        ] {
+            assert!(
+                invocation_is_secretless(&script_path, script.as_bytes(), &args(&command)),
+                "hf {command:?}",
+            );
+        }
+
+        for command in [
+            vec!["auth", "whoami"],
+            vec!["auth", "token"],
+            vec!["env"],
+            vec!["cache", "verify", "private/repo"],
+            vec!["download", "private/repo"],
+            vec!["upload", "private/repo", "."],
+            vec!["buckets", "ls"],
+            vec!["buckets", "cp", "hf://buckets/owner/private/file", "."],
+            vec!["collections", "info", "owner/collection"],
+            vec!["datasets", "info", "private/repo"],
+            vec!["discussions", "diff", "private/repo", "1"],
+            vec!["endpoints", "describe", "private-endpoint"],
+            vec!["endpoints", "catalog", "ls"],
+            vec!["jobs", "run", "image", "command", "--", "--token"],
+            vec!["models", "ls", "private/repo", "-h"],
+            vec!["papers", "read", "1234.5678"],
+            vec!["repo", "branch", "create", "private/repo", "new"],
+            vec!["repos", "cp", "hf://private/repo/file", "."],
+            vec!["repo-files", "delete", "private/repo", "file"],
+            vec!["sandbox", "exec", "sandbox-id", "--", "command"],
+            vec!["spaces", "secrets", "ls", "private/space"],
+            vec!["webhooks", "ls"],
+        ] {
+            assert!(
+                !invocation_is_secretless(&script_path, script.as_bytes(), &args(&command)),
+                "hf {command:?}",
+            );
+        }
+
+        assert!(!invocation_is_secretless(
+            &script_path,
+            format!("{script}# changed\n").as_bytes(),
+            &args(&["version"]),
+        ));
+        assert!(!invocation_is_secretless(
+            &script_path,
+            script.as_bytes(),
+            &[Path::new("/tmp/not-hf").into(), OsString::from("version")],
+        ));
+
+        unsafe { std::env::remove_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR") };
         let _ = fs::remove_dir_all(dir);
     }
 

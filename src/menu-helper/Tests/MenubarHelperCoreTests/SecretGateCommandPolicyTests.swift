@@ -208,3 +208,44 @@ import Testing
         #expect(genericSecretGateRequestClassification(gateID: "vagrant", arguments: arguments) == .unknown)
     }
 }
+
+@Test func huggingFacePolicyClassifiesReviewedHubCommands() {
+    for arguments in [
+        ["auth", "whoami"],
+        ["cache", "verify", "private/repo"],
+        ["download", "private/repo"],
+        ["datasets", "info", "private/repo"],
+        ["jobs", "scheduled", "inspect", "job-id"],
+        ["repos", "tag", "list", "private/repo"],
+        ["spaces", "secrets", "list", "private/space"],
+    ] {
+        #expect(genericSecretGateRequestClassification(
+            gateID: "huggingface-cli",
+            arguments: arguments
+        ) == .readOnly)
+    }
+
+    for arguments in [
+        ["upload", "private/repo", "."],
+        ["collections", "add-item", "owner/collection"],
+        ["endpoints", "catalog", "deploy"],
+        ["jobs", "scheduled", "uv", "run", "script.py"],
+        ["repo", "branch", "create", "private/repo", "new"],
+        ["sandbox", "exec", "sandbox-id", "--", "command"],
+        ["webhooks", "delete", "webhook-id"],
+    ] {
+        #expect(genericSecretGateRequestClassification(
+            gateID: "huggingface-cli",
+            arguments: arguments
+        ) == .mutating)
+    }
+
+    #expect(genericSecretGateRequestClassification(
+        gateID: "huggingface-cli",
+        arguments: ["auth", "token"]
+    ) == .secretDump)
+    #expect(genericSecretGateRequestClassification(
+        gateID: "huggingface-cli",
+        arguments: ["cp", "hf://private/repo/file", "."]
+    ) == .unknown)
+}
