@@ -91,6 +91,7 @@ pub(crate) fn invocation_is_secretless(
     let args = &args[1..];
     match stub.command {
         "npm" => npm_invocation_is_secretless(args),
+        "vault" => vault_invocation_is_secretless(args),
         "pnpm" => {
             local_command(
                 args,
@@ -205,6 +206,278 @@ fn npm_invocation_is_secretless(args: &[OsString]) -> bool {
             | "v"
             | "whoami"
     )
+}
+
+fn vault_invocation_is_secretless(args: &[OsString]) -> bool {
+    let Some(args) = args
+        .iter()
+        .map(|argument| argument.to_str())
+        .collect::<Option<Vec<_>>>()
+    else {
+        return true;
+    };
+    let before_separator = args
+        .split(|argument| *argument == "--")
+        .next()
+        .unwrap_or_default();
+    if before_separator.is_empty()
+        || before_separator
+            .iter()
+            .any(|argument| matches!(*argument, "-h" | "-help" | "--help"))
+        || before_separator.iter().any(|argument| {
+            [
+                "output-curl-string",
+                "output-policy",
+                "autocomplete-install",
+                "autocomplete-uninstall",
+            ]
+            .iter()
+            .any(|flag| vault_flag_is_enabled(argument, flag))
+        })
+        || std::env::var_os("VAULT_TOKEN").is_some_and(|value| !value.is_empty())
+        || vault_invocation_uses_unsafe_transport(before_separator)
+    {
+        return true;
+    }
+
+    let command = before_separator[0];
+    let subcommand = before_separator.get(1).copied();
+    let requires_token = match command {
+        "agent" => subcommand == Some("generate-config"),
+        "debug" | "delete" | "list" | "monitor" | "patch" | "read" | "ssh" | "version-history"
+        | "write" => true,
+        "unwrap" => vault_unwrap_uses_ambient_token(&args),
+        "events" => subcommand == Some("subscribe"),
+        "audit" => matches!(subcommand, Some("disable" | "enable" | "list")),
+        "auth" => match subcommand {
+            Some("help") => !vault_auth_help_is_local(before_separator),
+            command => matches!(
+                command,
+                Some("disable" | "enable" | "list" | "move" | "tune")
+            ),
+        },
+        "lease" => matches!(subcommand, Some("lookup" | "renew" | "revoke")),
+        "namespace" => matches!(
+            subcommand,
+            Some("create" | "delete" | "list" | "lock" | "lookup" | "patch" | "unlock")
+        ),
+        "operator" => vault_operator_invocation_requires_token(&before_separator[1..]),
+        "pki" => matches!(
+            subcommand,
+            Some("health-check" | "issue" | "list-intermediates" | "reissue" | "verify-sign")
+        ),
+        "plugin" => match subcommand {
+            Some("runtime") => matches!(
+                before_separator.get(2).copied(),
+                Some("deregister" | "info" | "list" | "register")
+            ),
+            command => matches!(
+                command,
+                Some("deregister" | "info" | "list" | "register" | "reload" | "reload-status")
+            ),
+        },
+        "policy" => matches!(subcommand, Some("delete" | "list" | "read" | "write")),
+        "print" => subcommand == Some("token"),
+        "secrets" => matches!(
+            subcommand,
+            Some("disable" | "enable" | "list" | "move" | "tune")
+        ),
+        "transform" | "transit" => matches!(subcommand, Some("import" | "import-version")),
+        "token" => matches!(
+            subcommand,
+            Some("capabilities" | "create" | "lookup" | "renew" | "revoke")
+        ),
+        "kv" => match subcommand {
+            Some("metadata") => matches!(
+                before_separator.get(2).copied(),
+                Some("delete" | "get" | "patch" | "put")
+            ),
+            command => matches!(
+                command,
+                Some(
+                    "delete"
+                        | "destroy"
+                        | "enable-versioning"
+                        | "get"
+                        | "list"
+                        | "patch"
+                        | "put"
+                        | "rollback"
+                        | "undelete"
+                )
+            ),
+        },
+        _ => false,
+    };
+    !requires_token
+}
+
+fn vault_operator_invocation_requires_token(args: &[&str]) -> bool {
+    let Some(command) = args.first() else {
+        return false;
+    };
+    match *command {
+        "generate-root" => !args.iter().skip(1).any(|argument| {
+            matches!(*argument, "-decode" | "--decode")
+                || argument.starts_with("-decode=")
+                || argument.starts_with("--decode=")
+        }),
+        "key-status" | "members" | "rekey" | "rotate" | "seal" | "step-down" | "usage"
+        | "utilization" => true,
+        "raft" => match args.get(1).copied() {
+            Some("autopilot") => matches!(
+                args.get(2).copied(),
+                Some("get-config" | "set-config" | "state")
+            ),
+            Some("snapshot") => {
+                matches!(args.get(2).copied(), Some("restore" | "save"))
+            }
+            command => matches!(command, Some("list-peers" | "remove-peer")),
+        },
+        _ => false,
+    }
+}
+
+fn vault_auth_help_is_local(args: &[&str]) -> bool {
+    matches!(
+        args.last().copied(),
+        Some(
+            "alicloud"
+                | "aws"
+                | "cert"
+                | "cf"
+                | "gcp"
+                | "github"
+                | "kerberos"
+                | "ldap"
+                | "oci"
+                | "oidc"
+                | "okta"
+                | "pcf"
+                | "radius"
+                | "token"
+                | "userpass"
+        )
+    )
+}
+
+fn vault_unwrap_uses_ambient_token(args: &[&str]) -> bool {
+    let options_with_values = [
+        "-address",
+        "--address",
+        "-agent-address",
+        "--agent-address",
+        "-ca-cert",
+        "--ca-cert",
+        "-ca-path",
+        "--ca-path",
+        "-client-cert",
+        "--client-cert",
+        "-client-key",
+        "--client-key",
+        "-field",
+        "--field",
+        "-format",
+        "--format",
+        "-header",
+        "--header",
+        "-mfa",
+        "--mfa",
+        "-namespace",
+        "--namespace",
+        "-ns",
+        "--ns",
+        "-tls-server-name",
+        "--tls-server-name",
+        "-wrap-ttl",
+        "--wrap-ttl",
+    ];
+    let mut index = 1;
+    while let Some(argument) = args.get(index) {
+        if *argument == "--" {
+            return args.get(index + 1).is_none();
+        }
+        if options_with_values.contains(argument) {
+            index += 2;
+        } else if argument.starts_with('-') {
+            index += 1;
+        } else {
+            return false;
+        }
+    }
+    true
+}
+
+fn vault_invocation_uses_unsafe_transport(args: &[&str]) -> bool {
+    if std::env::var_os("VAULT_SKIP_VERIFY")
+        .and_then(|value| value.to_str().map(str::to_ascii_lowercase))
+        .is_some_and(|value| matches!(value.as_str(), "1" | "t" | "true"))
+        || ["VAULT_ADDR", "VAULT_AGENT_ADDR"].iter().any(|key| {
+            std::env::var_os(key)
+                .is_some_and(|value| value.to_str().is_none_or(vault_address_is_http))
+        })
+    {
+        return true;
+    }
+
+    let mut index = 0;
+    while let Some(argument) = args.get(index) {
+        if vault_flag_is_enabled(argument, "tls-skip-verify") {
+            return true;
+        }
+        if matches!(
+            *argument,
+            "-address" | "--address" | "-agent-address" | "--agent-address"
+        ) {
+            if args
+                .get(index + 1)
+                .is_some_and(|value| vault_address_is_http(value))
+            {
+                return true;
+            }
+            index += 2;
+            continue;
+        }
+        if [
+            "-address=",
+            "--address=",
+            "-agent-address=",
+            "--agent-address=",
+        ]
+        .iter()
+        .find_map(|prefix| argument.strip_prefix(prefix))
+        .is_some_and(vault_address_is_http)
+        {
+            return true;
+        }
+        index += 1;
+    }
+    false
+}
+
+fn vault_flag_value_is_true(value: &str) -> bool {
+    matches!(value, "1" | "t" | "T" | "true" | "TRUE" | "True")
+}
+
+fn vault_flag_is_enabled(argument: &str, name: &str) -> bool {
+    ["-", "--"].iter().any(|dashes| {
+        let Some(value) = argument
+            .strip_prefix(dashes)
+            .and_then(|argument| argument.strip_prefix(name))
+        else {
+            return false;
+        };
+        value.is_empty()
+            || value
+                .strip_prefix('=')
+                .is_some_and(vault_flag_value_is_true)
+    })
+}
+
+fn vault_address_is_http(value: &str) -> bool {
+    value
+        .get(.."http://".len())
+        .is_some_and(|scheme| scheme.eq_ignore_ascii_case("http://"))
 }
 
 fn secret_gate(wrapper: &EnvWrapper) -> SecretGateDescriptor {
@@ -981,6 +1254,174 @@ mod tests {
         ));
 
         unsafe { std::env::remove_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR") };
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn vault_requests_its_token_only_for_reviewed_api_commands() {
+        let _guard = crate::global_test_env_lock().lock().unwrap();
+        let previous_stub_dir = std::env::var_os("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR");
+        let previous_values = [
+            "VAULT_TOKEN",
+            "VAULT_SKIP_VERIFY",
+            "VAULT_ADDR",
+            "VAULT_AGENT_ADDR",
+        ]
+        .map(|key| (key, std::env::var_os(key)));
+        let dir = temp_dir("env-wrapper-secretless-vault");
+        unsafe {
+            std::env::set_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR", &dir);
+            for (key, _) in &previous_values {
+                std::env::remove_var(key);
+            }
+        }
+        let script_path = dir.join("vault");
+        let script = stub_script(
+            &wrapper("vault").unwrap().primary,
+            Path::new("/opt/homebrew/bin/vault"),
+        );
+        let args = |values: &[&str]| {
+            std::iter::once(script_path.clone().into_os_string())
+                .chain(values.iter().map(OsString::from))
+                .collect::<Vec<_>>()
+        };
+
+        for command in [
+            vec![],
+            vec!["help"],
+            vec!["version"],
+            vec!["--version"],
+            vec!["status"],
+            vec!["path-help", "secret/"],
+            vec!["login"],
+            vec!["agent", "-config=agent.hcl"],
+            vec!["proxy", "-config=proxy.hcl"],
+            vec!["server", "-config=server.hcl"],
+            vec!["policy", "fmt", "policy.hcl"],
+            vec!["operator", "init"],
+            vec!["operator", "unseal"],
+            vec!["operator", "generate-root", "-decode=encoded", "-otp=otp"],
+            vec!["operator", "raft", "join", "https://vault-leader.example"],
+            vec!["operator", "raft", "snapshot", "inspect", "snapshot.snap"],
+            vec!["audit"],
+            vec!["auth", "help", "userpass"],
+            vec!["plugin", "runtime"],
+            vec!["kv", "metadata"],
+            vec!["unwrap", "caller-wrapping-token"],
+            vec!["unwrap", "--", "caller-wrapping-token"],
+            vec!["read", "-output-policy", "secret/example"],
+            vec!["read", "-output-policy=true", "secret/example"],
+            vec!["write", "--output-curl-string", "secret/example", "value=x"],
+            vec!["future-command"],
+            vec!["operator", "future-command"],
+            vec!["plugin", "runtime", "future-command"],
+            vec!["future-command", "--", "payload"],
+            vec!["read", "-tls-skip-verify", "secret/example"],
+            vec!["read", "-address", "http://vault.example", "secret/example"],
+        ] {
+            assert!(
+                invocation_is_secretless(&script_path, script.as_bytes(), &args(&command)),
+                "vault {command:?}",
+            );
+        }
+
+        for command in [
+            vec!["read", "secret/example"],
+            vec!["write", "-output-policy=false", "secret/example", "value=x"],
+            vec![
+                "agent",
+                "generate-config",
+                "-type=env-template",
+                "secret/example",
+            ],
+            vec!["write", "secret/example", "value=x"],
+            vec!["delete", "secret/example"],
+            vec!["list", "secret/"],
+            vec!["patch", "secret/example", "value=x"],
+            vec!["debug"],
+            vec!["monitor"],
+            vec!["ssh", "-role", "admin", "host"],
+            vec!["unwrap"],
+            vec!["version-history"],
+            vec!["events", "subscribe", "*"],
+            vec!["audit", "list"],
+            vec!["auth", "list"],
+            vec!["lease", "lookup", "lease-id"],
+            vec!["namespace", "list"],
+            vec!["auth", "help", "custom/"],
+            vec!["operator", "generate-root", "-status"],
+            vec!["operator", "key-status"],
+            vec!["operator", "rekey", "-status"],
+            vec!["operator", "seal"],
+            vec!["operator", "raft", "list-peers"],
+            vec!["operator", "raft", "autopilot", "state"],
+            vec!["operator", "raft", "snapshot", "save", "snapshot.snap"],
+            vec!["pki", "health-check"],
+            vec!["plugin", "list"],
+            vec!["plugin", "runtime", "info", "container"],
+            vec!["policy", "read", "default"],
+            vec!["print", "token"],
+            vec!["secrets", "list"],
+            vec!["transform", "import", "role", "key"],
+            vec!["transit", "import", "key", "material"],
+            vec!["token", "lookup"],
+            vec!["kv", "get", "secret/example"],
+            vec!["kv", "metadata", "get", "secret/example"],
+        ] {
+            assert!(
+                !invocation_is_secretless(&script_path, script.as_bytes(), &args(&command)),
+                "vault {command:?}",
+            );
+        }
+
+        unsafe { std::env::set_var("VAULT_TOKEN", "caller-token") };
+        assert!(invocation_is_secretless(
+            &script_path,
+            script.as_bytes(),
+            &args(&["read", "secret/example"]),
+        ));
+        unsafe {
+            std::env::remove_var("VAULT_TOKEN");
+            std::env::set_var("VAULT_ADDR", "http://vault.example");
+        }
+        assert!(invocation_is_secretless(
+            &script_path,
+            script.as_bytes(),
+            &args(&["read", "secret/example"]),
+        ));
+        unsafe { std::env::set_var("VAULT_ADDR", "https://vault.example") };
+        assert!(!invocation_is_secretless(
+            &script_path,
+            script.as_bytes(),
+            &args(&["read", "-format=json", "secret/example"]),
+        ));
+        unsafe {
+            std::env::remove_var("VAULT_ADDR");
+            std::env::set_var("VAULT_SKIP_VERIFY", "true");
+        }
+        assert!(invocation_is_secretless(
+            &script_path,
+            script.as_bytes(),
+            &args(&["read", "secret/example"]),
+        ));
+        assert!(!invocation_is_secretless(
+            &script_path,
+            format!("{script}# changed\n").as_bytes(),
+            &args(&["status"]),
+        ));
+
+        unsafe {
+            match previous_stub_dir {
+                Some(value) => std::env::set_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR", value),
+                None => std::env::remove_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR"),
+            }
+            for (key, value) in previous_values {
+                match value {
+                    Some(value) => std::env::set_var(key, value),
+                    None => std::env::remove_var(key),
+                }
+            }
+        }
         let _ = fs::remove_dir_all(dir);
     }
 

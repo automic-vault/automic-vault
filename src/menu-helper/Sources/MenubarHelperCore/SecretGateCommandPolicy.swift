@@ -18,6 +18,7 @@ public func genericSecretGateRequestClassification(
     gateID: String,
     arguments: [String]
 ) -> SecretGateRequestClassification {
+    if gateID == "vault" { return vaultRequestClassification(arguments) }
     let words = arguments.map { $0.lowercased() }
     guard !words.isEmpty else { return .unknown }
     if gateID == "stripe" { return stripeRequestClassification(words) }
@@ -34,6 +35,141 @@ public func genericSecretGateRequestClassification(
         if policy.mutating.contains(candidate) { return .mutating }
     }
     return .unknown
+}
+
+private func vaultRequestClassification(_ arguments: [String]) -> SecretGateRequestClassification {
+    let words = arguments.prefix { $0 != "--" }.map { $0.lowercased() }
+    guard let command = words.first else { return .unknown }
+    if words.contains(where: { ["-h", "-help", "--help"].contains($0) })
+        || vaultFlagIsEnabled(words, "output-curl-string")
+        || vaultFlagIsEnabled(words, "output-policy")
+    {
+        return .readOnly
+    }
+    if vaultFlagIsEnabled(words, "autocomplete-install")
+        || vaultFlagIsEnabled(words, "autocomplete-uninstall")
+    {
+        return .localWrite
+    }
+
+    let subcommand = words.dropFirst().first
+    switch command {
+    case "help", "version", "--version", "-version", "-v", "status", "list", "path-help", "version-history":
+        return .readOnly
+    case "read", "debug", "monitor", "ssh", "unwrap", "login":
+        return .secretDump
+    case "write", "delete", "patch":
+        return .mutating
+    case "agent":
+        return subcommand == "generate-config" ? .localWrite : .unknown
+    case "events":
+        return subcommand == "subscribe" ? .secretDump : .unknown
+    case "audit":
+        if subcommand == "list" { return .readOnly }
+        return ["disable", "enable"].contains(subcommand) ? .mutating : .unknown
+    case "auth":
+        if ["help", "list"].contains(subcommand) { return .readOnly }
+        return ["disable", "enable", "move", "tune"].contains(subcommand) ? .mutating : .unknown
+    case "lease":
+        if subcommand == "lookup" { return .readOnly }
+        return ["renew", "revoke"].contains(subcommand) ? .mutating : .unknown
+    case "namespace":
+        if ["list", "lookup"].contains(subcommand) { return .readOnly }
+        return ["create", "delete", "lock", "patch", "unlock"].contains(subcommand) ? .mutating : .unknown
+    case "operator":
+        return vaultOperatorRequestClassification(Array(words.dropFirst()))
+    case "pki":
+        if ["health-check", "list-intermediates", "verify-sign"].contains(subcommand) { return .readOnly }
+        return ["issue", "reissue"].contains(subcommand) ? .secretDump : .unknown
+    case "plugin":
+        if subcommand == "runtime" {
+            let operation = words.dropFirst(2).first
+            if ["info", "list"].contains(operation) { return .readOnly }
+            return ["deregister", "register"].contains(operation) ? .mutating : .unknown
+        }
+        if ["info", "list", "reload-status"].contains(subcommand) { return .readOnly }
+        return ["deregister", "register", "reload"].contains(subcommand) ? .mutating : .unknown
+    case "policy":
+        if ["list", "read"].contains(subcommand) { return .readOnly }
+        if subcommand == "fmt" { return .localWrite }
+        return ["delete", "write"].contains(subcommand) ? .mutating : .unknown
+    case "print":
+        return subcommand == "token" ? .secretDump : .unknown
+    case "secrets":
+        if subcommand == "list" { return .readOnly }
+        return ["disable", "enable", "move", "tune"].contains(subcommand) ? .mutating : .unknown
+    case "transform", "transit":
+        return ["import", "import-version"].contains(subcommand) ? .mutating : .unknown
+    case "token":
+        if ["capabilities", "lookup"].contains(subcommand) { return .readOnly }
+        if subcommand == "create" { return .secretDump }
+        return ["renew", "revoke"].contains(subcommand) ? .mutating : .unknown
+    case "kv":
+        return vaultKVRequestClassification(Array(words.dropFirst()))
+    default:
+        return .unknown
+    }
+}
+
+private func vaultOperatorRequestClassification(_ words: [String]) -> SecretGateRequestClassification {
+    guard let command = words.first else { return .unknown }
+    if ["key-status", "members", "usage", "utilization"].contains(command) { return .readOnly }
+    if command == "generate-root" {
+        if vaultFlagIsEnabled(words, "status") { return .readOnly }
+        if vaultFlagIsEnabled(words, "cancel") { return .mutating }
+        return .secretDump
+    }
+    if ["diagnose", "init"].contains(command) { return .secretDump }
+    if ["migrate", "rotate", "seal", "step-down", "unseal"].contains(command) { return .mutating }
+    if command == "rekey" {
+        if vaultFlagIsEnabled(words, "status") { return .readOnly }
+        if vaultFlagIsEnabled(words, "cancel") || vaultFlagIsEnabled(words, "backup-delete")
+        {
+            return .mutating
+        }
+        return .secretDump
+    }
+    guard command == "raft", let operation = words.dropFirst().first else { return .unknown }
+    if ["join", "remove-peer"].contains(operation) { return .mutating }
+    if operation == "list-peers" { return .readOnly }
+    let nested = words.dropFirst(2).first
+    if operation == "autopilot" {
+        if ["get-config", "state"].contains(nested) { return .readOnly }
+        return nested == "set-config" ? .mutating : .unknown
+    }
+    if operation == "snapshot" {
+        if nested == "inspect" { return .readOnly }
+        if nested == "save" { return .secretDump }
+        return nested == "restore" ? .mutating : .unknown
+    }
+    return .unknown
+}
+
+private func vaultFlagIsEnabled(_ words: [String], _ name: String) -> Bool {
+    words.contains { word in
+        for flag in ["-\(name)", "--\(name)"] {
+            if word == flag { return true }
+            if word.hasPrefix("\(flag)=")
+                && ["1", "t", "true"].contains(String(word.dropFirst(flag.count + 1)))
+            {
+                return true
+            }
+        }
+        return false
+    }
+}
+
+private func vaultKVRequestClassification(_ words: [String]) -> SecretGateRequestClassification {
+    guard let command = words.first else { return .unknown }
+    if command == "get" || (command == "metadata" && words.dropFirst().first == "get") {
+        return .secretDump
+    }
+    if command == "list" { return .readOnly }
+    if command == "metadata" {
+        return ["delete", "patch", "put"].contains(words.dropFirst().first) ? .mutating : .unknown
+    }
+    return ["delete", "destroy", "enable-versioning", "patch", "put", "rollback", "undelete"].contains(command)
+        ? .mutating : .unknown
 }
 
 private func stripeRequestClassification(_ arguments: [String]) -> SecretGateRequestClassification {
@@ -166,7 +302,7 @@ private let secretGateCommandPolicies: [String: SecretGateCommandPolicy] = [
     "travis": .init("whoami,repos,history,show,logs", "restart,cancel,enable,disable", secretDump: "token"),
     "twine": .init("check", "upload"),
     "vagrant": .init("status,global-status,validate,version", "up,destroy,halt,reload,suspend,resume,cloud publish"),
-    "vault": .init("status,list,kv list,token lookup", "write,delete,kv put,kv delete", secretDump: "read,kv get,login,token create,token generate"),
+    "vault": .init("", ""),
     "virustotal-cli": .init("file,url,domain,ip,collection", "scan,upload"),
     "vultr": .init("instance list,instance get,region list,plan list", "instance create,instance delete,instance start,instance stop"),
     "wsk": .init("action list,action get,namespace list,package list,trigger list", "action create,action update,action delete,action invoke", secretDump: "property get"),

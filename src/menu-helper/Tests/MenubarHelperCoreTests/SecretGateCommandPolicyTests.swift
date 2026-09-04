@@ -123,3 +123,45 @@ import Testing
     #expect(genericSecretGateRequestClassification(gateID: "node", arguments: ["stage", "publish"]) == .mutating)
     #expect(genericSecretGateRequestClassification(gateID: "node", arguments: ["ls"]) == .unknown)
 }
+
+@Test func vaultPolicyClassifiesReviewedCommandShapes() {
+    for arguments in [
+        ["status"],
+        ["list", "secret/"],
+        ["operator", "raft", "list-peers"],
+        ["plugin", "runtime", "info", "container"],
+        ["read", "-output-policy", "secret/example"],
+        ["read", "-output-policy=true", "secret/example"],
+    ] {
+        #expect(genericSecretGateRequestClassification(gateID: "vault", arguments: arguments) == .readOnly)
+    }
+
+    for arguments in [
+        ["write", "secret/example", "value=x"],
+        ["write", "-output-policy=false", "secret/example", "value=x"],
+        ["namespace", "lock"],
+        ["operator", "raft", "snapshot", "restore", "snapshot.snap"],
+        ["kv", "metadata", "patch", "secret/example"],
+    ] {
+        #expect(genericSecretGateRequestClassification(gateID: "vault", arguments: arguments) == .mutating)
+    }
+
+    for arguments in [
+        ["read", "secret/example"],
+        ["unwrap"],
+        ["operator", "raft", "snapshot", "save", "snapshot.snap"],
+        ["pki", "issue", "role", "common_name=example.com"],
+        ["print", "token"],
+        ["kv", "metadata", "get", "secret/example"],
+    ] {
+        #expect(genericSecretGateRequestClassification(gateID: "vault", arguments: arguments) == .secretDump)
+    }
+
+    #expect(genericSecretGateRequestClassification(gateID: "vault", arguments: ["policy", "fmt", "policy.hcl"]) == .localWrite)
+    #expect(genericSecretGateRequestClassification(
+        gateID: "vault",
+        arguments: ["agent", "generate-config", "-type=env-template", "secret/example"]
+    ) == .localWrite)
+    #expect(genericSecretGateRequestClassification(gateID: "vault", arguments: ["future-command"]) == .unknown)
+    #expect(genericSecretGateRequestClassification(gateID: "vault", arguments: []) == .unknown)
+}
