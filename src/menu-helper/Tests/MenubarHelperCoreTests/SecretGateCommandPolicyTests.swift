@@ -72,6 +72,14 @@ import Testing
     #expect(genericSecretGateRequestClassification(gateID: "flyctl", arguments: []) == .unknown)
 }
 
+@Test func herokuPolicyClassifiesColonCommandsAndSecretOutput() {
+    #expect(genericSecretGateRequestClassification(gateID: "heroku", arguments: ["status"]) == .readOnly)
+    #expect(genericSecretGateRequestClassification(gateID: "heroku", arguments: ["apps:info", "example"]) == .readOnly)
+    #expect(genericSecretGateRequestClassification(gateID: "heroku", arguments: ["apps:create", "example"]) == .mutating)
+    #expect(genericSecretGateRequestClassification(gateID: "heroku", arguments: ["auth:token"]) == .secretDump)
+    #expect(genericSecretGateRequestClassification(gateID: "heroku", arguments: ["config:get", "DATABASE_URL"]) == .secretDump)
+}
+
 @Test func stripePolicyClassifiesGeneratedBuiltInAndPluginCommands() {
     let readOnly = [
         ["customers", "list"],

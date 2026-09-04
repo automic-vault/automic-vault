@@ -90,6 +90,7 @@ pub(crate) fn invocation_is_secretless(
     }
     let args = &args[1..];
     match stub.command {
+        "heroku" => heroku_invocation_is_secretless(args),
         "npm" => npm_invocation_is_secretless(args),
         "pnpm" => {
             local_command(
@@ -118,6 +119,59 @@ pub(crate) fn invocation_is_secretless(
         ),
         _ => false,
     }
+}
+
+// Reviewed against heroku/cli v11.10.0. Heroku loads runtime plugins, so keep
+// the Secret boundary to this exact audited core vocabulary; plugin, future,
+// local, login, update, and passthrough commands stay tokenless.
+const HEROKU_AUTHENTICATED_COMMANDS: &str = "2fa,access,access:add,access:remove,access:update,accounts:add,addons,addons:add,addons:attach,addons:create,addons:destroy,addons:detach,addons:docs,addons:downgrade,addons:info,addons:open,addons:plans,addons:remove,addons:rename,addons:services,addons:upgrade,addons:wait,apps,apps:create,apps:delete,apps:destroy,apps:diff,apps:errors,apps:favorites,apps:favorites:add,apps:favorites:remove,apps:info,apps:join,apps:leave,apps:list,apps:lock,apps:open,apps:rename,apps:stacks,apps:stacks:set,apps:transfer,apps:unlock,auth:2fa,auth:logout,auth:token,auth:whoami,authorizations,authorizations:create,authorizations:destroy,authorizations:info,authorizations:revoke,authorizations:rotate,authorizations:update,buildpacks,buildpacks:add,buildpacks:clear,buildpacks:remove,buildpacks:set,buildpacks:versions,certs,certs:add,certs:auto,certs:auto:disable,certs:auto:enable,certs:auto:refresh,certs:generate,certs:info,certs:remove,certs:update,ci,ci:config,ci:config:get,ci:config:set,ci:config:unset,ci:debug,ci:info,ci:last,ci:open,ci:rerun,ci:run,clients,clients:create,clients:destroy,clients:info,clients:rotate,clients:update,config,config:add,config:edit,config:get,config:remove,config:set,config:unset,console,container:login,container:pull,container:push,container:release,container:rm,container:run,create,dashboard,data:maintenances,data:maintenances:history,data:maintenances:info,data:maintenances:run,data:maintenances:schedule,data:maintenances:wait,data:maintenances:window,data:maintenances:window:update,data:pg:attachments,data:pg:attachments:create,data:pg:attachments:destroy,data:pg:create,data:pg:credentials,data:pg:credentials:create,data:pg:credentials:destroy,data:pg:credentials:rotate,data:pg:credentials:url,data:pg:destroy,data:pg:fork,data:pg:info,data:pg:levels,data:pg:migrate,data:pg:psql,data:pg:quotas,data:pg:quotas:update,data:pg:settings,data:pg:update,data:pg:upgrade:run,data:pg:upgrade:wait,data:pg:wait,destroy,domains,domains:add,domains:clear,domains:info,domains:remove,domains:update,domains:wait,drains,drains:add,drains:get,drains:remove,drains:set,dyno:kill,dyno:resize,dyno:restart,dyno:scale,dyno:stop,dyno:type,features,features:disable,features:enable,features:info,git:clone,git:credentials,git:remote,info,join,keys,keys:add,keys:clear,keys:remove,kill,labs,labs:disable,labs:enable,labs:info,leave,list,lock,logout,logs,maintenance,maintenance:off,maintenance:on,mcp:start,members,members:add,members:remove,members:set,notifications,open,orgs,orgs:open,pg,pg:backups,pg:backups:cancel,pg:backups:capture,pg:backups:delete,pg:backups:download,pg:backups:info,pg:backups:restore,pg:backups:schedule,pg:backups:schedules,pg:backups:unschedule,pg:backups:url,pg:bloat,pg:blocking,pg:cache-hit,pg:cache_hit,pg:calls,pg:connection-pooling:attach,pg:copy,pg:credentials,pg:credentials:create,pg:credentials:destroy,pg:credentials:repair-default,pg:credentials:rotate,pg:credentials:url,pg:diagnose,pg:extensions,pg:fdwsql,pg:index-size,pg:index-usage,pg:index_size,pg:index_usage,pg:info,pg:kill,pg:killall,pg:links,pg:links:create,pg:links:destroy,pg:locks,pg:long-running-queries,pg:long_running_queries,pg:mandelbrot,pg:outliers,pg:promote,pg:ps,pg:psql,pg:pull,pg:push,pg:records-rank,pg:records_rank,pg:reset,pg:seq-scans,pg:seq_scans,pg:settings,pg:settings:auto-explain,pg:settings:auto-explain:log-analyze,pg:settings:auto-explain:log-buffers,pg:settings:auto-explain:log-format,pg:settings:auto-explain:log-min-duration,pg:settings:auto-explain:log-nested-statements,pg:settings:auto-explain:log-triggers,pg:settings:auto-explain:log-verbose,pg:settings:data-connector-details-logs,pg:settings:explain-data-connector-details,pg:settings:log-connections,pg:settings:log-lock-waits,pg:settings:log-min-duration-statement,pg:settings:log-min-error-statement,pg:settings:log-statement,pg:settings:track-functions,pg:stats-reset,pg:stats_reset,pg:table-indexes-size,pg:table-size,pg:table_indexes_size,pg:table_size,pg:total-index-size,pg:total-table-size,pg:total_index_size,pg:total_table_size,pg:unfollow,pg:unused-indexes,pg:unused_indexes,pg:upgrade:cancel,pg:upgrade:dryrun,pg:upgrade:prepare,pg:upgrade:run,pg:upgrade:wait,pg:user-connections,pg:user_connections,pg:vacuum-stats,pg:wait,pipelines,pipelines:add,pipelines:connect,pipelines:create,pipelines:destroy,pipelines:diff,pipelines:info,pipelines:open,pipelines:promote,pipelines:remove,pipelines:rename,pipelines:setup,pipelines:transfer,pipelines:update,ps,ps:autoscale:disable,ps:autoscale:enable,ps:copy,ps:exec,ps:forward,ps:kill,ps:resize,ps:restart,ps:scale,ps:socks,ps:stop,ps:type,ps:wait,psql,rake,redis,redis:cli,redis:credentials,redis:info,redis:keyspace-notifications,redis:maxmemory,redis:promote,redis:stats-reset,redis:timeout,redis:upgrade,redis:wait,regions,releases,releases:info,releases:output,releases:retry,releases:rollback,rename,resize,restart,reviewapps:create,reviewapps:disable,reviewapps:enable,reviewapps:wait,rollback,run,run:detached,run:inside,scale,sessions,sessions:destroy,spaces,spaces:create,spaces:destroy,spaces:drains:get,spaces:drains:set,spaces:hosts,spaces:info,spaces:peering:info,spaces:peerings,spaces:peerings:accept,spaces:peerings:destroy,spaces:peerings:info,spaces:ps,spaces:rename,spaces:topology,spaces:transfer,spaces:trusted-ips,spaces:trusted-ips:add,spaces:trusted-ips:remove,spaces:vpn:config,spaces:vpn:connect,spaces:vpn:connections,spaces:vpn:destroy,spaces:vpn:info,spaces:vpn:update,spaces:vpn:wait,spaces:wait,stack,stack:set,stop,teams,telemetry,telemetry:add,telemetry:info,telemetry:remove,telemetry:update,trusted-ips,trusted-ips:add,trusted-ips:remove,twofactor,unlock,usage:addons,webhooks,webhooks:add,webhooks:deliveries,webhooks:deliveries:info,webhooks:events,webhooks:events:info,webhooks:info,webhooks:remove,webhooks:update,whoami";
+
+fn heroku_invocation_is_secretless(args: &[OsString]) -> bool {
+    let Some(args) = args
+        .iter()
+        .map(|arg| arg.to_str())
+        .collect::<Option<Vec<_>>>()
+    else {
+        return true;
+    };
+    let option_end = args
+        .iter()
+        .position(|arg| *arg == "--")
+        .unwrap_or(args.len());
+    let args = &args[..option_end];
+    if args
+        .iter()
+        .any(|arg| matches!(*arg, "--help" | "-h" | "--version"))
+        || args
+            .first()
+            .is_some_and(|arg| matches!(*arg, "-v" | "version"))
+        || heroku_uses_another_credential_or_authority()
+    {
+        return true;
+    }
+    let Some(command) = args.first().filter(|command| !command.starts_with('-')) else {
+        return true;
+    };
+    !HEROKU_AUTHENTICATED_COMMANDS
+        .split(',')
+        .any(|candidate| candidate == *command)
+}
+
+fn heroku_uses_another_credential_or_authority() -> bool {
+    std::env::var_os("HEROKU_CLOUD").is_some_and(|value| value == "staging")
+        || [
+            "HEROKU_API_KEY",
+            "HEROKU_CI_WEBSOCKET_URL",
+            "HEROKU_DATA_HOST",
+            "HEROKU_EXEC_URL",
+            "HEROKU_GIT_HOST",
+            "HEROKU_HOST",
+            "HEROKU_PARTICLEBOARD_URL",
+            "HEROKU_REDIS_HOST",
+            "PGDIAGNOSE_URL",
+        ]
+        .iter()
+        .any(|key| std::env::var_os(key).is_some_and(|value| !value.is_empty()))
 }
 
 fn local_command(args: &[OsString], commands: &[&str]) -> bool {
@@ -982,6 +1036,149 @@ mod tests {
 
         unsafe { std::env::remove_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR") };
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn heroku_requests_secrets_only_for_reviewed_core_commands() {
+        let _guard = crate::global_test_env_lock().lock().unwrap();
+        let dir = temp_dir("env-wrapper-secretless-heroku");
+        let authority_vars = [
+            "HEROKU_API_KEY",
+            "HEROKU_CI_WEBSOCKET_URL",
+            "HEROKU_CLOUD",
+            "HEROKU_DATA_HOST",
+            "HEROKU_EXEC_URL",
+            "HEROKU_GIT_HOST",
+            "HEROKU_HOST",
+            "HEROKU_PARTICLEBOARD_URL",
+            "HEROKU_REDIS_HOST",
+            "PGDIAGNOSE_URL",
+        ];
+        let previous_values = authority_vars.map(|name| std::env::var_os(name));
+        unsafe {
+            std::env::set_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR", &dir);
+            for name in authority_vars {
+                std::env::remove_var(name);
+            }
+        }
+        let script_path = dir.join("heroku");
+        let script = stub_script(
+            &wrapper("heroku").unwrap().primary,
+            Path::new("/opt/homebrew/bin/heroku"),
+        );
+        let args = |values: &[&str]| {
+            std::iter::once(script_path.clone().into_os_string())
+                .chain(values.iter().map(OsString::from))
+                .collect::<Vec<_>>()
+        };
+
+        for command in [
+            vec![],
+            vec!["--help"],
+            vec!["--version"],
+            vec!["-v"],
+            vec!["version"],
+            vec!["apps:info", "--help"],
+            vec!["status"],
+            vec!["auth:login"],
+            vec!["login"],
+            vec!["accounts"],
+            vec!["accounts:current"],
+            vec!["accounts:set", "work"],
+            vec!["autocomplete"],
+            vec!["buildpacks:info", "example/buildpack"],
+            vec!["buildpacks:search", "ruby"],
+            vec!["ci:migrate-manifest"],
+            vec!["container:logout"],
+            vec!["data:pg:docs"],
+            vec!["local", "web"],
+            vec!["local:run", "--", "sh", "script.sh"],
+            vec!["repl"],
+            vec!["version:info"],
+            vec!["plugins:install", "third-party-plugin"],
+            vec!["my-plugin:run", "--", "sh", "script.sh"],
+            vec!["apps:future-command"],
+            vec!["--future-option", "apps"],
+        ] {
+            assert!(
+                invocation_is_secretless(&script_path, script.as_bytes(), &args(&command)),
+                "heroku {command:?}",
+            );
+        }
+        for command in [
+            vec!["apps"],
+            vec!["apps:info", "example"],
+            vec!["info", "--app", "example"],
+            vec!["auth:token"],
+            vec!["auth:logout"],
+            vec!["logout"],
+            vec!["config:get", "DATABASE_URL", "--app", "example"],
+            vec!["data:pg:levels"],
+            vec!["mcp:start"],
+            vec!["pg:psql", "--app", "example"],
+            vec!["psql", "--app", "example"],
+            vec!["run", "--app", "example", "--", "sh", "script.sh"],
+            vec!["webhooks", "--app", "example"],
+        ] {
+            assert!(
+                !invocation_is_secretless(&script_path, script.as_bytes(), &args(&command)),
+                "heroku {command:?}",
+            );
+        }
+
+        unsafe { std::env::set_var("HEROKU_API_KEY", "already-provided") };
+        assert!(invocation_is_secretless(
+            &script_path,
+            script.as_bytes(),
+            &args(&["apps"]),
+        ));
+        unsafe {
+            std::env::remove_var("HEROKU_API_KEY");
+            std::env::set_var("HEROKU_HOST", "staging.heroku.com");
+        }
+        assert!(invocation_is_secretless(
+            &script_path,
+            script.as_bytes(),
+            &args(&["apps"]),
+        ));
+        unsafe {
+            std::env::remove_var("HEROKU_HOST");
+            std::env::set_var("HEROKU_CLOUD", "production");
+        }
+        assert!(!invocation_is_secretless(
+            &script_path,
+            script.as_bytes(),
+            &args(&["apps"]),
+        ));
+        unsafe { std::env::set_var("HEROKU_CLOUD", "staging") };
+        assert!(invocation_is_secretless(
+            &script_path,
+            script.as_bytes(),
+            &args(&["apps"]),
+        ));
+        assert!(!invocation_is_secretless(
+            &script_path,
+            format!("{script}# changed\n").as_bytes(),
+            &args(&["local:run", "--", "sh", "script.sh"]),
+        ));
+
+        unsafe {
+            for (name, value) in authority_vars.into_iter().zip(previous_values) {
+                match value {
+                    Some(value) => std::env::set_var(name, value),
+                    None => std::env::remove_var(name),
+                }
+            }
+            std::env::remove_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR");
+        }
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn heroku_authenticated_command_vocabulary_is_sorted_and_unique() {
+        let commands = HEROKU_AUTHENTICATED_COMMANDS.split(',').collect::<Vec<_>>();
+        assert_eq!(commands.len(), 391);
+        assert!(commands.windows(2).all(|pair| pair[0] < pair[1]));
     }
 
     #[test]

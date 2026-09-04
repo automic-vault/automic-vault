@@ -141,7 +141,11 @@ private let secretGateCommandPolicies: [String: SecretGateCommandPolicy] = [
     "gotify": .init("health,version", "push"),
     "gptcommit": .init("", "prepare,commit"),
     "grafanactl": .init("resources get,resources list", "resources create,resources delete,resources apply"),
-    "heroku": .init("apps,apps info,ps,addons", "apps create,apps destroy,config set,config unset,ps scale", secretDump: "auth token,config"),
+    "heroku": .init(
+        "apps,apps:info,info,ps,addons,status,auth:whoami,whoami,regions,releases,logs,pg:info,pg,webhooks",
+        "apps:create,create,apps:destroy,destroy,auth:logout,logout,config:set,config:unset,ps:scale,scale,run,container:push,container:release",
+        secretDump: "auth:token,config,config:get,git:credentials"
+    ),
     "hcloud": .init("server list,server describe,network list,network describe", "server create,server delete,network create,network delete"),
     "huggingface-cli": .init("auth whoami,repo list,cache scan", "upload,upload-large-folder,repo create,repo delete"),
     "jfrog-cli": .init("rt search,rt ping,rt build-info", "rt upload,rt delete,rt build-publish", secretDump: "config show,config export"),
