@@ -91,6 +91,7 @@ pub(crate) fn invocation_is_secretless(
     let args = &args[1..];
     match stub.command {
         "npm" => npm_invocation_is_secretless(args),
+        "glab" => glab_invocation_is_secretless(args),
         "pnpm" => {
             local_command(
                 args,
@@ -205,6 +206,163 @@ fn npm_invocation_is_secretless(args: &[OsString]) -> bool {
             | "v"
             | "whoami"
     )
+}
+
+// Reviewed against glab v1.116.0-24-g7ee9692c. This is the exact canonical
+// runnable vocabulary that can consume GitLab credentials. Parent, unknown,
+// user-alias, and passthrough forms stay tokenless until audited.
+const GLAB_AUTHENTICATED_COMMANDS: &str = "api,artifact-registry get-token,artifact-registry login,artifact-registry status,attestation verify,changelog generate,ci artifact,ci cancel job,ci cancel pipeline,ci ci lint,ci ci trace,ci ci view,ci config compile,ci delete,ci get,ci lint,ci list,ci retry,ci run,ci run-trig,ci status,ci trace,ci trigger,ci view,cluster agent bootstrap,cluster agent check-manifest-usage,cluster agent get-token,cluster agent list,cluster agent token list,cluster agent token revoke,cluster agent token-cache clear,cluster agent token-cache list,cluster agent update-kubeconfig,cluster graph,container-registry repository delete,container-registry repository list,container-registry repository view,container-registry tag delete,container-registry tag list,container-registry tag view,dependency-firewall ci-summary,deploy-key add,deploy-key delete,deploy-key get,deploy-key list,gpg-key add,gpg-key delete,gpg-key get,gpg-key list,incident close,incident list,incident note,incident reopen,incident subscribe,incident unsubscribe,incident view,issue board create,issue board view,issue close,issue create,issue delete,issue list,issue note,issue reopen,issue subscribe,issue unsubscribe,issue update,issue view,iteration list,job artifact,label create,label delete,label edit,label get,label list,mcp serve,milestone create,milestone delete,milestone edit,milestone get,milestone list,mr approve,mr approvers,mr checkout,mr close,mr create,mr delete,mr diff,mr for,mr issues,mr list,mr merge,mr note,mr note create,mr note delete,mr note list,mr note reopen,mr note resolve,mr note update,mr rebase,mr reopen,mr revoke,mr subscribe,mr todo,mr unsubscribe,mr update,mr view,opentofu init,opentofu state delete,opentofu state download,opentofu state list,opentofu state lock,opentofu state unlock,packages delete,packages download,packages list,packages upload,release create,release delete,release download,release list,release upload,release view,repo archive,repo clone,repo contributors,repo create,repo delete,repo fork,repo list,repo members add,repo members remove,repo mirror,repo prune,repo publish catalog,repo remote add,repo search,repo transfer,repo update,repo view,runner assign,runner delete,runner jobs,runner list,runner managers,runner unassign,runner update,runner-controller create,runner-controller delete,runner-controller get,runner-controller list,runner-controller scope create,runner-controller scope delete,runner-controller scope list,runner-controller token create,runner-controller token list,runner-controller token revoke,runner-controller token rotate,runner-controller update,schedule create,schedule delete,schedule list,schedule run,schedule update,search semantic,securefile create,securefile download,securefile get,securefile list,securefile remove,securefile update,security config disable,security config enable,security config status,snippet create,ssh-key add,ssh-key delete,ssh-key get,ssh-key list,todo done,todo list,token create,token list,token revoke,token rotate,user events,variable delete,variable export,variable get,variable import,variable list,variable set,variable update,work-items create,work-items delete,work-items list,work-items update";
+
+fn glab_invocation_is_secretless(args: &[OsString]) -> bool {
+    let Some(args) = args
+        .iter()
+        .map(|arg| arg.to_str())
+        .collect::<Option<Vec<_>>>()
+    else {
+        return true;
+    };
+    let option_end = args
+        .iter()
+        .position(|arg| *arg == "--")
+        .unwrap_or(args.len());
+    let option_args = &args[..option_end];
+    if option_args
+        .iter()
+        .any(|arg| matches!(*arg, "--help" | "-h" | "--version"))
+        || args.len() == 1 && args[0] == "-v"
+        || glab_uses_another_credential()
+    {
+        return true;
+    }
+
+    let mut path = Vec::new();
+    let mut index = 0;
+    while index < option_end {
+        let argument = args[index];
+        let parent = path.join(" ");
+        let config_get = parent == "config get";
+        if matches!(argument, "--repo" | "-R") || config_get && argument == "--host" {
+            if index + 1 >= option_end {
+                return true;
+            }
+            index += 2;
+            continue;
+        }
+        if argument.starts_with("--repo=")
+            || config_get && argument.starts_with("--host=")
+            || parent.starts_with("config ") && matches!(argument, "--global" | "-g")
+            || parent == "orbit" && matches!(argument, "--yes" | "-y")
+        {
+            index += 1;
+            continue;
+        }
+        if argument.starts_with('-') {
+            return true;
+        }
+
+        path.push(glab_canonical_command(&path, argument));
+        let command = path.join(" ");
+        if matches!(
+            command.as_str(),
+            "auth status"
+                | "auth credential-helper"
+                | "auth git-credential get"
+                | "auth docker-helper get"
+                | "duo ask"
+                | "orbit remote"
+                | "stack sync"
+                | "stack reorder"
+        ) || matches!(
+            command.as_str(),
+            "config get token" | "config get gitlab_token" | "config get oauth_token"
+        ) || command == "auth dpop-gen" && !glab_has_option(option_args, "--pat")
+        {
+            return false;
+        }
+        if GLAB_AUTHENTICATED_COMMANDS
+            .split(',')
+            .any(|candidate| candidate == command)
+        {
+            return false;
+        }
+        index += 1;
+    }
+    true
+}
+
+fn glab_canonical_command(parent: &[String], argument: &str) -> String {
+    let argument = argument.to_ascii_lowercase();
+    let parent = parent.join(" ");
+    match (parent.as_str(), argument.as_str()) {
+        ("", "ar") => "artifact-registry",
+        ("", "conf") => "config",
+        ("", "cr") => "container-registry",
+        ("", "df") => "dependency-firewall",
+        ("", "pipe" | "pipeline") => "ci",
+        ("", "project") => "repo",
+        ("", "rc") => "runner-controller",
+        ("", "sched" | "skd") => "schedule",
+        ("", "stacks") => "stack",
+        ("", "terraform" | "tf") => "opentofu",
+        ("", "var") => "variable",
+        ("ci", "artifact" | "push") => "artifact",
+        ("ci", "create") => "run",
+        ("ci", "stats") => "status",
+        ("cluster agent", "bs") => "bootstrap",
+        ("cluster agent", "check_manifest_usage") => "check-manifest-usage",
+        ("container-registry", "tags") => "tag",
+        ("incident", "resolve") => "close",
+        ("job", "push") => "artifact",
+        ("mr", "accept") => "merge",
+        ("mr", "add-todo") => "todo",
+        ("mr", "create-for" | "for-issue" | "new-for") => "for",
+        ("mr", "issue") => "issues",
+        ("mr", "unapprove") => "revoke",
+        ("packages", "dl") => "download",
+        ("packages", "rm") => "delete",
+        ("packages", "ul") => "upload",
+        ("repo", "find" | "lookup") => "search",
+        ("repo", "users") => "contributors",
+        ("securefile", "delete" | "rm") => "remove",
+        ("securefile", "overwrite") => "update",
+        ("securefile", "show") => "get",
+        ("securefile", "upload") => "create",
+        ("token", "rm") => "revoke",
+        ("token", "rot") => "rotate",
+        ("variable", "create" | "new") => "set",
+        ("variable", "ex") => "export",
+        ("variable", "im") => "import",
+        ("variable", "remove") => "delete",
+        (_, "comment") => "note",
+        (_, "del") => "delete",
+        (_, "ls") => "list",
+        (_, "new") => "create",
+        (_, "open") => "reopen",
+        (_, "show") => "view",
+        (_, "sub") => "subscribe",
+        (_, "unsub") => "unsubscribe",
+        _ => argument.as_str(),
+    }
+    .to_string()
+}
+
+fn glab_has_option(args: &[&str], option: &str) -> bool {
+    args.iter()
+        .any(|arg| *arg == option || arg.starts_with(&format!("{option}=")))
+}
+
+fn glab_uses_another_credential() -> bool {
+    [
+        "GITLAB_TOKEN",
+        "GITLAB_ACCESS_TOKEN",
+        "OAUTH_TOKEN",
+        "JOB_TOKEN",
+    ]
+    .iter()
+    .any(|name| std::env::var_os(name).is_some_and(|value| !value.is_empty()))
+        || std::env::var_os("GLAB_ENABLE_CI_AUTOLOGIN").is_some_and(|value| value == "true")
+            && std::env::var_os("GITLAB_CI").is_some_and(|value| value == "true")
+            && std::env::var_os("CI_JOB_TOKEN").is_some_and(|value| !value.is_empty())
 }
 
 fn secret_gate(wrapper: &EnvWrapper) -> SecretGateDescriptor {
@@ -980,6 +1138,147 @@ mod tests {
             &args(&["root"]),
         ));
 
+        unsafe { std::env::remove_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR") };
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn glab_requests_secrets_only_for_reviewed_commands() {
+        let _guard = crate::global_test_env_lock().lock().unwrap();
+        let dir = temp_dir("env-wrapper-secretless-glab");
+        unsafe { std::env::set_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR", &dir) };
+        let credential_vars = [
+            "GITLAB_TOKEN",
+            "GITLAB_ACCESS_TOKEN",
+            "OAUTH_TOKEN",
+            "JOB_TOKEN",
+            "GLAB_ENABLE_CI_AUTOLOGIN",
+            "GITLAB_CI",
+            "CI_JOB_TOKEN",
+        ];
+        let previous_credentials = credential_vars.map(|name| std::env::var_os(name));
+        for name in credential_vars {
+            unsafe { std::env::remove_var(name) };
+        }
+
+        let script_path = dir.join("glab");
+        let script = stub_script(
+            &wrapper("glab").unwrap().primary,
+            Path::new("/opt/homebrew/bin/glab"),
+        );
+        let args = |values: &[&str]| {
+            std::iter::once(script_path.clone().into_os_string())
+                .chain(values.iter().map(OsString::from))
+                .collect::<Vec<_>>()
+        };
+
+        for command in [
+            vec![],
+            vec!["--help"],
+            vec!["--version"],
+            vec!["-R", "group/project", "--help"],
+            vec!["alias", "list"],
+            vec!["config", "path"],
+            vec!["config", "get", "editor"],
+            vec!["config", "set", "editor", "vim"],
+            vec!["auth", "login"],
+            vec!["auth", "logout", "--hostname", "gitlab.com"],
+            vec!["auth", "configure-docker"],
+            vec!["auth", "docker-helper", "erase"],
+            vec!["completion", "zsh"],
+            vec!["version"],
+            vec!["check-update"],
+            vec!["whatsnew"],
+            vec!["skills", "list"],
+            vec!["stack", "list"],
+            vec!["duo", "cli", "run", "--goal", "summarize"],
+            vec!["orbit", "local", "sql", "select 1"],
+            vec!["issue"],
+            vec!["issue", "future-command"],
+            vec!["my-shell-alias", "anything"],
+            vec!["-g", "issue", "list"],
+            vec!["--", "shell-passthrough"],
+        ] {
+            assert!(
+                invocation_is_secretless(&script_path, script.as_bytes(), &args(&command)),
+                "glab {command:?}",
+            );
+        }
+        for command in [
+            vec!["issue", "list"],
+            vec!["project", "ls"],
+            vec!["-R", "group/project", "mr", "view", "1"],
+            vec!["--repo=group/project", "issue", "view", "1"],
+            vec!["auth", "status"],
+            vec!["auth", "credential-helper"],
+            vec!["auth", "git-credential", "get"],
+            vec!["auth", "docker-helper", "get"],
+            vec!["auth", "dpop-gen", "--private-key", "/tmp/id"],
+            vec!["config", "get", "token"],
+            vec!["config", "get", "--host", "gitlab.com", "token"],
+            vec!["conf", "get", "GITLAB_TOKEN"],
+            vec!["artifact-registry", "get-token"],
+            vec!["stack", "sync"],
+            vec!["stacks", "reorder"],
+            vec!["duo", "ask", "summarize"],
+            vec!["orbit", "remote", "status"],
+            vec!["orbit", "--yes", "remote", "status"],
+        ] {
+            assert!(
+                !invocation_is_secretless(&script_path, script.as_bytes(), &args(&command)),
+                "glab {command:?}",
+            );
+        }
+        assert!(invocation_is_secretless(
+            &script_path,
+            script.as_bytes(),
+            &args(&[
+                "auth",
+                "dpop-gen",
+                "--private-key",
+                "/tmp/id",
+                "--pat=given"
+            ]),
+        ));
+
+        for name in [
+            "GITLAB_TOKEN",
+            "GITLAB_ACCESS_TOKEN",
+            "OAUTH_TOKEN",
+            "JOB_TOKEN",
+        ] {
+            unsafe { std::env::set_var(name, "already-provided") };
+            assert!(invocation_is_secretless(
+                &script_path,
+                script.as_bytes(),
+                &args(&["issue", "list"]),
+            ));
+            unsafe { std::env::remove_var(name) };
+        }
+        unsafe {
+            std::env::set_var("GLAB_ENABLE_CI_AUTOLOGIN", "true");
+            std::env::set_var("GITLAB_CI", "true");
+            std::env::set_var("CI_JOB_TOKEN", "already-provided");
+        }
+        assert!(invocation_is_secretless(
+            &script_path,
+            script.as_bytes(),
+            &args(&["issue", "list"]),
+        ));
+        assert!(!invocation_is_secretless(
+            &script_path,
+            format!("{script}# changed\n").as_bytes(),
+            &args(&["issue", "list"]),
+        ));
+
+        for (name, value) in credential_vars.into_iter().zip(previous_credentials) {
+            unsafe {
+                match value {
+                    Some(value) => std::env::set_var(name, value),
+                    None => std::env::remove_var(name),
+                }
+            }
+        }
         unsafe { std::env::remove_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR") };
         let _ = fs::remove_dir_all(dir);
     }

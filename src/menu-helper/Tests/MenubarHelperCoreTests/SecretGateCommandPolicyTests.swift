@@ -123,3 +123,14 @@ import Testing
     #expect(genericSecretGateRequestClassification(gateID: "node", arguments: ["stage", "publish"]) == .mutating)
     #expect(genericSecretGateRequestClassification(gateID: "node", arguments: ["ls"]) == .unknown)
 }
+
+@Test func glabPolicyClassifiesCredentialDisplays() {
+    #expect(genericSecretGateRequestClassification(gateID: "glab", arguments: ["auth", "status"]) == .readOnly)
+    #expect(genericSecretGateRequestClassification(gateID: "glab", arguments: ["auth", "status", "--show-token"]) == .secretDump)
+    #expect(genericSecretGateRequestClassification(gateID: "glab", arguments: ["auth", "credential-helper"]) == .secretDump)
+    #expect(genericSecretGateRequestClassification(gateID: "glab", arguments: ["auth", "git-credential", "get"]) == .secretDump)
+    #expect(genericSecretGateRequestClassification(gateID: "glab", arguments: ["auth", "docker-helper", "get"]) == .secretDump)
+    #expect(genericSecretGateRequestClassification(gateID: "glab", arguments: ["auth", "dpop-gen"]) == .secretDump)
+    #expect(genericSecretGateRequestClassification(gateID: "glab", arguments: ["config", "get", "token"]) == .secretDump)
+    #expect(genericSecretGateRequestClassification(gateID: "glab", arguments: ["artifact-registry", "get-token"]) == .secretDump)
+}
