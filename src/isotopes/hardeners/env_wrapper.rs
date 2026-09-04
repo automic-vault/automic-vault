@@ -90,6 +90,7 @@ pub(crate) fn invocation_is_secretless(
     }
     let args = &args[1..];
     match stub.command {
+        "algolia" => algolia_invocation_is_secretless(args),
         "npm" => npm_invocation_is_secretless(args),
         "pnpm" => {
             local_command(
@@ -118,6 +119,141 @@ pub(crate) fn invocation_is_secretless(
         ),
         _ => false,
     }
+}
+
+fn algolia_invocation_is_secretless(args: &[OsString]) -> bool {
+    if algolia_help_requested(args) {
+        return true;
+    }
+    let Some(command_index) = algolia_command_index(args) else {
+        return true;
+    };
+    let Some(command) = args[command_index].to_str() else {
+        return true;
+    };
+
+    let needs_search_credentials =
+        matches!(
+            command,
+            "search"
+                | "indices"
+                | "index"
+                | "objects"
+                | "records"
+                | "settings"
+                | "rules"
+                | "rule"
+                | "synonyms"
+                | "synonym"
+                | "dictionary"
+                | "dictionaries"
+                | "dict"
+                | "events"
+                | "compositions"
+        ) || matches!(command, "apikeys" | "api-key" | "api-keys" | "apikey")
+            && args
+                .get(command_index + 1)
+                .is_none_or(|subcommand| subcommand != "rotate")
+            || command == "auth"
+                && args
+                    .get(command_index + 1)
+                    .is_some_and(|subcommand| subcommand == "status");
+    if needs_search_credentials {
+        return algolia_search_credentials_are_supplied(args);
+    }
+
+    if matches!(command, "crawler" | "crawlers") {
+        return std::env::var_os("ALGOLIA_CRAWLER_USER_ID").is_some_and(|value| !value.is_empty())
+            && std::env::var_os("ALGOLIA_CRAWLER_API_KEY").is_some_and(|value| !value.is_empty());
+    }
+
+    true
+}
+
+fn algolia_help_requested(args: &[OsString]) -> bool {
+    for (index, argument) in args.iter().enumerate() {
+        if argument == "--" {
+            break;
+        }
+        if matches!(
+            argument.to_str(),
+            Some("--help" | "-h" | "--version" | "-v")
+        ) && index
+            .checked_sub(1)
+            .and_then(|previous| args[previous].to_str())
+            .is_none_or(|previous| !previous.starts_with('-'))
+        {
+            return true;
+        }
+    }
+    false
+}
+
+fn algolia_command_index(args: &[OsString]) -> Option<usize> {
+    let mut index = 0;
+    while index < args.len() {
+        let argument = args[index].to_str()?;
+        if argument == "--" {
+            return None;
+        }
+        if matches!(argument, "--help" | "-h" | "--version" | "-v") {
+            return None;
+        }
+        if matches!(
+            argument,
+            "--profile"
+                | "-p"
+                | "--application-id"
+                | "--api-key"
+                | "--admin-api-key"
+                | "--search-hosts"
+        ) {
+            index += 2;
+            continue;
+        }
+        if [
+            "--profile=",
+            "--application-id=",
+            "--api-key=",
+            "--admin-api-key=",
+            "--search-hosts=",
+        ]
+        .iter()
+        .any(|option| argument.starts_with(option))
+        {
+            index += 1;
+            continue;
+        }
+        return (!argument.starts_with('-')).then_some(index);
+    }
+    None
+}
+
+fn algolia_search_credentials_are_supplied(args: &[OsString]) -> bool {
+    let application_id = algolia_option_value(args, "--application-id")
+        .or_else(|| std::env::var_os("ALGOLIA_APPLICATION_ID"));
+    let api_key = algolia_option_value(args, "--api-key")
+        .or_else(|| algolia_option_value(args, "--admin-api-key"))
+        .or_else(|| std::env::var_os("ALGOLIA_API_KEY"))
+        .or_else(|| std::env::var_os("ALGOLIA_ADMIN_API_KEY"));
+    application_id.is_some_and(|value| !value.is_empty())
+        && api_key.is_some_and(|value| !value.is_empty())
+}
+
+fn algolia_option_value(args: &[OsString], option: &str) -> Option<OsString> {
+    let equals = format!("{option}=");
+    for (index, argument) in args.iter().enumerate() {
+        if argument == "--" {
+            break;
+        }
+        if argument == option {
+            return args.get(index + 1).cloned();
+        }
+        if let Some(value) = argument.to_str()?.strip_prefix(&equals) {
+            return Some(OsString::from(value));
+        }
+    }
+    None
 }
 
 fn local_command(args: &[OsString], commands: &[&str]) -> bool {
@@ -981,6 +1117,129 @@ mod tests {
         ));
 
         unsafe { std::env::remove_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR") };
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn algolia_requests_secrets_only_for_commands_that_can_use_them() {
+        let _guard = crate::global_test_env_lock().lock().unwrap();
+        let dir = temp_dir("env-wrapper-secretless-algolia");
+        unsafe { std::env::set_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR", &dir) };
+        let script_path = dir.join("algolia");
+        let script = stub_script(
+            &wrapper("algolia").unwrap().primary,
+            Path::new("/opt/homebrew/bin/algolia"),
+        );
+        let args = |values: &[&str]| {
+            std::iter::once(script_path.clone().into_os_string())
+                .chain(values.iter().map(OsString::from))
+                .collect::<Vec<_>>()
+        };
+
+        for command in [
+            vec![],
+            vec!["--help"],
+            vec!["search", "--help"],
+            vec!["--version"],
+            vec!["completion", "zsh"],
+            vec!["describe", "objects", "browse"],
+            vec!["schema", "search"],
+            vec!["application", "list"],
+            vec!["app", "select"],
+            vec!["open", "docs"],
+            vec!["profile", "list"],
+            vec!["auth", "login"],
+            vec!["future-command"],
+            vec!["--profile", "work", "describe"],
+            vec!["--future-global", "search", "INDEX"],
+        ] {
+            assert!(
+                invocation_is_secretless(&script_path, script.as_bytes(), &args(&command)),
+                "algolia {command:?}",
+            );
+        }
+        for command in [
+            vec!["search", "INDEX"],
+            vec!["indices", "list"],
+            vec!["records", "browse", "INDEX"],
+            vec!["api-keys", "list"],
+            vec!["settings", "get", "INDEX"],
+            vec!["rules", "browse", "INDEX"],
+            vec!["synonyms", "browse", "INDEX"],
+            vec!["dict", "entries", "browse"],
+            vec!["events", "tail"],
+            vec!["compositions", "list"],
+            vec!["crawler", "list"],
+            vec!["auth", "status"],
+            vec!["--profile", "work", "objects", "browse", "INDEX"],
+            vec!["search", "INDEX", "--query", "--help"],
+            vec!["search", "INDEX", "--", "--help"],
+        ] {
+            assert!(
+                !invocation_is_secretless(&script_path, script.as_bytes(), &args(&command)),
+                "algolia {command:?}",
+            );
+        }
+        assert!(invocation_is_secretless(
+            &script_path,
+            script.as_bytes(),
+            &args(&["apikeys", "rotate"]),
+        ));
+        assert!(invocation_is_secretless(
+            &script_path,
+            script.as_bytes(),
+            &args(&[
+                "--application-id=APP",
+                "--api-key",
+                "caller-key",
+                "search",
+                "INDEX",
+            ]),
+        ));
+
+        unsafe {
+            std::env::set_var("ALGOLIA_APPLICATION_ID", "APP");
+            std::env::set_var("ALGOLIA_API_KEY", "caller-key");
+        }
+        assert!(invocation_is_secretless(
+            &script_path,
+            script.as_bytes(),
+            &args(&["objects", "browse", "INDEX"]),
+        ));
+        unsafe {
+            std::env::remove_var("ALGOLIA_APPLICATION_ID");
+            std::env::remove_var("ALGOLIA_API_KEY");
+            std::env::set_var("ALGOLIA_CRAWLER_USER_ID", "caller-user");
+            std::env::set_var("ALGOLIA_CRAWLER_API_KEY", "caller-key");
+        }
+        assert!(invocation_is_secretless(
+            &script_path,
+            script.as_bytes(),
+            &args(&["crawler", "list"]),
+        ));
+        unsafe {
+            std::env::remove_var("ALGOLIA_CRAWLER_USER_ID");
+            std::env::remove_var("ALGOLIA_CRAWLER_API_KEY");
+            std::env::set_var(
+                "ALGOLIA_ENV_ASSIGNMENTS",
+                "ALGOLIA_APPLICATION_ID=APP\nALGOLIA_API_KEY=vault-key",
+            );
+        }
+        assert!(!invocation_is_secretless(
+            &script_path,
+            script.as_bytes(),
+            &args(&["search", "INDEX"]),
+        ));
+        assert!(!invocation_is_secretless(
+            &script_path,
+            format!("{script}# changed\n").as_bytes(),
+            &args(&["describe"]),
+        ));
+
+        unsafe {
+            std::env::remove_var("ALGOLIA_ENV_ASSIGNMENTS");
+            std::env::remove_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR");
+        }
         let _ = fs::remove_dir_all(dir);
     }
 
