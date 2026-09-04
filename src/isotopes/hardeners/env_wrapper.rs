@@ -103,19 +103,6 @@ pub(crate) fn invocation_is_secretless(
     }
 }
 
-fn local_command(args: &[OsString], commands: &[&str]) -> bool {
-    args.is_empty()
-        || args.iter().any(|arg| arg == "--help" || arg == "-h")
-        || args.len() == 1
-            && args
-                .first()
-                .is_some_and(|arg| arg == "--version" || arg == "-V" || arg == "-v")
-        || args.first().is_some_and(|arg| {
-            arg.to_str()
-                .is_some_and(|command| commands.contains(&command))
-        })
-}
-
 fn npm_invocation_is_secretless(args: &[OsString]) -> bool {
     let Some(command) = args.first().and_then(|arg| arg.to_str()) else {
         return true;
