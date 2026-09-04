@@ -123,3 +123,71 @@ import Testing
     #expect(genericSecretGateRequestClassification(gateID: "node", arguments: ["stage", "publish"]) == .mutating)
     #expect(genericSecretGateRequestClassification(gateID: "node", arguments: ["ls"]) == .unknown)
 }
+
+@Test func sentryCLIPolicyCoversEveryTokenRequiringCommandShape() {
+    let readOnly = [
+        ["build", "download"],
+        ["deploys", "list"],
+        ["events", "--quiet", "list"],
+        ["info"],
+        ["issues", "list"],
+        ["logs", "list"],
+        ["monitors", "list"],
+        ["organizations", "list"],
+        ["projects", "list"],
+        ["--url", "https://sentry.example", "releases", "list"],
+        ["releases", "info", "1.2.3"],
+        ["releases", "deploys", "list", "1.2.3"],
+        ["repos", "list"],
+        ["snapshots", "download"],
+    ]
+    for arguments in readOnly {
+        #expect(genericSecretGateRequestClassification(
+            gateID: "sentry-cli", arguments: arguments
+        ) == .readOnly)
+    }
+
+    let mutating = [
+        ["build", "upload"],
+        ["build", "snapshots"],
+        ["code-mappings", "upload"],
+        ["dart-symbol-map", "upload"],
+        ["--header=X-Test:value", "debug-files", "upload", "example.dSYM"],
+        ["dif", "upload", "example.dSYM"],
+        ["difutil", "upload", "example.dSYM"],
+        ["deploys", "new"],
+        ["issues", "mute", "123"],
+        ["issues", "resolve", "123"],
+        ["issues", "unresolve", "123"],
+        ["proguard", "upload", "mapping.txt"],
+        ["react-native", "gradle"],
+        ["react-native", "xcode"],
+        ["releases", "archive", "1.2.3"],
+        ["releases", "delete", "1.2.3"],
+        ["releases", "finalize", "1.2.3"],
+        ["releases", "new", "1.2.3"],
+        ["releases", "restore", "1.2.3"],
+        ["releases", "set-commits", "1.2.3"],
+        ["releases", "deploys", "new", "1.2.3"],
+        ["snapshots", "upload"],
+        ["sourcemaps", "upload", "dist"],
+        ["upload-dif", "example.dSYM"],
+        ["upload-dsym", "example.dSYM"],
+        ["upload-proguard", "mapping.txt"],
+    ]
+    for arguments in mutating {
+        #expect(genericSecretGateRequestClassification(
+            gateID: "sentry-cli", arguments: arguments
+        ) == .mutating)
+    }
+
+    #expect(genericSecretGateRequestClassification(
+        gateID: "sentry-cli", arguments: ["projects", "list", "--help"]
+    ) == .readOnly)
+    #expect(genericSecretGateRequestClassification(
+        gateID: "sentry-cli", arguments: ["--auth-token=explicit", "projects", "list"]
+    ) == .secretDump)
+    #expect(genericSecretGateRequestClassification(
+        gateID: "sentry-cli", arguments: ["future-command"]
+    ) == .unknown)
+}

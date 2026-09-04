@@ -91,6 +91,7 @@ pub(crate) fn invocation_is_secretless(
     let args = &args[1..];
     match stub.command {
         "npm" => npm_invocation_is_secretless(args),
+        "sentry-cli" => sentry_cli_invocation_is_secretless(args),
         "pnpm" => {
             local_command(
                 args,
@@ -205,6 +206,92 @@ fn npm_invocation_is_secretless(args: &[OsString]) -> bool {
             | "v"
             | "whoami"
     )
+}
+
+fn sentry_cli_invocation_is_secretless(args: &[OsString]) -> bool {
+    // Reviewed against sentry-cli 3.7.0. Keep this positive: local commands,
+    // DSN-only envelope commands, and unrecognized future commands must not
+    // inherit the protected SENTRY_AUTH_TOKEN.
+    let Some(args) = args
+        .iter()
+        .map(|arg| arg.to_str())
+        .collect::<Option<Vec<_>>>()
+    else {
+        return true;
+    };
+    let before_passthrough = args.iter().take_while(|arg| **arg != "--");
+    if before_passthrough
+        .clone()
+        .any(|arg| matches!(*arg, "--help" | "-h" | "--version" | "-V"))
+        || before_passthrough
+            .clone()
+            .any(|arg| *arg == "--auth-token" || arg.starts_with("--auth-token="))
+    {
+        return true;
+    }
+    let no_upload = before_passthrough.clone().any(|arg| *arg == "--no-upload");
+
+    let Some((command_index, command)) = sentry_cli_positional(&args, 0, true) else {
+        return true;
+    };
+    let subcommand = sentry_cli_positional(&args, command_index + 1, false);
+    let requires_secret = match (command, subcommand.map(|(_, command)| command)) {
+        ("info" | "upload-dif" | "upload-dsym", _) => true,
+        ("upload-proguard", _) => !no_upload,
+        ("proguard", Some("upload")) => !no_upload,
+        ("build", Some("download" | "snapshots" | "upload"))
+        | ("code-mappings" | "dart-symbol-map", Some("upload"))
+        | ("debug-files" | "dif" | "difutil", Some("upload"))
+        | ("deploys", Some("list" | "new"))
+        | ("events", Some("list"))
+        | ("issues", Some("list" | "mute" | "resolve" | "unresolve"))
+        | ("logs", Some("list"))
+        | ("monitors", Some("list"))
+        | ("organizations", Some("list"))
+        | ("projects", Some("list"))
+        | ("react-native", Some("gradle" | "xcode"))
+        | ("repos", Some("list"))
+        | ("snapshots", Some("download" | "upload"))
+        | ("sourcemaps", Some("upload")) => true,
+        ("releases", Some("deploys")) => subcommand.is_some_and(|(index, _)| {
+            sentry_cli_positional(&args, index + 1, false)
+                .is_some_and(|(_, command)| matches!(command, "list" | "new"))
+        }),
+        (
+            "releases",
+            Some(
+                "archive" | "delete" | "finalize" | "info" | "list" | "new" | "restore"
+                | "set-commits",
+            ),
+        ) => true,
+        _ => false,
+    };
+    !requires_secret
+}
+
+fn sentry_cli_positional<'a>(
+    args: &'a [&'a str],
+    start: usize,
+    root: bool,
+) -> Option<(usize, &'a str)> {
+    let mut index = start;
+    while let Some(&arg) = args.get(index) {
+        if matches!(arg, "--header" | "--log-level" | "--auth-token") || root && arg == "--url" {
+            index += 2;
+        } else if matches!(arg, "--quiet" | "--silent" | "--allow-failure")
+            || arg.starts_with("--header=")
+            || arg.starts_with("--log-level=")
+            || arg.starts_with("--auth-token=")
+            || root && arg.starts_with("--url=")
+        {
+            index += 1;
+        } else if arg == "--" || arg.starts_with('-') {
+            return None;
+        } else {
+            return Some((index, arg));
+        }
+    }
+    None
 }
 
 fn secret_gate(wrapper: &EnvWrapper) -> SecretGateDescriptor {
@@ -978,6 +1065,118 @@ mod tests {
             &script_path,
             format!("{script}# changed\n").as_bytes(),
             &args(&["root"]),
+        ));
+
+        unsafe { std::env::remove_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR") };
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn sentry_cli_requests_its_token_only_for_reviewed_api_commands() {
+        let _guard = crate::global_test_env_lock().lock().unwrap();
+        let dir = temp_dir("env-wrapper-secretless-sentry-cli");
+        unsafe { std::env::set_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR", &dir) };
+        let script_path = dir.join("sentry-cli");
+        let script = stub_script(
+            &wrapper("sentry-cli").unwrap().primary,
+            Path::new("/opt/homebrew/bin/sentry-cli"),
+        );
+        let args = |values: &[&str]| {
+            std::iter::once(script_path.clone().into_os_string())
+                .chain(values.iter().map(OsString::from))
+                .collect::<Vec<_>>()
+        };
+
+        for invocation in [
+            vec![],
+            vec!["--help"],
+            vec!["--version"],
+            vec!["completions", "zsh"],
+            vec!["bash-hook"],
+            vec!["debug-files", "bundle-sources", "example.dSYM"],
+            vec!["debug-files", "check", "example.dSYM"],
+            vec!["debug-files", "bundle-jvm", "app.jar"],
+            vec!["debug-files", "find", "example.dSYM"],
+            vec!["debug-files", "print-sources", "example.dSYM"],
+            vec!["dif", "check", "example.dSYM"],
+            vec!["proguard", "uuid", "mapping.txt"],
+            vec!["proguard", "upload", "--no-upload", "mapping.txt"],
+            vec!["upload-proguard", "--no-upload", "mapping.txt"],
+            vec!["releases", "propose-version"],
+            vec!["sourcemaps", "inject", "dist"],
+            vec!["sourcemaps", "resolve", "bundle.js.map"],
+            vec!["snapshots", "diff", "base", "head"],
+            vec!["send-event", "--message", "broken"],
+            vec!["send-envelope", "event.envelope"],
+            vec!["monitors", "run", "nightly", "--", "sh", "--help"],
+            vec!["login"],
+            vec!["uninstall"],
+            vec!["update"],
+            vec!["future-command"],
+            vec!["releases", "future-command"],
+            vec!["projects", "list", "--help"],
+            vec!["projects", "--", "--help"],
+            vec!["--url", "https://sentry.example", "future-command"],
+            vec!["--auth-token", "explicit", "projects", "list"],
+            vec!["projects", "list", "--auth-token=explicit"],
+        ] {
+            assert!(
+                invocation_is_secretless(&script_path, script.as_bytes(), &args(&invocation)),
+                "sentry-cli {invocation:?}",
+            );
+        }
+        for invocation in [
+            vec!["build", "download"],
+            vec!["build", "upload"],
+            vec!["build", "snapshots"],
+            vec!["code-mappings", "upload"],
+            vec!["dart-symbol-map", "upload"],
+            vec!["projects", "list"],
+            vec!["--url", "https://sentry.example", "projects", "list"],
+            vec!["--header=X-Test:value", "events", "list"],
+            vec!["deploys", "list"],
+            vec!["deploys", "new"],
+            vec!["info"],
+            vec!["issues", "list"],
+            vec!["issues", "mute", "123"],
+            vec!["issues", "unresolve", "123"],
+            vec!["logs", "list"],
+            vec!["monitors", "list"],
+            vec!["organizations", "list"],
+            vec!["proguard", "upload", "mapping.txt"],
+            vec!["react-native", "gradle"],
+            vec!["releases", "list"],
+            vec!["releases", "archive", "1.2.3"],
+            vec!["releases", "delete", "1.2.3"],
+            vec!["releases", "finalize", "1.2.3"],
+            vec!["releases", "info", "1.2.3"],
+            vec!["releases", "new", "1.2.3"],
+            vec!["releases", "restore", "1.2.3"],
+            vec!["releases", "set-commits", "1.2.3"],
+            vec!["releases", "deploys", "list", "1.2.3"],
+            vec!["releases", "deploys", "new", "1.2.3"],
+            vec!["repos", "list"],
+            vec!["issues", "resolve", "123"],
+            vec!["debug-files", "upload", "example.dSYM"],
+            vec!["dif", "upload", "example.dSYM"],
+            vec!["difutil", "upload", "example.dSYM"],
+            vec!["sourcemaps", "upload", "dist"],
+            vec!["snapshots", "download"],
+            vec!["snapshots", "upload"],
+            vec!["react-native", "xcode"],
+            vec!["upload-dif", "example.dSYM"],
+            vec!["upload-dsym", "example.dSYM"],
+            vec!["upload-proguard", "mapping.txt"],
+        ] {
+            assert!(
+                !invocation_is_secretless(&script_path, script.as_bytes(), &args(&invocation)),
+                "sentry-cli {invocation:?}",
+            );
+        }
+        assert!(!invocation_is_secretless(
+            &script_path,
+            format!("{script}# changed\n").as_bytes(),
+            &args(&["completions", "zsh"]),
         ));
 
         unsafe { std::env::remove_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR") };

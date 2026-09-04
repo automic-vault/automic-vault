@@ -21,6 +21,7 @@ public func genericSecretGateRequestClassification(
     let words = arguments.map { $0.lowercased() }
     guard !words.isEmpty else { return .unknown }
     if gateID == "stripe" { return stripeRequestClassification(words) }
+    if gateID == "sentry-cli" { return sentryCLIRequestClassification(words) }
     if words == ["help"] || words == ["--help"] || words == ["version"] || words == ["--version"] {
         return .readOnly
     }
@@ -30,6 +31,45 @@ public func genericSecretGateRequestClassification(
     }
     for candidate in candidates {
         if policy.secretDump.contains(candidate) { return .secretDump }
+        if policy.readOnly.contains(candidate) { return .readOnly }
+        if policy.mutating.contains(candidate) { return .mutating }
+    }
+    return .unknown
+}
+
+private func sentryCLIRequestClassification(
+    _ arguments: [String]
+) -> SecretGateRequestClassification {
+    let optionsWithValues = ["--auth-token", "--header", "--log-level", "--url"]
+    var words: [String] = []
+    var index = 0
+    while index < arguments.count, words.count < 3 {
+        let argument = arguments[index]
+        if optionsWithValues.contains(argument) {
+            guard index + 1 < arguments.count else { return .unknown }
+            if argument == "--auth-token" { return .secretDump }
+            index += 2
+        } else if optionsWithValues.contains(where: { argument.hasPrefix("\($0)=") }) {
+            if argument.hasPrefix("--auth-token=") { return .secretDump }
+            index += 1
+        } else if ["--help", "-h", "--version", "-v"].contains(argument) {
+            return .readOnly
+        } else if ["--quiet", "--silent", "--allow-failure"].contains(argument) {
+            index += 1
+        } else if argument == "--" || argument.hasPrefix("-") {
+            return .unknown
+        } else {
+            words.append(argument)
+            index += 1
+        }
+    }
+    guard !words.isEmpty, let policy = secretGateCommandPolicies["sentry-cli"] else {
+        return .unknown
+    }
+    let candidates = (1...words.count).reversed().map {
+        words.prefix($0).joined(separator: " ")
+    }
+    for candidate in candidates {
         if policy.readOnly.contains(candidate) { return .readOnly }
         if policy.mutating.contains(candidate) { return .mutating }
     }
@@ -159,7 +199,10 @@ private let secretGateCommandPolicies: [String: SecretGateCommandPolicy] = [
     "qwen-code": .init("", "chat,run"),
     "runpodctl": .init("get,list", "create,remove,start,stop", secretDump: "config view"),
     "s3cmd": .init("ls,la,info,du", "put,get,del,rm,sync,cp,mv,mb,rb", secretDump: "--dump-config"),
-    "sentry-cli": .init("projects list,organizations list,releases list", "send-event,releases new,releases deploys new,upload-dif"),
+    "sentry-cli": .init(
+        "build download,deploys list,events list,info,issues list,logs list,monitors list,organizations list,projects list,releases info,releases list,releases deploys list,repos list,snapshots download",
+        "build upload,build snapshots,code-mappings upload,dart-symbol-map upload,debug-files upload,dif upload,difutil upload,deploys new,issues mute,issues resolve,issues unresolve,proguard upload,react-native gradle,react-native xcode,releases archive,releases delete,releases finalize,releases new,releases restore,releases set-commits,releases deploys new,snapshots upload,sourcemaps upload,upload-dif,upload-dsym,upload-proguard"
+    ),
     "snowflake-cli": .init("object list,object describe,connection test", "object create,object drop,stage copy"),
     "snyk": .init("", "monitor,auth"),
     "transifex-cli": .init("status", "pull,push"),
