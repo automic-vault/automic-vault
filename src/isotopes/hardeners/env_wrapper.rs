@@ -91,6 +91,7 @@ pub(crate) fn invocation_is_secretless(
     let args = &args[1..];
     match stub.command {
         "npm" => npm_invocation_is_secretless(args),
+        "tx" => transifex_cli_invocation_is_secretless(args),
         "pnpm" => {
             local_command(
                 args,
@@ -205,6 +206,121 @@ fn npm_invocation_is_secretless(args: &[OsString]) -> bool {
             | "v"
             | "whoami"
     )
+}
+
+fn transifex_cli_invocation_is_secretless(args: &[OsString]) -> bool {
+    let Some(args) = args
+        .iter()
+        .map(|arg| arg.to_str())
+        .collect::<Option<Vec<_>>>()
+    else {
+        return true;
+    };
+    let args = &args[..args
+        .iter()
+        .position(|arg| *arg == "--")
+        .unwrap_or(args.len())];
+
+    if args
+        .iter()
+        .any(|arg| matches!(*arg, "--help" | "-h" | "--version" | "-v"))
+    {
+        return true;
+    }
+    let Some((command_index, caller_supplied_authority)) = transifex_root_command(args) else {
+        return true;
+    };
+    if caller_supplied_authority
+        || ["TX_TOKEN", "TX_HOSTNAME"]
+            .iter()
+            .any(|name| std::env::var_os(name).is_some_and(|value| !value.is_empty()))
+    {
+        return true;
+    }
+
+    let words = &args[command_index..];
+    !match words[0] {
+        "merge" | "push" | "pull" | "delete" | "status" => true,
+        "add" | "a" => transifex_add_requires_secret(&words[1..]),
+        _ => false,
+    }
+}
+
+// Reviewed against Transifex CLI v1.6.17 (30dac142). New commands remain
+// tokenless until their use of the migrated credential is reviewed.
+fn transifex_root_command(args: &[&str]) -> Option<(usize, bool)> {
+    let mut index = 0;
+    let mut caller_supplied_authority = false;
+    while index < args.len() {
+        let argument = args[index];
+        if matches!(argument, "--token" | "-t") {
+            let value = *args.get(index + 1)?;
+            caller_supplied_authority |= !value.is_empty();
+            index += 2;
+        } else if let Some(value) = argument.strip_prefix("--token=") {
+            caller_supplied_authority |= !value.is_empty();
+            index += 1;
+        } else if matches!(argument, "--hostname" | "-H") {
+            let value = *args.get(index + 1)?;
+            caller_supplied_authority |= !value.is_empty();
+            index += 2;
+        } else if let Some(value) = argument.strip_prefix("--hostname=") {
+            caller_supplied_authority |= !value.is_empty();
+            index += 1;
+        } else if let Some(value) = argument.strip_prefix("-H=") {
+            caller_supplied_authority |= !value.is_empty();
+            index += 1;
+        } else if matches!(argument, "--root-config" | "--config" | "-c" | "--cacert") {
+            args.get(index + 1)?;
+            index += 2;
+        } else if ["--root-config=", "--config=", "-c=", "--cacert="]
+            .iter()
+            .any(|prefix| argument.starts_with(prefix))
+        {
+            index += 1;
+        } else if argument.starts_with('-') {
+            return None;
+        } else {
+            return Some((index, caller_supplied_authority));
+        }
+    }
+    None
+}
+
+fn transifex_add_requires_secret(args: &[&str]) -> bool {
+    const LOCAL_OPTIONS: &[&str] = &[
+        "--organization",
+        "--project",
+        "--resource",
+        "--file-filter",
+        "--type",
+    ];
+    let mut index = 0;
+    let mut has_local_option = false;
+    let mut first_positional = None;
+    while index < args.len() {
+        let argument = args[index];
+        if LOCAL_OPTIONS.contains(&argument) || argument == "--resource-name" {
+            has_local_option |= LOCAL_OPTIONS.contains(&argument);
+            if args.get(index + 1).is_none() {
+                return false;
+            }
+            index += 2;
+        } else if LOCAL_OPTIONS
+            .iter()
+            .any(|option| argument.starts_with(&format!("{option}=")))
+            || argument.starts_with("--resource-name=")
+        {
+            has_local_option |= !argument.starts_with("--resource-name=");
+            index += 1;
+        } else if argument.starts_with('-') {
+            return false;
+        } else {
+            first_positional.get_or_insert(argument);
+            index += 1;
+        }
+    }
+    first_positional == Some("remote") || !has_local_option
 }
 
 fn secret_gate(wrapper: &EnvWrapper) -> SecretGateDescriptor {
@@ -981,6 +1097,98 @@ mod tests {
         ));
 
         unsafe { std::env::remove_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR") };
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn transifex_requests_secrets_only_for_commands_that_consume_its_token() {
+        let _guard = crate::global_test_env_lock().lock().unwrap();
+        let dir = temp_dir("env-wrapper-secretless-transifex");
+        let previous_authority =
+            ["TX_TOKEN", "TX_HOSTNAME"].map(|name| (name, std::env::var_os(name)));
+        unsafe {
+            std::env::set_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR", &dir);
+            std::env::remove_var("TX_TOKEN");
+            std::env::remove_var("TX_HOSTNAME");
+        }
+        let script_path = dir.join("tx");
+        let script = stub_script(
+            &wrapper("transifex-cli").unwrap().primary,
+            Path::new("/opt/homebrew/bin/tx"),
+        );
+        let invokes_secretlessly = |values: &[&str]| {
+            let invocation = std::iter::once(script_path.clone().into_os_string())
+                .chain(values.iter().map(OsString::from))
+                .collect::<Vec<_>>();
+            invocation_is_secretless(&script_path, script.as_bytes(), &invocation)
+        };
+
+        for command in [
+            vec![],
+            vec!["help", "push"],
+            vec!["push", "--help"],
+            vec!["--version"],
+            vec!["init"],
+            vec!["update", "--check"],
+            vec!["migrate"],
+            vec!["mg"],
+            vec!["add", "messages.po", "--organization", "example"],
+            vec!["a", "messages.po", "--type=PO"],
+            vec!["--hostname=https://example.invalid", "pull"],
+            vec!["-H", "https://example.invalid", "status"],
+            vec!["future-command"],
+            vec!["--future-option", "push"],
+            vec!["--", "push"],
+        ] {
+            assert!(invokes_secretlessly(&command), "tx {command:?}");
+        }
+        for command in [
+            vec!["status"],
+            vec!["--config", ".tx/config", "status"],
+            vec!["merge", "project.resource"],
+            vec!["push"],
+            vec!["push", "--", "--help"],
+            vec!["pull"],
+            vec!["delete", "project.resource"],
+            vec!["add"],
+            vec!["a", "messages.po"],
+            vec!["add", "--organization", "example", "remote"],
+            vec!["add", "remote", "https://app.transifex.com/o/p/dashboard/"],
+        ] {
+            assert!(!invokes_secretlessly(&command), "tx {command:?}");
+        }
+
+        for command in [
+            vec!["--token", "caller-token", "status"],
+            vec!["--token=caller-token", "push"],
+        ] {
+            assert!(invokes_secretlessly(&command), "tx {command:?}");
+        }
+        unsafe { std::env::set_var("TX_TOKEN", "caller-token") };
+        assert!(invokes_secretlessly(&["pull"]));
+        unsafe {
+            std::env::remove_var("TX_TOKEN");
+            std::env::set_var("TX_HOSTNAME", "https://example.invalid");
+        }
+        assert!(invokes_secretlessly(&["status"]));
+
+        let altered_script = format!("{script}# changed\n");
+        let invocation = [script_path.clone().into_os_string(), OsString::from("init")];
+        assert!(!invocation_is_secretless(
+            &script_path,
+            altered_script.as_bytes(),
+            &invocation,
+        ));
+
+        unsafe {
+            for (name, value) in previous_authority {
+                match value {
+                    Some(value) => std::env::set_var(name, value),
+                    None => std::env::remove_var(name),
+                }
+            }
+            std::env::remove_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR");
+        }
         let _ = fs::remove_dir_all(dir);
     }
 

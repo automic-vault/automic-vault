@@ -123,3 +123,42 @@ import Testing
     #expect(genericSecretGateRequestClassification(gateID: "node", arguments: ["stage", "publish"]) == .mutating)
     #expect(genericSecretGateRequestClassification(gateID: "node", arguments: ["ls"]) == .unknown)
 }
+
+@Test func transifexPolicyClassifiesOnlyRequestsThatReceiveTheMigratedToken() {
+    let readOnly = [
+        ["status"],
+        ["--config", ".tx/config", "status"],
+        ["-H", "https://rest.api.transifex.com", "status"],
+        ["push", "--help"],
+    ]
+    for arguments in readOnly {
+        #expect(genericSecretGateRequestClassification(gateID: "transifex-cli", arguments: arguments) == .readOnly)
+    }
+
+    let mutating = [
+        ["merge", "project.resource"],
+        ["--hostname=https://rest.api.transifex.com", "push"],
+        ["pull"],
+        ["delete", "project.resource"],
+        ["add"],
+        ["a", "messages.po"],
+        ["add", "--organization", "example", "remote"],
+        ["add", "remote", "https://app.transifex.com/o/p/dashboard/"],
+        ["push", "--", "--help"],
+    ]
+    for arguments in mutating {
+        #expect(genericSecretGateRequestClassification(gateID: "transifex-cli", arguments: arguments) == .mutating)
+    }
+
+    for arguments in [
+        ["init"],
+        ["update", "--check"],
+        ["migrate"],
+        ["add", "messages.po", "--organization", "example"],
+        ["future-command"],
+        ["--future-option", "push"],
+        ["--", "push"],
+    ] {
+        #expect(genericSecretGateRequestClassification(gateID: "transifex-cli", arguments: arguments) == .unknown)
+    }
+}
