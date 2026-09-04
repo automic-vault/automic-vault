@@ -90,6 +90,7 @@ pub(crate) fn invocation_is_secretless(
     }
     let args = &args[1..];
     match stub.command {
+        "gptcommit" => gptcommit_invocation_is_secretless(args),
         "npm" => npm_invocation_is_secretless(args),
         "pnpm" => {
             local_command(
@@ -118,6 +119,60 @@ pub(crate) fn invocation_is_secretless(
         ),
         _ => false,
     }
+}
+
+// Reviewed against zurawiki/gptcommit v0.5.17. Configuration and hook
+// management never consume the OpenAI key. The hook only reaches its LLM
+// client for a new commit or an amend enabled by configuration.
+fn gptcommit_invocation_is_secretless(args: &[OsString]) -> bool {
+    let Some(args) = args
+        .iter()
+        .map(|arg| arg.to_str())
+        .collect::<Option<Vec<_>>>()
+    else {
+        return true;
+    };
+    let option_end = args
+        .iter()
+        .position(|arg| *arg == "--")
+        .unwrap_or(args.len());
+    let args = &args[..option_end];
+    if args
+        .iter()
+        .any(|arg| matches!(*arg, "--help" | "-h" | "--version" | "-V"))
+        || ["GPTCOMMIT__OPENAI__API_KEY", "OPENAI_API_KEY"]
+            .iter()
+            .any(|key| std::env::var_os(key).is_some_and(|value| !value.is_empty()))
+        || std::env::var_os("GPTCOMMIT__MODEL_PROVIDER")
+            .is_some_and(|value| value == "tester-foobar")
+    {
+        return true;
+    }
+
+    let Some(command_index) = args
+        .iter()
+        .position(|arg| !matches!(*arg, "--verbose" | "-v"))
+    else {
+        return true;
+    };
+    if args[command_index] != "prepare-commit-msg" {
+        return true;
+    }
+    let args = &args[command_index + 1..];
+    let has_commit_message_file = option_value(args, "--commit-msg-file").is_some();
+    let commit_source = option_value(args, "--commit-source");
+    !(has_commit_message_file && matches!(commit_source, Some("" | "commit")))
+}
+
+fn option_value<'a>(args: &'a [&str], option: &str) -> Option<&'a str> {
+    args.iter().enumerate().find_map(|(index, argument)| {
+        if *argument == option {
+            return args.get(index + 1).copied();
+        }
+        argument
+            .strip_prefix(option)
+            .and_then(|value| value.strip_prefix('='))
+    })
 }
 
 fn local_command(args: &[OsString], commands: &[&str]) -> bool {
@@ -981,6 +1036,136 @@ mod tests {
         ));
 
         unsafe { std::env::remove_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR") };
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn gptcommit_requests_secrets_only_when_the_hook_can_call_the_llm() {
+        let _guard = crate::global_test_env_lock().lock().unwrap();
+        let dir = temp_dir("env-wrapper-secretless-gptcommit");
+        let previous_gptcommit_key = std::env::var_os("GPTCOMMIT__OPENAI__API_KEY");
+        let previous_openai_key = std::env::var_os("OPENAI_API_KEY");
+        let previous_model_provider = std::env::var_os("GPTCOMMIT__MODEL_PROVIDER");
+        unsafe {
+            std::env::set_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR", &dir);
+            std::env::remove_var("GPTCOMMIT__OPENAI__API_KEY");
+            std::env::remove_var("OPENAI_API_KEY");
+            std::env::remove_var("GPTCOMMIT__MODEL_PROVIDER");
+        }
+        let script_path = dir.join("gptcommit");
+        let script = stub_script(
+            &wrapper("gptcommit").unwrap().primary,
+            Path::new("/opt/homebrew/bin/gptcommit"),
+        );
+        let args = |values: &[&str]| {
+            std::iter::once(script_path.clone().into_os_string())
+                .chain(values.iter().map(OsString::from))
+                .collect::<Vec<_>>()
+        };
+
+        for command in [
+            vec![],
+            vec!["--help"],
+            vec!["--version"],
+            vec!["help", "prepare-commit-msg"],
+            vec!["install"],
+            vec!["uninstall"],
+            vec!["config", "keys"],
+            vec!["config", "get", "openai.api_key"],
+            vec!["config", "set", "output.lang", "fr"],
+            vec!["future-command"],
+            vec!["--verbose", "config", "list"],
+            vec!["prepare-commit-msg", "--help"],
+            vec!["prepare-commit-msg", "--commit-source", "message"],
+            vec![
+                "-v",
+                "prepare-commit-msg",
+                "--commit-msg-file=/tmp/message",
+                "--commit-source=merge",
+            ],
+            vec![
+                "prepare-commit-msg",
+                "--commit-msg-file",
+                "/tmp/message",
+                "--commit-source",
+                "squash",
+            ],
+            vec![
+                "config",
+                "set",
+                "prompt.commit_title",
+                "--",
+                "arbitrary text",
+            ],
+        ] {
+            assert!(
+                invocation_is_secretless(&script_path, script.as_bytes(), &args(&command)),
+                "gptcommit {command:?}",
+            );
+        }
+        for command in [
+            vec![
+                "prepare-commit-msg",
+                "--commit-msg-file",
+                "/tmp/message",
+                "--commit-source",
+                "",
+            ],
+            vec![
+                "--verbose",
+                "prepare-commit-msg",
+                "--commit-source=commit",
+                "--commit-msg-file=/tmp/message",
+            ],
+        ] {
+            assert!(
+                !invocation_is_secretless(&script_path, script.as_bytes(), &args(&command)),
+                "gptcommit {command:?}",
+            );
+        }
+
+        unsafe { std::env::set_var("OPENAI_API_KEY", "already-provided") };
+        let credentialed = args(&[
+            "prepare-commit-msg",
+            "--commit-msg-file=/tmp/message",
+            "--commit-source=commit",
+        ]);
+        assert!(invocation_is_secretless(
+            &script_path,
+            script.as_bytes(),
+            &credentialed,
+        ));
+        assert!(!invocation_is_secretless(
+            &script_path,
+            format!("{script}# changed\n").as_bytes(),
+            &credentialed,
+        ));
+
+        unsafe {
+            std::env::remove_var("OPENAI_API_KEY");
+            std::env::set_var("GPTCOMMIT__MODEL_PROVIDER", "tester-foobar");
+        }
+        assert!(invocation_is_secretless(
+            &script_path,
+            script.as_bytes(),
+            &credentialed,
+        ));
+
+        unsafe {
+            match previous_gptcommit_key {
+                Some(value) => std::env::set_var("GPTCOMMIT__OPENAI__API_KEY", value),
+                None => std::env::remove_var("GPTCOMMIT__OPENAI__API_KEY"),
+            }
+            match previous_openai_key {
+                Some(value) => std::env::set_var("OPENAI_API_KEY", value),
+                None => std::env::remove_var("OPENAI_API_KEY"),
+            }
+            match previous_model_provider {
+                Some(value) => std::env::set_var("GPTCOMMIT__MODEL_PROVIDER", value),
+                None => std::env::remove_var("GPTCOMMIT__MODEL_PROVIDER"),
+            }
+            std::env::remove_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR");
+        }
         let _ = fs::remove_dir_all(dir);
     }
 

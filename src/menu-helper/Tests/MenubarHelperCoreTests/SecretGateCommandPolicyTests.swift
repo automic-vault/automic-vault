@@ -18,7 +18,7 @@ import Testing
         "flyctl": ["apps", "list"],
         "glab": ["repo", "view"],
         "gotify": ["health"],
-        "gptcommit": ["--version"],
+        "gptcommit": ["config", "keys"],
         "grafanactl": ["resources", "list"],
         "heroku": ["apps"],
         "hcloud": ["server", "list"],
@@ -70,6 +70,19 @@ import Testing
     #expect(genericSecretGateRequestClassification(gateID: "flyctl", arguments: ["future-command"]) == .unknown)
     #expect(genericSecretGateRequestClassification(gateID: "future-hardener", arguments: ["list"]) == .unknown)
     #expect(genericSecretGateRequestClassification(gateID: "flyctl", arguments: []) == .unknown)
+}
+
+@Test func gptcommitPolicyClassifiesReviewedCommands() {
+    #expect(genericSecretGateRequestClassification(gateID: "gptcommit", arguments: ["config", "keys"]) == .readOnly)
+    #expect(genericSecretGateRequestClassification(gateID: "gptcommit", arguments: ["install"]) == .mutating)
+    #expect(genericSecretGateRequestClassification(
+        gateID: "gptcommit",
+        arguments: ["prepare-commit-msg", "--commit-msg-file", "/tmp/message", "--commit-source", ""]
+    ) == .mutating)
+    #expect(genericSecretGateRequestClassification(
+        gateID: "gptcommit",
+        arguments: ["config", "get", "openai.api_key"]
+    ) == .secretDump)
 }
 
 @Test func stripePolicyClassifiesGeneratedBuiltInAndPluginCommands() {

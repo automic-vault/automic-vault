@@ -139,7 +139,11 @@ private let secretGateCommandPolicies: [String: SecretGateCommandPolicy] = [
     "flyctl": .init("status,apps list,machine list,machine status,secrets list,auth whoami", "deploy,scale,apps create,apps destroy,machine run,machine destroy,secrets set,secrets unset,secrets import", secretDump: "auth token"),
     "glab": .init("repo view,repo list,issue list,issue view,mr list,mr view,pipeline list,pipeline view", "repo create,repo delete,issue create,mr create,pipeline run", secretDump: "auth token,auth status --show-token"),
     "gotify": .init("health,version", "push"),
-    "gptcommit": .init("", "prepare,commit"),
+    "gptcommit": .init(
+        "config keys,config get",
+        "install,uninstall,config set,config delete,prepare-commit-msg",
+        secretDump: "config list,config get openai.api_key"
+    ),
     "grafanactl": .init("resources get,resources list", "resources create,resources delete,resources apply"),
     "heroku": .init("apps,apps info,ps,addons", "apps create,apps destroy,config set,config unset,ps scale", secretDump: "auth token,config"),
     "hcloud": .init("server list,server describe,network list,network describe", "server create,server delete,network create,network delete"),
