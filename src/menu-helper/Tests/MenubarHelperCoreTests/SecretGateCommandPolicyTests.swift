@@ -123,3 +123,50 @@ import Testing
     #expect(genericSecretGateRequestClassification(gateID: "node", arguments: ["stage", "publish"]) == .mutating)
     #expect(genericSecretGateRequestClassification(gateID: "node", arguments: ["ls"]) == .unknown)
 }
+
+@Test func pulumiPolicyUnderstandsRootOptionsAndLocalCommands() {
+    #expect(genericSecretGateRequestClassification(
+        gateID: "pulumi",
+        arguments: ["--cwd", "/tmp", "stack", "list"]
+    ) == .readOnly)
+    #expect(genericSecretGateRequestClassification(
+        gateID: "pulumi",
+        arguments: ["--color=never", "up"]
+    ) == .mutating)
+    #expect(genericSecretGateRequestClassification(
+        gateID: "pulumi",
+        arguments: ["config", "get", "--show-secrets"]
+    ) == .secretDump)
+    #expect(genericSecretGateRequestClassification(
+        gateID: "pulumi",
+        arguments: ["up", "--help"]
+    ) == .readOnly)
+    #expect(genericSecretGateRequestClassification(
+        gateID: "pulumi",
+        arguments: ["up", "--help=true"]
+    ) == .readOnly)
+    #expect(genericSecretGateRequestClassification(
+        gateID: "pulumi",
+        arguments: ["up", "--help=false"]
+    ) == .mutating)
+    #expect(genericSecretGateRequestClassification(
+        gateID: "pulumi",
+        arguments: ["about", "env"]
+    ) == .readOnly)
+    #expect(genericSecretGateRequestClassification(
+        gateID: "pulumi",
+        arguments: ["plugin"]
+    ) == .readOnly)
+    #expect(genericSecretGateRequestClassification(
+        gateID: "pulumi",
+        arguments: ["stack", "unselect"]
+    ) == .mutating)
+    #expect(genericSecretGateRequestClassification(
+        gateID: "pulumi",
+        arguments: ["--future-option", "up"]
+    ) == .unknown)
+    #expect(genericSecretGateRequestClassification(
+        gateID: "pulumi",
+        arguments: ["--future-option=true", "up"]
+    ) == .unknown)
+}

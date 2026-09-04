@@ -98,6 +98,7 @@ pub(crate) fn invocation_is_secretless(
             ) || args.first().is_some_and(|arg| arg == "store")
                 && args.get(1).is_some_and(|arg| arg == "path")
         }
+        "pulumi" => pulumi_invocation_is_secretless(args),
         "fly" | "flyctl" => local_command(args, &["completion", "help", "version"]),
         "k6" => local_command(
             args,
@@ -118,6 +119,219 @@ pub(crate) fn invocation_is_secretless(
         ),
         _ => false,
     }
+}
+
+fn pulumi_invocation_is_secretless(args: &[OsString]) -> bool {
+    let Some(args) = args
+        .iter()
+        .map(|arg| arg.to_str())
+        .collect::<Option<Vec<_>>>()
+    else {
+        return true;
+    };
+    let option_end = args
+        .iter()
+        .position(|argument| *argument == "--")
+        .unwrap_or(args.len());
+    let option_args = &args[..option_end];
+    if pulumi_boolean_flag(option_args, "--help", "-h")
+        || pulumi_boolean_flag(option_args, "--version", "")
+    {
+        return true;
+    }
+
+    let Some(command_index) = pulumi_command_index(option_args) else {
+        return true;
+    };
+    let command_args = &option_args[command_index..];
+    let command = command_args[0];
+
+    if command_args.len() == 1
+        && matches!(
+            command,
+            "api"
+                | "deployment"
+                | "env"
+                | "insights"
+                | "org"
+                | "package"
+                | "plugin"
+                | "policy"
+                | "project"
+                | "schema"
+                | "state"
+                | "template"
+        )
+    {
+        return true;
+    }
+
+    // Reviewed against Pulumi v3.261.0. Only commands that may consume the
+    // Pulumi Cloud token are positive matches; unknown future commands remain
+    // tokenless.
+    if !matches!(
+        command,
+        "about"
+            | "api"
+            | "cancel"
+            | "config"
+            | "console"
+            | "convert"
+            | "deployment"
+            | "destroy"
+            | "do"
+            | "env"
+            | "import"
+            | "insights"
+            | "install"
+            | "login"
+            | "logs"
+            | "neo"
+            | "new"
+            | "org"
+            | "package"
+            | "plugin"
+            | "policy"
+            | "preview"
+            | "project"
+            | "refresh"
+            | "schema"
+            | "stack"
+            | "state"
+            | "template"
+            | "up"
+            | "watch"
+            | "whoami"
+    ) {
+        return true;
+    }
+
+    match command_args {
+        ["about", "env", ..]
+        | ["stack", "unselect", ..]
+        | ["plugin", "remove" | "rm" | "delete", ..]
+        | ["package", "new" | "create" | "setup", ..]
+        | ["policy", "new" | "create" | "setup", ..] => true,
+        ["plugin", "list" | "ls", rest @ ..] => !pulumi_boolean_flag(rest, "--project", "-p"),
+        ["new", rest @ ..] => {
+            pulumi_boolean_flag(rest, "--generate-only", "-g")
+                || pulumi_boolean_flag(rest, "--list-templates", "")
+        }
+        ["login", rest @ ..] => pulumi_login_is_secretless(rest),
+        _ => false,
+    }
+}
+
+fn pulumi_command_index(args: &[&str]) -> Option<usize> {
+    const BOOLEAN_OPTIONS: &[&str] = &[
+        "--disable-integrity-checking",
+        "--emoji",
+        "--fully-qualify-stack-names",
+        "--help",
+        "--logflow",
+        "--logtostderr",
+        "--non-interactive",
+        "--version",
+        "-Q",
+        "-e",
+        "-h",
+    ];
+    const VALUE_OPTIONS: &[&str] = &[
+        "--color",
+        "--cwd",
+        "--memprofilerate",
+        "--otel-traces",
+        "--profiling",
+        "--tracing",
+        "--tracing-header",
+        "--verbose",
+        "-C",
+        "-v",
+    ];
+
+    let mut index = 0;
+    while let Some(argument) = args.get(index) {
+        if !argument.starts_with('-') {
+            return Some(index);
+        }
+        if BOOLEAN_OPTIONS.contains(argument)
+            || argument.split_once('=').is_some_and(|(name, _)| {
+                BOOLEAN_OPTIONS.contains(&name) || VALUE_OPTIONS.contains(&name)
+            })
+            || ["-C", "-v"]
+                .iter()
+                .any(|option| argument.starts_with(option) && argument.len() > option.len())
+        {
+            index += 1;
+        } else if VALUE_OPTIONS.contains(argument) {
+            args.get(index + 1)?;
+            index += 2;
+        } else {
+            return None;
+        }
+    }
+    None
+}
+
+fn pulumi_boolean_flag(args: &[&str], long: &str, short: &str) -> bool {
+    args.iter().any(|argument| {
+        *argument == long
+            || !short.is_empty() && *argument == short
+            || argument
+                .strip_prefix(long)
+                .is_some_and(|value| value == "=true")
+            || !short.is_empty()
+                && argument
+                    .strip_prefix(short)
+                    .is_some_and(|value| value == "=true")
+    })
+}
+
+fn pulumi_login_is_secretless(args: &[&str]) -> bool {
+    if pulumi_boolean_flag(args, "--local", "-l") {
+        return true;
+    }
+
+    let mut backend = None;
+    let mut explicit_oidc = false;
+    let mut index = 0;
+    while let Some(argument) = args.get(index) {
+        if let Some(value) = argument.strip_prefix("--cloud-url=") {
+            backend = Some(value);
+        } else if let Some(value) = argument.strip_prefix("-c=").or_else(|| {
+            argument
+                .strip_prefix("-c")
+                .filter(|value| !value.is_empty())
+        }) {
+            backend = Some(value);
+        } else if let Some(value) = argument.strip_prefix("--oidc-token=") {
+            explicit_oidc = !value.is_empty();
+        } else if matches!(*argument, "--cloud-url" | "-c" | "--oidc-token") {
+            let value = args.get(index + 1).copied().unwrap_or_default();
+            if *argument == "--oidc-token" {
+                explicit_oidc = !value.is_empty();
+            } else {
+                backend = Some(value);
+            }
+            index += 1;
+        } else if matches!(
+            *argument,
+            "--default-org" | "--oidc-expiration" | "--oidc-org" | "--oidc-team" | "--oidc-user"
+        ) {
+            index += 1;
+        } else if !argument.starts_with('-') && backend.is_none() {
+            backend = Some(argument);
+        }
+        index += 1;
+    }
+
+    explicit_oidc || backend.is_some_and(pulumi_backend_is_diy)
+}
+
+fn pulumi_backend_is_diy(backend: &str) -> bool {
+    ["file://", "s3://", "gs://", "azblob://", "postgres://"]
+        .iter()
+        .any(|scheme| backend.starts_with(scheme))
 }
 
 fn local_command(args: &[OsString], commands: &[&str]) -> bool {
@@ -979,6 +1193,89 @@ mod tests {
             format!("{script}# changed\n").as_bytes(),
             &args(&["root"]),
         ));
+
+        unsafe { std::env::remove_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR") };
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn pulumi_requests_secrets_only_for_reviewed_cloud_commands() {
+        let _guard = crate::global_test_env_lock().lock().unwrap();
+        let dir = temp_dir("env-wrapper-secretless-pulumi");
+        unsafe { std::env::set_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR", &dir) };
+        let script_path = dir.join("pulumi");
+        let script = stub_script(
+            &wrapper("pulumi").unwrap().primary,
+            Path::new("/opt/homebrew/bin/pulumi"),
+        );
+        let args = |values: &[&str]| {
+            std::iter::once(script_path.clone().into_os_string())
+                .chain(values.iter().map(OsString::from))
+                .collect::<Vec<_>>()
+        };
+
+        for command in [
+            vec![],
+            vec!["--help"],
+            vec!["up", "--help"],
+            vec!["up", "--help=true"],
+            vec!["--version"],
+            vec!["version"],
+            vec!["logout"],
+            vec!["about", "env"],
+            vec!["gen-completion", "zsh"],
+            vec!["view-trace", "trace.json"],
+            vec!["stack", "unselect"],
+            vec!["plugin", "list"],
+            vec!["plugin"],
+            vec!["state"],
+            vec!["api"],
+            vec!["plugin", "remove", "resource", "aws"],
+            vec!["package", "new", "component-nodejs"],
+            vec!["policy", "setup", "aws-typescript"],
+            vec!["new", "--generate-only", "aws-typescript"],
+            vec!["new", "-g=true", "aws-typescript"],
+            vec!["new", "--list-templates"],
+            vec!["login", "--local"],
+            vec!["login", "file://~"],
+            vec!["login", "--cloud-url", "s3://pulumi-state"],
+            vec!["login", "-cs3://pulumi-state"],
+            vec!["login", "--oidc-token=provided-token"],
+            vec!["--cwd", "/tmp", "version"],
+            vec!["--future-option", "up"],
+            vec!["--future-option=true", "up"],
+            vec!["future-command", "--", "arbitrary", "arguments"],
+        ] {
+            assert!(invocation_is_secretless(
+                &script_path,
+                script.as_bytes(),
+                &args(&command),
+            ));
+        }
+
+        for command in [
+            vec!["up"],
+            vec!["preview"],
+            vec!["whoami"],
+            vec!["config", "get", "region"],
+            vec!["stack", "list"],
+            vec!["--cwd", "/tmp", "stack", "list"],
+            vec!["plugin", "list", "--project"],
+            vec!["plugin", "install", "resource", "aws"],
+            vec!["new", "aws-typescript"],
+            vec!["login"],
+            vec!["login", "https://api.pulumi.com"],
+            vec!["login", "--local=false"],
+            vec!["login", "--oidc-token="],
+            vec!["about"],
+            vec!["up", "--help=false"],
+        ] {
+            assert!(!invocation_is_secretless(
+                &script_path,
+                script.as_bytes(),
+                &args(&command),
+            ));
+        }
 
         unsafe { std::env::remove_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR") };
         let _ = fs::remove_dir_all(dir);
