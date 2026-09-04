@@ -101,6 +101,10 @@ pub(super) fn names() -> impl Iterator<Item = &'static str> {
     MIGRATIONS.iter().map(|(name, _)| *name)
 }
 
+pub(super) fn virustotal_default_config_is_safe_for_api_key() -> bool {
+    virustotal_cli::default_config_is_safe_for_api_key()
+}
+
 #[unsafe(no_mangle)]
 unsafe extern "C" fn isotope_store_generic_password_json(
     service: *const std::ffi::c_char,

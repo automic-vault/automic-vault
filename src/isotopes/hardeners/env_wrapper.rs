@@ -91,6 +91,7 @@ pub(crate) fn invocation_is_secretless(
     let args = &args[1..];
     match stub.command {
         "npm" => npm_invocation_is_secretless(args),
+        "vt" => virustotal_invocation_is_secretless(args),
         "pnpm" => {
             local_command(
                 args,
@@ -118,6 +119,130 @@ pub(crate) fn invocation_is_secretless(
         ),
         _ => false,
     }
+}
+
+// Reviewed against vt-cli v1.3.1. Unknown command paths remain tokenless: a
+// future command must not receive the protected API key until it is reviewed.
+fn virustotal_invocation_is_secretless(args: &[OsString]) -> bool {
+    let Some(args) = args
+        .iter()
+        .map(|argument| argument.to_str())
+        .collect::<Option<Vec<_>>>()
+    else {
+        return true;
+    };
+    let args = args
+        .split(|argument| *argument == "--")
+        .next()
+        .unwrap_or_default();
+    if args.is_empty()
+        || args
+            .iter()
+            .any(|argument| matches!(*argument, "-h" | "--help"))
+        || virustotal_invocation_has_caller_api_key(args)
+        || std::env::var_os("VTCLI_APIKEY").is_some_and(|value| !value.is_empty())
+        || virustotal_invocation_selects_custom_host(args)
+    {
+        return true;
+    }
+
+    let Some(command) = virustotal_command(args) else {
+        return true;
+    };
+    let requires_api_key = matches!(
+        command,
+        "analysis"
+            | "an"
+            | "collection"
+            | "domain"
+            | "download"
+            | "dl"
+            | "file"
+            | "group"
+            | "hunting"
+            | "ht"
+            | "iocstream"
+            | "is"
+            | "ip"
+            | "meta"
+            | "monitor"
+            | "monitorpartner"
+            | "retrohunt"
+            | "rh"
+            | "scan"
+            | "search"
+            | "threatprofile"
+            | "url"
+            | "user"
+    );
+    !requires_api_key
+        || !(virustotal_invocation_selects_official_host(args)
+            || super::migrations::virustotal_default_config_is_safe_for_api_key())
+}
+
+fn virustotal_command<'a>(args: &'a [&str]) -> Option<&'a str> {
+    let options_with_values = ["--apikey", "-k", "--format", "--host", "--proxy"];
+    let mut index = 0;
+    while let Some(argument) = args.get(index) {
+        if options_with_values.contains(argument) {
+            index += 2;
+        } else if ["--apikey=", "-k=", "--format=", "--host=", "--proxy="]
+            .iter()
+            .any(|prefix| argument.starts_with(prefix))
+            || argument.starts_with("-k") && argument.len() > 2
+            || matches!(*argument, "--silent" | "-s" | "--verbose" | "-v")
+            || argument.strip_prefix('-').is_some_and(|flags| {
+                !flags.is_empty() && flags.chars().all(|flag| matches!(flag, 's' | 'v'))
+            })
+        {
+            index += 1;
+        } else if argument.starts_with('-') {
+            return None;
+        } else {
+            return Some(argument);
+        }
+    }
+    None
+}
+
+fn virustotal_invocation_has_caller_api_key(args: &[&str]) -> bool {
+    args.iter().enumerate().any(|(index, argument)| {
+        matches!(*argument, "--apikey" | "-k") && args.get(index + 1).is_some()
+            || argument.starts_with("--apikey=")
+            || argument.starts_with("-k=")
+            || argument.starts_with("-k") && argument.len() > 2
+    })
+}
+
+fn virustotal_invocation_selects_official_host(args: &[&str]) -> bool {
+    const OFFICIAL_HOST: &str = "www.virustotal.com";
+    args.iter().enumerate().any(|(index, argument)| {
+        let host = if *argument == "--host" {
+            args.get(index + 1).copied()
+        } else {
+            argument.strip_prefix("--host=")
+        };
+        host.is_some_and(|host| host.is_empty() || host.eq_ignore_ascii_case(OFFICIAL_HOST))
+    })
+}
+
+fn virustotal_invocation_selects_custom_host(args: &[&str]) -> bool {
+    const OFFICIAL_HOST: &str = "www.virustotal.com";
+    if std::env::var_os("VTCLI_HOST").is_some_and(|value| {
+        value
+            .to_str()
+            .is_none_or(|value| !value.is_empty() && !value.eq_ignore_ascii_case(OFFICIAL_HOST))
+    }) {
+        return true;
+    }
+    args.iter().enumerate().any(|(index, argument)| {
+        let host = if *argument == "--host" {
+            args.get(index + 1).copied()
+        } else {
+            argument.strip_prefix("--host=")
+        };
+        host.is_some_and(|host| !host.is_empty() && !host.eq_ignore_ascii_case(OFFICIAL_HOST))
+    })
 }
 
 fn local_command(args: &[OsString], commands: &[&str]) -> bool {
@@ -981,6 +1106,150 @@ mod tests {
         ));
 
         unsafe { std::env::remove_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR") };
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn virustotal_requests_its_api_key_only_for_reviewed_official_api_commands() {
+        let _guard = crate::global_test_env_lock().lock().unwrap();
+        let previous_home = std::env::var_os("HOME");
+        let previous_stub_dir = std::env::var_os("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR");
+        let previous_values =
+            ["VTCLI_APIKEY", "VTCLI_HOST"].map(|key| (key, std::env::var_os(key)));
+        let dir = temp_dir("env-wrapper-secretless-virustotal");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join(".vt.toml"), "host=\"www.virustotal.com\"\n").unwrap();
+        unsafe {
+            std::env::set_var("HOME", &dir);
+            std::env::set_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR", &dir);
+            for (key, _) in &previous_values {
+                std::env::remove_var(key);
+            }
+        }
+        let script_path = dir.join("vt");
+        let script = stub_script(
+            &wrapper("virustotal-cli").unwrap().primary,
+            Path::new("/opt/homebrew/bin/vt"),
+        );
+        let args = |values: &[&str]| {
+            std::iter::once(script_path.clone().into_os_string())
+                .chain(values.iter().map(OsString::from))
+                .collect::<Vec<_>>()
+        };
+
+        for command in [
+            vec![],
+            vec!["help"],
+            vec!["--help"],
+            vec!["file", "--help"],
+            vec!["version"],
+            vec!["completion", "zsh"],
+            vec!["gendoc", "docs"],
+            vec!["init"],
+            vec!["future-command"],
+            vec!["future-command", "--", "payload"],
+            vec!["file", "hash", "--apikey", "caller-key"],
+            vec!["file", "hash", "--apikey=caller-key"],
+            vec!["file", "hash", "-kcaller-key"],
+            vec!["file", "hash", "--apikey="],
+            vec!["file", "hash", "--host", "private.example"],
+            vec!["file", "hash", "--host=private.example"],
+        ] {
+            assert!(
+                invocation_is_secretless(&script_path, script.as_bytes(), &args(&command)),
+                "vt {command:?}",
+            );
+        }
+
+        for command in [
+            vec!["analysis", "id"],
+            vec!["an", "id"],
+            vec!["collection", "id"],
+            vec!["domain", "example.com"],
+            vec!["download", "hash"],
+            vec!["dl", "hash"],
+            vec!["file", "hash"],
+            vec!["group", "name"],
+            vec!["hunting", "notification", "list"],
+            vec!["ht", "notification", "list"],
+            vec!["iocstream", "list"],
+            vec!["is", "list"],
+            vec!["ip", "192.0.2.1"],
+            vec!["meta"],
+            vec!["monitor", "list"],
+            vec!["monitorpartner", "list"],
+            vec!["retrohunt", "list"],
+            vec!["rh", "list"],
+            vec!["scan", "url", "https://example.com"],
+            vec!["search", "type:peexe"],
+            vec!["threatprofile", "list"],
+            vec!["url", "https://example.com"],
+            vec!["user", "name"],
+            vec!["--format", "json", "file", "hash"],
+            vec!["-sv", "file", "hash"],
+        ] {
+            assert!(
+                !invocation_is_secretless(&script_path, script.as_bytes(), &args(&command)),
+                "vt {command:?}",
+            );
+        }
+
+        unsafe { std::env::set_var("VTCLI_APIKEY", "caller-key") };
+        assert!(invocation_is_secretless(
+            &script_path,
+            script.as_bytes(),
+            &args(&["file", "hash"]),
+        ));
+        unsafe {
+            std::env::remove_var("VTCLI_APIKEY");
+            std::env::set_var("VTCLI_HOST", "private.example");
+        }
+        assert!(invocation_is_secretless(
+            &script_path,
+            script.as_bytes(),
+            &args(&["file", "hash"]),
+        ));
+        unsafe { std::env::remove_var("VTCLI_HOST") };
+
+        fs::write(dir.join(".vt.toml"), "host=\"private.example\"\n").unwrap();
+        assert!(invocation_is_secretless(
+            &script_path,
+            script.as_bytes(),
+            &args(&["file", "hash"]),
+        ));
+        assert!(!invocation_is_secretless(
+            &script_path,
+            script.as_bytes(),
+            &args(&["--host", "www.virustotal.com", "file", "hash"]),
+        ));
+        fs::write(dir.join(".vt.toml"), "apikey=\"caller-key\"\n").unwrap();
+        assert!(invocation_is_secretless(
+            &script_path,
+            script.as_bytes(),
+            &args(&["file", "hash"]),
+        ));
+        assert!(!invocation_is_secretless(
+            &script_path,
+            format!("{script}# changed\n").as_bytes(),
+            &args(&["version"]),
+        ));
+
+        unsafe {
+            match previous_home {
+                Some(value) => std::env::set_var("HOME", value),
+                None => std::env::remove_var("HOME"),
+            }
+            match previous_stub_dir {
+                Some(value) => std::env::set_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR", value),
+                None => std::env::remove_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR"),
+            }
+            for (key, value) in previous_values {
+                match value {
+                    Some(value) => std::env::set_var(key, value),
+                    None => std::env::remove_var(key),
+                }
+            }
+        }
         let _ = fs::remove_dir_all(dir);
     }
 
