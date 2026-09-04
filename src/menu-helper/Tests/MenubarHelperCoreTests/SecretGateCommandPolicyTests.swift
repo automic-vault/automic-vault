@@ -9,7 +9,7 @@ import Testing
         "ast-cli": ["scan", "list"],
         "buf": ["repository", "list"],
         "censys": ["search", "example"],
-        "checkov": ["frameworks"],
+        "checkov": ["--list"],
         "circleci": ["pipeline", "list"],
         "civo": ["instance", "list"],
         "cloudsmith-cli": ["packages", "list"],
@@ -70,6 +70,36 @@ import Testing
     #expect(genericSecretGateRequestClassification(gateID: "flyctl", arguments: ["future-command"]) == .unknown)
     #expect(genericSecretGateRequestClassification(gateID: "future-hardener", arguments: ["list"]) == .unknown)
     #expect(genericSecretGateRequestClassification(gateID: "flyctl", arguments: []) == .unknown)
+}
+
+@Test func checkovPolicyClassifiesPlatformEffects() {
+    for arguments in [
+        ["--list"],
+        ["-l", "--prisma-api-url", "https://api.prismacloud.io"],
+        ["--show-config"],
+        ["--repo-id", "owner/repo", "--list"],
+        ["--repo-id", "owner/repo", "--skip-results-upload", "--directory", "."],
+    ] {
+        #expect(genericSecretGateRequestClassification(gateID: "checkov", arguments: arguments) == .readOnly)
+    }
+
+    for arguments in [
+        ["--repo-id", "owner/repo", "--directory", "."],
+        ["--repo-id=owner/repo", "--file", "main.tf"],
+        ["--list", "--support"],
+    ] {
+        #expect(genericSecretGateRequestClassification(gateID: "checkov", arguments: arguments) == .mutating)
+    }
+
+    for arguments in [
+        ["--directory", "."],
+        ["--framework", "terraform"],
+        ["--external-checks-dir", "checks"],
+        ["--", "--repo-id", "owner/repo"],
+        ["--future-option"],
+    ] {
+        #expect(genericSecretGateRequestClassification(gateID: "checkov", arguments: arguments) == .unknown)
+    }
 }
 
 @Test func stripePolicyClassifiesGeneratedBuiltInAndPluginCommands() {

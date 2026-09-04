@@ -90,6 +90,7 @@ pub(crate) fn invocation_is_secretless(
     }
     let args = &args[1..];
     match stub.command {
+        "checkov" => checkov_invocation_is_secretless(args),
         "npm" => npm_invocation_is_secretless(args),
         "pnpm" => {
             local_command(
@@ -205,6 +206,209 @@ fn npm_invocation_is_secretless(args: &[OsString]) -> bool {
             | "v"
             | "whoami"
     )
+}
+
+// Reviewed against Checkov 3.3.16. BC_API_KEY turns an otherwise local scan
+// into a platform-integrated run, so route it only for an explicit platform
+// request and never to invocations that load arbitrary external Python checks.
+fn checkov_invocation_is_secretless(args: &[OsString]) -> bool {
+    let Some(arguments) = args
+        .iter()
+        .map(|arg| arg.to_str())
+        .collect::<Option<Vec<_>>>()
+    else {
+        return true;
+    };
+    if arguments.is_empty()
+        || arguments.contains(&"--")
+        || arguments
+            .iter()
+            .any(|arg| matches!(*arg, "-h" | "--help" | "-v" | "--version"))
+    {
+        return true;
+    }
+
+    let configs = checkov_config_contents(&arguments);
+    let config_has = |key| {
+        configs
+            .iter()
+            .any(|contents| checkov_config_value(contents, key).is_some())
+    };
+    let declared = |key| {
+        configs
+            .iter()
+            .any(|contents| checkov_config_declares(contents, key))
+    };
+
+    if checkov_option_is_present(&arguments, "--bc-api-key")
+        || std::env::var_os("BC_API_KEY").is_some()
+        || checkov_credentials_file_has_key()
+        || config_has("bc-api-key")
+    {
+        return true;
+    }
+    if arguments.iter().any(|arg| {
+        matches!(
+            *arg,
+            "--add-check"
+                | "--create-config"
+                | "--show-config"
+                | "--external-checks-dir"
+                | "--external-checks-git"
+        ) || arg.starts_with("--create-config=")
+            || arg.starts_with("--external-checks-dir=")
+            || arg.starts_with("--external-checks-git=")
+    }) || [
+        "add-check",
+        "show-config",
+        "external-checks-dir",
+        "external-checks-git",
+    ]
+    .iter()
+    .any(|key| declared(key))
+    {
+        return true;
+    }
+
+    let repo_id = checkov_option_value(&arguments, "--repo-id")
+        .map(|value| !value.is_empty())
+        .unwrap_or_else(|| config_has("repo-id"));
+    if repo_id {
+        return false;
+    }
+
+    let lists_checks = arguments.iter().any(|arg| matches!(*arg, "-l" | "--list"));
+    let platform_list = arguments
+        .iter()
+        .any(|argument| matches!(*argument, "--support" | "--use-enforcement-rules"))
+        || [
+            "--prisma-api-url",
+            "--policy-metadata-filter",
+            "--policy-metadata-filter-exception",
+        ]
+        .iter()
+        .any(|option| checkov_option_is_present(&arguments, option))
+        || [
+            "prisma-api-url",
+            "support",
+            "use-enforcement-rules",
+            "policy-metadata-filter",
+            "policy-metadata-filter-exception",
+        ]
+        .iter()
+        .any(|key| config_has(key));
+    !(lists_checks && platform_list)
+}
+
+fn checkov_option_is_present(arguments: &[&str], name: &str) -> bool {
+    arguments.iter().any(|argument| {
+        *argument == name
+            || argument
+                .strip_prefix(name)
+                .is_some_and(|suffix| suffix.starts_with('='))
+    })
+}
+
+fn checkov_option_value<'a>(arguments: &'a [&str], name: &str) -> Option<&'a str> {
+    arguments.iter().enumerate().find_map(|(index, argument)| {
+        if *argument == name {
+            return Some(
+                arguments
+                    .get(index + 1)
+                    .filter(|value| !value.starts_with('-'))
+                    .copied()
+                    .unwrap_or_default(),
+            );
+        }
+        argument.strip_prefix(name)?.strip_prefix('=')
+    })
+}
+
+fn checkov_config_contents(arguments: &[&str]) -> Vec<String> {
+    let cwd = std::env::current_dir().ok();
+    let mut paths = Vec::new();
+    for (index, argument) in arguments.iter().enumerate() {
+        if matches!(*argument, "-d" | "--directory") {
+            if let Some(directory) = arguments.get(index + 1) {
+                paths.extend(checkov_default_config_paths(Path::new(directory)));
+            }
+        } else if *argument == "--config-file" {
+            if let Some(path) = arguments.get(index + 1) {
+                paths.push(PathBuf::from(path));
+            }
+        } else if let Some(path) = argument.strip_prefix("--config-file=") {
+            paths.push(PathBuf::from(path));
+        }
+    }
+    if let Some(cwd) = cwd {
+        paths.extend(checkov_default_config_paths(&cwd));
+    }
+    if let Some(home) = std::env::var_os("HOME") {
+        paths.extend(checkov_default_config_paths(Path::new(&home)));
+    }
+    paths
+        .into_iter()
+        .filter_map(|path| fs::read_to_string(path).ok())
+        .collect()
+}
+
+fn checkov_default_config_paths(directory: &Path) -> [PathBuf; 2] {
+    [
+        directory.join(".checkov.yaml"),
+        directory.join(".checkov.yml"),
+    ]
+}
+
+fn checkov_config_value<'a>(contents: &'a str, key: &str) -> Option<&'a str> {
+    contents.lines().find_map(|line| {
+        if line.starts_with(char::is_whitespace) {
+            return None;
+        }
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            return None;
+        }
+        let (candidate, value) = line.split_once(':')?;
+        if candidate.trim() != key {
+            return None;
+        }
+        let value = value
+            .split_once(" #")
+            .map_or(value, |(value, _)| value)
+            .trim()
+            .trim_matches(['\'', '"']);
+        (!value.is_empty()
+            && !matches!(value.to_ascii_lowercase().as_str(), "false" | "null" | "~"))
+        .then_some(value)
+    })
+}
+
+fn checkov_config_declares(contents: &str, key: &str) -> bool {
+    contents.lines().any(|line| {
+        !line.starts_with(char::is_whitespace)
+            && line
+                .trim()
+                .split_once(':')
+                .is_some_and(|(candidate, value)| {
+                    candidate.trim() == key
+                        && !matches!(
+                            value
+                                .trim()
+                                .trim_matches(['\'', '"'])
+                                .to_ascii_lowercase()
+                                .as_str(),
+                            "false" | "null" | "~" | "[]"
+                        )
+                })
+    })
+}
+
+fn checkov_credentials_file_has_key() -> bool {
+    let Some(home) = std::env::var_os("HOME") else {
+        return false;
+    };
+    fs::read_to_string(PathBuf::from(home).join(".bridgecrew/credentials"))
+        .is_ok_and(|contents| !contents.lines().next().unwrap_or_default().is_empty())
 }
 
 fn secret_gate(wrapper: &EnvWrapper) -> SecretGateDescriptor {
@@ -791,6 +995,7 @@ const fn stub(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::ffi::OsStringExt;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
@@ -981,6 +1186,181 @@ mod tests {
         ));
 
         unsafe { std::env::remove_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR") };
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn checkov_requests_its_key_only_for_explicit_platform_integration() {
+        let _guard = crate::global_test_env_lock().lock().unwrap();
+        let dir = temp_dir("env-wrapper-secretless-checkov");
+        let stub_dir = dir.join("stubs");
+        let home = dir.join("home");
+        let project = dir.join("project");
+        fs::create_dir_all(&home).unwrap();
+        fs::create_dir_all(&project).unwrap();
+
+        let env_names = [
+            "AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR",
+            "BC_API_KEY",
+            "HOME",
+        ];
+        let previous = env_names.map(|name| (name, std::env::var_os(name)));
+        unsafe {
+            std::env::set_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR", &stub_dir);
+            std::env::set_var("HOME", &home);
+            std::env::remove_var("BC_API_KEY");
+        }
+
+        let script_path = stub_dir.join("checkov");
+        let script = stub_script(
+            &wrapper("checkov").unwrap().primary,
+            Path::new("/opt/homebrew/bin/checkov"),
+        );
+        let invocation = |values: Vec<OsString>| {
+            std::iter::once(script_path.clone().into_os_string())
+                .chain(values)
+                .collect::<Vec<_>>()
+        };
+        let args = |values: &[&str]| values.iter().map(OsString::from).collect::<Vec<_>>();
+
+        for values in [
+            vec![],
+            vec!["--help"],
+            vec!["-h"],
+            vec!["--version"],
+            vec!["-v"],
+            vec!["--directory", "."],
+            vec!["--file", "main.tf"],
+            vec!["--framework", "terraform", "--directory", "."],
+            vec!["--list"],
+            vec!["--list", "--support=false"],
+            vec!["--show-config"],
+            vec!["--create-config", "/tmp/checkov.yml"],
+            vec!["--add-check"],
+            vec!["--future-option"],
+            vec!["--", "--repo-id", "owner/repo"],
+            vec!["--repo-id", "--directory", "."],
+            vec!["--repo-id", "owner/repo", "--external-checks-dir", "checks"],
+            vec![
+                "--repo-id=owner/repo",
+                "--external-checks-git=https://example.test/checks.git",
+            ],
+        ] {
+            assert!(
+                invocation_is_secretless(
+                    &script_path,
+                    script.as_bytes(),
+                    &invocation(args(&values))
+                ),
+                "checkov {values:?}",
+            );
+        }
+
+        for values in [
+            vec!["--repo-id", "owner/repo", "--directory", "."],
+            vec!["--repo-id=owner/repo", "--file", "main.tf"],
+            vec!["--list", "--prisma-api-url", "https://api.prismacloud.io"],
+            vec!["--list", "--support"],
+            vec!["--list", "--use-enforcement-rules"],
+            vec!["--list", "--policy-metadata-filter", "cloud.type=aws"],
+        ] {
+            assert!(
+                !invocation_is_secretless(
+                    &script_path,
+                    script.as_bytes(),
+                    &invocation(args(&values))
+                ),
+                "checkov {values:?}",
+            );
+        }
+
+        for values in [
+            vec!["--repo-id", "owner/repo", "--bc-api-key", "explicit"],
+            vec!["--repo-id=owner/repo", "--bc-api-key=explicit"],
+        ] {
+            assert!(invocation_is_secretless(
+                &script_path,
+                script.as_bytes(),
+                &invocation(args(&values)),
+            ));
+        }
+
+        unsafe { std::env::set_var("BC_API_KEY", "") };
+        assert!(invocation_is_secretless(
+            &script_path,
+            script.as_bytes(),
+            &invocation(args(&["--repo-id", "owner/repo", "--directory", "."])),
+        ));
+        unsafe { std::env::remove_var("BC_API_KEY") };
+
+        fs::create_dir_all(home.join(".bridgecrew")).unwrap();
+        fs::write(home.join(".bridgecrew/credentials"), "fresh-key\n").unwrap();
+        assert!(invocation_is_secretless(
+            &script_path,
+            script.as_bytes(),
+            &invocation(args(&["--repo-id", "owner/repo", "--directory", "."])),
+        ));
+        fs::write(home.join(".bridgecrew/credentials"), "").unwrap();
+
+        fs::write(project.join(".checkov.yaml"), "repo-id: owner/repo\n").unwrap();
+        assert!(!invocation_is_secretless(
+            &script_path,
+            script.as_bytes(),
+            &invocation(args(&["--directory", project.to_str().unwrap()])),
+        ));
+        fs::write(
+            project.join(".checkov.yaml"),
+            "repo-id: owner/repo\nbc-api-key: fresh-key\n",
+        )
+        .unwrap();
+        assert!(invocation_is_secretless(
+            &script_path,
+            script.as_bytes(),
+            &invocation(args(&["--directory", project.to_str().unwrap()])),
+        ));
+        fs::write(
+            project.join(".checkov.yaml"),
+            "repo-id: owner/repo\nexternal-checks-dir:\n  - checks\n",
+        )
+        .unwrap();
+        assert!(invocation_is_secretless(
+            &script_path,
+            script.as_bytes(),
+            &invocation(args(&["--directory", project.to_str().unwrap()])),
+        ));
+
+        let explicit_config = dir.join("platform.yml");
+        fs::write(&explicit_config, "repo-id: owner/repo\n").unwrap();
+        assert!(!invocation_is_secretless(
+            &script_path,
+            script.as_bytes(),
+            &invocation(args(&[
+                "--config-file",
+                explicit_config.to_str().unwrap(),
+                "--directory",
+                "."
+            ])),
+        ));
+
+        assert!(invocation_is_secretless(
+            &script_path,
+            script.as_bytes(),
+            &invocation(vec![OsString::from_vec(vec![0xff])]),
+        ));
+        assert!(!invocation_is_secretless(
+            &script_path,
+            format!("{script}# changed\n").as_bytes(),
+            &invocation(args(&["--help"])),
+        ));
+
+        for (name, value) in previous {
+            unsafe {
+                match value {
+                    Some(value) => std::env::set_var(name, value),
+                    None => std::env::remove_var(name),
+                }
+            }
+        }
         let _ = fs::remove_dir_all(dir);
     }
 

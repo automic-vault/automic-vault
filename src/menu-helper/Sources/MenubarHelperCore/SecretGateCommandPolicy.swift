@@ -21,6 +21,7 @@ public func genericSecretGateRequestClassification(
     let words = arguments.map { $0.lowercased() }
     guard !words.isEmpty else { return .unknown }
     if gateID == "stripe" { return stripeRequestClassification(words) }
+    if gateID == "checkov" { return checkovRequestClassification(words) }
     if words == ["help"] || words == ["--help"] || words == ["version"] || words == ["--version"] {
         return .readOnly
     }
@@ -33,6 +34,29 @@ public func genericSecretGateRequestClassification(
         if policy.readOnly.contains(candidate) { return .readOnly }
         if policy.mutating.contains(candidate) { return .mutating }
     }
+    return .unknown
+}
+
+private func checkovRequestClassification(_ arguments: [String]) -> SecretGateRequestClassification {
+    if arguments.contains("--") { return .unknown }
+    if arguments.contains("--help") || arguments.contains("-h")
+        || arguments.contains("--version") || arguments.contains("-v")
+        || arguments.contains("--show-config")
+    {
+        return .readOnly
+    }
+    if arguments.contains("--support") { return .mutating }
+    let hasRepository = arguments.contains("--repo-id")
+        || arguments.contains(where: { $0.hasPrefix("--repo-id=") })
+    if hasRepository {
+        let hasScanTarget = arguments.contains(where: {
+            ["-d", "--directory", "-f", "--file", "--docker-image", "--image"].contains($0)
+                || $0.hasPrefix("--directory=") || $0.hasPrefix("--file=")
+                || $0.hasPrefix("--docker-image=") || $0.hasPrefix("--image=")
+        })
+        return arguments.contains("--skip-results-upload") || !hasScanTarget ? .readOnly : .mutating
+    }
+    if arguments.contains("--list") || arguments.contains("-l") { return .readOnly }
     return .unknown
 }
 
@@ -130,7 +154,7 @@ private let secretGateCommandPolicies: [String: SecretGateCommandPolicy] = [
     "ast-cli": .init("scan list,scan show,project list,project show", "scan create,scan cancel,project create,project delete"),
     "buf": .init("repository list,module list,organization list", "push,repository create,repository delete"),
     "censys": .init("search,view,account", "asm seeds add,asm seeds delete"),
-    "checkov": .init("frameworks", "submit"),
+    "checkov": .init("", ""),
     "circleci": .init("project list,pipeline list,config validate", "pipeline run,context create,context delete,context store-secret"),
     "civo": .init("instance list,instance show,kubernetes list,kubernetes show", "instance create,instance remove,kubernetes create,kubernetes remove", secretDump: "apikey show"),
     "cloudsmith-cli": .init("whoami,repos list,packages list,packages search", "push,packages delete,repos create,repos delete"),
