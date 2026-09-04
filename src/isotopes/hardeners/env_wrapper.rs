@@ -91,6 +91,7 @@ pub(crate) fn invocation_is_secretless(
     let args = &args[1..];
     match stub.command {
         "npm" => npm_invocation_is_secretless(args),
+        "vultr-cli" => vultr_invocation_is_secretless(args),
         "pnpm" => {
             local_command(
                 args,
@@ -118,6 +119,256 @@ pub(crate) fn invocation_is_secretless(
         ),
         _ => false,
     }
+}
+
+// Reviewed against vultr-cli v3.11.0. Unknown command paths remain tokenless:
+// a future command must not receive the protected API key until it is reviewed.
+fn vultr_invocation_is_secretless(args: &[OsString]) -> bool {
+    let Some(args) = args
+        .iter()
+        .map(|argument| argument.to_str())
+        .collect::<Option<Vec<_>>>()
+    else {
+        return true;
+    };
+    let args = args
+        .split(|argument| *argument == "--")
+        .next()
+        .unwrap_or_default();
+    if args.is_empty()
+        || args
+            .iter()
+            .any(|argument| matches!(*argument, "-h" | "--help"))
+    {
+        return true;
+    }
+    let Some((command, command_index)) = vultr_command(args) else {
+        return true;
+    };
+    let authenticated_root = matches!(
+        command,
+        "account"
+            | "backups"
+            | "backup"
+            | "b"
+            | "bare-metal"
+            | "bm"
+            | "billing"
+            | "block-storage"
+            | "bs"
+            | "cdn"
+            | "container-registry"
+            | "cr"
+            | "database"
+            | "dns"
+            | "firewall"
+            | "fw"
+            | "inference"
+            | "instance"
+            | "iso"
+            | "kubernetes"
+            | "k"
+            | "load-balancer"
+            | "logs"
+            | "log"
+            | "object-storage"
+            | "reserved-ip"
+            | "rip"
+            | "script"
+            | "ss"
+            | "startup-script"
+            | "snapshot"
+            | "sn"
+            | "ssh-key"
+            | "ssh"
+            | "ssh-keys"
+            | "sshkeys"
+            | "user"
+            | "users"
+            | "u"
+            | "vpc"
+    );
+    !authenticated_root
+        || !vultr_command_path_requires_api_key(command, &args[command_index + 1..])
+        || std::env::var_os("VULTR_API_KEY").is_some_and(|value| !value.is_empty())
+        || super::migrations::vultr_config_has_api_key(vultr_config_argument(args))
+}
+
+fn vultr_command<'a>(args: &'a [&str]) -> Option<(&'a str, usize)> {
+    let mut index = 0;
+    while let Some(argument) = args.get(index) {
+        if matches!(*argument, "--config" | "--output" | "-o") {
+            index += 2;
+        } else if ["--config=", "--output=", "-o="]
+            .iter()
+            .any(|prefix| argument.starts_with(prefix))
+            || argument.starts_with("-o") && argument.len() > 2
+        {
+            index += 1;
+        } else if argument.starts_with('-') {
+            return None;
+        } else {
+            return Some((argument, index));
+        }
+    }
+    None
+}
+
+fn vultr_command_path_requires_api_key(root: &str, args: &[&str]) -> bool {
+    let groups = [
+        "acl",
+        "advanced-option",
+        "alert",
+        "app",
+        "artifact",
+        "available-connector",
+        "backup",
+        "cluster",
+        "connection-pool",
+        "connector",
+        "credentials",
+        "db",
+        "domain",
+        "firewall",
+        "firewall-rule",
+        "forwarding",
+        "group",
+        "history",
+        "image",
+        "invoice",
+        "ipv4",
+        "ipv6",
+        "iso",
+        "kafka-connect",
+        "kafka-rest",
+        "maintenance",
+        "migration",
+        "nat-gateway",
+        "node",
+        "node-pool",
+        "os",
+        "plan",
+        "port-forwarding-rule",
+        "pull",
+        "push",
+        "quota",
+        "read-replica",
+        "record",
+        "repository",
+        "reverse-dns",
+        "rule",
+        "schema-registry",
+        "ssl",
+        "tier",
+        "topic",
+        "upgrades",
+        "usage",
+        "user",
+        "user-data",
+        "version",
+        "vpc",
+    ];
+    let operations = [
+        "attach",
+        "bandwidth",
+        "change",
+        "config",
+        "convert",
+        "create",
+        "create-endpoint",
+        "create-url",
+        "default-ipv4",
+        "delete",
+        "delete-file",
+        "delete-ipv6",
+        "destroy",
+        "detach",
+        "disable-auto-ssl",
+        "dnssec",
+        "dnssec-info",
+        "docker",
+        "fork",
+        "get",
+        "get-file",
+        "get-schema",
+        "get-status",
+        "halt",
+        "info",
+        "items",
+        "label",
+        "list",
+        "list-files",
+        "list-ipv6",
+        "pause",
+        "plans",
+        "promote",
+        "public",
+        "purge",
+        "reboot",
+        "recycle",
+        "regenerate-keys",
+        "regions",
+        "reinstall",
+        "resize",
+        "restart",
+        "restart-task",
+        "restore",
+        "resume",
+        "set",
+        "set-auto-ssl",
+        "set-certificate",
+        "set-ipv4",
+        "set-ipv6",
+        "soa-info",
+        "soa-update",
+        "start",
+        "status",
+        "stop",
+        "tags",
+        "tiers",
+        "update",
+        "update-firewall-group",
+        "upgrade",
+        "versions",
+        "vnc",
+    ];
+    let aliases = ["a", "c", "d", "destroy", "g", "l", "u"];
+    let mut index = 0;
+    while let Some(argument) = args.get(index) {
+        if matches!(*argument, "--config" | "--output" | "-o") {
+            index += 2;
+            continue;
+        }
+        if ["--config=", "--output=", "-o="]
+            .iter()
+            .any(|prefix| argument.starts_with(prefix))
+            || argument.starts_with("-o") && argument.len() > 2
+        {
+            index += 1;
+            continue;
+        }
+        if (root == "bare-metal" || root == "bm") && matches!(*argument, "ipv4" | "ipv6")
+            || operations.contains(argument)
+            || aliases.contains(argument)
+        {
+            return true;
+        }
+        if !groups.contains(argument) {
+            return false;
+        }
+        index += 1;
+    }
+    false
+}
+
+fn vultr_config_argument<'a>(args: &'a [&'a str]) -> Option<&'a Path> {
+    args.iter().enumerate().rev().find_map(|(index, argument)| {
+        if *argument == "--config" {
+            args.get(index + 1).map(Path::new)
+        } else {
+            argument.strip_prefix("--config=").map(Path::new)
+        }
+    })
 }
 
 fn local_command(args: &[OsString], commands: &[&str]) -> bool {
@@ -982,6 +1233,168 @@ mod tests {
 
         unsafe { std::env::remove_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR") };
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn vultr_requests_its_api_key_only_for_reviewed_authenticated_commands() {
+        let _guard = crate::global_test_env_lock().lock().unwrap();
+        let previous_home = std::env::var_os("HOME");
+        let previous_stub_dir = std::env::var_os("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR");
+        let previous_api_key = std::env::var_os("VULTR_API_KEY");
+        let dir = temp_dir("env-wrapper-secretless-vultr");
+        fs::create_dir_all(&dir).unwrap();
+        unsafe {
+            std::env::set_var("HOME", &dir);
+            std::env::set_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR", &dir);
+            std::env::remove_var("VULTR_API_KEY");
+        }
+        let script_path = dir.join("vultr-cli");
+        let script = stub_script(
+            &wrapper("vultr").unwrap().primary,
+            Path::new("/opt/homebrew/bin/vultr-cli"),
+        );
+        let args = |values: &[&str]| {
+            std::iter::once(script_path.clone().into_os_string())
+                .chain(values.iter().map(OsString::from))
+                .collect::<Vec<_>>()
+        };
+
+        for command in [
+            vec![],
+            vec!["help"],
+            vec!["--help"],
+            vec!["instance", "--help"],
+            vec!["completion", "zsh"],
+            vec!["version"],
+            vec!["v"],
+            vec!["apps", "list"],
+            vec!["a", "l"],
+            vec!["marketplace", "app", "list-variables", "app"],
+            vec!["os", "list"],
+            vec!["o", "l"],
+            vec!["plans", "list"],
+            vec!["p", "m"],
+            vec!["regions", "availability", "ewr"],
+            vec!["r", "l"],
+            vec!["--output", "json", "apps", "list"],
+            vec!["future-command"],
+            vec!["future-command", "--", "payload"],
+        ] {
+            assert!(
+                invocation_is_secretless(&script_path, script.as_bytes(), &args(&command)),
+                "vultr-cli {command:?}",
+            );
+        }
+
+        for command in [
+            vec!["account", "info"],
+            vec!["backups", "list"],
+            vec!["backup", "list"],
+            vec!["b", "list"],
+            vec!["bare-metal", "list"],
+            vec!["bm", "list"],
+            vec!["billing", "invoice", "list"],
+            vec!["block-storage", "list"],
+            vec!["bs", "list"],
+            vec!["cdn", "pull", "list"],
+            vec!["container-registry", "list"],
+            vec!["cr", "list"],
+            vec!["database", "list"],
+            vec!["dns", "domain", "list"],
+            vec!["firewall", "group", "list"],
+            vec!["fw", "group", "list"],
+            vec!["inference", "list"],
+            vec!["instance", "list"],
+            vec!["iso", "list"],
+            vec!["kubernetes", "list"],
+            vec!["k", "list"],
+            vec!["load-balancer", "list"],
+            vec!["logs", "list"],
+            vec!["log", "list"],
+            vec!["object-storage", "list"],
+            vec!["reserved-ip", "list"],
+            vec!["rip", "list"],
+            vec!["script", "list"],
+            vec!["ss", "list"],
+            vec!["startup-script", "list"],
+            vec!["snapshot", "list"],
+            vec!["sn", "list"],
+            vec!["ssh-key", "list"],
+            vec!["ssh", "list"],
+            vec!["ssh-keys", "list"],
+            vec!["sshkeys", "list"],
+            vec!["user", "list"],
+            vec!["users", "list"],
+            vec!["u", "list"],
+            vec!["vpc", "list"],
+        ] {
+            assert!(
+                !invocation_is_secretless(&script_path, script.as_bytes(), &args(&command)),
+                "vultr-cli {command:?}",
+            );
+        }
+        for command in [
+            vec!["instance"],
+            vec!["dns", "domain"],
+            vec!["database", "future-command"],
+            vec!["instance", "future-command"],
+        ] {
+            assert!(
+                invocation_is_secretless(&script_path, script.as_bytes(), &args(&command)),
+                "vultr-cli {command:?}",
+            );
+        }
+        assert!(!invocation_is_secretless(
+            &script_path,
+            script.as_bytes(),
+            &args(&["-ojson", "instance", "list"]),
+        ));
+        assert!(!invocation_is_secretless(
+            &script_path,
+            script.as_bytes(),
+            &args(&["instance", "list", "--", "payload"]),
+        ));
+
+        unsafe { std::env::set_var("VULTR_API_KEY", "caller-key") };
+        assert!(invocation_is_secretless(
+            &script_path,
+            script.as_bytes(),
+            &args(&["instance", "list"]),
+        ));
+        unsafe { std::env::remove_var("VULTR_API_KEY") };
+        let caller_config = dir.join("caller.yaml");
+        fs::write(&caller_config, "api-key: caller-key\n").unwrap();
+        assert!(invocation_is_secretless(
+            &script_path,
+            script.as_bytes(),
+            &args(&[
+                "--config",
+                caller_config.to_str().unwrap(),
+                "instance",
+                "list",
+            ]),
+        ));
+        assert!(!invocation_is_secretless(
+            &script_path,
+            format!("{script}# changed\n").as_bytes(),
+            &args(&["version"]),
+        ));
+
+        unsafe {
+            match previous_home {
+                Some(value) => std::env::set_var("HOME", value),
+                None => std::env::remove_var("HOME"),
+            }
+            match previous_stub_dir {
+                Some(value) => std::env::set_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR", value),
+                None => std::env::remove_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR"),
+            }
+            match previous_api_key {
+                Some(value) => std::env::set_var("VULTR_API_KEY", value),
+                None => std::env::remove_var("VULTR_API_KEY"),
+            }
+        }
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

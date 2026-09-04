@@ -101,6 +101,10 @@ pub(super) fn names() -> impl Iterator<Item = &'static str> {
     MIGRATIONS.iter().map(|(name, _)| *name)
 }
 
+pub(super) fn vultr_config_has_api_key(path: Option<&std::path::Path>) -> bool {
+    vultr::config_has_api_key(path)
+}
+
 #[unsafe(no_mangle)]
 unsafe extern "C" fn isotope_store_generic_password_json(
     service: *const std::ffi::c_char,
