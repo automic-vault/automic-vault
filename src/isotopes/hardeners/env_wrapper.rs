@@ -160,7 +160,6 @@ fn option_value<'a>(args: &'a [&str], option: &str) -> Option<&'a str> {
     })
 }
 
-
 fn npm_invocation_is_secretless(args: &[OsString]) -> bool {
     let Some(command) = args.first().and_then(|arg| arg.to_str()) else {
         return true;
