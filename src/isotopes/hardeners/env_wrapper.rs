@@ -135,11 +135,7 @@ fn vultr_invocation_is_secretless(args: &[OsString]) -> bool {
         .split(|argument| *argument == "--")
         .next()
         .unwrap_or_default();
-    if args.is_empty()
-        || args
-            .iter()
-            .any(|argument| matches!(*argument, "-h" | "--help"))
-    {
+    if args.is_empty() || vultr_help_requested(args) {
         return true;
     }
     let Some((command, command_index)) = vultr_command(args) else {
@@ -192,6 +188,12 @@ fn vultr_invocation_is_secretless(args: &[OsString]) -> bool {
         || !vultr_command_path_requires_api_key(command, &args[command_index + 1..])
         || std::env::var_os("VULTR_API_KEY").is_some_and(|value| !value.is_empty())
         || super::migrations::vultr_config_has_api_key(vultr_config_argument(args))
+}
+
+fn vultr_help_requested(args: &[&str]) -> bool {
+    args.iter().enumerate().any(|(index, argument)| {
+        matches!(*argument, "-h" | "--help") && (index == 0 || !args[index - 1].starts_with('-'))
+    })
 }
 
 fn vultr_command<'a>(args: &'a [&str]) -> Option<(&'a str, usize)> {
@@ -1353,6 +1355,16 @@ mod tests {
             &script_path,
             script.as_bytes(),
             &args(&["instance", "list", "--", "payload"]),
+        ));
+        assert!(!invocation_is_secretless(
+            &script_path,
+            script.as_bytes(),
+            &args(&["user", "create", "--password", "-h"]),
+        ));
+        assert!(!invocation_is_secretless(
+            &script_path,
+            script.as_bytes(),
+            &args(&["instance", "create", "--label", "--help"]),
         ));
 
         unsafe { std::env::set_var("VULTR_API_KEY", "caller-key") };

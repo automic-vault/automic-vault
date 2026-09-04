@@ -43,7 +43,7 @@ import Testing
         "vagrant": ["status"],
         "vault": ["token", "lookup"],
         "virustotal-cli": ["domain", "example.com"],
-        "vultr": ["instance", "list"],
+        "vultr": ["account", "info"],
         "wsk": ["action", "list"],
         "stripe": ["customers", "list"],
         "supabase": ["projects", "list"],
@@ -57,6 +57,64 @@ import Testing
             "missing read-only policy for \(gateID)"
         )
     }
+}
+
+@Test func vultrPolicyClassifiesReviewedCommands() {
+    let readOnly = [
+        ["regions", "list"],
+        ["--output", "json", "apps", "list"],
+        ["account", "info"],
+        ["dns", "domain", "list"],
+        ["fw", "group", "list"],
+        ["--config=/tmp/vultr.yaml", "billing", "history", "list"],
+        ["--help"],
+    ]
+    for arguments in readOnly {
+        #expect(genericSecretGateRequestClassification(gateID: "vultr", arguments: arguments) == .readOnly)
+    }
+
+    let mutating = [
+        ["instance", "start", "instance-id"],
+        ["dns", "record", "create", "example.com"],
+        ["--config", "/tmp/vultr.yaml", "instance", "stop", "instance-id"],
+        ["load-balancer", "create", "--region", "ewr"],
+        ["user", "update", "user-id", "--name", "-h"],
+    ]
+    for arguments in mutating {
+        #expect(genericSecretGateRequestClassification(gateID: "vultr", arguments: arguments) == .mutating)
+    }
+
+    let secretDump = [
+        ["instance", "get", "instance-id"],
+        ["bm", "vnc", "bare-metal-id"],
+        ["k", "config", "cluster-id"],
+        ["object-storage", "get", "storage-id"],
+        ["object-storage", "regenerate-keys", "storage-id"],
+        ["container-registry", "credentials", "docker", "registry-id"],
+        ["database", "user", "list", "database-id"],
+        ["database", "connector", "get", "database-id", "connector-id"],
+        ["script", "get", "script-id"],
+        ["instance", "user-data", "get", "instance-id"],
+        ["load-balancer", "ssl", "set-certificate", "load-balancer-id"],
+        ["load-balancer", "create", "--private-key=/tmp/key.pem"],
+        ["user", "create", "--password", "-h"],
+    ]
+    for arguments in secretDump {
+        #expect(genericSecretGateRequestClassification(gateID: "vultr", arguments: arguments) == .secretDump)
+    }
+
+    let unknown = [
+        ["future-command"],
+        ["instance", "future-command"],
+        ["dns", "domain"],
+    ]
+    for arguments in unknown {
+        #expect(genericSecretGateRequestClassification(gateID: "vultr", arguments: arguments) == .unknown)
+    }
+    #expect(genericSecretGateRequestClassification(
+        gateID: "vultr",
+        arguments: ["instance", "list", "--", "ignored"]
+    ) == .secretDump)
 }
 
 @Test func genericPoliciesClassifyMutationsSecretsAndUnknowns() {
