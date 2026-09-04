@@ -72,6 +72,57 @@ import Testing
     #expect(genericSecretGateRequestClassification(gateID: "flyctl", arguments: []) == .unknown)
 }
 
+@Test func civoPolicyClassifiesReviewedAPIEffects() {
+    let readOnly = [
+        ["instance", "ls"],
+        ["--config", "/tmp/civo.json", "--region=NYC1", "kubernetes", "ls"],
+        ["database", "backup", "show", "backup-id"],
+        ["objectstore", "credential", "ls"],
+        ["vpc", "firewall", "rule", "ls"],
+        ["quota"],
+    ]
+    for arguments in readOnly {
+        #expect(genericSecretGateRequestClassification(gateID: "civo", arguments: arguments) == .readOnly)
+    }
+
+    let mutating = [
+        ["instance", "create", "example"],
+        ["database", "backup", "delete", "backup-id"],
+        ["kubernetes", "node-pool", "scale", "cluster"],
+        ["objectstore", "credential", "create", "example"],
+        ["vpc", "subnet", "attach", "subnet-id"],
+    ]
+    for arguments in mutating {
+        #expect(genericSecretGateRequestClassification(gateID: "civo", arguments: arguments) == .mutating)
+    }
+
+    for arguments in [
+        ["apikey", "show"],
+        ["database", "credential", "example"],
+        ["instance", "show", "example"],
+        ["instance", "password", "example"],
+        ["kubernetes", "show", "example"],
+        ["kubernetes", "config", "example"],
+        ["objectstore", "credential", "export", "--access-key", "key"],
+    ] {
+        #expect(genericSecretGateRequestClassification(gateID: "civo", arguments: arguments) == .secretDump)
+    }
+
+    for arguments in [
+        ["future-command"],
+        ["instance", "future-command"],
+        ["instance", "console", "example"],
+        ["kubernetes", "applications", "remove", "grafana"],
+        ["kubernetes", "config", "example", "--save"],
+        ["kubernetes", "update-kubeconfig", "example"],
+        ["kubernetes", "create", "example", "--save", "--merge"],
+        ["kubernetes", "remove", "example", "--delete-kubeconfig-context"],
+        ["instance", "list", "--", "anything"],
+    ] {
+        #expect(genericSecretGateRequestClassification(gateID: "civo", arguments: arguments) == .unknown)
+    }
+}
+
 @Test func stripePolicyClassifiesGeneratedBuiltInAndPluginCommands() {
     let readOnly = [
         ["customers", "list"],

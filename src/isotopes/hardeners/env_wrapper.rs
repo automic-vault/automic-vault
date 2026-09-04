@@ -90,6 +90,7 @@ pub(crate) fn invocation_is_secretless(
     }
     let args = &args[1..];
     match stub.command {
+        "civo" => civo_invocation_is_secretless(args),
         "npm" => npm_invocation_is_secretless(args),
         "pnpm" => {
             local_command(
@@ -205,6 +206,324 @@ fn npm_invocation_is_secretless(args: &[OsString]) -> bool {
             | "v"
             | "whoami"
     )
+}
+
+// Reviewed against civo v1.5.4 (6a367adf). Keep this positive: unknown
+// commands and invocations that launch local programs must not inherit the
+// protected token.
+fn civo_invocation_is_secretless(args: &[OsString]) -> bool {
+    let Some(arguments) = args
+        .iter()
+        .map(|argument| argument.to_str())
+        .collect::<Option<Vec<_>>>()
+    else {
+        return true;
+    };
+    if arguments.is_empty()
+        || arguments.contains(&"--")
+        || matches!(arguments.as_slice(), ["--version" | "-v"])
+        || std::env::var_os("CIVO_TOKEN").is_some()
+    {
+        return true;
+    }
+
+    let Some((words, explicit_config)) = civo_command_words(&arguments) else {
+        return true;
+    };
+    if civo_invocation_launches_child(&words, &arguments) {
+        return true;
+    }
+
+    !civo_command_uses_api(&words) || civo_config_has_token(explicit_config.as_deref())
+}
+
+fn civo_command_words<'a>(arguments: &[&'a str]) -> Option<(Vec<&'a str>, Option<PathBuf>)> {
+    let mut words = Vec::new();
+    let mut explicit_config = None;
+    let mut index = 0;
+    while index < arguments.len() {
+        let argument = arguments[index];
+        if matches!(argument, "--help" | "-h") {
+            return None;
+        } else if matches!(
+            argument,
+            "--config" | "--fields" | "-f" | "--output" | "-o" | "--region"
+        ) {
+            let value = *arguments.get(index + 1)?;
+            if argument == "--config" {
+                explicit_config = (!value.is_empty()).then(|| PathBuf::from(value));
+            }
+            index += 2;
+        } else if let Some(value) = argument.strip_prefix("--config=") {
+            explicit_config = (!value.is_empty()).then(|| PathBuf::from(value));
+            index += 1;
+        } else if ["--fields=", "--output=", "--region="]
+            .iter()
+            .any(|prefix| argument.starts_with(prefix))
+            || (argument.starts_with("-f") || argument.starts_with("-o")) && argument.len() > 2
+            || matches!(argument, "--pretty" | "--yes" | "-y")
+            || argument.starts_with("--pretty=")
+            || argument.starts_with("--yes=")
+        {
+            index += 1;
+        } else {
+            words.push(argument);
+            index += 1;
+        }
+    }
+    Some((words, explicit_config))
+}
+
+fn civo_command_uses_api(words: &[&str]) -> bool {
+    let Some(root) = words.first().copied() else {
+        return false;
+    };
+    let action = words.get(1).copied();
+    match root {
+        "quota" | "quotas" => true,
+        "database" | "db" | "databases" => {
+            civo_action(
+                action,
+                "ls list all create new add update modify change show get inspect delete rm remove destroy credential credentials creds cred size sizes engine engines software softwares restore reset restores versions version",
+            ) || civo_nested_action(
+                words,
+                1,
+                "backup bk backups",
+                "create new add ls list all update modify change show get inspect delete rm remove destroy",
+            )
+        }
+        "diskimage" | "diskimages" | "template" | "templates" => civo_action(
+            action,
+            "ls list all show get search find create upload new delete rm remove",
+        ),
+        "domain" | "domains" => {
+            civo_action(
+                action,
+                "ls list all create new add remove rm delete destroy",
+            ) || civo_nested_action(
+                words,
+                1,
+                "record records",
+                "ls list all create new add show get inspect remove delete destroy rm",
+            )
+        }
+        "firewall" | "firewalls" | "fw" => {
+            civo_action(
+                action,
+                "ls list all create new add update rename change remove rm delete destroy",
+            ) || civo_nested_action(
+                words,
+                1,
+                "rule rules",
+                "ls list all create new add remove delete destroy rm",
+            )
+        }
+        "instance" | "instances" => {
+            civo_action(
+                action,
+                "ls list all size sizes create new add show get inspect update set remove delete destroy rm reboot hard-reboot soft-reboot stop shutdown start boot run upgrade resize firewall set-firewall change-firewall fw public-ip ip publicip password pw tag tags console vnc access connect recovery rescue recovery-status allowed-ips-update update-allowed-ips bandwidth-update update-bandwidth",
+            ) || civo_nested_action(
+                words,
+                1,
+                "snapshot snapshots",
+                "create list ls show update delete restore",
+            )
+        }
+        "ip" | "ips" => civo_action(
+            action,
+            "ls list all reserve new add allocate rename update change delete unallocate free remove rm assign attach unassign detach",
+        ),
+        root if civo_kubernetes_root(root) => {
+            civo_action(
+                action,
+                "ls list all size sizes versions version show get inspect config conf create new add rename upgrade change modify remove rm delete destroy recycle update-kubeconfig update edit",
+            ) || civo_nested_action(
+                words,
+                1,
+                "applications application app apps addon addons marketplace k8s-apps k8s-app k3s-apps k3s-app",
+                "ls list all add install show get inspect remove rm uninstall",
+            ) || civo_nested_action(
+                words,
+                1,
+                "node-pool pool",
+                "create add delete rm scale instance-delete instance-rm instance-remove instance-ls instance-list instance-all ls list all",
+            )
+        }
+        "loadbalancer" | "loadbalancers" | "lb" => {
+            civo_action(action, "ls list all show get inspect")
+        }
+        "network" | "networks" | "net" => civo_action(
+            action,
+            "ls list all create new add update change modify remove rm delete destroy show get describe inspect connect",
+        ),
+        "objectstore" | "bucket" | "buckets" | "object" | "objects" => {
+            civo_action(
+                action,
+                "ls list all create new add resize edit modify change update delete rm remove destroy show get info",
+            ) || civo_nested_action(
+                words,
+                1,
+                "credential credentials creds user users key keys",
+                "secret export export-credentials ls list all create new add update edit modify change delete rm remove destroy",
+            )
+        }
+        "permissions" | "permission" => civo_action(action, "ls all list"),
+        "region" | "regions" => civo_action(action, "ls list all current use default set"),
+        "resource-snapshot" | "resourcesnapshot" | "resource-snapshots" | "resourcesnapshots" => {
+            civo_action(
+                action,
+                "list ls show get describe update modify edit delete rm remove restore recover",
+            )
+        }
+        "size" | "sizes" => civo_action(action, "ls list all"),
+        "snapshot" | "snapshots" => civo_nested_action(
+            words,
+            1,
+            "schedule schedules",
+            "create delete remove rm update list ls show get inspect",
+        ),
+        "sshkey" | "ssh" | "ssh-key" | "sshkeys" => civo_action(
+            action,
+            "ls list all remove rm delete destroy find get update modify rename create new add",
+        ),
+        "teams" => civo_action(action, "ls all list create new add rename delete rm"),
+        "volume" | "volumes" => civo_action(
+            action,
+            "attach connect link detach disconnect unlink remove rm delete destroy create new add ls list all resize",
+        ),
+        "volumetypes" | "voltype" | "volumetype" => civo_action(action, "ls"),
+        "vpc" => civo_vpc_command_uses_api(words),
+        _ => false,
+    }
+}
+
+fn civo_vpc_command_uses_api(words: &[&str]) -> bool {
+    let Some(group) = words.get(1).copied() else {
+        return false;
+    };
+    let action = words.get(2).copied();
+    match group {
+        "network" | "networks" | "net" => civo_action(
+            action,
+            "ls list all create new add show get describe inspect update rename change modify remove rm delete destroy",
+        ),
+        "subnet" | "subnets" => civo_action(
+            action,
+            "ls list all create new add show get describe inspect remove rm delete destroy attach connect detach disconnect",
+        ),
+        "firewall" | "firewalls" | "fw" => {
+            civo_action(
+                action,
+                "ls list all create new add show get describe inspect update rename change remove rm delete destroy",
+            ) || civo_nested_action(
+                words,
+                2,
+                "rule rules",
+                "ls list all create new add remove delete destroy rm",
+            )
+        }
+        "loadbalancer" | "loadbalancers" | "lb" => civo_action(
+            action,
+            "ls list all create new add show get inspect update change modify remove rm delete destroy",
+        ),
+        "ip" | "ips" => civo_action(
+            action,
+            "ls list all reserve new add allocate create show get describe inspect update rename change assign attach unassign detach delete unallocate free remove rm",
+        ),
+        _ => false,
+    }
+}
+
+fn civo_action(action: Option<&str>, allowed: &str) -> bool {
+    action.is_some_and(|action| allowed.split_ascii_whitespace().any(|item| item == action))
+}
+
+fn civo_nested_action(words: &[&str], group_index: usize, groups: &str, actions: &str) -> bool {
+    words
+        .get(group_index)
+        .is_some_and(|group| groups.split_ascii_whitespace().any(|item| item == *group))
+        && civo_action(words.get(group_index + 1).copied(), actions)
+}
+
+fn civo_kubernetes_root(root: &str) -> bool {
+    matches!(root, "kubernetes" | "k3s" | "k8s" | "kube" | "talos")
+}
+
+fn civo_invocation_launches_child(words: &[&str], arguments: &[&str]) -> bool {
+    let Some(root) = words.first().copied() else {
+        return false;
+    };
+    if matches!(root, "instance" | "instances")
+        && civo_action(words.get(1).copied(), "console vnc access connect")
+        && !civo_action(words.get(2).copied(), "status stop")
+    {
+        return true;
+    }
+    if !civo_kubernetes_root(root) {
+        return false;
+    }
+    if civo_nested_action(
+        words,
+        1,
+        "applications application app apps addon addons marketplace k8s-apps k8s-app k3s-apps k3s-app",
+        "remove rm uninstall",
+    ) || words.get(1) == Some(&"update-kubeconfig")
+    {
+        return true;
+    }
+    civo_action(words.get(1).copied(), "config conf")
+        && civo_has_flag(arguments, &["--save", "-s"])
+        && !civo_has_flag(arguments, &["--overwrite", "-w"])
+        || civo_action(words.get(1).copied(), "create new add")
+            && civo_has_flag(arguments, &["--save"])
+            && civo_has_flag(arguments, &["--merge", "-m"])
+        || civo_action(words.get(1).copied(), "remove rm delete destroy")
+            && civo_has_flag(arguments, &["--delete-kubeconfig-context", "-d"])
+}
+
+fn civo_has_flag(arguments: &[&str], names: &[&str]) -> bool {
+    arguments.iter().any(|argument| {
+        names.contains(argument)
+            || names.iter().any(|name| {
+                argument
+                    .strip_prefix(name)
+                    .is_some_and(|suffix| suffix.starts_with('=') && suffix != "=false")
+            })
+    })
+}
+
+fn civo_config_has_token(explicit: Option<&Path>) -> bool {
+    let path = match std::env::var_os("CIVO_CONFIG") {
+        Some(path) if !path.is_empty() => Some(PathBuf::from(path)),
+        Some(_) => civo_default_config_path(),
+        None => explicit
+            .map(Path::to_path_buf)
+            .or_else(civo_default_config_path),
+    };
+    let Some(path) = path else { return false };
+    let Ok(contents) = fs::read_to_string(path) else {
+        return false;
+    };
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(&contents) else {
+        return false;
+    };
+    let Some(current) = value
+        .get("meta")
+        .and_then(|meta| meta.get("current_apikey"))
+        .and_then(serde_json::Value::as_str)
+        .filter(|current| !current.is_empty())
+    else {
+        return false;
+    };
+    value
+        .get("apikeys")
+        .and_then(|keys| keys.get(current))
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|token| !token.is_empty())
+}
+
+fn civo_default_config_path() -> Option<PathBuf> {
+    std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".civo.json"))
 }
 
 fn secret_gate(wrapper: &EnvWrapper) -> SecretGateDescriptor {
@@ -791,6 +1110,7 @@ const fn stub(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::ffi::OsStringExt;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
@@ -982,6 +1302,174 @@ mod tests {
 
         unsafe { std::env::remove_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR") };
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn civo_requests_its_token_only_for_reviewed_api_commands() {
+        let _guard = crate::global_test_env_lock().lock().unwrap();
+        let dir = temp_dir("env-wrapper-secretless-civo");
+        let stub_dir = dir.join("stubs");
+        let default_config = dir.join(".civo.json");
+        let explicit_config = dir.join("explicit.json");
+        let environment_config = dir.join("environment.json");
+        fs::create_dir_all(&stub_dir).unwrap();
+
+        let env_names = [
+            "AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR",
+            "CIVO_CONFIG",
+            "CIVO_TOKEN",
+            "HOME",
+        ];
+        let previous = env_names.map(|name| (name, std::env::var_os(name)));
+        unsafe {
+            std::env::set_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR", &stub_dir);
+            std::env::set_var("HOME", &dir);
+            std::env::remove_var("CIVO_CONFIG");
+            std::env::remove_var("CIVO_TOKEN");
+        }
+
+        let script_path = stub_dir.join("civo");
+        let script = stub_script(
+            &wrapper("civo").unwrap().primary,
+            Path::new("/opt/homebrew/bin/civo"),
+        );
+        let invocation = |values: Vec<OsString>| {
+            std::iter::once(script_path.clone().into_os_string())
+                .chain(values)
+                .collect::<Vec<_>>()
+        };
+        let args = |values: &[&str]| values.iter().map(OsString::from).collect::<Vec<_>>();
+
+        for values in [
+            vec![],
+            vec!["help"],
+            vec!["instance", "list", "--help"],
+            vec!["--version"],
+            vec!["-v"],
+            vec!["version"],
+            vec!["completion", "zsh"],
+            vec!["update"],
+            vec!["apikey", "show"],
+            vec!["apikeys", "save", "work", "explicit-key"],
+            vec!["future-command"],
+            vec!["instance"],
+            vec!["instance", "future-command"],
+            vec!["instance", "list", "--", "anything"],
+            vec!["instance", "console", "example"],
+            vec![
+                "kubernetes",
+                "applications",
+                "remove",
+                "grafana",
+                "--cluster",
+                "example",
+            ],
+            vec!["kubernetes", "config", "example", "--save"],
+            vec!["kubernetes", "update-kubeconfig", "example"],
+            vec!["kubernetes", "create", "example", "--save", "--merge"],
+            vec![
+                "kubernetes",
+                "remove",
+                "example",
+                "--delete-kubeconfig-context",
+            ],
+        ] {
+            assert!(
+                invocation_is_secretless(
+                    &script_path,
+                    script.as_bytes(),
+                    &invocation(args(&values)),
+                ),
+                "civo {values:?}",
+            );
+        }
+        assert!(invocation_is_secretless(
+            &script_path,
+            script.as_bytes(),
+            &invocation(vec![OsString::from_vec(vec![0xff])]),
+        ));
+
+        for values in [
+            vec!["instance", "list"],
+            vec!["instance", "--region", "NYC1", "show", "example"],
+            vec!["--output=json", "--pretty", "quota"],
+            vec!["db", "credential", "example"],
+            vec!["k8s", "list"],
+            vec!["kubernetes", "config", "example"],
+            vec!["kubernetes", "config", "example", "--save", "--overwrite"],
+            vec!["objectstore", "credential", "export", "--access-key", "key"],
+            vec!["vpc", "firewall", "rule", "create"],
+        ] {
+            assert!(
+                !invocation_is_secretless(
+                    &script_path,
+                    script.as_bytes(),
+                    &invocation(args(&values)),
+                ),
+                "civo {values:?}",
+            );
+        }
+
+        unsafe { std::env::set_var("CIVO_TOKEN", "") };
+        assert!(invocation_is_secretless(
+            &script_path,
+            script.as_bytes(),
+            &invocation(args(&["instance", "list"])),
+        ));
+        unsafe { std::env::remove_var("CIVO_TOKEN") };
+
+        let configured = r#"{"apikeys":{"work":"fresh-key"},"meta":{"current_apikey":"work"}}"#;
+        fs::write(&default_config, configured).unwrap();
+        assert!(invocation_is_secretless(
+            &script_path,
+            script.as_bytes(),
+            &invocation(args(&["instance", "list"])),
+        ));
+        fs::write(
+            &default_config,
+            r#"{"apikeys":{"work":"fresh-key"},"meta":{"current_apikey":"missing"}}"#,
+        )
+        .unwrap();
+        assert!(!invocation_is_secretless(
+            &script_path,
+            script.as_bytes(),
+            &invocation(args(&["instance", "list"])),
+        ));
+
+        fs::write(&explicit_config, configured).unwrap();
+        assert!(invocation_is_secretless(
+            &script_path,
+            script.as_bytes(),
+            &invocation(args(&[
+                "--config",
+                explicit_config.to_str().unwrap(),
+                "instance",
+                "list",
+            ])),
+        ));
+        fs::write(&environment_config, configured).unwrap();
+        unsafe { std::env::set_var("CIVO_CONFIG", &environment_config) };
+        assert!(invocation_is_secretless(
+            &script_path,
+            script.as_bytes(),
+            &invocation(args(&["instance", "list"])),
+        ));
+
+        assert!(!invocation_is_secretless(
+            &script_path,
+            format!("{script}# changed\n").as_bytes(),
+            &invocation(args(&["--help"])),
+        ));
+
+        for (name, value) in previous {
+            unsafe {
+                match value {
+                    Some(value) => std::env::set_var(name, value),
+                    None => std::env::remove_var(name),
+                }
+            }
+        }
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
