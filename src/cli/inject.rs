@@ -234,7 +234,12 @@ fn exec(mut options: Options, stderr: &mut dyn Write) -> i32 {
         )
     });
     let prepared = if secretless {
-        resolve_target(&options.target).map(|target| (target, secretless_environment(&options)))
+        let substitute_empty = verified_script
+            .as_ref()
+            .and_then(|script| script.path.file_name())
+            .is_some_and(|name| name == "pnpm");
+        resolve_target(&options.target)
+            .map(|target| (target, secretless_environment(&options, substitute_empty)))
     } else {
         prepare_injection(
             &options,
@@ -287,10 +292,19 @@ fn exec(mut options: Options, stderr: &mut dyn Write) -> i32 {
     1
 }
 
-fn secretless_environment(options: &Options) -> BTreeMap<OsString, OsString> {
+fn secretless_environment(
+    options: &Options,
+    substitute_empty: bool,
+) -> BTreeMap<OsString, OsString> {
     let mut env = std::env::vars_os().collect::<BTreeMap<_, _>>();
     for key in &options.keys {
-        env.remove(std::ffi::OsStr::new(key));
+        if substitute_empty {
+            // pnpm expands NODE_AUTH_TOKEN while loading .npmrc and warns when
+            // it is absent. An empty value is unauthenticated and stays quiet.
+            env.insert(OsString::from(key), OsString::new());
+        } else {
+            env.remove(std::ffi::OsStr::new(key));
+        }
     }
     env
 }
@@ -1597,11 +1611,33 @@ mod tests {
             shebang_script: None,
         };
 
-        let env = secretless_environment(&options);
+        let env = secretless_environment(&options, false);
 
         unsafe { std::env::remove_var("SOME_SECRET") };
         assert!(!env.contains_key(std::ffi::OsStr::new("SOME_SECRET")));
         assert!(env.contains_key(std::ffi::OsStr::new("PATH")));
+    }
+
+    #[test]
+    fn pnpm_secretless_environment_substitutes_an_empty_token() {
+        let _guard = crate::global_test_env_lock().lock().unwrap();
+        unsafe { std::env::set_var("NODE_AUTH_TOKEN", "ambient") };
+        let options = Options {
+            replace_existing_env: false,
+            allow_missing_keys: true,
+            keys: vec!["NODE_AUTH_TOKEN".into()],
+            target: "/bin/echo".into(),
+            args: Vec::new(),
+            shebang_script: None,
+        };
+
+        let env = secretless_environment(&options, true);
+
+        unsafe { std::env::remove_var("NODE_AUTH_TOKEN") };
+        assert_eq!(
+            env.get(std::ffi::OsStr::new("NODE_AUTH_TOKEN")),
+            Some(&OsString::new())
+        );
     }
 
     #[test]
