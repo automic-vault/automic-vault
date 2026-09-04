@@ -72,6 +72,40 @@ import Testing
     #expect(genericSecretGateRequestClassification(gateID: "flyctl", arguments: []) == .unknown)
 }
 
+@Test func akamaiPolicyClassifiesBuiltInsAndLeavesPluginsUnknown() {
+    for arguments in [
+        ["help"],
+        ["list"],
+        ["search", "property"],
+        ["config", "get", "cli.cache-path"],
+        ["config", "list"],
+        ["--section", "prod", "list"],
+        ["--edgerc=/tmp/caller.edgerc", "--help"],
+    ] {
+        #expect(genericSecretGateRequestClassification(gateID: "akamai", arguments: arguments) == .readOnly)
+    }
+    for arguments in [
+        ["get", "property-manager"],
+        ["install", "property-manager"],
+        ["uninstall", "property-manager"],
+        ["update", "property-manager"],
+        ["upgrade"],
+        ["config", "set", "cli.color", "true"],
+        ["config", "unset", "cli.color"],
+    ] {
+        #expect(genericSecretGateRequestClassification(gateID: "akamai", arguments: arguments) == .localWrite)
+    }
+    #expect(genericSecretGateRequestClassification(
+        gateID: "akamai", arguments: ["property-manager", "--help"]
+    ) == .readOnly)
+    #expect(genericSecretGateRequestClassification(
+        gateID: "akamai", arguments: ["property-manager", "list"]
+    ) == .unknown)
+    #expect(genericSecretGateRequestClassification(
+        gateID: "akamai", arguments: ["future-command"]
+    ) == .unknown)
+}
+
 @Test func stripePolicyClassifiesGeneratedBuiltInAndPluginCommands() {
     let readOnly = [
         ["customers", "list"],

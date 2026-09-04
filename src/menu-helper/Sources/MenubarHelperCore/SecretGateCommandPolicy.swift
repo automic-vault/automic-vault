@@ -21,6 +21,7 @@ public func genericSecretGateRequestClassification(
     let words = arguments.map { $0.lowercased() }
     guard !words.isEmpty else { return .unknown }
     if gateID == "stripe" { return stripeRequestClassification(words) }
+    if gateID == "akamai" { return akamaiRequestClassification(words) }
     if words == ["help"] || words == ["--help"] || words == ["version"] || words == ["--version"] {
         return .readOnly
     }
@@ -34,6 +35,57 @@ public func genericSecretGateRequestClassification(
         if policy.mutating.contains(candidate) { return .mutating }
     }
     return .unknown
+}
+
+// Reviewed against Akamai CLI 2.0.5 (cae602d). Installed package commands
+// remain Unknown because each package defines its own authority.
+private func akamaiRequestClassification(_ arguments: [String]) -> SecretGateRequestClassification {
+    var index = 0
+    while index < arguments.count {
+        let argument = arguments[index]
+        if ["--help", "-h", "--version"].contains(argument) { return .readOnly }
+        if argument == "--" {
+            index += 1
+            break
+        }
+        if ["--bash", "--zsh", "--generate-bash-completion"].contains(argument) {
+            index += 1
+            continue
+        }
+        if ["--edgerc", "-e", "--section", "-s", "--accountkey", "--account-key", "--proxy"]
+            .contains(argument)
+        {
+            guard index + 1 < arguments.count else { return .unknown }
+            index += 2
+            continue
+        }
+        if ["--edgerc=", "-e=", "--section=", "-s=", "--accountkey=", "--account-key=", "--proxy="]
+            .contains(where: { argument.hasPrefix($0) })
+        {
+            index += 1
+            continue
+        }
+        if argument == "--daemon" || argument.hasPrefix("-") { return .unknown }
+        break
+    }
+    guard index < arguments.count else { return .readOnly }
+    let command = arguments[index]
+    let trailing = Array(arguments.dropFirst(index + 1))
+    if trailing.first.map({ ["help", "--help", "-h", "--version"].contains($0) }) == true {
+        return .readOnly
+    }
+    switch command {
+    case "help", "list", "search":
+        return .readOnly
+    case "get", "install", "uninstall", "update", "upgrade":
+        return .localWrite
+    case "config":
+        guard let operation = trailing.first else { return .unknown }
+        if ["get", "list"].contains(operation) { return .readOnly }
+        return ["set", "unset", "rm"].contains(operation) ? .localWrite : .unknown
+    default:
+        return .unknown
+    }
 }
 
 private func stripeRequestClassification(_ arguments: [String]) -> SecretGateRequestClassification {
@@ -124,7 +176,7 @@ accept,acknowledge_confirmation_of_payee,activate,add_lines,advance,apply_custom
 """)
 
 private let secretGateCommandPolicies: [String: SecretGateCommandPolicy] = [
-    "akamai": .init("config list", "config set,config remove", secretDump: "config show"),
+    "akamai": .init("", ""),
     "algolia": .init("profile list", "objects import,objects delete,indices delete", secretDump: "profile get"),
     "argocd": .init("app get,app list,app diff,cluster get,cluster list,account get-user-info", "app create,app set,app sync,app delete,app rollback", secretDump: "account generate-token"),
     "ast-cli": .init("scan list,scan show,project list,project show", "scan create,scan cancel,project create,project delete"),
