@@ -72,6 +72,47 @@ import Testing
     #expect(genericSecretGateRequestClassification(gateID: "flyctl", arguments: []) == .unknown)
 }
 
+@Test func argocdPolicyMatchesVersion352CommandAuthority() {
+    let readOnly = [
+        ["version"],
+        ["app", "get", "example"],
+        ["app", "resources", "example"],
+        ["appset", "list"],
+        ["cluster", "get", "in-cluster"],
+        ["repo", "list"],
+        ["project", "list"],
+        ["account", "can-i", "get", "applications", "'*'"],
+        ["cert", "list"],
+        ["--config", "/tmp/config", "--server=argocd.example.com", "app", "list"],
+        ["-H", "X-Forwarded-For: example", "cluster", "list"],
+        ["app", "delete", "--help"],
+    ]
+    for arguments in readOnly {
+        #expect(genericSecretGateRequestClassification(gateID: "argocd", arguments: arguments) == .readOnly)
+    }
+
+    let mutating = [
+        ["app", "create", "example"],
+        ["app", "actions", "run", "example", "restart"],
+        ["appset", "delete", "example"],
+        ["cluster", "rotate-auth", "in-cluster"],
+        ["repo", "add", "https://example.com/repo.git"],
+        ["proj", "role", "add-policy", "example", "reader"],
+        ["account", "delete-token", "token-id"],
+        ["--auth-token", "--help", "app", "delete", "example"],
+    ]
+    for arguments in mutating {
+        #expect(genericSecretGateRequestClassification(gateID: "argocd", arguments: arguments) == .mutating)
+    }
+
+    #expect(genericSecretGateRequestClassification(gateID: "argocd", arguments: ["account", "generate-token"]) == .secretDump)
+    #expect(genericSecretGateRequestClassification(gateID: "argocd", arguments: ["account", "session-token"]) == .secretDump)
+    #expect(genericSecretGateRequestClassification(gateID: "argocd", arguments: ["proj", "role", "create-token"]) == .secretDump)
+    #expect(genericSecretGateRequestClassification(gateID: "argocd", arguments: ["future-plugin"]) == .unknown)
+    #expect(genericSecretGateRequestClassification(gateID: "argocd", arguments: ["app", "future-operation"]) == .unknown)
+    #expect(genericSecretGateRequestClassification(gateID: "argocd", arguments: ["--future-global", "app", "list"]) == .unknown)
+}
+
 @Test func stripePolicyClassifiesGeneratedBuiltInAndPluginCommands() {
     let readOnly = [
         ["customers", "list"],
