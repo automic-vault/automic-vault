@@ -275,14 +275,22 @@ fn censys_target_uses_legacy_environment(target: &Path) -> bool {
 
 fn censys_search_credentials_are_available(args: &[OsString]) -> bool {
     (censys_has_option(args, "--api-id") && censys_has_option(args, "--api-secret"))
-        || (nonempty_env("CENSYS_API_ID") && nonempty_env("CENSYS_API_SECRET"))
+        || censys_search_environment_prevents_injection()
         || censys_config_has_credentials(&["api_id", "api_secret"])
 }
 
 fn censys_asm_credentials_are_available(args: &[OsString]) -> bool {
     censys_has_option(args, "--api-key")
-        || nonempty_env("CENSYS_ASM_API_KEY")
+        || std::env::var_os("CENSYS_ASM_API_KEY").is_some()
         || censys_config_has_credentials(&["asm_api_key"])
+}
+
+fn censys_search_environment_prevents_injection() -> bool {
+    let api_id = std::env::var_os("CENSYS_API_ID");
+    let api_secret = std::env::var_os("CENSYS_API_SECRET");
+    api_id.as_ref().is_some_and(|value| value.is_empty())
+        || api_secret.as_ref().is_some_and(|value| value.is_empty())
+        || (api_id.is_some() && api_secret.is_some())
 }
 
 fn censys_has_flag(args: &[OsString], names: &[&str]) -> bool {
@@ -300,10 +308,6 @@ fn censys_has_option(args: &[OsString], name: &str) -> bool {
                 .and_then(|arg| arg.strip_prefix('='))
                 .is_some_and(|value| !value.is_empty())
     })
-}
-
-fn nonempty_env(name: &str) -> bool {
-    std::env::var_os(name).is_some_and(|value| !value.is_empty())
 }
 
 fn censys_config_has_credentials(keys: &[&str]) -> bool {
@@ -1287,6 +1291,31 @@ mod tests {
                 &invocation(args(&values)),
             ));
         }
+        unsafe {
+            std::env::set_var("CENSYS_API_ID", "");
+            std::env::remove_var("CENSYS_API_SECRET");
+            std::env::set_var("CENSYS_ASM_API_KEY", "");
+        }
+        for values in [
+            vec!["search", "query"],
+            vec!["config"],
+            vec!["asm", "list-seeds"],
+        ] {
+            assert!(invocation_is_secretless(
+                &script_path,
+                legacy_script.as_bytes(),
+                &invocation(args(&values)),
+            ));
+        }
+        unsafe {
+            std::env::set_var("CENSYS_API_ID", "existing-id");
+            std::env::set_var("CENSYS_API_SECRET", "");
+        }
+        assert!(invocation_is_secretless(
+            &script_path,
+            legacy_script.as_bytes(),
+            &invocation(args(&["search", "query"])),
+        ));
         unsafe {
             std::env::remove_var("CENSYS_API_ID");
             std::env::remove_var("CENSYS_API_SECRET");
