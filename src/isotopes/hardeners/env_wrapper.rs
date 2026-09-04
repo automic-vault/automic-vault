@@ -122,7 +122,7 @@ pub(crate) fn invocation_is_secretless(
 }
 
 fn buf_invocation_is_secretless(args: &[OsString]) -> bool {
-    if buf_help_requested(args) {
+    if buf_help_requested(args) || args.iter().any(|argument| argument == "--") {
         return true;
     }
     let words = buf_command_words(args);
@@ -135,20 +135,25 @@ fn buf_invocation_is_secretless(args: &[OsString]) -> bool {
 // inherit BUF_TOKEN until their token use and subprocess behavior are reviewed.
 fn buf_command_needs_token(words: &[&str], args: &[OsString]) -> bool {
     match words {
-        [
-            "build" | "breaking" | "convert" | "export" | "format" | "lint" | "ls-files" | "stats",
-            ..,
-        ]
+        ["build" | "breaking" | "convert" | "export" | "lint", ..]
         | ["dep", "graph" | "prune" | "update", ..]
         | ["config", "ls-breaking-rules" | "ls-lint-rules", ..]
-        | ["source", "edit", "deprecate", ..]
         | [
             "mod",
             "prune" | "update" | "ls-breaking-rules" | "ls-lint-rules",
             ..,
         ]
-        | ["plugin" | "policy", "update", ..]
-        | ["beta", "price", ..] => buf_invocation_references_registry(args),
+        | ["plugin" | "policy", "update", ..] => buf_invocation_references_registry(args),
+        ["format" | "stats", ..] | ["beta", "price", ..] => args
+            .iter()
+            .any(|argument| argument.to_str().is_some_and(buf_value_references_registry)),
+        ["ls-files", ..] => {
+            args.iter()
+                .any(|argument| argument.to_str().is_some_and(buf_value_references_registry))
+                || (buf_flag_is_present(args, "--include-imports")
+                    || buf_flag_is_present(args, "--include-importable"))
+                    && buf_project_references_registry(args)
+        }
         ["curl", ..] => {
             buf_flag_is_present(args, "--schema") && buf_invocation_references_registry(args)
         }
@@ -1498,6 +1503,7 @@ mod tests {
             vec!["beta", "studio-agent"],
             vec!["future-command"],
             vec!["registry", "future-command"],
+            vec!["registry", "module", "info", "--", "--help"],
             vec!["--future-flag", "registry", "whoami"],
             vec![
                 "export",
@@ -1519,11 +1525,23 @@ mod tests {
             "version: v2\nmodules:\n  - path: proto\ndeps:\n  - buf.build/acme/private\nplugins:\n  - plugin: buf.build/acme/check\n",
         )
         .unwrap();
+        for command in [
+            vec!["format", project_path],
+            vec!["stats", project_path],
+            vec!["source", "edit", "deprecate", project_path],
+            vec!["ls-files", project_path],
+        ] {
+            assert!(
+                invocation_is_secretless(&script_path, script.as_bytes(), &args(&command)),
+                "buf does not fetch configured dependencies for {command:?}",
+            );
+        }
 
         for command in [
             vec!["build", "buf.build/acme/petapis"],
             vec!["format", "buf.build/acme/petapis"],
             vec!["lint", project_path],
+            vec!["ls-files", project_path, "--include-imports"],
             vec!["breaking", "--against", "buf.build/acme/petapis"],
             vec!["convert", "buf.build/acme/petapis", "--type", "acme.v1.Pet"],
             vec![
@@ -1536,7 +1554,6 @@ mod tests {
             vec!["dep", "prune", project_path],
             vec!["dep", "update", project_path],
             vec!["config", "ls-lint-rules", "--config", config_path],
-            vec!["source", "edit", "deprecate", project_path],
             vec!["push"],
             vec!["plugin", "push", "buf.build/acme/check"],
             vec!["plugin", "update", project_path],
@@ -1572,7 +1589,7 @@ mod tests {
                 "--module",
                 "buf.build/acme/petapis",
             ],
-            vec!["beta", "price", project_path],
+            vec!["beta", "price", "buf.build/acme/petapis"],
             vec![
                 "beta",
                 "registry",

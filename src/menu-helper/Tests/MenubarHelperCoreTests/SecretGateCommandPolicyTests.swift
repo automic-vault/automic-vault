@@ -107,6 +107,7 @@ import Testing
         ["generate", "--template", "buf.gen.yaml"],
         ["registry", "future-command"],
         ["--future-flag", "registry", "whoami"],
+        ["registry", "whoami", "--", "--help"],
     ] {
         #expect(genericSecretGateRequestClassification(gateID: "buf", arguments: arguments) == .unknown)
     }

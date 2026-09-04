@@ -43,6 +43,7 @@ private func bufRequestClassification(_ arguments: [String]) -> SecretGateReques
     }) {
         return .readOnly
     }
+    if arguments.contains("--") { return .unknown }
     let words = bufCommandWords(arguments)
 
     if words.starts(with: ["registry", "whoami"])
