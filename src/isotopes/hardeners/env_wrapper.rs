@@ -1518,6 +1518,20 @@ mod tests {
         ));
         unsafe { std::env::remove_var("CIRCLECI_CLI_TOKEN") };
 
+        fs::write(&current_config, "token: \"\"\n").unwrap();
+        assert!(!invocation_is_secretless(
+            &script_path,
+            script.as_bytes(),
+            &invocation(args(&["pipeline", "list"])),
+        ));
+        fs::write(&current_config, "token: fresh\n").unwrap();
+        assert!(invocation_is_secretless(
+            &script_path,
+            script.as_bytes(),
+            &invocation(args(&["pipeline", "list"])),
+        ));
+        fs::remove_file(&current_config).unwrap();
+
         fs::write(&legacy_config, "host: https://circleci.com\ntoken: fresh\n").unwrap();
         assert!(invocation_is_secretless(
             &script_path,
