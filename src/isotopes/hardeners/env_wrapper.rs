@@ -98,6 +98,7 @@ pub(crate) fn invocation_is_secretless(
             ) || args.first().is_some_and(|arg| arg == "store")
                 && args.get(1).is_some_and(|arg| arg == "path")
         }
+        "doctl" => doctl_invocation_is_secretless(args),
         "fly" | "flyctl" => local_command(args, &["completion", "help", "version"]),
         "k6" => local_command(
             args,
@@ -205,6 +206,210 @@ fn npm_invocation_is_secretless(args: &[OsString]) -> bool {
             | "v"
             | "whoami"
     )
+}
+
+// Reviewed against doctl v1.168.0. Runnable-only names and context-checked
+// ambiguous aliases cross from the tokenless command tree into a credentialed leaf.
+const DOCTL_ROOTS: &str = "1-click,account,apps,app,a,auth,balance,billing-history,bh,compute,databases,db,dbs,d,database,dedicated-inference,di,dedicated-inferences,gradient,ai,genai,gradientai,invoice,kubernetes,kube,k8s,k,monitoring,network,nfs,projects,registries,regs,rs,registry,reg,r,secrets,security,serverless,sandbox,sbx,sls,serverless-inference,inference,si,spaces,sp,vector-databases,vdb,vdbs,version,vpcs";
+const DOCTL_GROUP_ONLY: &str = "1-click,access-point,account,action,activation,activations,actv,agent,agents,ai,alert,alerts,apikeys,apk,app,apps,async,async-invoke,attachment,auth,autoscale,backup-policies,balance,bh,billing-history,byoip-prefix,byoip-prefixes,cdn,certificate,cfg,chat,chat-completions,chatcompletion,cluster,clusters,compute,configuration,da,das,database,databases,db,dbs,dedicated-inference,dedicated-inferences,dev,di,domain,droplet,droplet-action,droplet-autoscale,embeddings,events,fip,fipa,firewall,firewalls,floating-ip,floating-ip-action,floating-ip-actions,floating-ips,fn,fr,function,functionroute,functions,fw,garbage-collection,genai,gradient,gradientai,image,image-action,images,indexes,inference,instance-size,invoice,k8scfg,kb,key,keys,knowledge-base,kube,kubecfg,kubeconfig,kubernetes,lb,load-balancer,main,maintenance,maintenance-window,messages,monitoring,mw,namespace,namespaces,network,nfs,node-pool,node-pools,nodepool,nodepools,np,ns,o,ok,openai-key,options,opts,peerings,plugin,pool,pools,projects,records,reg,region,registries,registry,regs,rep,replica,repo,repository,reserved-ip,reserved-ip-action,reserved-ip-actions,reserved-ips,reserved-ipv6,reserved-ipv6s,responses,route,routes,sandbox,sbx,scan,scans,scenario-library,scenario-set,scenario-sets,secrets,security,serverless,serverless-inference,si,sim,simulation-run,simulation-runs,size,sl,sls,sm,sp,spaces,spec,sql-mode,ss,ssh-key,storage,storage-autoscale,tier,topics,trig,trigger,triggers,uptime,user,vdb,vdbs,vector-databases,vng,volume,volume-action,vpc-nat-gateway,vpcs";
+const DOCTL_RUNNABLE_ONLY: &str = "actions,add,add-datasource,add-droplets,add-ds,add-forwarding-rules,add-rules,add-tags,affected-resources,append,apply,ar,assign,ath,attach,available-regions,b,backups,bu,build,c-ss,cancel,cancel-event,cancel-indexing-job,cancel-job,cancel-job-invocation,cd,ce,change-backup-policy,change-kernel,cji,conn,connect,connection,console,create,create-deployment,create-scenario-set,create-token,credentials,creds,cs,csv,ct,d-ds,del,delete,delete-dangerous,delete-datasource,delete-manifest,delete-node,delete-selective,delete-tag,deploy,detach,detach-by-droplet-id,disable,disable-backups,dl-url,dm,docker-config,download-url,ds,dt,dth,enable,enable-backups,enable-ipv6,enable-private-networking,eng,engines,exec-credential,f,fc,flush,fork,g-bgp-auth-key,g-j,g-service-key,g-t,g-t-url,ga,gd,ge,gen,generate,get,get-active,get-agents,get-bgp-auth-key,get-ca,get-deployment,get-event,get-gpu-model-config,get-indexing-job,get-job,get-job-invocation,get-journey,get-metadata,get-service-key,get-sizes,get-trajectory,get-trajectory-url,get-upgrades,ggmc,gji,gs,gu,i,import,in,init,install,invoke,kernels,kubernetes-manifest,l,la,latest,list,list-accelerators,list-alerts,list-application,list-associated-resources,list-buildpacks,list-by-droplet,list-datasources,list-deployments,list-distribution,list-events,list-history,list-indexing-job-data-sources,list-indexing-jobs,list-instances,list-job-invocations,list-journeys,list-manifests,list-members,list-models,list-regions,list-routes,list-scenarios,list-supported,list-tags,list-tokens,list-user,list-v2,list-versions,lm,login,logout,logs,lr,ls,ls-ds,ls-j,ls-job-ds,ls-jobs,ls-routes,ls-s,ls2,lsd,lse,lsji,lt,lv,m,migrate,n,neighbors,partitions,password-reset,pdf,power-cycle,power-off,power-on,promote,propose,purge-cache,ratelimit,reassign,reboot,rebuild,recycle,regen-api-key,regen-service-key,regenerate,regenerate-service-key,regions,remove,remove-droplets,remove-forwarding-rules,remove-rules,remove-tags,rename,replace,replace-node,reset,resize,resource,restart,restore,restore-status,result,revoke-token,rl,rm,rs-status,rt,run,save,set,show,shutdown,sizes,slugs,snapshots,ssh,start,status,subscription-tiers,summary,switch,switch-performance-tier,t,tags,tiers,token,transfer,uad,unassign,undeploy,uninstall,unset,untag,update,update-alert-destinations,update-vis,update-visibility,upgrade,upgrade-buildpack,uv,v,validate,version,versions,w,wait,watch";
+const DOCTL_AMBIGUOUS: &str = "a,c,config,d,g,gc,k,k8s,models,p,r,resources,rs,s,snapshot,tag,u";
+
+fn doctl_invocation_is_secretless(args: &[OsString]) -> bool {
+    let Some(args) = args
+        .iter()
+        .map(|arg| arg.to_str())
+        .collect::<Option<Vec<_>>>()
+    else {
+        return true;
+    };
+    let option_end = args
+        .iter()
+        .position(|arg| *arg == "--")
+        .unwrap_or(args.len());
+    let option_args = &args[..option_end];
+    if option_args
+        .iter()
+        .any(|arg| matches!(*arg, "--help" | "-h" | "--version"))
+        || doctl_uses_another_token(option_args)
+    {
+        return true;
+    }
+
+    let mut path = Vec::new();
+    let mut index = 0;
+    while index < option_end {
+        let argument = args[index];
+        if doctl_flag_takes_value(argument) {
+            if index + 1 >= option_end {
+                return true;
+            }
+            index += 2;
+            continue;
+        }
+        if doctl_attached_value(argument)
+            || matches!(argument, "--interactive" | "--trace" | "--verbose" | "-v")
+        {
+            index += 1;
+            continue;
+        }
+        if argument.starts_with('-') {
+            return true;
+        }
+        if path.is_empty() {
+            if !doctl_name_in(DOCTL_ROOTS, argument) || argument == "version" {
+                return true;
+            }
+            path.push(argument);
+            index += 1;
+            continue;
+        }
+        if doctl_local_leaf(&path, argument) {
+            return true;
+        }
+        if doctl_name_in(DOCTL_GROUP_ONLY, argument) || doctl_ambiguous_group(&path, argument) {
+            path.push(argument);
+            index += 1;
+            continue;
+        }
+        return !doctl_name_in(DOCTL_RUNNABLE_ONLY, argument)
+            && !doctl_name_in(DOCTL_AMBIGUOUS, argument);
+    }
+    true
+}
+
+fn doctl_uses_another_token(args: &[&str]) -> bool {
+    let mut context = None;
+    for (index, argument) in args.iter().enumerate() {
+        if matches!(*argument, "--access-token" | "-t")
+            || argument.starts_with("--access-token=")
+            || argument.starts_with("-t") && argument.len() > 2
+        {
+            return true;
+        }
+        if *argument == "--context" {
+            context = args.get(index + 1).copied();
+        } else if let Some(value) = argument.strip_prefix("--context=") {
+            context = Some(value);
+        }
+    }
+    match context.filter(|value| !value.is_empty()) {
+        Some(value) => !value.eq_ignore_ascii_case("default"),
+        None => std::env::var_os("DIGITALOCEAN_CONTEXT")
+            .is_some_and(|value| !value.is_empty() && value != "default"),
+    }
+}
+
+fn doctl_flag_takes_value(argument: &str) -> bool {
+    matches!(
+        argument,
+        "--access-token"
+            | "-t"
+            | "--api-url"
+            | "-u"
+            | "--config"
+            | "-c"
+            | "--context"
+            | "--http-retry-max"
+            | "--http-retry-wait-max"
+            | "--http-retry-wait-min"
+            | "--output"
+            | "-o"
+    )
+}
+
+fn doctl_attached_value(argument: &str) -> bool {
+    [
+        "--access-token=",
+        "--api-url=",
+        "--config=",
+        "--context=",
+        "--http-retry-max=",
+        "--http-retry-wait-max=",
+        "--http-retry-wait-min=",
+        "--output=",
+    ]
+    .iter()
+    .any(|prefix| argument.starts_with(prefix))
+        || ["-t", "-u", "-c", "-o"]
+            .iter()
+            .any(|prefix| argument.starts_with(prefix) && argument.len() > prefix.len())
+}
+
+fn doctl_local_leaf(path: &[&str], leaf: &str) -> bool {
+    let root = path[0];
+    (root == "auth" && matches!(leaf, "list" | "ls" | "remove" | "switch"))
+        || (matches!(root, "apps" | "app" | "a")
+            && path.get(1).is_some_and(|command| *command == "spec")
+            && leaf == "validate")
+        || (matches!(root, "serverless" | "sandbox" | "sbx" | "sls") && leaf == "get-metadata")
+        || (matches!(root, "serverless" | "sandbox" | "sbx" | "sls")
+            && leaf == "install"
+            && (std::env::var_os("SNAP_SANDBOX_INSTALL").is_some()
+                || std::env::var_os("DOCKER_SANDBOX_INSTALL").is_some()))
+}
+
+fn doctl_ambiguous_group(path: &[&str], command: &str) -> bool {
+    let parent = path.last().copied().unwrap_or_default();
+    (parent == "dev" && matches!(command, "config" | "c"))
+        || (parent == "compute"
+            && matches!(
+                command,
+                "droplet" | "d" | "plugin" | "p" | "snapshot" | "s" | "ssh-key" | "k" | "tag"
+            ))
+        || (matches!(parent, "databases" | "db" | "dbs" | "d" | "database")
+            && matches!(
+                command,
+                "configuration"
+                    | "cfg"
+                    | "config"
+                    | "pool"
+                    | "p"
+                    | "replica"
+                    | "rep"
+                    | "r"
+                    | "user"
+                    | "u"
+            ))
+        || (matches!(parent, "gradient" | "ai" | "genai" | "gradientai")
+            && matches!(command, "agent" | "agents" | "a"))
+        || (matches!(parent, "agent" | "agents" | "a")
+            && matches!(command, "route" | "routes" | "r"))
+        || (matches!(parent, "kubernetes" | "kube" | "k8s" | "k")
+            && matches!(command, "cluster" | "clusters" | "c"))
+        || (matches!(parent, "cluster" | "clusters" | "c")
+            && matches!(
+                command,
+                "kubeconfig"
+                    | "kubecfg"
+                    | "k8scfg"
+                    | "config"
+                    | "cfg"
+                    | "node-pool"
+                    | "node-pools"
+                    | "nodepool"
+                    | "nodepools"
+                    | "pool"
+                    | "pools"
+                    | "np"
+                    | "p"
+            ))
+        || (parent == "monitoring" && matches!(command, "alert" | "alerts" | "a"))
+        || (parent == "nfs" && command == "snapshot")
+        || (parent == "projects" && command == "resources")
+        || (matches!(
+            parent,
+            "registries" | "regs" | "rs" | "registry" | "reg" | "r"
+        ) && matches!(
+            command,
+            "garbage-collection" | "gc" | "g" | "repository" | "repo" | "r"
+        ))
+        || (matches!(parent, "serverless-inference" | "inference" | "si") && command == "models")
+        || (matches!(parent, "spaces" | "sp") && matches!(command, "keys" | "k"))
+}
+
+fn doctl_name_in(names: &str, candidate: &str) -> bool {
+    names.split(',').any(|name| name == candidate)
 }
 
 fn secret_gate(wrapper: &EnvWrapper) -> SecretGateDescriptor {
@@ -981,6 +1186,111 @@ mod tests {
         ));
 
         unsafe { std::env::remove_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR") };
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn doctl_requests_token_only_for_audited_runnable_commands() {
+        let _guard = crate::global_test_env_lock().lock().unwrap();
+        let dir = temp_dir("env-wrapper-secretless-doctl");
+        unsafe { std::env::set_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR", &dir) };
+        let previous_context = std::env::var_os("DIGITALOCEAN_CONTEXT");
+        let previous_sandbox = std::env::var_os("SNAP_SANDBOX_INSTALL");
+        unsafe {
+            std::env::remove_var("DIGITALOCEAN_CONTEXT");
+            std::env::remove_var("SNAP_SANDBOX_INSTALL");
+        }
+        let script_path = dir.join("doctl");
+        let script = stub_script(
+            &wrapper("doctl").unwrap().primary,
+            Path::new("/opt/homebrew/bin/doctl"),
+        );
+        let args = |values: &[&str]| {
+            std::iter::once(script_path.clone().into_os_string())
+                .chain(values.iter().map(OsString::from))
+                .collect::<Vec<_>>()
+        };
+
+        for command in [
+            vec![],
+            vec!["--help"],
+            vec!["version"],
+            vec!["completion", "zsh"],
+            vec!["__complete", "auth"],
+            vec!["compute"],
+            vec!["compute", "droplet"],
+            vec!["k8s", "c"],
+            vec!["apps", "dev", "config"],
+            vec!["apps", "spec", "validate", "app.yaml"],
+            vec!["auth", "list"],
+            vec!["auth", "ls"],
+            vec!["auth", "switch", "--context", "team"],
+            vec!["auth", "remove", "--context", "team"],
+            vec!["serverless", "get-metadata", "."],
+            vec!["future-command"],
+            vec!["compute", "future-command"],
+            vec!["--access-token", "caller-token", "account", "get"],
+            vec!["-tcaller-token", "account", "get"],
+            vec!["--context", "team", "account", "get"],
+        ] {
+            assert!(
+                invocation_is_secretless(&script_path, script.as_bytes(), &args(&command)),
+                "doctl {command:?}",
+            );
+        }
+
+        for command in [
+            vec!["account", "get"],
+            vec!["compute", "droplet", "list"],
+            vec!["compute", "d", "g", "123"],
+            vec!["k8s", "c", "ls"],
+            vec!["--output", "json", "account", "get"],
+            vec!["account", "get", "--output=json"],
+            vec!["--context", "default", "account", "get"],
+            vec!["--context=DEFAULT", "account", "get"],
+            vec!["auth", "init"],
+            vec!["auth", "token"],
+            vec!["serverless", "install"],
+            vec!["serverless", "status"],
+        ] {
+            assert!(
+                !invocation_is_secretless(&script_path, script.as_bytes(), &args(&command)),
+                "doctl {command:?}",
+            );
+        }
+
+        unsafe { std::env::set_var("DIGITALOCEAN_CONTEXT", "team") };
+        assert!(invocation_is_secretless(
+            &script_path,
+            script.as_bytes(),
+            &args(&["account", "get"]),
+        ));
+        unsafe {
+            std::env::remove_var("DIGITALOCEAN_CONTEXT");
+            std::env::set_var("SNAP_SANDBOX_INSTALL", "1");
+        }
+        assert!(invocation_is_secretless(
+            &script_path,
+            script.as_bytes(),
+            &args(&["serverless", "install"]),
+        ));
+        assert!(!invocation_is_secretless(
+            &script_path,
+            format!("{script}# changed\n").as_bytes(),
+            &args(&["version"]),
+        ));
+
+        unsafe {
+            std::env::remove_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR");
+            match previous_context {
+                Some(value) => std::env::set_var("DIGITALOCEAN_CONTEXT", value),
+                None => std::env::remove_var("DIGITALOCEAN_CONTEXT"),
+            }
+            match previous_sandbox {
+                Some(value) => std::env::set_var("SNAP_SANDBOX_INSTALL", value),
+                None => std::env::remove_var("SNAP_SANDBOX_INSTALL"),
+            }
+        }
         let _ = fs::remove_dir_all(dir);
     }
 

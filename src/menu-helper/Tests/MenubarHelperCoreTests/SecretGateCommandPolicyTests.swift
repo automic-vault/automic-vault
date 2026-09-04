@@ -123,3 +123,11 @@ import Testing
     #expect(genericSecretGateRequestClassification(gateID: "node", arguments: ["stage", "publish"]) == .mutating)
     #expect(genericSecretGateRequestClassification(gateID: "node", arguments: ["ls"]) == .unknown)
 }
+
+@Test func doctlPolicySeparatesLocalAndCredentialedCommands() {
+    #expect(genericSecretGateRequestClassification(gateID: "doctl", arguments: ["account", "get"]) == .readOnly)
+    #expect(genericSecretGateRequestClassification(gateID: "doctl", arguments: ["compute", "droplet", "create"]) == .mutating)
+    #expect(genericSecretGateRequestClassification(gateID: "doctl", arguments: ["auth", "token"]) == .secretDump)
+    #expect(genericSecretGateRequestClassification(gateID: "doctl", arguments: ["auth", "list"]) == .unknown)
+    #expect(genericSecretGateRequestClassification(gateID: "doctl", arguments: ["version"]) == .readOnly)
+}
