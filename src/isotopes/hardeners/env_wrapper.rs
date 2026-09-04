@@ -270,13 +270,6 @@ fn checkov_invocation_is_secretless(args: &[OsString]) -> bool {
         return true;
     }
 
-    let repo_id = checkov_option_value(&arguments, "--repo-id")
-        .map(|value| !value.is_empty())
-        .unwrap_or_else(|| config_has("repo-id"));
-    if repo_id {
-        return false;
-    }
-
     let lists_checks = arguments.iter().any(|arg| matches!(*arg, "-l" | "--list"));
     let platform_list = arguments
         .iter()
@@ -297,7 +290,13 @@ fn checkov_invocation_is_secretless(args: &[OsString]) -> bool {
         ]
         .iter()
         .any(|key| config_has(key));
-    !(lists_checks && platform_list)
+    if lists_checks {
+        return !platform_list;
+    }
+
+    !checkov_option_value(&arguments, "--repo-id")
+        .map(|value| !value.is_empty())
+        .unwrap_or_else(|| config_has("repo-id"))
 }
 
 fn checkov_option_is_present(arguments: &[&str], name: &str) -> bool {
@@ -1307,6 +1306,11 @@ mod tests {
             &script_path,
             script.as_bytes(),
             &invocation(args(&["--directory", project.to_str().unwrap()])),
+        ));
+        assert!(invocation_is_secretless(
+            &script_path,
+            script.as_bytes(),
+            &invocation(args(&["--directory", project.to_str().unwrap(), "--list"])),
         ));
         fs::write(
             project.join(".checkov.yaml"),
