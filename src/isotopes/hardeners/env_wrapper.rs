@@ -116,8 +116,232 @@ pub(crate) fn invocation_is_secretless(
                 "validate",
             ],
         ),
+        "mc" => minio_mc_invocation_is_secretless(args),
         _ => false,
     }
+}
+
+// Reviewed against MinIO Client RELEASE.2025-08-13T08-35-41Z. The migrated
+// bundle contains only aliases whose sanitized config entry retains an access
+// key; inject it only when a built-in command actually names one of them.
+const MINIO_MC_GLOBAL_FLAGS: &[&str] = &[
+    "--quiet",
+    "-q",
+    "--disable-pager",
+    "--dp",
+    "--no-color",
+    "--json",
+    "--debug",
+    "--insecure",
+];
+const MINIO_MC_GLOBAL_OPTIONS: &[&str] = &[
+    "--config-dir",
+    "-C",
+    "--resolve",
+    "--limit-upload",
+    "--limit-download",
+    "--custom-header",
+    "-H",
+];
+
+fn minio_mc_invocation_is_secretless(args: &[OsString]) -> bool {
+    let Some(args) = args
+        .iter()
+        .map(|argument| argument.to_str())
+        .collect::<Option<Vec<_>>>()
+    else {
+        return true;
+    };
+    let option_end = args
+        .iter()
+        .position(|argument| *argument == "--")
+        .unwrap_or(args.len());
+    let option_args = &args[..option_end];
+    if option_args.iter().any(|argument| {
+        matches!(
+            *argument,
+            "--help" | "-h" | "--version" | "-v" | "--autocompletion"
+        )
+    }) || minio_mc_flag_value(option_args, &["--config-dir", "-C"]).is_some()
+        || ["MC_CONFIG_DIR", "MC_CONFIG_ENV_FILE"]
+            .iter()
+            .any(|name| std::env::var_os(name).is_some_and(|value| !value.is_empty()))
+    {
+        return true;
+    }
+
+    let Some((command, command_index)) = minio_mc_command(option_args) else {
+        return true;
+    };
+    let aliases = minio_mc_protected_aliases();
+    if aliases.is_empty() {
+        return true;
+    }
+    if command == "alias" {
+        let Some((subcommand, subcommand_index)) =
+            minio_mc_command(&option_args[command_index + 1..])
+        else {
+            return true;
+        };
+        if !matches!(subcommand, "list" | "ls") {
+            return true;
+        }
+        let named_alias =
+            minio_mc_command(&option_args[command_index + subcommand_index + 2..]).is_some();
+        return named_alias && !minio_mc_uses_protected_alias(&args, &aliases)
+            || aliases
+                .iter()
+                .all(|alias| minio_mc_has_ambient_alias(alias));
+    }
+    if !matches!(
+        command,
+        "admin"
+            | "anonymous"
+            | "batch"
+            | "cp"
+            | "cat"
+            | "cors"
+            | "diff"
+            | "du"
+            | "encrypt"
+            | "event"
+            | "find"
+            | "get"
+            | "head"
+            | "ilm"
+            | "idp"
+            | "license"
+            | "legalhold"
+            | "ls"
+            | "mb"
+            | "mv"
+            | "mirror"
+            | "od"
+            | "ping"
+            | "pipe"
+            | "put"
+            | "quota"
+            | "rm"
+            | "retention"
+            | "rb"
+            | "replicate"
+            | "ready"
+            | "sql"
+            | "stat"
+            | "support"
+            | "share"
+            | "tree"
+            | "tag"
+            | "undo"
+            | "version"
+            | "watch"
+    ) {
+        return true;
+    }
+    !minio_mc_uses_protected_alias(&args, &aliases)
+}
+
+fn minio_mc_command<'a>(args: &[&'a str]) -> Option<(&'a str, usize)> {
+    let mut index = 0;
+    while index < args.len() {
+        let argument = args[index];
+        if MINIO_MC_GLOBAL_FLAGS.contains(&argument) {
+            index += 1;
+        } else if MINIO_MC_GLOBAL_OPTIONS.contains(&argument) {
+            args.get(index + 1)?;
+            index += 2;
+        } else if MINIO_MC_GLOBAL_OPTIONS
+            .iter()
+            .any(|option| argument.starts_with(&format!("{option}=")))
+        {
+            index += 1;
+        } else if argument.starts_with('-') {
+            return None;
+        } else {
+            return Some((argument, index));
+        }
+    }
+    None
+}
+
+fn minio_mc_flag_value<'a>(args: &'a [&str], flags: &[&str]) -> Option<&'a str> {
+    for (index, argument) in args.iter().enumerate() {
+        for flag in flags {
+            if *argument == *flag {
+                return args
+                    .get(index + 1)
+                    .copied()
+                    .filter(|value| !value.is_empty());
+            }
+            if let Some(value) = argument.strip_prefix(&format!("{flag}=")) {
+                return (!value.is_empty()).then_some(value);
+            }
+        }
+    }
+    None
+}
+
+fn minio_mc_protected_aliases() -> Vec<String> {
+    let Some(home) = std::env::var_os("HOME") else {
+        return Vec::new();
+    };
+    let Ok(contents) = fs::read_to_string(PathBuf::from(home).join(".mc/config.json")) else {
+        return Vec::new();
+    };
+    let Ok(config) = serde_json::from_str::<serde_json::Value>(&contents) else {
+        return Vec::new();
+    };
+    config
+        .get("aliases")
+        .and_then(serde_json::Value::as_object)
+        .into_iter()
+        .flat_map(|aliases| aliases.iter())
+        .filter(|(_, config)| {
+            config
+                .get("accessKey")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|value| !value.is_empty())
+        })
+        .map(|(alias, _)| alias.clone())
+        .collect()
+}
+
+fn minio_mc_uses_protected_alias(args: &[&str], aliases: &[String]) -> bool {
+    let mut values = Vec::new();
+    let mut index = 0;
+    while index < args.len() {
+        let argument = args[index];
+        if argument == "--" {
+            values.extend_from_slice(&args[index + 1..]);
+            break;
+        }
+        if MINIO_MC_GLOBAL_FLAGS.contains(&argument) {
+            index += 1;
+        } else if MINIO_MC_GLOBAL_OPTIONS.contains(&argument) {
+            index += 2;
+        } else if MINIO_MC_GLOBAL_OPTIONS
+            .iter()
+            .any(|option| argument.starts_with(&format!("{option}=")))
+        {
+            index += 1;
+        } else {
+            values.push(argument);
+            index += 1;
+        }
+    }
+    aliases.iter().any(|alias| {
+        !minio_mc_has_ambient_alias(alias)
+            && values.iter().any(|argument| {
+                let value = argument
+                    .split_once('=')
+                    .map_or(*argument, |(_, value)| value);
+                value == alias || value.starts_with(&format!("{alias}/"))
+            })
+    })
+}
+
+fn minio_mc_has_ambient_alias(alias: &str) -> bool {
+    std::env::var_os(format!("MC_HOST_{alias}")).is_some_and(|value| !value.is_empty())
 }
 
 fn local_command(args: &[OsString], commands: &[&str]) -> bool {
@@ -1025,6 +1249,112 @@ mod tests {
         }
 
         unsafe { std::env::remove_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR") };
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn minio_mc_requests_secrets_only_for_configured_remote_aliases() {
+        let _guard = crate::global_test_env_lock().lock().unwrap();
+        let dir = temp_dir("env-wrapper-secretless-minio-mc");
+        let env_names = [
+            "HOME",
+            "MC_CONFIG_DIR",
+            "MC_CONFIG_ENV_FILE",
+            "MC_HOST_private",
+        ];
+        let previous_env = env_names.map(|name| (name, std::env::var_os(name)));
+        fs::create_dir_all(dir.join(".mc")).unwrap();
+        fs::write(
+            dir.join(".mc/config.json"),
+            r#"{"aliases":{"private":{"url":"https://minio.example","accessKey":"access"},"anonymous":{"url":"https://public.example","accessKey":""}}}"#,
+        )
+        .unwrap();
+        unsafe {
+            std::env::set_var("HOME", &dir);
+            std::env::set_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR", &dir);
+            for name in env_names.into_iter().skip(1) {
+                std::env::remove_var(name);
+            }
+        }
+        let stub = &wrapper("minio-mc").unwrap().primary;
+        let script_path = dir.join("mc");
+        let script = stub_script(stub, Path::new("/opt/homebrew/bin/mc"));
+        let invocation = |values: &[&str]| {
+            std::iter::once(script_path.clone().into_os_string())
+                .chain(values.iter().map(OsString::from))
+                .collect::<Vec<_>>()
+        };
+        let secretless = |values: &[&str]| {
+            invocation_is_secretless(&script_path, script.as_bytes(), &invocation(values))
+        };
+
+        for args in [
+            &[][..],
+            &["--help"][..],
+            &["--version"][..],
+            &["--autocompletion"][..],
+            &["ls", "--help", "private/bucket"][..],
+            &["alias", "set", "other", "https://other.example"][..],
+            &["alias", "list", "anonymous"][..],
+            &["alias", "export", "private"][..],
+            &["update"][..],
+            &["ls", "."][..],
+            &["ls", "--resolve", "private/bucket", "."][..],
+            &["cp", "./source", "../target"][..],
+            &["mirror", "/tmp/source", "/tmp/target"][..],
+            &["ls", "other/bucket"][..],
+            &["future-command", "private/bucket"][..],
+            &["--future-flag", "ls", "private/bucket"][..],
+            &["--config-dir", "/tmp/other", "ls", "private/bucket"][..],
+        ] {
+            assert!(secretless(args), "mc {args:?}");
+        }
+        for args in [
+            &["alias", "list"][..],
+            &["alias", "ls", "private"][..],
+            &["alias", "--json", "list"][..],
+            &["alias", "list", "--resolve", "minio.example=127.0.0.1"][..],
+            &["ls", "private/bucket"][..],
+            &["--json", "ls", "private/bucket"][..],
+            &["cp", "./source", "private/bucket"][..],
+            &["mirror", "private/source", "/tmp/target"][..],
+            &["admin", "info", "private"][..],
+            &["version", "info", "private/bucket"][..],
+            &["ls", "--", "private/bucket"][..],
+        ] {
+            assert!(!secretless(args), "mc {args:?}");
+        }
+
+        unsafe { std::env::set_var("MC_HOST_private", "https://caller@other.example") };
+        assert!(secretless(&["ls", "private/bucket"]));
+        assert!(secretless(&["alias", "list"]));
+        unsafe {
+            std::env::remove_var("MC_HOST_private");
+            std::env::set_var("MC_CONFIG_DIR", "/tmp/other");
+        }
+        assert!(secretless(&["ls", "private/bucket"]));
+        unsafe { std::env::remove_var("MC_CONFIG_DIR") };
+
+        assert!(!invocation_is_secretless(
+            &script_path,
+            format!("{script}# changed\n").as_bytes(),
+            &invocation(&["ls", "."]),
+        ));
+        assert!(!invocation_is_secretless(
+            &script_path,
+            script.as_bytes(),
+            &[PathBuf::from("/tmp/not-the-stub").into_os_string()],
+        ));
+
+        unsafe {
+            std::env::remove_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR");
+            for (name, value) in previous_env {
+                match value {
+                    Some(value) => std::env::set_var(name, value),
+                    None => std::env::remove_var(name),
+                }
+            }
+        }
         let _ = fs::remove_dir_all(dir);
     }
 

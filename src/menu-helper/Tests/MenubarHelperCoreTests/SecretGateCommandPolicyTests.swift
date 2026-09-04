@@ -123,3 +123,10 @@ import Testing
     #expect(genericSecretGateRequestClassification(gateID: "node", arguments: ["stage", "publish"]) == .mutating)
     #expect(genericSecretGateRequestClassification(gateID: "node", arguments: ["ls"]) == .unknown)
 }
+
+@Test func minioPolicyTreatsAliasListingAsASecretDump() {
+    #expect(genericSecretGateRequestClassification(gateID: "minio-mc", arguments: ["alias", "list"]) == .secretDump)
+    #expect(genericSecretGateRequestClassification(gateID: "minio-mc", arguments: ["ls", "private/bucket"]) == .readOnly)
+    #expect(genericSecretGateRequestClassification(gateID: "minio-mc", arguments: ["put", "file", "private/bucket"]) == .mutating)
+    #expect(genericSecretGateRequestClassification(gateID: "minio-mc", arguments: ["alias", "export", "private"]) == .unknown)
+}
