@@ -122,4 +122,32 @@ import Testing
     #expect(genericSecretGateRequestClassification(gateID: "node", arguments: ["stage", "list"]) == .readOnly)
     #expect(genericSecretGateRequestClassification(gateID: "node", arguments: ["stage", "publish"]) == .mutating)
     #expect(genericSecretGateRequestClassification(gateID: "node", arguments: ["ls"]) == .unknown)
+    #expect(genericSecretGateRequestClassification(
+        gateID: "node",
+        arguments: ["--global", "install"]
+    ) == .mutating)
+    #expect(genericSecretGateRequestClassification(
+        gateID: "node",
+        arguments: ["--registry", "https://registry.npmjs.org", "view", "example"]
+    ) == .readOnly)
+    #expect(genericSecretGateRequestClassification(
+        gateID: "node",
+        arguments: ["install", "--version"]
+    ) == .readOnly)
+    #expect(genericSecretGateRequestClassification(
+        gateID: "node",
+        arguments: ["--cache", "install", "run", "build"]
+    ) == .unknown)
+    #expect(genericSecretGateRequestClassification(
+        gateID: "node",
+        arguments: ["-gq", "install"]
+    ) == .mutating)
+    #expect(genericSecretGateRequestClassification(
+        gateID: "node",
+        arguments: ["-C/tmp", "view", "example"]
+    ) == .readOnly)
+    #expect(genericSecretGateRequestClassification(
+        gateID: "node",
+        arguments: ["install", "--", "--version"]
+    ) == .mutating)
 }

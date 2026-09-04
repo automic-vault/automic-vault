@@ -134,12 +134,34 @@ fn local_command(args: &[OsString], commands: &[&str]) -> bool {
 }
 
 fn npm_invocation_is_secretless(args: &[OsString]) -> bool {
-    let Some(command) = args.first().and_then(|arg| arg.to_str()) else {
+    let Some(args) = args
+        .iter()
+        .map(|arg| arg.to_str())
+        .collect::<Option<Vec<_>>>()
+    else {
         return true;
     };
-    // Keep this positive list exact: npm's dynamic abbreviations can change
-    // meaning when npm adds commands, and arbitrary package scripts must not
-    // inherit NODE_AUTH_TOKEN merely because npm launched them.
+    let option_end = args
+        .iter()
+        .position(|argument| *argument == "--")
+        .unwrap_or(args.len());
+    let option_args = &args[..option_end];
+    if option_args.iter().any(|argument| {
+        matches!(
+            *argument,
+            "--help" | "-h" | "-?" | "-H" | "--version" | "--versions" | "-v"
+        )
+    }) || npm_uses_explicit_auth(option_args)
+    {
+        return true;
+    }
+    let Some(command) = npm_command(option_args) else {
+        return true;
+    };
+    // Reviewed against npm v11.19.0. Keep this positive list exact: npm's
+    // dynamic abbreviations can change meaning when npm adds commands, and
+    // arbitrary package scripts must not inherit NODE_AUTH_TOKEN merely because
+    // npm launched them.
     !matches!(
         command,
         "access"
@@ -205,6 +227,112 @@ fn npm_invocation_is_secretless(args: &[OsString]) -> bool {
             | "v"
             | "whoami"
     )
+}
+
+fn npm_command<'a>(args: &'a [&str]) -> Option<&'a str> {
+    const BOOLEAN_SHORT_OPTIONS: &str = "DEOPSadfglpqsy";
+    const BOOLEAN_OPTIONS: &[&str] = &[
+        "--all",
+        "--dry-run",
+        "--force",
+        "--fund",
+        "--global",
+        "--ignore-scripts",
+        "--include-workspace-root",
+        "--json",
+        "--local",
+        "--long",
+        "--offline",
+        "--parseable",
+        "--prefer-offline",
+        "--prefer-online",
+        "--quiet",
+        "--readonly",
+        "--silent",
+        "--timing",
+        "--verbose",
+        "--workspaces",
+        "--yes",
+        "-D",
+        "-E",
+        "-O",
+        "-P",
+        "-S",
+        "-a",
+        "-d",
+        "-dd",
+        "-ddd",
+        "-f",
+        "-g",
+        "-l",
+        "-p",
+        "-q",
+        "-s",
+        "-y",
+    ];
+    const VALUE_OPTIONS: &[&str] = &[
+        "--cache",
+        "--call",
+        "--location",
+        "--loglevel",
+        "--otp",
+        "--prefix",
+        "--registry",
+        "--reg",
+        "--scope",
+        "--tag",
+        "--userconfig",
+        "--workspace",
+        "-C",
+        "-L",
+        "-c",
+        "-m",
+        "-w",
+    ];
+    const VALUE_SHORT_OPTIONS: &[&str] = &["-C", "-L", "-c", "-m", "-w"];
+
+    let mut index = 0;
+    while let Some(argument) = args.get(index) {
+        if !argument.starts_with('-') {
+            return Some(argument);
+        }
+        if argument.contains('=')
+            || argument.starts_with("--no-")
+            || BOOLEAN_OPTIONS.contains(argument)
+            || argument.strip_prefix('-').is_some_and(|options| {
+                options.len() > 1
+                    && options
+                        .chars()
+                        .all(|option| BOOLEAN_SHORT_OPTIONS.contains(option))
+            })
+            || VALUE_SHORT_OPTIONS
+                .iter()
+                .any(|option| argument.starts_with(option) && argument.len() > option.len())
+        {
+            index += 1;
+        } else if VALUE_OPTIONS.contains(argument) {
+            args.get(index + 1)?;
+            index += 2;
+        } else {
+            return None;
+        }
+    }
+    None
+}
+
+fn npm_uses_explicit_auth(args: &[&str]) -> bool {
+    args.iter().any(|argument| {
+        let option = argument
+            .strip_prefix("--")
+            .unwrap_or(argument)
+            .split_once('=')
+            .map_or(*argument, |(name, _)| name)
+            .to_ascii_lowercase();
+        option == "_authtoken"
+            || option == "_auth-token"
+            || option.ends_with(":_authtoken")
+            || option.ends_with(":_auth-token")
+    })
 }
 
 fn secret_gate(wrapper: &EnvWrapper) -> SecretGateDescriptor {
@@ -947,7 +1075,17 @@ mod tests {
             vec!["config", "get", "//registry.npmjs.org/:_authToken"],
             vec!["login"],
             vec!["run", "build"],
+            vec!["exec", "eslint", "."],
+            vec!["init", "@scope/app"],
             vec!["version"],
+            vec!["install", "--help"],
+            vec!["install", "--version"],
+            vec!["--cache", "install", "run", "build"],
+            vec!["--future-option", "install"],
+            vec![
+                "install",
+                "--//registry.npmjs.org/:_authToken=provided-token",
+            ],
             vec!["future-command"],
         ] {
             assert!(invocation_is_secretless(
@@ -958,6 +1096,18 @@ mod tests {
         }
         for command in [
             vec!["install"],
+            vec!["--global", "install"],
+            vec![
+                "--registry",
+                "https://registry.npmjs.org",
+                "view",
+                "private-package",
+            ],
+            vec!["--workspace", "app", "audit"],
+            vec!["--loglevel", "verbose", "whoami"],
+            vec!["--color=always", "publish"],
+            vec!["-gq", "install"],
+            vec!["-C/tmp", "view", "private-package"],
             vec!["i", "private-package"],
             vec!["ci"],
             vec!["audit"],
@@ -967,6 +1117,7 @@ mod tests {
             vec!["publish"],
             vec!["dist-tags", "ls", "private-package"],
             vec!["trust", "list", "private-package"],
+            vec!["install", "--", "--version"],
         ] {
             assert!(!invocation_is_secretless(
                 &script_path,
