@@ -18,11 +18,29 @@ public func genericSecretGateRequestClassification(
     gateID: String,
     arguments: [String]
 ) -> SecretGateRequestClassification {
-    let words = arguments.map { $0.lowercased() }
+    var words = arguments.map { $0.lowercased() }
     guard !words.isEmpty else { return .unknown }
     if gateID == "stripe" { return stripeRequestClassification(words) }
     if words == ["help"] || words == ["--help"] || words == ["version"] || words == ["--version"] {
         return .readOnly
+    }
+    if gateID == "hcloud" {
+        let commandArguments = Array(words.prefix { $0 != "--" })
+        guard let normalized = hcloudArgumentsWithoutPersistentFlags(commandArguments) else { return .unknown }
+        words = normalized
+        if words.contains("--help") || words.contains("-h") || words.first == "version" { return .readOnly }
+        let positionals = words.filter { !$0.hasPrefix("-") }
+        if hcloudFlagEnabled(words, "--allow-sensitive")
+            && (positionals.starts(with: ["config", "list"])
+                || positionals.starts(with: ["config", "get", "token"]))
+        {
+            return .secretDump
+        }
+        if hcloudFlagEnabled(words, "--token-from-env")
+            && positionals.starts(with: ["context", "create"])
+        {
+            return .mutating
+        }
     }
     guard let policy = secretGateCommandPolicies[gateID] else { return .unknown }
     let candidates = (1...min(3, words.count)).reversed().map {
@@ -34,6 +52,39 @@ public func genericSecretGateRequestClassification(
         if policy.mutating.contains(candidate) { return .mutating }
     }
     return .unknown
+}
+
+private func hcloudArgumentsWithoutPersistentFlags(_ arguments: [String]) -> [String]? {
+    let valueFlags = [
+        "--config", "--context", "--debug-file", "--endpoint", "--hetzner-endpoint", "--http-timeout",
+        "--poll-interval",
+    ]
+    let booleanFlags = ["--debug", "--no-experimental-warnings", "--quiet"]
+    var result: [String] = []
+    var index = 0
+    while index < arguments.count {
+        let argument = arguments[index]
+        if valueFlags.contains(argument) {
+            guard index + 1 < arguments.count else { return nil }
+            index += 2
+        } else if valueFlags.contains(where: { argument.hasPrefix("\($0)=") })
+            || booleanFlags.contains(argument)
+            || booleanFlags.contains(where: { argument.hasPrefix("\($0)=") })
+        {
+            index += 1
+        } else {
+            result.append(argument)
+            index += 1
+        }
+    }
+    return result
+}
+
+private func hcloudFlagEnabled(_ arguments: [String], _ flag: String) -> Bool {
+    arguments.contains(flag) || arguments.contains { argument in
+        guard argument.hasPrefix("\(flag)=") else { return false }
+        return ["1", "t", "true"].contains(argument.dropFirst(flag.count + 1).lowercased())
+    }
 }
 
 private func stripeRequestClassification(_ arguments: [String]) -> SecretGateRequestClassification {
@@ -142,7 +193,11 @@ private let secretGateCommandPolicies: [String: SecretGateCommandPolicy] = [
     "gptcommit": .init("", "prepare,commit"),
     "grafanactl": .init("resources get,resources list", "resources create,resources delete,resources apply"),
     "heroku": .init("apps,apps info,ps,addons", "apps create,apps destroy,config set,config unset,ps scale", secretDump: "auth token,config"),
-    "hcloud": .init("server list,server describe,network list,network describe", "server create,server delete,network create,network delete"),
+    "hcloud": .init(
+        "all list,server list,server describe,network list,network describe,datacenter list,location list",
+        "server create,server delete,network create,network delete,context create",
+        secretDump: "config get token,config list --allow-sensitive"
+    ),
     "huggingface-cli": .init("auth whoami,repo list,cache scan", "upload,upload-large-folder,repo create,repo delete"),
     "jfrog-cli": .init("rt search,rt ping,rt build-info", "rt upload,rt delete,rt build-publish", secretDump: "config show,config export"),
     "k6": .init("inspect", "run,cloud"),

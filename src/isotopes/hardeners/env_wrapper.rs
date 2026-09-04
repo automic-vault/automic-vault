@@ -90,6 +90,7 @@ pub(crate) fn invocation_is_secretless(
     }
     let args = &args[1..];
     match stub.command {
+        "hcloud" => hcloud_invocation_is_secretless(args),
         "npm" => npm_invocation_is_secretless(args),
         "pnpm" => {
             local_command(
@@ -118,6 +119,170 @@ pub(crate) fn invocation_is_secretless(
         ),
         _ => false,
     }
+}
+
+// Reviewed against hetznercloud/cli v1.67.0. Keep the Secret boundary to
+// exact API command paths; local configuration, future commands, and unknown
+// forms must not receive the protected token.
+const HCLOUD_AUTHENTICATED_COMMANDS: &str = "all list,certificate add-label,certificate create,certificate delete,certificate describe,certificate list,certificate remove-label,certificate retry,certificate update,datacenter describe,datacenter list,firewall add-label,firewall add-rule,firewall apply-to-resource,firewall create,firewall delete,firewall delete-rule,firewall describe,firewall list,firewall remove-from-resource,firewall remove-label,firewall replace-rules,firewall update,floating-ip add-label,floating-ip assign,floating-ip create,floating-ip delete,floating-ip describe,floating-ip disable-protection,floating-ip enable-protection,floating-ip list,floating-ip remove-label,floating-ip set-rdns,floating-ip unassign,floating-ip update,image add-label,image delete,image describe,image disable-protection,image enable-protection,image list,image remove-label,image update,iso describe,iso list,load-balancer add-label,load-balancer add-service,load-balancer add-target,load-balancer attach-to-network,load-balancer change-algorithm,load-balancer change-type,load-balancer create,load-balancer delete,load-balancer delete-service,load-balancer describe,load-balancer detach-from-network,load-balancer disable-protection,load-balancer disable-public-interface,load-balancer enable-protection,load-balancer enable-public-interface,load-balancer list,load-balancer metrics,load-balancer remove-label,load-balancer remove-target,load-balancer set-rdns,load-balancer update,load-balancer update-service,load-balancer-type describe,load-balancer-type list,location describe,location list,network add-label,network add-route,network add-subnet,network change-ip-range,network create,network delete,network describe,network disable-protection,network enable-protection,network expose-routes-to-vswitch,network list,network remove-label,network remove-route,network remove-subnet,network update,placement-group add-label,placement-group create,placement-group delete,placement-group describe,placement-group list,placement-group remove-label,placement-group update,primary-ip add-label,primary-ip assign,primary-ip create,primary-ip delete,primary-ip describe,primary-ip disable-protection,primary-ip enable-protection,primary-ip list,primary-ip remove-label,primary-ip set-rdns,primary-ip unassign,primary-ip update,server add-label,server add-to-placement-group,server attach-iso,server attach-to-network,server change-alias-ips,server change-type,server create,server create-image,server delete,server describe,server detach-from-network,server detach-iso,server disable-backup,server disable-protection,server disable-rescue,server enable-backup,server enable-protection,server enable-rescue,server ip,server list,server metrics,server poweroff,server poweron,server reboot,server rebuild,server remove-from-placement-group,server remove-label,server request-console,server reset,server reset-password,server set-rdns,server shutdown,server ssh,server update,server-type describe,server-type list,ssh-key add-label,ssh-key create,ssh-key delete,ssh-key describe,ssh-key list,ssh-key remove-label,ssh-key update,storage-box add-label,storage-box change-type,storage-box create,storage-box delete,storage-box describe,storage-box disable-protection,storage-box disable-snapshot-plan,storage-box enable-protection,storage-box enable-snapshot-plan,storage-box folders,storage-box list,storage-box remove-label,storage-box reset-password,storage-box rollback-snapshot,storage-box snapshot add-label,storage-box snapshot create,storage-box snapshot delete,storage-box snapshot describe,storage-box snapshot list,storage-box snapshot remove-label,storage-box snapshot update,storage-box subaccount change-home-directory,storage-box subaccount create,storage-box subaccount delete,storage-box subaccount describe,storage-box subaccount list,storage-box subaccount reset-password,storage-box subaccount update,storage-box subaccount update-access-settings,storage-box update,storage-box update-access-settings,storage-box-type describe,storage-box-type list,volume add-label,volume attach,volume create,volume delete,volume describe,volume detach,volume disable-protection,volume enable-protection,volume list,volume remove-label,volume resize,volume update,zone add-label,zone add-records,zone change-primary-nameservers,zone change-ttl,zone create,zone delete,zone describe,zone disable-protection,zone enable-protection,zone export-zonefile,zone import-zonefile,zone list,zone remove-label,zone remove-records,zone rrset add-label,zone rrset add-records,zone rrset change-ttl,zone rrset create,zone rrset delete,zone rrset describe,zone rrset disable-protection,zone rrset enable-protection,zone rrset list,zone rrset remove-label,zone rrset remove-records,zone rrset set-records,zone set-records";
+
+fn hcloud_invocation_is_secretless(args: &[OsString]) -> bool {
+    let Some(args) = args
+        .iter()
+        .map(|arg| arg.to_str())
+        .collect::<Option<Vec<_>>>()
+    else {
+        return true;
+    };
+    let option_end = args
+        .iter()
+        .position(|arg| *arg == "--")
+        .unwrap_or(args.len());
+    let args = &args[..option_end];
+    if args
+        .iter()
+        .any(|arg| matches!(*arg, "--help" | "-h" | "--version"))
+        || std::env::var_os("HCLOUD_TOKEN").is_some_and(|value| !value.is_empty())
+    {
+        return true;
+    }
+    let Some(command) = hcloud_command_path(args) else {
+        return true;
+    };
+    let consumes_secret = command == "context create" && hcloud_bool_flag(args, "--token-from-env")
+        || command == "config get token" && hcloud_bool_flag(args, "--allow-sensitive")
+        || command == "config list" && hcloud_bool_flag(args, "--allow-sensitive");
+    if consumes_secret {
+        return false;
+    }
+    if hcloud_uses_another_authority(args) {
+        return true;
+    }
+    !HCLOUD_AUTHENTICATED_COMMANDS
+        .split(',')
+        .any(|candidate| candidate == command)
+}
+
+fn hcloud_command_path(args: &[&str]) -> Option<String> {
+    const VALUE_FLAGS: &[&str] = &[
+        "--config",
+        "--context",
+        "--debug-file",
+        "--endpoint",
+        "--hetzner-endpoint",
+        "--http-timeout",
+        "--poll-interval",
+    ];
+    const BOOL_FLAGS: &[&str] = &["--debug", "--no-experimental-warnings", "--quiet"];
+
+    let mut words = Vec::with_capacity(3);
+    let mut index = 0;
+    while index < args.len() {
+        let arg = args[index];
+        if VALUE_FLAGS.contains(&arg) {
+            index += 2;
+            if index > args.len() {
+                return None;
+            }
+            continue;
+        }
+        if words == ["config", "get"] && matches!(arg, "--allow-sensitive" | "--global")
+            || words == ["config", "get"]
+                && ["--allow-sensitive", "--global"]
+                    .iter()
+                    .any(|flag| arg.starts_with(&format!("{flag}=")))
+        {
+            index += 1;
+            continue;
+        }
+        if VALUE_FLAGS
+            .iter()
+            .chain(BOOL_FLAGS)
+            .any(|flag| arg.starts_with(&format!("{flag}=")))
+            || BOOL_FLAGS.contains(&arg)
+        {
+            index += 1;
+            continue;
+        }
+        if arg.starts_with('-') {
+            return None;
+        }
+        words.push(arg);
+        match words.as_slice() {
+            ["version" | "completion"] => return Some(words.join(" ")),
+            [_, _]
+                if !matches!(
+                    words.as_slice(),
+                    ["config", "get"]
+                        | [
+                            "storage-box",
+                            "snapshot" | "snapshots" | "subaccount" | "subaccounts"
+                        ]
+                        | [
+                            "storage-boxes",
+                            "snapshot" | "snapshots" | "subaccount" | "subaccounts"
+                        ]
+                        | ["zone" | "zones" | "dns", "rrset" | "record" | "records"]
+                ) =>
+            {
+                break;
+            }
+            [_, _, _] => break,
+            _ => {}
+        }
+        index += 1;
+    }
+    let first = match words.first().copied()? {
+        "certificates" => "certificate",
+        "datacenters" => "datacenter",
+        "firewalls" => "firewall",
+        "floating-ips" => "floating-ip",
+        "images" => "image",
+        "isos" => "iso",
+        "loadbalancer" | "load-balancers" | "loadbalancers" => "load-balancer",
+        "locations" => "location",
+        "networks" => "network",
+        "placement-groups" => "placement-group",
+        "primary-ips" => "primary-ip",
+        "servers" => "server",
+        "ssh-keys" => "ssh-key",
+        "storage-boxes" => "storage-box",
+        "storage-box-types" => "storage-box-type",
+        "volumes" => "volume",
+        "dns" | "zones" => "zone",
+        command => command,
+    };
+    words[0] = first;
+    if words.len() == 3 {
+        words[1] = match (first, words[1]) {
+            ("storage-box", "snapshots") => "snapshot",
+            ("storage-box", "subaccounts") => "subaccount",
+            ("zone", "record" | "records") => "rrset",
+            (_, command) => command,
+        };
+    }
+    Some(words.join(" "))
+}
+
+fn hcloud_bool_flag(args: &[&str], flag: &str) -> bool {
+    args.iter().any(|arg| {
+        *arg == flag
+            || arg
+                .strip_prefix(flag)
+                .and_then(|value| value.strip_prefix('='))
+                .is_some_and(|value| matches!(value, "1" | "t" | "T" | "true" | "True" | "TRUE"))
+    })
+}
+
+fn hcloud_uses_another_authority(args: &[&str]) -> bool {
+    ["HCLOUD_ENDPOINT", "HETZNER_ENDPOINT"]
+        .iter()
+        .any(|key| std::env::var_os(key).is_some_and(|value| !value.is_empty()))
+        || args.iter().any(|arg| {
+            matches!(*arg, "--endpoint" | "--hetzner-endpoint")
+                || arg.starts_with("--endpoint=")
+                || arg.starts_with("--hetzner-endpoint=")
+        })
 }
 
 fn local_command(args: &[OsString], commands: &[&str]) -> bool {
@@ -982,6 +1147,126 @@ mod tests {
 
         unsafe { std::env::remove_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR") };
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn hcloud_requests_secrets_only_for_reviewed_api_commands() {
+        let _guard = crate::global_test_env_lock().lock().unwrap();
+        let dir = temp_dir("env-wrapper-secretless-hcloud");
+        let authority_vars = ["HCLOUD_ENDPOINT", "HCLOUD_TOKEN", "HETZNER_ENDPOINT"];
+        let previous_values = authority_vars.map(|name| std::env::var_os(name));
+        unsafe {
+            std::env::set_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR", &dir);
+            for name in authority_vars {
+                std::env::remove_var(name);
+            }
+        }
+        let script_path = dir.join("hcloud");
+        let script = stub_script(
+            &wrapper("hcloud").unwrap().primary,
+            Path::new("/opt/homebrew/bin/hcloud"),
+        );
+        let args = |values: &[&str]| {
+            std::iter::once(script_path.clone().into_os_string())
+                .chain(values.iter().map(OsString::from))
+                .collect::<Vec<_>>()
+        };
+
+        for command in [
+            vec![],
+            vec!["--help"],
+            vec!["version"],
+            vec!["--context", "prod", "version"],
+            vec!["completion", "zsh"],
+            vec!["context"],
+            vec!["context", "list"],
+            vec!["context", "create", "dev"],
+            vec!["context", "create", "--token-from-env=false", "dev"],
+            vec!["config"],
+            vec!["config", "list"],
+            vec!["config", "list", "--allow-sensitive=false"],
+            vec!["config", "get", "token"],
+            vec!["server"],
+            vec!["server", "list", "--help"],
+            vec!["server", "future-command"],
+            vec!["future-command", "--", "sh", "script.sh"],
+            vec!["--future-option", "server", "list"],
+            vec!["--allow-sensitive", "config", "list"],
+            vec!["--token-from-env", "context", "create", "dev"],
+            vec!["--endpoint", "https://example.invalid/v1", "server", "list"],
+            vec!["server", "list", "--endpoint=https://example.invalid/v1"],
+        ] {
+            assert!(
+                invocation_is_secretless(&script_path, script.as_bytes(), &args(&command)),
+                "hcloud {command:?}",
+            );
+        }
+        for command in [
+            vec!["server", "list"],
+            vec!["--context", "prod", "server", "list"],
+            vec!["server", "--context", "prod", "list"],
+            vec!["servers", "describe", "example"],
+            vec!["dns", "records", "list", "example.com"],
+            vec!["storage-boxes", "snapshots", "list", "example"],
+            vec!["context", "create", "--token-from-env", "dev"],
+            vec!["context", "create", "dev", "--token-from-env=true"],
+            vec!["config", "get", "--allow-sensitive", "token"],
+            vec!["config", "list", "--allow-sensitive=true"],
+            vec!["server", "ssh", "example", "--", "sh", "script.sh"],
+        ] {
+            assert!(
+                !invocation_is_secretless(&script_path, script.as_bytes(), &args(&command)),
+                "hcloud {command:?}",
+            );
+        }
+
+        unsafe { std::env::set_var("HCLOUD_TOKEN", "already-provided") };
+        assert!(invocation_is_secretless(
+            &script_path,
+            script.as_bytes(),
+            &args(&["server", "list"]),
+        ));
+        unsafe {
+            std::env::remove_var("HCLOUD_TOKEN");
+            std::env::set_var("HCLOUD_ENDPOINT", "https://example.invalid/v1");
+        }
+        assert!(invocation_is_secretless(
+            &script_path,
+            script.as_bytes(),
+            &args(&["server", "list"]),
+        ));
+        unsafe {
+            std::env::remove_var("HCLOUD_ENDPOINT");
+            std::env::set_var("HETZNER_ENDPOINT", "https://example.invalid/v1");
+        }
+        assert!(invocation_is_secretless(
+            &script_path,
+            script.as_bytes(),
+            &args(&["storage-box", "list"]),
+        ));
+        assert!(!invocation_is_secretless(
+            &script_path,
+            format!("{script}# changed\n").as_bytes(),
+            &args(&["future-command", "--", "sh", "script.sh"]),
+        ));
+
+        unsafe {
+            for (name, value) in authority_vars.into_iter().zip(previous_values) {
+                match value {
+                    Some(value) => std::env::set_var(name, value),
+                    None => std::env::remove_var(name),
+                }
+            }
+            std::env::remove_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR");
+        }
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn hcloud_authenticated_command_vocabulary_is_sorted_and_unique() {
+        let commands = HCLOUD_AUTHENTICATED_COMMANDS.split(',').collect::<Vec<_>>();
+        assert_eq!(commands.len(), 220);
+        assert!(commands.windows(2).all(|pair| pair[0] < pair[1]));
     }
 
     #[test]

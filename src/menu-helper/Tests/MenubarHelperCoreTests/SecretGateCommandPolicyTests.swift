@@ -72,6 +72,36 @@ import Testing
     #expect(genericSecretGateRequestClassification(gateID: "flyctl", arguments: []) == .unknown)
 }
 
+@Test func hcloudPolicyClassifiesApiAndExplicitSecretCommands() {
+    #expect(genericSecretGateRequestClassification(gateID: "hcloud", arguments: ["server", "list"]) == .readOnly)
+    #expect(genericSecretGateRequestClassification(
+        gateID: "hcloud",
+        arguments: ["--context", "prod", "server", "list"]
+    ) == .readOnly)
+    #expect(genericSecretGateRequestClassification(gateID: "hcloud", arguments: ["server", "create"]) == .mutating)
+    #expect(genericSecretGateRequestClassification(
+        gateID: "hcloud",
+        arguments: ["server", "create", "--", "--help"]
+    ) == .mutating)
+    #expect(genericSecretGateRequestClassification(
+        gateID: "hcloud",
+        arguments: ["context", "create", "--token-from-env", "dev"]
+    ) == .mutating)
+    #expect(genericSecretGateRequestClassification(
+        gateID: "hcloud",
+        arguments: ["--quiet", "config", "get", "--allow-sensitive", "token"]
+    ) == .secretDump)
+    #expect(genericSecretGateRequestClassification(
+        gateID: "hcloud",
+        arguments: ["config", "list", "--json", "--allow-sensitive"]
+    ) == .secretDump)
+    #expect(genericSecretGateRequestClassification(
+        gateID: "hcloud",
+        arguments: ["config", "list", "--allow-sensitive=false"]
+    ) == .unknown)
+    #expect(genericSecretGateRequestClassification(gateID: "hcloud", arguments: ["server", "future"]) == .unknown)
+}
+
 @Test func stripePolicyClassifiesGeneratedBuiltInAndPluginCommands() {
     let readOnly = [
         ["customers", "list"],
