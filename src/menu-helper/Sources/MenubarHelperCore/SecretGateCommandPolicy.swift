@@ -10,7 +10,7 @@ private struct SecretGateCommandPolicy: Sendable {
     }
 
     static func commands(_ value: String) -> Set<String> {
-        Set(value.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) })
+        Set(value.split(separator: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) })
     }
 }
 
@@ -21,6 +21,7 @@ public func genericSecretGateRequestClassification(
     let words = arguments.map { $0.lowercased() }
     guard !words.isEmpty else { return .unknown }
     if gateID == "stripe" { return stripeRequestClassification(words) }
+    if gateID == "snowflake-cli" { return snowflakeCLIRequestClassification(words) }
     if words == ["help"] || words == ["--help"] || words == ["version"] || words == ["--version"] {
         return .readOnly
     }
@@ -35,6 +36,86 @@ public func genericSecretGateRequestClassification(
     }
     return .unknown
 }
+
+private func snowflakeCLIRequestClassification(_ arguments: [String]) -> SecretGateRequestClassification {
+    let optionsWithValues = [
+        "--config-file", "--pycharm-debug-library-path", "--pycharm-debug-server-host",
+        "--pycharm-debug-server-port",
+    ]
+    var index = 0
+    while index < arguments.count {
+        let argument = arguments[index]
+        if optionsWithValues.contains(argument) {
+            guard index + 1 < arguments.count else { return .unknown }
+            index += 2
+        } else if optionsWithValues.contains(where: { argument.hasPrefix("\($0)=") })
+            || ["--disable-external-command-plugins", "--commands-registration"].contains(argument)
+        {
+            index += 1
+        } else if ["--help", "-h", "--version", "--info", "--docs", "--structure",
+                   "--install-completion", "--show-completion"].contains(argument)
+        {
+            return .readOnly
+        } else if argument.hasPrefix("-") {
+            return .unknown
+        } else {
+            break
+        }
+    }
+    guard index < arguments.count else { return .unknown }
+    let words = Array(arguments[index...])
+    let candidates = (1...min(3, words.count)).reversed().map {
+        words.prefix($0).joined(separator: " ")
+    }
+    for candidate in candidates {
+        if snowflakeCLICommandPolicy.secretDump.contains(candidate) { return .secretDump }
+        if snowflakeCLICommandPolicy.readOnly.contains(candidate) { return .readOnly }
+        if snowflakeCLICommandPolicy.mutating.contains(candidate) { return .mutating }
+    }
+    return .unknown
+}
+
+// Reviewed against Snowflake CLI v3.26.0's built-in command structure. SQL,
+// dbt passthrough, external plugins, and future commands remain Unknown.
+private let snowflakeCLICommandPolicy = SecretGateCommandPolicy(
+    """
+    app diff,app open,app validate,app events,app version list,app release-directive list,
+    app release-channel list,connection test,cortex search,cortex complete,cortex extract-answer,
+    cortex sentiment,cortex summarize,cortex translate,dbt list,dbt describe,dcm list,dcm plan,
+    dcm raw-analyze,dcm describe,dcm list-deployments,dcm preview,dcm test,git list,git describe,
+    git list-branches,git list-tags,git list-files,logs,notebook get-url,notebook open,object list,
+    object describe,snowpark list,snowpark describe,snowpark package lookup,
+    spcs compute-pool list,spcs compute-pool describe,spcs compute-pool status,spcs service list,
+    spcs service describe,spcs service status,spcs service logs,spcs service events,
+    spcs service metrics,spcs service list-endpoints,spcs service list-instances,
+    spcs service list-containers,spcs service list-roles,spcs service remote-build-status,
+    spcs service remote-build-history,spcs image-registry url,spcs image-repository list,
+    spcs image-repository list-images,spcs image-repository list-tags,
+    spcs image-repository url,stage list,stage describe,stage list-files,stage diff,streamlit list,
+    streamlit describe,streamlit get-url,streamlit logs,ws version list
+    """,
+    """
+    app setup,app run,app teardown,app deploy,app publish,app version create,app version drop,
+    app release-directive set,app release-directive unset,app release-directive add-accounts,
+    app release-directive remove-accounts,app release-channel add-accounts,
+    app release-channel remove-accounts,app release-channel set-accounts,
+    app release-channel add-version,app release-channel remove-version,dbt drop,dbt copy,dbt deploy,
+    dcm deploy,dcm purge,dcm create,dcm drop,dcm drop-deployment,dcm refresh,git drop,git setup,
+    git fetch,git copy,git execute,notebook execute,notebook create,notebook deploy,object drop,
+    object create,snowpark deploy,snowpark build,snowpark execute,snowpark drop,
+    snowpark package upload,snowpark package create,spcs compute-pool drop,
+    spcs compute-pool create,spcs compute-pool deploy,spcs compute-pool stop-all,
+    spcs compute-pool suspend,spcs compute-pool resume,spcs compute-pool set,
+    spcs compute-pool unset,spcs service drop,spcs service create,spcs service deploy,
+    spcs service execute-job,spcs service upgrade,spcs service suspend,spcs service resume,
+    spcs service set,spcs service unset,spcs service build-image,spcs service remote-build,
+    spcs image-registry login,spcs image-repository drop,spcs image-repository create,
+    spcs image-repository deploy,stage drop,stage copy,stage create,stage remove,stage execute,
+    streamlit drop,streamlit execute,streamlit share,streamlit deploy,ws bundle,ws deploy,ws drop,
+    ws validate,ws version create,ws version drop
+    """,
+    secretDump: "spcs image-registry token"
+)
 
 private func stripeRequestClassification(_ arguments: [String]) -> SecretGateRequestClassification {
     let optionsWithValues = ["--api-key", "--color", "--config", "--device-name", "--log-level", "--project-name", "-p"]
@@ -160,7 +241,7 @@ private let secretGateCommandPolicies: [String: SecretGateCommandPolicy] = [
     "runpodctl": .init("get,list", "create,remove,start,stop", secretDump: "config view"),
     "s3cmd": .init("ls,la,info,du", "put,get,del,rm,sync,cp,mv,mb,rb", secretDump: "--dump-config"),
     "sentry-cli": .init("projects list,organizations list,releases list", "send-event,releases new,releases deploys new,upload-dif"),
-    "snowflake-cli": .init("object list,object describe,connection test", "object create,object drop,stage copy"),
+    "snowflake-cli": .init("", ""),
     "snyk": .init("", "monitor,auth"),
     "transifex-cli": .init("status", "pull,push"),
     "travis": .init("whoami,repos,history,show,logs", "restart,cancel,enable,disable", secretDump: "token"),

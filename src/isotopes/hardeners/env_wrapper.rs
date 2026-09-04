@@ -91,6 +91,7 @@ pub(crate) fn invocation_is_secretless(
     let args = &args[1..];
     match stub.command {
         "npm" => npm_invocation_is_secretless(args),
+        "snow" => snowflake_cli_invocation_is_secretless(args),
         "pnpm" => {
             local_command(
                 args,
@@ -205,6 +206,232 @@ fn npm_invocation_is_secretless(args: &[OsString]) -> bool {
             | "v"
             | "whoami"
     )
+}
+
+fn snowflake_cli_invocation_is_secretless(args: &[OsString]) -> bool {
+    let Some(args) = args
+        .iter()
+        .map(|arg| arg.to_str())
+        .collect::<Option<Vec<_>>>()
+    else {
+        return true;
+    };
+    let args = &args[..args
+        .iter()
+        .position(|arg| *arg == "--")
+        .unwrap_or(args.len())];
+
+    let Some(command_index) = snowflake_root_command_index(args) else {
+        return true;
+    };
+    let words = &args[command_index..];
+
+    if words.starts_with(&["dbt", "execute"]) {
+        return !snowflake_dbt_execute_requires_password(&words[2..]);
+    }
+    // Explicit authentication material supersedes the migrated connection
+    // password. Keeping that invocation tokenless also avoids repeating a
+    // command-line credential in an Authorization Request.
+    if args.iter().any(|arg| snowflake_auth_option(arg)) {
+        return true;
+    }
+    if args.iter().any(|arg| matches!(*arg, "--help" | "-h")) {
+        return true;
+    }
+
+    !SNOWFLAKE_PASSWORD_COMMANDS.split(',').any(|command| {
+        let mut command = command.split_whitespace();
+        command
+            .by_ref()
+            .zip(words.iter().copied())
+            .all(|(expected, actual)| expected == actual)
+            && command.next().is_none()
+    })
+}
+
+// Reviewed against Snowflake CLI v3.26.0's built-in command structure. New
+// commands and external plugins remain tokenless until their credential use is
+// reviewed.
+const SNOWFLAKE_PASSWORD_COMMANDS: &str = "
+app setup,app diff,app run,app open,app teardown,app deploy,app validate,app events,app publish,
+app version create,app version list,app version drop,app release-directive list,
+app release-directive set,app release-directive unset,app release-directive add-accounts,
+app release-directive remove-accounts,app release-channel list,app release-channel add-accounts,
+app release-channel remove-accounts,app release-channel set-accounts,app release-channel add-version,
+app release-channel remove-version,connection test,cortex search,cortex complete,
+cortex extract-answer,cortex sentiment,cortex summarize,cortex translate,dbt list,dbt drop,
+dbt describe,dbt copy,dbt deploy,dcm list,dcm deploy,dcm purge,dcm plan,dcm raw-analyze,
+dcm create,dcm drop,dcm describe,dcm list-deployments,dcm drop-deployment,dcm preview,dcm refresh,
+dcm test,git list,git drop,git describe,git setup,git list-branches,git list-tags,git list-files,
+git fetch,git copy,git execute,logs,notebook execute,notebook get-url,notebook open,notebook create,
+notebook deploy,object list,object drop,object describe,object create,snowpark deploy,snowpark build,
+snowpark execute,snowpark list,snowpark drop,snowpark describe,snowpark package lookup,
+snowpark package upload,snowpark package create,spcs compute-pool list,spcs compute-pool drop,
+spcs compute-pool describe,spcs compute-pool create,spcs compute-pool deploy,
+spcs compute-pool stop-all,spcs compute-pool suspend,spcs compute-pool resume,spcs compute-pool set,
+spcs compute-pool unset,spcs compute-pool status,spcs service list,spcs service describe,
+spcs service drop,spcs service create,spcs service deploy,spcs service execute-job,
+spcs service status,spcs service logs,spcs service events,spcs service metrics,spcs service upgrade,
+spcs service list-endpoints,spcs service list-instances,spcs service list-containers,
+spcs service list-roles,spcs service suspend,spcs service resume,spcs service set,
+spcs service unset,spcs service build-image,spcs service remote-build,
+spcs service remote-build-status,spcs service remote-build-history,spcs image-registry token,
+spcs image-registry url,spcs image-registry login,spcs image-repository list,
+spcs image-repository drop,spcs image-repository create,spcs image-repository deploy,
+spcs image-repository list-images,spcs image-repository list-tags,spcs image-repository url,sql,
+stage list,stage drop,stage describe,stage list-files,stage copy,stage create,stage remove,stage diff,
+stage execute,streamlit list,streamlit drop,streamlit describe,streamlit execute,streamlit share,
+streamlit deploy,streamlit get-url,streamlit logs,ws bundle,ws deploy,ws drop,ws validate,
+ws version list,ws version create,ws version drop";
+
+fn snowflake_root_command_index(args: &[&str]) -> Option<usize> {
+    const VALUE_OPTIONS: &[&str] = &[
+        "--config-file",
+        "--pycharm-debug-library-path",
+        "--pycharm-debug-server-host",
+        "--pycharm-debug-server-port",
+    ];
+    let mut index = 0;
+    while index < args.len() {
+        let arg = args[index];
+        if VALUE_OPTIONS.contains(&arg) {
+            index += 2;
+        } else if VALUE_OPTIONS
+            .iter()
+            .any(|option| arg.starts_with(&format!("{option}=")))
+            || matches!(
+                arg,
+                "--disable-external-command-plugins" | "--commands-registration"
+            )
+        {
+            index += 1;
+        } else if arg.starts_with('-') {
+            return None;
+        } else {
+            return Some(index);
+        }
+    }
+    None
+}
+
+fn snowflake_dbt_execute_requires_password(args: &[&str]) -> bool {
+    const VALUE_OPTIONS: &[&str] = &[
+        "--dbt-version",
+        "--env",
+        "--env-vars",
+        "--import",
+        "--connection",
+        "-c",
+        "--environment",
+        "--host",
+        "--port",
+        "--protocol",
+        "--account",
+        "--accountname",
+        "--user",
+        "--username",
+        "--authenticator",
+        "--database",
+        "--dbname",
+        "--schema",
+        "--schemaname",
+        "--role",
+        "--rolename",
+        "--warehouse",
+        "--mfa-passcode",
+        "--diag-log-path",
+        "--diag-allowlist-path",
+        "--oauth-client-id",
+        "--oauth-client-secret",
+        "--oauth-authorization-url",
+        "--oauth-token-request-url",
+        "--oauth-redirect-uri",
+        "--oauth-scope",
+        "--secondary-roles",
+        "--format",
+        "--decimal-precision",
+    ];
+    const FLAGS: &[&str] = &[
+        "--run-async",
+        "--no-run-async",
+        "--use-shell-env-vars",
+        "--writeback",
+        "--no-writeback",
+        "--temporary-connection",
+        "-x",
+        "--enable-diag",
+        "--oauth-disable-pkce",
+        "--oauth-enable-refresh-tokens",
+        "--oauth-enable-single-use-refresh-tokens",
+        "--client-store-temporary-credential",
+        "--server-session-keep-alive",
+        "--verbose",
+        "-v",
+        "--debug",
+        "--silent",
+        "--enhanced-exit-codes",
+    ];
+    const COMMANDS: &[&str] = &[
+        "build",
+        "compile",
+        "deps",
+        "list",
+        "parse",
+        "retry",
+        "run",
+        "run-operation",
+        "seed",
+        "show",
+        "snapshot",
+        "test",
+    ];
+
+    let mut index = 0;
+    let mut saw_name = false;
+    let mut has_explicit_auth = false;
+    while index < args.len() {
+        let arg = args[index];
+        if matches!(arg, "--help" | "-h") {
+            return false;
+        }
+        if snowflake_auth_option(arg) {
+            has_explicit_auth = true;
+            index += usize::from(!arg.contains('=')) + 1;
+        } else if VALUE_OPTIONS.contains(&arg) {
+            index += 2;
+        } else if VALUE_OPTIONS
+            .iter()
+            .any(|option| arg.starts_with(&format!("{option}=")))
+            || FLAGS.contains(&arg)
+        {
+            index += 1;
+        } else if arg.starts_with('-') {
+            return false;
+        } else if !saw_name {
+            saw_name = true;
+            index += 1;
+        } else {
+            return COMMANDS.contains(&arg) && !has_explicit_auth;
+        }
+    }
+    false
+}
+
+fn snowflake_auth_option(arg: &str) -> bool {
+    const OPTIONS: &[&str] = &[
+        "--password",
+        "--private-key-file",
+        "--private-key-path",
+        "--token",
+        "--token-file-path",
+        "--workload-identity-provider",
+        "--session-token",
+        "--master-token",
+    ];
+    OPTIONS.contains(&arg)
+        || OPTIONS
+            .iter()
+            .any(|option| arg.starts_with(&format!("{option}=")))
 }
 
 fn secret_gate(wrapper: &EnvWrapper) -> SecretGateDescriptor {
@@ -979,6 +1206,275 @@ mod tests {
             format!("{script}# changed\n").as_bytes(),
             &args(&["root"]),
         ));
+
+        unsafe { std::env::remove_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR") };
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn snowflake_cli_requests_passwords_only_for_reviewed_connection_commands() {
+        let _guard = crate::global_test_env_lock().lock().unwrap();
+        let dir = temp_dir("env-wrapper-secretless-snowflake-cli");
+        unsafe { std::env::set_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR", &dir) };
+        let script_path = dir.join("snow");
+        let script = stub_script(
+            &wrapper("snowflake-cli").unwrap().primary,
+            Path::new("/opt/homebrew/bin/snow"),
+        );
+        let invokes_secretlessly = |values: &[&str]| {
+            let invocation = std::iter::once(script_path.clone().into_os_string())
+                .chain(values.iter().map(OsString::from))
+                .collect::<Vec<_>>();
+            invocation_is_secretless(&script_path, script.as_bytes(), &invocation)
+        };
+
+        for command in [
+            "app setup",
+            "app diff",
+            "app run",
+            "app open",
+            "app teardown",
+            "app deploy",
+            "app validate",
+            "app events",
+            "app publish",
+            "app version create",
+            "app version list",
+            "app version drop",
+            "app release-directive list",
+            "app release-directive set",
+            "app release-directive unset",
+            "app release-directive add-accounts",
+            "app release-directive remove-accounts",
+            "app release-channel list",
+            "app release-channel add-accounts",
+            "app release-channel remove-accounts",
+            "app release-channel set-accounts",
+            "app release-channel add-version",
+            "app release-channel remove-version",
+            "connection test",
+            "cortex search",
+            "cortex complete",
+            "cortex extract-answer",
+            "cortex sentiment",
+            "cortex summarize",
+            "cortex translate",
+            "dbt list",
+            "dbt drop",
+            "dbt describe",
+            "dbt copy",
+            "dbt deploy",
+            "dcm list",
+            "dcm deploy",
+            "dcm purge",
+            "dcm plan",
+            "dcm raw-analyze",
+            "dcm create",
+            "dcm drop",
+            "dcm describe",
+            "dcm list-deployments",
+            "dcm drop-deployment",
+            "dcm preview",
+            "dcm refresh",
+            "dcm test",
+            "git list",
+            "git drop",
+            "git describe",
+            "git setup",
+            "git list-branches",
+            "git list-tags",
+            "git list-files",
+            "git fetch",
+            "git copy",
+            "git execute",
+            "logs",
+            "notebook execute",
+            "notebook get-url",
+            "notebook open",
+            "notebook create",
+            "notebook deploy",
+            "object list",
+            "object drop",
+            "object describe",
+            "object create",
+            "snowpark deploy",
+            "snowpark build",
+            "snowpark execute",
+            "snowpark list",
+            "snowpark drop",
+            "snowpark describe",
+            "snowpark package lookup",
+            "snowpark package upload",
+            "snowpark package create",
+            "spcs compute-pool list",
+            "spcs compute-pool drop",
+            "spcs compute-pool describe",
+            "spcs compute-pool create",
+            "spcs compute-pool deploy",
+            "spcs compute-pool stop-all",
+            "spcs compute-pool suspend",
+            "spcs compute-pool resume",
+            "spcs compute-pool set",
+            "spcs compute-pool unset",
+            "spcs compute-pool status",
+            "spcs service list",
+            "spcs service describe",
+            "spcs service drop",
+            "spcs service create",
+            "spcs service deploy",
+            "spcs service execute-job",
+            "spcs service status",
+            "spcs service logs",
+            "spcs service events",
+            "spcs service metrics",
+            "spcs service upgrade",
+            "spcs service list-endpoints",
+            "spcs service list-instances",
+            "spcs service list-containers",
+            "spcs service list-roles",
+            "spcs service suspend",
+            "spcs service resume",
+            "spcs service set",
+            "spcs service unset",
+            "spcs service build-image",
+            "spcs service remote-build",
+            "spcs service remote-build-status",
+            "spcs service remote-build-history",
+            "spcs image-registry token",
+            "spcs image-registry url",
+            "spcs image-registry login",
+            "spcs image-repository list",
+            "spcs image-repository drop",
+            "spcs image-repository create",
+            "spcs image-repository deploy",
+            "spcs image-repository list-images",
+            "spcs image-repository list-tags",
+            "spcs image-repository url",
+            "sql",
+            "stage list",
+            "stage drop",
+            "stage describe",
+            "stage list-files",
+            "stage copy",
+            "stage create",
+            "stage remove",
+            "stage diff",
+            "stage execute",
+            "streamlit list",
+            "streamlit drop",
+            "streamlit describe",
+            "streamlit execute",
+            "streamlit share",
+            "streamlit deploy",
+            "streamlit get-url",
+            "streamlit logs",
+            "ws bundle",
+            "ws deploy",
+            "ws drop",
+            "ws validate",
+            "ws version list",
+            "ws version create",
+            "ws version drop",
+        ] {
+            let args = command.split_whitespace().collect::<Vec<_>>();
+            assert!(!invokes_secretlessly(&args), "snow {command}");
+        }
+        for dbt_command in [
+            "build",
+            "compile",
+            "deps",
+            "list",
+            "parse",
+            "retry",
+            "run",
+            "run-operation",
+            "seed",
+            "show",
+            "snapshot",
+            "test",
+        ] {
+            assert!(!invokes_secretlessly(&[
+                "dbt",
+                "execute",
+                "project",
+                dbt_command
+            ]));
+        }
+
+        for command in [
+            vec![],
+            vec!["--version"],
+            vec!["--info"],
+            vec!["--config-file", "/tmp/config.toml", "--help"],
+            vec!["app", "bundle"],
+            vec!["auth", "oidc", "read-token"],
+            vec!["connection", "list"],
+            vec!["connection", "generate-jwt"],
+            vec!["connection", "generate-workload-identity-token"],
+            vec!["custom-image", "validate"],
+            vec!["helpers", "show-config-sources"],
+            vec!["init"],
+            vec!["plugin", "list"],
+            vec!["ws", "dump"],
+            vec!["future-command"],
+            vec!["external-plugin", "deploy"],
+            vec!["object", "future-command"],
+            vec!["object", "list", "--help"],
+            vec!["object", "list", "--password", "from-command-line"],
+            vec!["sql", "--password=from-command-line", "-q", "select 1"],
+            vec!["object", "list", "--private-key-file", "/tmp/key.p8"],
+            vec![
+                "sql",
+                "--token-file-path=/tmp/oauth-token",
+                "-q",
+                "select 1",
+            ],
+            vec!["dbt", "execute", "project", "future-command", "--help"],
+            vec!["dbt", "execute", "--help"],
+        ] {
+            assert!(invokes_secretlessly(&command), "snow {command:?}");
+        }
+
+        assert!(!invokes_secretlessly(&[
+            "--disable-external-command-plugins",
+            "--config-file=/tmp/config.toml",
+            "object",
+            "list",
+        ]));
+        assert!(!invokes_secretlessly(&[
+            "dbt",
+            "execute",
+            "--dbt-version",
+            "1.9",
+            "project",
+            "run",
+            "--help",
+        ]));
+        assert!(!invokes_secretlessly(&[
+            "dbt",
+            "execute",
+            "project",
+            "run",
+            "--password",
+            "dbt-passthrough",
+        ]));
+        assert!(!invokes_secretlessly(&[
+            "dbt",
+            "execute",
+            "project",
+            "run",
+            "--",
+            "--password",
+            "passthrough",
+        ]));
+        assert!(invokes_secretlessly(&[
+            "dbt",
+            "execute",
+            "project",
+            "--password",
+            "from-command-line",
+            "run",
+        ]));
 
         unsafe { std::env::remove_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR") };
         let _ = fs::remove_dir_all(dir);

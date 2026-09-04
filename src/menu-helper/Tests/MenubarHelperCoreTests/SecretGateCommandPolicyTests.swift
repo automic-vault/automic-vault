@@ -123,3 +123,43 @@ import Testing
     #expect(genericSecretGateRequestClassification(gateID: "node", arguments: ["stage", "publish"]) == .mutating)
     #expect(genericSecretGateRequestClassification(gateID: "node", arguments: ["ls"]) == .unknown)
 }
+
+@Test func snowflakeCLIPolicyClassifiesAuditedCommandsAndOptions() {
+    let readOnly = [
+        ["object", "list"],
+        ["cortex", "summarize"],
+        ["spcs", "service", "remote-build-history"],
+        ["--disable-external-command-plugins", "--config-file=/tmp/config.toml", "stage", "list-files"],
+        ["--config-file", "/tmp/config.toml", "--version"],
+    ]
+    for arguments in readOnly {
+        #expect(genericSecretGateRequestClassification(gateID: "snowflake-cli", arguments: arguments) == .readOnly)
+    }
+
+    let mutating = [
+        ["app", "release-channel", "add-version"],
+        ["object", "create"],
+        ["spcs", "service", "remote-build"],
+        ["stage", "copy"],
+    ]
+    for arguments in mutating {
+        #expect(genericSecretGateRequestClassification(gateID: "snowflake-cli", arguments: arguments) == .mutating)
+    }
+
+    #expect(genericSecretGateRequestClassification(
+        gateID: "snowflake-cli",
+        arguments: ["spcs", "image-registry", "token"]
+    ) == .secretDump)
+    #expect(genericSecretGateRequestClassification(
+        gateID: "snowflake-cli",
+        arguments: ["dbt", "execute", "project", "run", "--help"]
+    ) == .unknown)
+    #expect(genericSecretGateRequestClassification(
+        gateID: "snowflake-cli",
+        arguments: ["sql", "-q", "select 1"]
+    ) == .unknown)
+    #expect(genericSecretGateRequestClassification(
+        gateID: "snowflake-cli",
+        arguments: ["external-plugin", "deploy"]
+    ) == .unknown)
+}
