@@ -90,6 +90,7 @@ pub(crate) fn invocation_is_secretless(
     }
     let args = &args[1..];
     match stub.command {
+        "buf" => buf_invocation_is_secretless(args),
         "npm" => npm_invocation_is_secretless(args),
         "pnpm" => {
             local_command(
@@ -118,6 +119,450 @@ pub(crate) fn invocation_is_secretless(
         ),
         _ => false,
     }
+}
+
+fn buf_invocation_is_secretless(args: &[OsString]) -> bool {
+    if buf_help_requested(args) {
+        return true;
+    }
+    let words = buf_command_words(args);
+    !buf_command_needs_token(&words, args)
+        || buf_may_launch_git_or_plugin(&words, args)
+        || buf_netrc_supplies_token(&words, args)
+}
+
+// Reviewed against Buf CLI v1.72.0. Keep this positive: new commands must not
+// inherit BUF_TOKEN until their token use and subprocess behavior are reviewed.
+fn buf_command_needs_token(words: &[&str], args: &[OsString]) -> bool {
+    match words {
+        [
+            "build" | "breaking" | "convert" | "export" | "format" | "lint" | "ls-files" | "stats",
+            ..,
+        ]
+        | ["dep", "graph" | "prune" | "update", ..]
+        | ["config", "ls-breaking-rules" | "ls-lint-rules", ..]
+        | ["source", "edit", "deprecate", ..]
+        | [
+            "mod",
+            "prune" | "update" | "ls-breaking-rules" | "ls-lint-rules",
+            ..,
+        ]
+        | ["plugin" | "policy", "update", ..]
+        | ["beta", "price", ..] => buf_invocation_references_registry(args),
+        ["curl", ..] => {
+            buf_flag_is_present(args, "--schema") && buf_invocation_references_registry(args)
+        }
+        ["push", ..] | ["plugin" | "policy", "push", ..] => true,
+        ["registry", "whoami", ..] => true,
+        [
+            "registry",
+            "commit",
+            "add-label" | "info" | "list" | "resolve",
+            ..,
+        ]
+        | [
+            "registry",
+            "label",
+            "archive" | "info" | "list" | "unarchive",
+            ..,
+        ]
+        | ["registry", "sdk", "info" | "version", ..] => true,
+        ["registry", "organization", command, ..]
+            if matches!(*command, "create" | "delete" | "info" | "update") =>
+        {
+            true
+        }
+        ["registry", resource, "create" | "delete" | "info", ..]
+            if matches!(*resource, "module" | "plugin" | "policy") =>
+        {
+            true
+        }
+        [
+            "registry",
+            "module",
+            "deprecate" | "undeprecate" | "update",
+            ..,
+        ] => true,
+        ["registry", resource, "commit", command, ..]
+            if matches!(*resource, "module" | "plugin" | "policy")
+                && matches!(*command, "add-label" | "info" | "list" | "resolve") =>
+        {
+            true
+        }
+        ["registry", resource, "label", command, ..]
+            if matches!(*resource, "module" | "plugin" | "policy")
+                && matches!(*command, "archive" | "info" | "list" | "unarchive") =>
+        {
+            true
+        }
+        ["registry", resource, "settings", "update", ..]
+            if matches!(*resource, "module" | "plugin" | "policy") =>
+        {
+            true
+        }
+        ["beta", "registry", "plugin", "delete" | "push", ..]
+        | [
+            "beta",
+            "registry",
+            "webhook",
+            "create" | "delete" | "list",
+            ..,
+        ] => true,
+        ["alpha", "registry", "token", "delete" | "get" | "list", ..] => true,
+        _ => false,
+    }
+}
+
+fn buf_invocation_references_registry(args: &[OsString]) -> bool {
+    args.iter()
+        .any(|argument| argument.to_str().is_some_and(buf_value_references_registry))
+        || buf_project_references_registry(args)
+}
+
+fn buf_value_references_registry(value: &str) -> bool {
+    let value = value
+        .split_once('=')
+        .map_or(value, |(_, value)| value)
+        .trim_matches(['\'', '"']);
+    if value.contains("://") {
+        return false;
+    }
+    let Some((remote, _)) = value.split_once('/') else {
+        return false;
+    };
+    remote != "."
+        && remote != ".."
+        && remote.contains('.')
+        && remote
+            .chars()
+            .any(|character| character.is_ascii_alphanumeric())
+}
+
+fn buf_targets_only_default_registry(words: &[&str], args: &[OsString]) -> bool {
+    let mut saw_default = false;
+    let mut saw_custom = false;
+    for (index, argument) in args.iter().enumerate() {
+        let Some(argument) = argument.to_str() else {
+            saw_custom = true;
+            continue;
+        };
+        let value = argument
+            .split_once('=')
+            .map_or(argument, |(_, value)| value);
+        let remote = buf_registry_remote(value)
+            .or_else(|| (index > 0 && args[index - 1] == "--remote").then_some(value));
+        match remote {
+            Some("buf.build" | "go.buf.build") => saw_default = true,
+            Some(_) => saw_custom = true,
+            None => {}
+        }
+    }
+    if matches!(words, ["registry", "whoami", remote, ..] if *remote != "buf.build" && *remote != "go.buf.build")
+    {
+        saw_custom = true;
+    }
+    !saw_custom && (saw_default || matches!(words, ["registry", "whoami"]))
+}
+
+fn buf_registry_remote(value: &str) -> Option<&str> {
+    let value = value.trim_matches(['\'', '"']);
+    if matches!(value, "buf.build" | "go.buf.build") {
+        return Some(value);
+    }
+    if value.contains("://") {
+        return None;
+    }
+    if !value.contains('/') && value.contains('.') && !value.starts_with('.') {
+        return Some(value);
+    }
+    let (remote, _) = value.split_once('/')?;
+    (remote != "."
+        && remote != ".."
+        && remote.contains('.')
+        && remote
+            .chars()
+            .any(|character| character.is_ascii_alphanumeric()))
+    .then_some(remote)
+}
+
+fn buf_netrc_supplies_token(words: &[&str], args: &[OsString]) -> bool {
+    let Some(path) = std::env::var_os("NETRC")
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME")
+                .map(PathBuf::from)
+                .map(|home| home.join(".netrc"))
+        })
+    else {
+        return false;
+    };
+    let Ok(contents) = fs::read_to_string(path) else {
+        return false;
+    };
+    let fields = contents
+        .lines()
+        .flat_map(|line| {
+            line.split_once('#')
+                .map_or(line, |(line, _)| line)
+                .split_whitespace()
+        })
+        .collect::<Vec<_>>();
+    let mut machine = None;
+    let mut default_token = false;
+    let mut buf_token = false;
+    let mut index = 0;
+    while index < fields.len() {
+        match fields[index] {
+            "machine" if index + 1 < fields.len() => {
+                machine = Some(fields[index + 1]);
+                index += 2;
+            }
+            "default" => {
+                machine = Some("default");
+                index += 1;
+            }
+            "password" if index + 1 < fields.len() => {
+                if !fields[index + 1].is_empty() {
+                    default_token |= machine == Some("default");
+                    buf_token |= matches!(machine, Some("buf.build" | "go.buf.build"));
+                }
+                index += 2;
+            }
+            _ => index += 1,
+        }
+    }
+    default_token || buf_token && buf_targets_only_default_registry(words, args)
+}
+
+fn buf_project_references_registry(args: &[OsString]) -> bool {
+    let Ok(current_dir) = std::env::current_dir() else {
+        return false;
+    };
+    if buf_directory_references_registry(&current_dir) {
+        return true;
+    }
+    args.iter()
+        .filter_map(|argument| argument.to_str())
+        .any(|argument| {
+            let path = Path::new(
+                argument
+                    .split_once('=')
+                    .map_or(argument, |(_, value)| value),
+            );
+            if path.extension().is_some_and(|extension| {
+                matches!(extension.to_str(), Some("yaml" | "yml" | "lock"))
+            }) && fs::read_to_string(path)
+                .is_ok_and(|contents| buf_config_references_registry(&contents))
+            {
+                return true;
+            }
+            path.exists()
+                && buf_directory_references_registry(if path.is_dir() {
+                    path
+                } else {
+                    path.parent().unwrap_or(path)
+                })
+        })
+}
+
+fn buf_directory_references_registry(directory: &Path) -> bool {
+    directory.ancestors().any(|directory| {
+        ["buf.yaml", "buf.yml", "buf.lock"].iter().any(|name| {
+            fs::read_to_string(directory.join(name))
+                .is_ok_and(|contents| buf_config_references_registry(&contents))
+        })
+    })
+}
+
+fn buf_config_references_registry(contents: &str) -> bool {
+    let mut remote_section_indent = None;
+    for line in contents.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        let indent = line.len() - line.trim_start().len();
+        if matches!(trimmed, "deps:" | "plugins:" | "policies:") {
+            remote_section_indent = Some(indent);
+            continue;
+        }
+        let Some(section_indent) = remote_section_indent else {
+            continue;
+        };
+        if indent <= section_indent {
+            remote_section_indent = None;
+            continue;
+        }
+        let value = trimmed
+            .strip_prefix("- ")
+            .unwrap_or(trimmed)
+            .split_once(": ")
+            .map_or(trimmed, |(_, value)| value);
+        if buf_value_references_registry(value) {
+            return true;
+        }
+    }
+    false
+}
+
+fn buf_flag_is_present(args: &[OsString], flag: &str) -> bool {
+    args.iter().any(|argument| {
+        argument == flag
+            || argument
+                .to_str()
+                .is_some_and(|argument| argument.starts_with(&format!("{flag}=")))
+    })
+}
+
+fn buf_help_requested(args: &[OsString]) -> bool {
+    args.iter()
+        .take_while(|argument| argument != &"--")
+        .any(|argument| {
+            matches!(
+                argument.to_str(),
+                Some("--help" | "-h" | "--help-tree" | "--version")
+            )
+        })
+}
+
+fn buf_command_words(args: &[OsString]) -> Vec<&str> {
+    let mut words = Vec::new();
+    let mut index = 0;
+    while index < args.len() {
+        let Some(argument) = args[index].to_str() else {
+            return Vec::new();
+        };
+        if argument == "--" {
+            break;
+        }
+        if matches!(argument, "--log-format" | "--timeout") {
+            index += 2;
+            continue;
+        }
+        if matches!(argument, "--debug" | "--debug=true" | "--debug=false")
+            || argument.starts_with("--log-format=")
+            || argument.starts_with("--timeout=")
+        {
+            index += 1;
+            continue;
+        }
+        if argument.starts_with('-') {
+            break;
+        }
+        words.push(argument);
+        index += 1;
+    }
+    words
+}
+
+fn buf_may_launch_git_or_plugin(words: &[&str], args: &[OsString]) -> bool {
+    matches!(words, ["generate", ..] | ["alpha", "protoc", ..])
+        || matches!(words, ["beta", command, ..] if command.starts_with("buf-plugin-"))
+        || matches!(
+            words,
+            ["lint" | "breaking", ..]
+                | ["config" | "mod", "ls-breaking-rules" | "ls-lint-rules", ..]
+        ) && buf_project_launches_native_check_plugin(args)
+        || args.iter().any(|argument| {
+            argument.to_str().is_some_and(|argument| {
+                argument == "--git-metadata"
+                    || argument.starts_with("git@")
+                    || argument.starts_with("git://")
+                    || argument.starts_with("ssh://")
+                    || argument.contains(".git#")
+                    || argument.ends_with(".git")
+                    || argument.contains("format=git")
+            })
+        })
+}
+
+fn buf_project_launches_native_check_plugin(args: &[OsString]) -> bool {
+    let Ok(current_dir) = std::env::current_dir() else {
+        return false;
+    };
+    if buf_directory_launches_native_check_plugin(&current_dir) {
+        return true;
+    }
+    args.iter()
+        .filter_map(|argument| argument.to_str())
+        .any(|argument| {
+            if argument.contains("plugins:") || argument.contains("policies:") {
+                // --config accepts YAML data as well as a path. Keep inline
+                // plugin configuration tokenless instead of trying to prove
+                // that every flow-style value is a sandboxed remote plugin.
+                return true;
+            }
+            let path = Path::new(
+                argument
+                    .split_once('=')
+                    .map_or(argument, |(_, value)| value),
+            );
+            if path
+                .extension()
+                .is_some_and(|extension| matches!(extension.to_str(), Some("yaml" | "yml")))
+                && fs::read_to_string(path)
+                    .is_ok_and(|contents| buf_config_launches_native_check_plugin(&contents))
+            {
+                return true;
+            }
+            path.exists()
+                && buf_directory_launches_native_check_plugin(if path.is_dir() {
+                    path
+                } else {
+                    path.parent().unwrap_or(path)
+                })
+        })
+}
+
+fn buf_directory_launches_native_check_plugin(directory: &Path) -> bool {
+    directory.ancestors().any(|directory| {
+        ["buf.yaml", "buf.yml"].iter().any(|name| {
+            fs::read_to_string(directory.join(name))
+                .is_ok_and(|contents| buf_config_launches_native_check_plugin(&contents))
+        })
+    })
+}
+
+fn buf_config_launches_native_check_plugin(contents: &str) -> bool {
+    let mut section = None;
+    for line in contents.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        let indent = line.len() - line.trim_start().len();
+        if matches!(trimmed, "plugins:" | "policies:") {
+            section = Some((trimmed, indent));
+            continue;
+        }
+        let Some((section_name, section_indent)) = section else {
+            continue;
+        };
+        if indent <= section_indent {
+            section = None;
+            continue;
+        }
+        let Some((key, value)) = trimmed
+            .strip_prefix("- ")
+            .unwrap_or(trimmed)
+            .split_once(": ")
+        else {
+            continue;
+        };
+        let value = value.trim_matches(['\'', '"']);
+        if section_name == "plugins:"
+            && key == "plugin"
+            && !value.ends_with(".wasm")
+            && !buf_value_references_registry(value)
+        {
+            return true;
+        }
+        if section_name == "policies:" && key == "policy" && !buf_value_references_registry(value) {
+            return true;
+        }
+    }
+    false
 }
 
 fn local_command(args: &[OsString], commands: &[&str]) -> bool {
@@ -985,12 +1430,255 @@ mod tests {
     }
 
     #[test]
+    fn buf_requests_its_token_only_for_reviewed_registry_uses() {
+        let _guard = crate::global_test_env_lock().lock().unwrap();
+        let dir = temp_dir("env-wrapper-secretless-buf");
+        let previous_home = std::env::var_os("HOME");
+        let previous_netrc = std::env::var_os("NETRC");
+        unsafe {
+            std::env::set_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR", &dir);
+            std::env::set_var("HOME", &dir);
+            std::env::remove_var("NETRC");
+        }
+        let script_path = dir.join("buf");
+        let script = stub_script(
+            &wrapper("buf").unwrap().primary,
+            Path::new("/opt/homebrew/bin/buf"),
+        );
+        let project = dir.join("project");
+        fs::create_dir_all(&project).unwrap();
+        let config = project.join("buf.yaml");
+        fs::write(&config, "version: v2\nmodules:\n  - path: proto\n").unwrap();
+        let project_path = project.to_str().unwrap();
+        let config_path = config.to_str().unwrap();
+        let args = |values: &[&str]| {
+            std::iter::once(script_path.clone().into_os_string())
+                .chain(values.iter().map(OsString::from))
+                .collect::<Vec<_>>()
+        };
+
+        for command in [
+            vec![],
+            vec!["--help"],
+            vec!["--help-tree"],
+            vec![
+                "registry",
+                "module",
+                "info",
+                "buf.build/acme/petapis",
+                "--help",
+            ],
+            vec!["completion", "zsh"],
+            vec!["config", "init"],
+            vec!["config", "migrate"],
+            vec!["build", project_path],
+            vec!["format", project_path],
+            vec!["lint", project_path],
+            vec!["convert", project_path, "--type", "acme.v1.Pet"],
+            vec!["dep", "graph", project_path],
+            vec!["dep", "prune", project_path],
+            vec!["plugin", "update", project_path],
+            vec!["beta", "price", project_path],
+            vec![
+                "curl",
+                "--schema",
+                project_path,
+                "https://example.com/acme.v1.API/Get",
+            ],
+            vec!["lsp", "serve"],
+            vec!["registry", "login"],
+            vec!["registry", "logout"],
+            vec!["registry", "cc"],
+            vec!["plugin", "prune"],
+            vec!["policy", "prune"],
+            vec!["mod", "open"],
+            vec!["generate", "--template", "buf.gen.yaml", "."],
+            vec!["alpha", "protoc", "--", "--plugin=protoc-gen-owned"],
+            vec!["beta", "buf-plugin-v2"],
+            vec!["beta", "studio-agent"],
+            vec!["future-command"],
+            vec!["registry", "future-command"],
+            vec!["--future-flag", "registry", "whoami"],
+            vec![
+                "export",
+                "https://example.com/source.git",
+                "--output",
+                "out",
+            ],
+            vec!["breaking", "--against", "ssh://git@example.com/source.git"],
+            vec!["push", "--git-metadata"],
+        ] {
+            assert!(
+                invocation_is_secretless(&script_path, script.as_bytes(), &args(&command)),
+                "buf {command:?}",
+            );
+        }
+
+        fs::write(
+            &config,
+            "version: v2\nmodules:\n  - path: proto\ndeps:\n  - buf.build/acme/private\nplugins:\n  - plugin: buf.build/acme/check\n",
+        )
+        .unwrap();
+
+        for command in [
+            vec!["build", "buf.build/acme/petapis"],
+            vec!["format", "buf.build/acme/petapis"],
+            vec!["lint", project_path],
+            vec!["breaking", "--against", "buf.build/acme/petapis"],
+            vec!["convert", "buf.build/acme/petapis", "--type", "acme.v1.Pet"],
+            vec![
+                "curl",
+                "--schema",
+                "buf.build/acme/petapis",
+                "https://example.com/acme.v1.API/Get",
+            ],
+            vec!["dep", "graph", project_path],
+            vec!["dep", "prune", project_path],
+            vec!["dep", "update", project_path],
+            vec!["config", "ls-lint-rules", "--config", config_path],
+            vec!["source", "edit", "deprecate", project_path],
+            vec!["push"],
+            vec!["plugin", "push", "buf.build/acme/check"],
+            vec!["plugin", "update", project_path],
+            vec!["policy", "push", "buf.build/acme/policy"],
+            vec!["registry", "whoami"],
+            vec!["registry", "organization", "info", "buf.build/acme"],
+            vec!["registry", "module", "create", "buf.build/acme/petapis"],
+            vec![
+                "registry",
+                "module",
+                "commit",
+                "list",
+                "buf.build/acme/petapis",
+            ],
+            vec![
+                "registry",
+                "plugin",
+                "label",
+                "archive",
+                "buf.build/acme/check:main",
+            ],
+            vec![
+                "registry",
+                "policy",
+                "settings",
+                "update",
+                "buf.build/acme/policy",
+            ],
+            vec![
+                "registry",
+                "sdk",
+                "version",
+                "--module",
+                "buf.build/acme/petapis",
+            ],
+            vec!["beta", "price", project_path],
+            vec![
+                "beta",
+                "registry",
+                "webhook",
+                "list",
+                "--remote",
+                "buf.build",
+            ],
+            vec!["alpha", "registry", "token", "list", "buf.build"],
+            vec!["--log-format", "json", "--timeout=5s", "registry", "whoami"],
+            vec![
+                "registry",
+                "--debug",
+                "module",
+                "info",
+                "buf.build/acme/petapis",
+            ],
+        ] {
+            assert!(
+                !invocation_is_secretless(&script_path, script.as_bytes(), &args(&command)),
+                "buf {command:?}",
+            );
+        }
+
+        fs::write(
+            &config,
+            "version: v2\nmodules:\n  - path: proto\ndeps:\n  - buf.build/acme/private\nplugins:\n  - plugin: buf.build/acme/check\n  - plugin: ./untrusted-check-plugin\n",
+        )
+        .unwrap();
+        for command in [
+            vec!["lint", project_path],
+            vec![
+                "breaking",
+                project_path,
+                "--against",
+                "buf.build/acme/petapis",
+            ],
+            vec!["config", "ls-lint-rules", "--config", config_path],
+            vec![
+                "lint",
+                "--config",
+                "version: v2\nplugins:\n  - plugin: ./untrusted-check-plugin\n",
+                "buf.build/acme/petapis",
+            ],
+        ] {
+            assert!(
+                invocation_is_secretless(&script_path, script.as_bytes(), &args(&command)),
+                "buf must not pass BUF_TOKEN to a local check plugin: {command:?}",
+            );
+        }
+
+        assert!(!invocation_is_secretless(
+            &script_path,
+            format!("{script}# changed\n").as_bytes(),
+            &args(&["registry", "whoami"]),
+        ));
+
+        fs::write(
+            dir.join(".netrc"),
+            "machine buf.build login user password freshly-logged-in-token\n",
+        )
+        .unwrap();
+        assert!(invocation_is_secretless(
+            &script_path,
+            script.as_bytes(),
+            &args(&["registry", "whoami"]),
+        ));
+        assert!(invocation_is_secretless(
+            &script_path,
+            script.as_bytes(),
+            &args(&["registry", "module", "info", "buf.build/acme/petapis",]),
+        ));
+        assert!(!invocation_is_secretless(
+            &script_path,
+            script.as_bytes(),
+            &args(&[
+                "registry",
+                "module",
+                "info",
+                "registry.example.com/acme/petapis",
+            ]),
+        ));
+
+        unsafe {
+            std::env::remove_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR");
+            match previous_home {
+                Some(home) => std::env::set_var("HOME", home),
+                None => std::env::remove_var("HOME"),
+            }
+            match previous_netrc {
+                Some(netrc) => std::env::set_var("NETRC", netrc),
+                None => std::env::remove_var("NETRC"),
+            }
+        }
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn local_env_wrapper_commands_bypass_secret_application() {
         let _guard = crate::global_test_env_lock().lock().unwrap();
         let dir = temp_dir("env-wrapper-secretless-commands");
         unsafe { std::env::set_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR", &dir) };
 
         for (wrapper_name, command, args, expected) in [
+            ("buf", "buf", &["config", "init"][..], true),
+            ("buf", "buf", &["registry", "whoami"][..], false),
             ("pnpm", "pnpm", &["root", "-g"][..], true),
             ("pnpm", "pnpm", &["store", "path"][..], true),
             ("pnpm", "pnpm", &["install"][..], false),
