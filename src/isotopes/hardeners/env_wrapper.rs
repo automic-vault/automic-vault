@@ -116,6 +116,7 @@ pub(crate) fn invocation_is_secretless(
                 "validate",
             ],
         ),
+        "wsk" => wsk_invocation_is_secretless(args),
         _ => false,
     }
 }
@@ -205,6 +206,173 @@ fn npm_invocation_is_secretless(args: &[OsString]) -> bool {
             | "v"
             | "whoami"
     )
+}
+
+fn wsk_invocation_is_secretless(args: &[OsString]) -> bool {
+    let args = args
+        .split(|arg| arg == "--")
+        .next()
+        .unwrap_or_default()
+        .iter()
+        .map(|arg| arg.to_str())
+        .collect::<Option<Vec<_>>>();
+    let Some(args) = args else { return true };
+    let Some((root, mut index, caller_auth)) = wsk_root_command(&args) else {
+        return true;
+    };
+    if root == "list" {
+        return caller_auth || super::migrations::wsk_selected_props_have_auth();
+    }
+
+    while index < args.len() {
+        match wsk_global_option(&args, index) {
+            Some((next, _)) => index = next,
+            None => break,
+        }
+    }
+    let Some(operation) = args.get(index).copied() else {
+        return true;
+    };
+    if is_help_argument(operation) {
+        return true;
+    }
+    index += 1;
+    if args.get(index).is_some_and(|arg| is_help_argument(arg)) {
+        return true;
+    }
+
+    let needs_auth = match (root, operation) {
+        ("action", "create" | "delete" | "get" | "invoke" | "list" | "update")
+        | ("activation", "get" | "list" | "logs" | "poll" | "result")
+        | ("api", "create" | "delete" | "get" | "list")
+        | ("namespace", "get" | "list")
+        | ("package", "bind" | "create" | "delete" | "get" | "list" | "refresh" | "update")
+        | ("project", "deploy" | "export" | "sync" | "undeploy")
+        | (
+            "rule",
+            "create" | "delete" | "disable" | "enable" | "get" | "list" | "status" | "update",
+        )
+        | ("trigger", "create" | "delete" | "fire" | "get" | "list" | "update") => true,
+        ("property", "get") => wsk_property_get_needs_auth(&args[index..]),
+        _ => false,
+    };
+    !needs_auth || caller_auth || super::migrations::wsk_selected_props_have_auth()
+}
+
+fn wsk_root_command<'a>(args: &'a [&str]) -> Option<(&'a str, usize, bool)> {
+    let mut index = 0;
+    let mut caller_auth = false;
+    while index < args.len() {
+        if is_help_argument(args[index]) || matches!(args[index], "--version" | "version") {
+            return None;
+        }
+        let Some((next, auth)) = wsk_global_option(args, index) else {
+            break;
+        };
+        caller_auth |= auth;
+        index = next;
+    }
+    let root = *args.get(index)?;
+    if root.starts_with('-') || matches!(root, "help" | "version") {
+        return None;
+    }
+    Some((root, index + 1, caller_auth))
+}
+
+fn wsk_global_option(args: &[&str], index: usize) -> Option<(usize, bool)> {
+    let argument = *args.get(index)?;
+    if matches!(
+        argument,
+        "--debug" | "-d" | "--insecure" | "-i" | "--verbose" | "-v"
+    ) {
+        return Some((index + 1, false));
+    }
+    if [
+        "--cert",
+        "--key",
+        "--auth",
+        "-u",
+        "--apihost",
+        "--apiversion",
+    ]
+    .contains(&argument)
+    {
+        let value = *args.get(index + 1)?;
+        return Some((
+            index + 2,
+            matches!(argument, "--auth" | "-u") && !value.is_empty(),
+        ));
+    }
+    for option in ["--cert=", "--key=", "--apihost=", "--apiversion="] {
+        if argument.starts_with(option) {
+            return Some((index + 1, false));
+        }
+    }
+    if let Some(value) = argument.strip_prefix("--auth=") {
+        return Some((index + 1, !value.is_empty()));
+    }
+    if let Some(value) = argument.strip_prefix("-u") {
+        if !value.is_empty() {
+            return Some((index + 1, true));
+        }
+    }
+    None
+}
+
+fn is_help_argument(argument: &str) -> bool {
+    matches!(argument, "help" | "--help" | "-h")
+}
+
+fn wsk_property_get_needs_auth(args: &[&str]) -> bool {
+    if args.is_empty() {
+        return true;
+    }
+    let mut selected_property = false;
+    let mut index = 0;
+    while index < args.len() {
+        let argument = args[index];
+        if matches!(argument, "--auth" | "--all" | "--namespace")
+            || argument.starts_with("--auth=")
+            || argument.starts_with("--all=")
+            || argument.starts_with("--namespace=")
+        {
+            return true;
+        }
+        if matches!(
+            argument,
+            "--cert"
+                | "--key"
+                | "--apihost"
+                | "--apiversion"
+                | "--apibuild"
+                | "--apibuildno"
+                | "--cliversion"
+        ) {
+            selected_property = true;
+            index += 1;
+            continue;
+        }
+        if matches!(
+            argument,
+            "--debug" | "-d" | "--insecure" | "-i" | "--verbose" | "-v"
+        ) {
+            index += 1;
+            continue;
+        }
+        if matches!(argument, "--output" | "-o") {
+            if args.get(index + 1).is_none() {
+                return false;
+            }
+            index += 2;
+            continue;
+        }
+        if argument.starts_with("--output=") {
+            index += 1;
+            continue;
+        }
+        return false;
+    }
+    !selected_property
 }
 
 fn secret_gate(wrapper: &EnvWrapper) -> SecretGateDescriptor {
@@ -982,6 +1150,150 @@ mod tests {
 
         unsafe { std::env::remove_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR") };
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn wsk_requests_secrets_only_for_reviewed_remote_commands() {
+        let _guard = crate::global_test_env_lock().lock().unwrap();
+        let dir = temp_dir("env-wrapper-secretless-wsk");
+        let home = dir.join("home");
+        let selected = home.join("selected.wskprops");
+        fs::create_dir_all(&home).unwrap();
+        let previous_home = std::env::var_os("HOME");
+        let previous_config = std::env::var_os("WSK_CONFIG_FILE");
+        let previous_auth = std::env::var_os("WHISK_AUTH");
+        unsafe {
+            std::env::set_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR", &dir);
+            std::env::set_var("HOME", &home);
+            std::env::set_var("WSK_CONFIG_FILE", &selected);
+            std::env::remove_var("WHISK_AUTH");
+        }
+        let script_path = dir.join("wsk");
+        let script = stub_script(
+            &wrapper("wsk").unwrap().primary,
+            Path::new("/opt/homebrew/bin/wsk"),
+        );
+        let secretless = |values: &[&str]| {
+            let args = std::iter::once(script_path.clone().into_os_string())
+                .chain(values.iter().map(OsString::from))
+                .collect::<Vec<_>>();
+            invocation_is_secretless(&script_path, script.as_bytes(), &args)
+        };
+
+        for command in [
+            vec![],
+            vec!["help"],
+            vec!["--help"],
+            vec!["--version"],
+            vec!["action"],
+            vec!["action", "--help"],
+            vec!["action", "list", "--help"],
+            vec!["action", "future"],
+            vec!["future", "list"],
+            vec!["action", "--", "list"],
+            vec!["sdk", "install", "bashauto"],
+            vec!["sdk", "install", "docker"],
+            vec!["property", "set", "--auth", "caller"],
+            vec!["property", "unset", "--auth"],
+            vec!["property", "get", "--cert"],
+            vec!["property", "get", "--key"],
+            vec!["property", "get", "--apihost"],
+            vec!["property", "get", "--apiversion"],
+            vec!["property", "get", "--apibuild"],
+            vec!["property", "get", "--apibuildno"],
+            vec!["property", "get", "--cliversion"],
+        ] {
+            assert!(secretless(&command), "wsk {command:?}");
+        }
+
+        for command in [
+            vec!["list"],
+            vec!["action", "create"],
+            vec!["action", "delete"],
+            vec!["action", "get"],
+            vec!["action", "invoke"],
+            vec!["action", "list"],
+            vec!["action", "update"],
+            vec!["activation", "get"],
+            vec!["activation", "list"],
+            vec!["activation", "logs"],
+            vec!["activation", "poll"],
+            vec!["activation", "result"],
+            vec!["api", "create"],
+            vec!["api", "delete"],
+            vec!["api", "get"],
+            vec!["api", "list"],
+            vec!["namespace", "get"],
+            vec!["namespace", "list"],
+            vec!["package", "bind"],
+            vec!["package", "create"],
+            vec!["package", "delete"],
+            vec!["package", "get"],
+            vec!["package", "list"],
+            vec!["package", "refresh"],
+            vec!["package", "update"],
+            vec!["project", "deploy"],
+            vec!["project", "export"],
+            vec!["project", "sync"],
+            vec!["project", "undeploy"],
+            vec!["rule", "create"],
+            vec!["rule", "delete"],
+            vec!["rule", "disable"],
+            vec!["rule", "enable"],
+            vec!["rule", "get"],
+            vec!["rule", "list"],
+            vec!["rule", "status"],
+            vec!["rule", "update"],
+            vec!["trigger", "create"],
+            vec!["trigger", "delete"],
+            vec!["trigger", "fire"],
+            vec!["trigger", "get"],
+            vec!["trigger", "list"],
+            vec!["trigger", "update"],
+            vec!["property", "get"],
+            vec!["property", "get", "--all"],
+            vec!["property", "get", "--auth"],
+            vec!["property", "get", "--namespace"],
+            vec!["property", "get", "--output", "raw"],
+            vec!["--debug", "action", "list"],
+            vec!["action", "--insecure", "list"],
+            vec!["action", "create", "name", "--param", "key", "-h"],
+            vec!["action", "create", "--", "payload"],
+        ] {
+            assert!(!secretless(&command), "wsk {command:?}");
+        }
+
+        unsafe { std::env::set_var("WHISK_AUTH", "ambient-caller-auth") };
+        assert!(!secretless(&["action", "list"]));
+        assert!(secretless(&["--auth", "caller-auth", "action", "list"]));
+        assert!(secretless(&["-u", "caller-auth", "action", "list"]));
+        assert!(secretless(&["-ucaller-auth", "action", "list"]));
+        fs::write(&selected, "AUTH=caller-file-auth\n").unwrap();
+        assert!(secretless(&["action", "list"]));
+
+        let invocation = [script_path.clone().into_os_string(), OsString::from("help")];
+        assert!(!invocation_is_secretless(
+            &script_path,
+            format!("{script}# changed\n").as_bytes(),
+            &invocation,
+        ));
+
+        unsafe {
+            std::env::remove_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR");
+            match previous_home {
+                Some(value) => std::env::set_var("HOME", value),
+                None => std::env::remove_var("HOME"),
+            }
+            match previous_config {
+                Some(value) => std::env::set_var("WSK_CONFIG_FILE", value),
+                None => std::env::remove_var("WSK_CONFIG_FILE"),
+            }
+            match previous_auth {
+                Some(value) => std::env::set_var("WHISK_AUTH", value),
+                None => std::env::remove_var("WHISK_AUTH"),
+            }
+        }
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

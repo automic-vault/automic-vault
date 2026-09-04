@@ -101,6 +101,10 @@ pub(super) fn names() -> impl Iterator<Item = &'static str> {
     MIGRATIONS.iter().map(|(name, _)| *name)
 }
 
+pub(super) fn wsk_selected_props_have_auth() -> bool {
+    wsk::selected_props_have_auth()
+}
+
 #[unsafe(no_mangle)]
 unsafe extern "C" fn isotope_store_generic_password_json(
     service: *const std::ffi::c_char,
