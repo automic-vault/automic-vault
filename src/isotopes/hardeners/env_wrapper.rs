@@ -347,8 +347,15 @@ fn glab_canonical_command(parent: &[String], argument: &str) -> String {
 }
 
 fn glab_has_option(args: &[&str], option: &str) -> bool {
-    args.iter()
-        .any(|arg| *arg == option || arg.starts_with(&format!("{option}=")))
+    args.iter().enumerate().any(|(index, argument)| {
+        if *argument == option {
+            return args.get(index + 1).is_some_and(|value| !value.is_empty());
+        }
+        argument
+            .strip_prefix(option)
+            .and_then(|value| value.strip_prefix('='))
+            .is_some_and(|value| !value.is_empty())
+    })
 }
 
 fn glab_uses_another_credential() -> bool {
@@ -1214,6 +1221,8 @@ mod tests {
             vec!["auth", "git-credential", "get"],
             vec!["auth", "docker-helper", "get"],
             vec!["auth", "dpop-gen", "--private-key", "/tmp/id"],
+            vec!["auth", "dpop-gen", "--private-key", "/tmp/id", "--pat="],
+            vec!["auth", "dpop-gen", "--private-key", "/tmp/id", "--pat", ""],
             vec!["config", "get", "token"],
             vec!["config", "get", "--host", "gitlab.com", "token"],
             vec!["conf", "get", "GITLAB_TOKEN"],
