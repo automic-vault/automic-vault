@@ -98,7 +98,7 @@ pub(crate) fn invocation_is_secretless(
             ) || args.first().is_some_and(|arg| arg == "store")
                 && args.get(1).is_some_and(|arg| arg == "path")
         }
-        "fly" | "flyctl" => local_command(args, &["completion", "help", "version"]),
+        "fly" | "flyctl" => flyctl_invocation_is_secretless(args),
         "k6" => local_command(
             args,
             &["archive", "completion", "help", "inspect", "new", "version"],
@@ -205,6 +205,115 @@ fn npm_invocation_is_secretless(args: &[OsString]) -> bool {
             | "v"
             | "whoami"
     )
+}
+
+// Reviewed against flyctl v0.4.99. Unknown commands stay tokenless until their
+// authority is audited; the current runnable command and alias vocabulary gates
+// every authenticated leaf while local exceptions remain explicit below.
+const FLYCTL_ROOT_GROUPS: &str = "agent,apps,app,auth,certs,checks,config,consul,create,extensions,ext,history,image,img,incidents,info,ips,ip,litefs-cloud,lfsc,machine,machines,m,mcp,metrics,mpg,orgs,platform,postgres,pg,redis,regions,registry,resume,scale,secrets,services,settings,sftp,ssh,storage,tigris,suspend,synthetics,tokens,volumes,volume,vol,v,wireguard,wg";
+const FLYCTL_ROOT_RUNNABLE: &str = "console,curl,dashboard,dash,deploy,destroy,dig,doctor,launch,logs,move,open,ping,proxy,releases,status";
+const FLYCTL_GROUP_ONLY: &str = "3p,app,apps,arcjet,auth,backups,barman,certs,checks,clusters,config,consul,cross-network-replays,database,databases,db,dbs,egress-ip,events,ext,extension,extensions,history,hosts,image,img,incidents,info,ip,ips,k8s,keys,kubernetes,lease,leases,lfsc,m,machine,machines,mcp,mpg,orgs,pg,plan,platform,registry,replay-sources,resume,scale,secrets,sentry,services,settings,sftp,snaps,snapshot,snapshots,storage,third-party,tokens,user,users,v,vector,vol,volumes,waf,wafris,wg";
+const FLYCTL_RUNNABLE_ONLY: &str = "add,add-discharge,add_flycast,allocate,allocate-egress,allocate-v4,allocate-v6,analytics,api-proxy,attach,attenuate,autoupdate,check,clear,clone,connect,console,cordon,count,curl,daemon-start,dash,dashboard,debug,del,delete,deploy,destroy,detach,diag,dig,disable,discharge,display,docker,docs,doctor,enable,env,errors,exec,export,extend,failover,files,find,fork,gen,generate,get,import,inspect,invite,issue,jobs,kill,kubectl-token,launch,list,list-backup,log,login,logout,logs,ls,machine-exec,memory,move,open,org,ping,place,plans,private,promote,propose,proxy,put,readonly,recover,release,release-egress,releases,remove,renew-certs,reset,restart,restore,revoke,rm,run,save,save-install,save-kubeconfig,sbom,send,server,set,set-role,setup,shell,show,show-backup,signup,start,status,stop,switch-wal,sync,ticket,token,uncordon,unset,update,update-role,upgrade,validate,version,view,vm,vm-sizes,vulns,vulnsummary,wait,websockets,whoami,wrap";
+const FLYCTL_AMBIGUOUS: &str = "agent,backup,create,litefs-cloud,metrics,postgres,redis,regions,ssh,suspend,synthetics,tigris,volume,wireguard";
+
+fn flyctl_invocation_is_secretless(args: &[OsString]) -> bool {
+    let Some(args) = args
+        .iter()
+        .map(|arg| arg.to_str())
+        .collect::<Option<Vec<_>>>()
+    else {
+        return true;
+    };
+    let option_end = args
+        .iter()
+        .position(|arg| *arg == "--")
+        .unwrap_or(args.len());
+    let option_args = &args[..option_end];
+    if option_args
+        .iter()
+        .any(|arg| matches!(*arg, "--help" | "-h" | "--version"))
+        || args.len() == 1 && args[0] == "-v"
+        || flyctl_uses_another_token(option_args)
+    {
+        return true;
+    }
+
+    let mut path = Vec::new();
+    let mut current_runnable = false;
+    let mut index = 0;
+    while index < option_end {
+        let argument = args[index];
+        if matches!(argument, "--access-token" | "-t") {
+            return true;
+        }
+        if argument.starts_with("--access-token=")
+            || argument.starts_with("-t") && argument.len() > 2
+            || matches!(argument, "--verbose" | "--debug")
+        {
+            index += 1;
+            continue;
+        }
+        if argument.starts_with('-') {
+            return !current_runnable;
+        }
+        if path.is_empty() {
+            if matches!(argument, "docs" | "jobs" | "version" | "settings") {
+                return true;
+            }
+            if flyctl_name_in(FLYCTL_ROOT_RUNNABLE, argument) {
+                current_runnable = true;
+            } else if !flyctl_name_in(FLYCTL_ROOT_GROUPS, argument) {
+                return true;
+            }
+            path.push(argument);
+            index += 1;
+            continue;
+        }
+        if flyctl_local_leaf(&path, argument) {
+            return true;
+        }
+        if flyctl_name_in(FLYCTL_GROUP_ONLY, argument) || flyctl_ambiguous_group(&path, argument) {
+            path.push(argument);
+            current_runnable = false;
+            index += 1;
+            continue;
+        }
+        if flyctl_name_in(FLYCTL_RUNNABLE_ONLY, argument)
+            || flyctl_name_in(FLYCTL_AMBIGUOUS, argument)
+        {
+            return false;
+        }
+        return !current_runnable;
+    }
+    !current_runnable
+}
+
+fn flyctl_uses_another_token(args: &[&str]) -> bool {
+    args.iter().any(|argument| {
+        matches!(*argument, "--access-token" | "-t")
+            || argument.starts_with("--access-token=")
+            || argument.starts_with("-t") && argument.len() > 2
+    }) || std::env::var_os("FLY_API_TOKEN").is_some_and(|value| !value.is_empty())
+}
+
+fn flyctl_local_leaf(path: &[&str], leaf: &str) -> bool {
+    let root = path[0];
+    (root == "agent" && matches!(leaf, "ping" | "stop"))
+        || (root == "auth" && matches!(leaf, "login" | "signup"))
+        || (root == "platform" && leaf == "status")
+        || (root == "mcp" && matches!(leaf, "list" | "proxy" | "inspect" | "wrap"))
+}
+
+fn flyctl_ambiguous_group(path: &[&str], command: &str) -> bool {
+    let parent = path.last().copied().unwrap_or_default();
+    (matches!(parent, "apps" | "app") && command == "suspend")
+        || (matches!(parent, "extensions" | "ext") && matches!(command, "storage" | "tigris"))
+        || (matches!(parent, "mpg" | "postgres" | "pg") && matches!(command, "backup" | "backups"))
+        || (parent == "tokens" && command == "create")
+}
+
+fn flyctl_name_in(names: &str, candidate: &str) -> bool {
+    names.split(',').any(|name| name == candidate)
 }
 
 fn secret_gate(wrapper: &EnvWrapper) -> SecretGateDescriptor {
@@ -981,6 +1090,114 @@ mod tests {
         ));
 
         unsafe { std::env::remove_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR") };
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn flyctl_requests_token_only_for_audited_authenticated_commands() {
+        let _guard = crate::global_test_env_lock().lock().unwrap();
+        let dir = temp_dir("env-wrapper-secretless-flyctl");
+        unsafe { std::env::set_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR", &dir) };
+        let previous_api_token = std::env::var_os("FLY_API_TOKEN");
+        unsafe { std::env::remove_var("FLY_API_TOKEN") };
+        let stub = &wrapper("flyctl").unwrap().primary;
+        let script_path = dir.join("flyctl");
+        let script = stub_script(stub, Path::new("/opt/homebrew/bin/flyctl"));
+        let args = |values: &[&str]| {
+            std::iter::once(script_path.clone().into_os_string())
+                .chain(values.iter().map(OsString::from))
+                .collect::<Vec<_>>()
+        };
+
+        for command in [
+            vec![],
+            vec!["--help"],
+            vec!["--version"],
+            vec!["deploy", "--help"],
+            vec!["completion", "zsh"],
+            vec!["docs"],
+            vec!["jobs"],
+            vec!["jobs", "open"],
+            vec!["version", "upgrade"],
+            vec!["settings", "analytics"],
+            vec!["settings", "autoupdate", "disable"],
+            vec!["agent"],
+            vec!["agent", "ping"],
+            vec!["agent", "stop"],
+            vec!["auth", "login"],
+            vec!["auth", "signup"],
+            vec!["platform", "status", "--json"],
+            vec!["mcp", "list"],
+            vec!["mcp", "inspect", "--url", "http://localhost:8080"],
+            vec!["mcp", "proxy", "--url", "http://localhost:8080"],
+            vec!["mcp", "wrap", "--mcp", "server"],
+            vec!["launch", "plan"],
+            vec!["apps", "suspend"],
+            vec!["tokens", "create"],
+            vec!["future-command"],
+            vec!["apps", "future-command"],
+            vec!["--access-token", "caller-token", "apps", "list"],
+            vec!["-tcaller-token", "apps", "list"],
+        ] {
+            assert!(
+                invocation_is_secretless(&script_path, script.as_bytes(), &args(&command)),
+                "flyctl {command:?}",
+            );
+        }
+
+        for command in [
+            vec!["apps", "list"],
+            vec!["deploy"],
+            vec!["dashboard"],
+            vec!["--verbose", "apps", "list"],
+            vec!["launch", "plan", "create", "manifest.json"],
+            vec!["agent", "run"],
+            vec!["auth", "logout"],
+            vec!["auth", "token"],
+            vec!["platform", "regions"],
+            vec!["postgres", "list"],
+            vec!["metrics", "send"],
+            vec!["tokens", "debug"],
+            vec!["mcp", "server"],
+            vec!["mcp", "add"],
+        ] {
+            assert!(
+                !invocation_is_secretless(&script_path, script.as_bytes(), &args(&command)),
+                "flyctl {command:?}",
+            );
+        }
+
+        unsafe { std::env::set_var("FLY_API_TOKEN", "caller-token") };
+        assert!(invocation_is_secretless(
+            &script_path,
+            script.as_bytes(),
+            &args(&["apps", "list"]),
+        ));
+        assert!(!invocation_is_secretless(
+            &script_path,
+            format!("{script}# changed\n").as_bytes(),
+            &args(&["version"]),
+        ));
+
+        let fly_stub = stubs(wrapper("flyctl").unwrap())
+            .find(|candidate| candidate.command == "fly")
+            .unwrap();
+        let fly_path = dir.join("fly");
+        let fly_script = stub_script(fly_stub, Path::new("/opt/homebrew/bin/fly"));
+        let fly_args = [fly_path.clone().into_os_string(), OsString::from("version")];
+        assert!(invocation_is_secretless(
+            &fly_path,
+            fly_script.as_bytes(),
+            &fly_args,
+        ));
+
+        unsafe {
+            std::env::remove_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR");
+            match previous_api_token {
+                Some(value) => std::env::set_var("FLY_API_TOKEN", value),
+                None => std::env::remove_var("FLY_API_TOKEN"),
+            }
+        }
         let _ = fs::remove_dir_all(dir);
     }
 
