@@ -322,11 +322,10 @@ fn npm_command<'a>(args: &'a [&str]) -> Option<&'a str> {
 
 fn npm_uses_explicit_auth(args: &[&str]) -> bool {
     args.iter().any(|argument| {
-        let option = argument
-            .strip_prefix("--")
-            .unwrap_or(argument)
+        let option = argument.strip_prefix("--").unwrap_or(argument);
+        let option = option
             .split_once('=')
-            .map_or(*argument, |(name, _)| name)
+            .map_or(option, |(name, _)| name)
             .to_ascii_lowercase();
         option == "_authtoken"
             || option == "_auth-token"
@@ -1086,6 +1085,8 @@ mod tests {
                 "install",
                 "--//registry.npmjs.org/:_authToken=provided-token",
             ],
+            vec!["install", "--_authToken"],
+            vec!["install", "--//registry.npmjs.org/:_authToken"],
             vec!["future-command"],
         ] {
             assert!(invocation_is_secretless(
