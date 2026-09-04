@@ -123,3 +123,11 @@ import Testing
     #expect(genericSecretGateRequestClassification(gateID: "node", arguments: ["stage", "publish"]) == .mutating)
     #expect(genericSecretGateRequestClassification(gateID: "node", arguments: ["ls"]) == .unknown)
 }
+
+@Test func jfrogPolicyClassifiesOnlyRequestsThatReachItsAuthorizationGate() {
+    #expect(genericSecretGateRequestClassification(gateID: "jfrog-cli", arguments: ["rt", "search"]) == .readOnly)
+    #expect(genericSecretGateRequestClassification(gateID: "jfrog-cli", arguments: ["worker", "deploy"]) == .mutating)
+    #expect(genericSecretGateRequestClassification(gateID: "jfrog-cli", arguments: ["rt", "access-token-create"]) == .secretDump)
+    #expect(genericSecretGateRequestClassification(gateID: "jfrog-cli", arguments: ["config", "show"]) == .unknown)
+    #expect(genericSecretGateRequestClassification(gateID: "jfrog-cli", arguments: ["config", "export"]) == .unknown)
+}

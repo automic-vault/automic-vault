@@ -144,7 +144,11 @@ private let secretGateCommandPolicies: [String: SecretGateCommandPolicy] = [
     "heroku": .init("apps,apps info,ps,addons", "apps create,apps destroy,config set,config unset,ps scale", secretDump: "auth token,config"),
     "hcloud": .init("server list,server describe,network list,network describe", "server create,server delete,network create,network delete"),
     "huggingface-cli": .init("auth whoami,repo list,cache scan", "upload,upload-large-folder,repo create,repo delete"),
-    "jfrog-cli": .init("rt search,rt ping,rt build-info", "rt upload,rt delete,rt build-publish", secretDump: "config show,config export"),
+    "jfrog-cli": .init(
+        "rt search,rt ping,pl status,worker list,apptrust ping,stats",
+        "rt upload,rt delete,rt build-publish,worker deploy,apptrust app-create,release-bundle-create",
+        secretDump: "access-token-create,rt access-token-create"
+    ),
     "k6": .init("inspect", "run,cloud"),
     "luarocks": .init("search,show,list,which", "install,remove,upload,publish"),
     "minio-mc": .init("ls,stat,find,du,tree", "cp,mv,rm,mb,rb,mirror", secretDump: "alias export"),

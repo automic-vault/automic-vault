@@ -90,6 +90,7 @@ pub(crate) fn invocation_is_secretless(
     }
     let args = &args[1..];
     match stub.command {
+        "jf" | "jfrog" => jfrog_invocation_is_secretless(args),
         "npm" => npm_invocation_is_secretless(args),
         "pnpm" => {
             local_command(
@@ -118,6 +119,146 @@ pub(crate) fn invocation_is_secretless(
         ),
         _ => false,
     }
+}
+
+// Reviewed against JFrog CLI v2.123.0. This is the exact built-in command
+// vocabulary that can consume the migrated JFrog credential bundle. Dynamic
+// plugins, unknown commands, and parent namespaces remain tokenless.
+const JFROG_AUTHENTICATED_COMMANDS: &str = "access-token-create,ag,agent apm,agent apm install,agent apm publish,agent plugins delete,agent plugins install,agent plugins publish,agent plugins search,agent plugins update,agent skills delete,agent skills install,agent skills publish,agent skills search,agent skills update,ago,am,an,ap,ape,api,apk,apptrust ac,apptrust ad,apptrust aexp,apptrust aimp,apptrust app-create,apptrust app-delete,apptrust app-export,apptrust app-import,apptrust app-update,apptrust au,apptrust p,apptrust package-bind,apptrust package-unbind,apptrust pb,apptrust ping,apptrust pu,apptrust vc,apptrust vd,apptrust vdist,apptrust vdr,apptrust version-create,apptrust version-delete,apptrust version-delete-remote,apptrust version-distribute,apptrust version-promote,apptrust version-release,apptrust version-rollback,apptrust version-update,apptrust version-update-sources,apptrust vp,apptrust vr,apptrust vrb,apptrust vu,apptrust vus,apt,apt-get,at ac,at ad,at aexp,at aimp,at app-create,at app-delete,at app-export,at app-import,at app-update,at au,at p,at package-bind,at package-unbind,at pb,at ping,at pu,at vc,at vd,at vdist,at vdr,at version-create,at version-delete,at version-delete-remote,at version-distribute,at version-promote,at version-release,at version-rollback,at version-update,at version-update-sources,at vp,at vr,at vrb,at vu,at vus,atc,aud,audit,audit-go,audit-gradle,audit-mvn,audit-npm,audit-pip,audit-pipenv,bs,build-scan,ca,cargo,conan,conan-config,conanc,curation-audit,docker,dotnet,dotnet-config,dotnetc,ds rbc,ds rbd,ds rbdel,ds rbs,ds rbu,ds release-bundle-create,ds release-bundle-delete,ds release-bundle-distribute,ds release-bundle-sign,ds release-bundle-update,evd create,evd create-evidence,evd get,evd get-evidence,evd verify,evd verify-evidence,git a,git audit,go,go-config,go-publish,goc,gp,gradle,gradle-config,gradlec,helm,hf,hf d,hf download,hf u,hf upload,hugging-face,hugging-face d,hugging-face download,hugging-face u,hugging-face upload,ide s,ide setup,malicious-scan,mc ja,mc jd,mc jpd-add,mc jpd-delete,mc la,mc ld,mc license-acquire,mc license-deploy,mc license-release,mc lr,ms,mvn,mvn-config,mvnc,mvnw,nix,npm,npm-config,npmc,nuget,nuget-config,nugetc,pip,pip-config,pipc,pipec,pipenv,pipenv-config,pl s,pl ss,pl status,pl sy,pl sync,pl sync-status,pl t,pl trigger,pl v,pl version,pnpm,pnpm-config,pnpmc,poc,poetry,poetry-config,rba,rbc,rbd,rbdell,rbdelr,rbe,rbf,rbi,rbp,rbs,rbu,release-bundle-annotate,release-bundle-create,release-bundle-delete-local,release-bundle-delete-remote,release-bundle-distribute,release-bundle-export,release-bundle-finalize,release-bundle-import,release-bundle-promote,release-bundle-search,release-bundle-update,rt access-token-create,rt atc,rt ba,rt bdc,rt bdi,rt bp,rt bpr,rt bs,rt build-append,rt build-discard,rt build-docker-create,rt build-promote,rt build-publish,rt build-scan,rt cl,rt cocoapods-config,rt cocoapodsc,rt copy,rt cp,rt curl,rt ddl,rt del,rt delete,rt delete-props,rt delp,rt direct-download,rt dl,rt docker-promote,rt docker-pull,rt docker-push,rt dotnet,rt dotnet-config,rt dotnetc,rt download,rt dp,rt dpl,rt dpr,rt gau,rt gc,rt gdel,rt git-lfs-clean,rt glc,rt go,rt go-config,rt go-publish,rt gp,rt gradle,rt gradle-config,rt gradlec,rt group-add-users,rt group-create,rt group-delete,rt move,rt mv,rt mvn,rt mvn-config,rt mvnc,rt npm-ci,rt npm-config,rt npm-install,rt npm-publish,rt npmc,rt npmci,rt npmi,rt npmp,rt nuget,rt nuget-config,rt nugetc,rt oc,rt osb,rt p,rt permission-target-create,rt permission-target-delete,rt permission-target-update,rt ping,rt pip-config,rt pip-install,rt pipc,rt pipi,rt podman-pull,rt podman-push,rt pp,rt ppl,rt ptc,rt ptdel,rt ptu,rt rc,rt rdel,rt replication-create,rt replication-delete,rt repo-create,rt repo-delete,rt repo-update,rt rplc,rt rpldel,rt ru,rt s,rt search,rt set-props,rt sp,rt swift-config,rt swiftc,rt transfer-config,rt transfer-config-merge,rt transfer-files,rt transfer-plugin-install,rt transfer-settings,rt u,rt uc,rt udel,rt upload,rt user-create,rt users-create,rt users-delete,rt yarn,rt yarn-config,rt yarnc,ruby,ruby-config,rubyc,s,sast-server,sbom-enrich,scan,se,setup,skill delete,skill install,skill publish,skill search,skill update,skills delete,skills install,skills publish,skills search,skills update,source-mcp,st,stats,terraform,terraform-config,tf,tfc,twine,ucdx,upload-cdx,uv,worker add-secret,worker as,worker d,worker deploy,worker dr,worker dry-run,worker e,worker edit-schedule,worker eh,worker es,worker exec,worker exec-hist,worker execute,worker execution-history,worker i,worker init,worker le,worker list,worker list-event,worker ls,worker rm,worker test-run,worker tr,worker undeploy,xr ag,xr ago,xr am,xr an,xr ap,xr audit-go,xr audit-gradle,xr audit-mvn,xr audit-npm,xr audit-pip,xr cl,xr curl,xr offline-update,xr ou,xr s,xr scan,yarn,yarn-config,yarnc";
+
+const JFROG_TOKENLESS_COMMANDS: &str = "api docs,api docs describe,api docs search,c add,c edit,c ex,c export,c im,c import,c remove,c rm,c s,c show,c use,completion bash,completion fish,completion zsh,config add,config edit,config ex,config export,config im,config import,config remove,config rm,config s,config show,config use,eot,evd gen-keys,evd generate-key-pair,exchange-oidc-token,generate-summary-markdown,git cc,git count-contributors,gsm,intro,login,mcp install,mcp show,mcp uninstall,options,package-alias install,package-alias status,package-alias uninstall,plugin ui,plugin uninstall,rt bc,rt bce,rt build-clean,rt build-collect-env,rt ndt,rt nuget-deps-tree,rt permission-target-template,rt ptt,rt replication-template,rt repo-template,rt rplt,rt rpt";
+
+fn jfrog_invocation_is_secretless(args: &[OsString]) -> bool {
+    let Some(args) = args
+        .iter()
+        .map(|arg| arg.to_str())
+        .collect::<Option<Vec<_>>>()
+    else {
+        return true;
+    };
+    let option_end = args
+        .iter()
+        .position(|argument| *argument == "--")
+        .unwrap_or(args.len());
+    let option_args = &args[..option_end];
+    if option_args
+        .iter()
+        .any(|argument| matches!(*argument, "--help" | "-h"))
+        || jfrog_uses_explicit_connection(option_args)
+    {
+        return true;
+    }
+
+    let mut command_args = option_args;
+    while command_args.first().is_some_and(|argument| {
+        matches!(*argument, "--ai-help" | "-ai-help")
+            || argument.starts_with("--ai-help=")
+            || argument.starts_with("-ai-help=")
+    }) {
+        command_args = &command_args[1..];
+    }
+    if command_args
+        .first()
+        .is_some_and(|argument| matches!(*argument, "--version" | "-v"))
+    {
+        return true;
+    }
+    if command_args.is_empty() || command_args[0].starts_with('-') {
+        return true;
+    }
+
+    for length in (1..=command_args.len().min(3)).rev() {
+        let command = command_args[..length].join(" ");
+        match command.as_str() {
+            "rt bad" | "rt build-add-dependencies" => {
+                return !jfrog_true_flag(option_args, "--from-rt");
+            }
+            "rt bag" | "rt build-add-git" => {
+                return jfrog_flag_value(option_args, "--config").is_none();
+            }
+            "agent plugins list" | "agent skills list" | "skill list" | "skills list" => {
+                let harness = jfrog_flag_value(option_args, "--harness").is_some();
+                let repo = jfrog_flag_value(option_args, "--repo").is_some();
+                return !(repo || harness && jfrog_true_flag(option_args, "--check-updates"));
+            }
+            "plugin i" | "plugin install" | "plugin p" | "plugin publish" => {
+                return std::env::var_os("JFROG_CLI_PLUGINS_SERVER")
+                    .is_none_or(|value| value.is_empty());
+            }
+            _ => {}
+        }
+        if JFROG_TOKENLESS_COMMANDS
+            .split(',')
+            .any(|candidate| candidate == command)
+        {
+            return true;
+        }
+        if JFROG_AUTHENTICATED_COMMANDS
+            .split(',')
+            .any(|candidate| candidate == command)
+        {
+            return false;
+        }
+    }
+    true
+}
+
+fn jfrog_uses_explicit_connection(args: &[&str]) -> bool {
+    const AUTHORITIES: &[&str] = &[
+        "--url",
+        "--platform-url",
+        "--artifactory-url",
+        "--distribution-url",
+        "--xray-url",
+        "--mission-control-url",
+        "--pipelines-url",
+        "--dist-url",
+        "--xr-url",
+        "--mc-url",
+        "--server-id",
+        "--server-id-resolve",
+        "--server-id-deploy",
+    ];
+    AUTHORITIES
+        .iter()
+        .any(|flag| jfrog_flag_value(args, flag).is_some())
+        || jfrog_flag_value(args, "--access-token").is_some()
+        || jfrog_true_flag(args, "--access-token-stdin")
+        || jfrog_flag_value(args, "--user").is_some()
+            && (jfrog_flag_value(args, "--password").is_some()
+                || jfrog_true_flag(args, "--password-stdin"))
+        || std::env::var_os("JFROG_CLI_SERVER_ID").is_some_and(|value| !value.is_empty())
+        || std::env::var_os("JFROG_ACCESS_TOKEN").is_some_and(|value| !value.is_empty())
+        || std::env::var_os("JFROG_USER").is_some_and(|value| !value.is_empty())
+            && std::env::var_os("JFROG_PASSWORD").is_some_and(|value| !value.is_empty())
+        || args.starts_with(&["ide", "setup"])
+            && args.get(3).is_some_and(|argument| {
+                argument.starts_with("https://") || argument.starts_with("http://")
+            })
+}
+
+fn jfrog_flag_value<'a>(args: &'a [&str], flag: &str) -> Option<&'a str> {
+    for (index, argument) in args.iter().enumerate() {
+        if *argument == flag {
+            return args
+                .get(index + 1)
+                .copied()
+                .filter(|value| !value.is_empty());
+        }
+        if let Some(value) = argument.strip_prefix(&format!("{flag}=")) {
+            return (!value.is_empty()).then_some(value);
+        }
+    }
+    None
+}
+
+fn jfrog_true_flag(args: &[&str], flag: &str) -> bool {
+    args.iter().any(|argument| {
+        *argument == flag
+            || argument
+                .strip_prefix(&format!("{flag}="))
+                .is_some_and(|value| matches!(value, "1" | "t" | "T" | "true" | "TRUE" | "True"))
+    })
 }
 
 fn local_command(args: &[OsString], commands: &[&str]) -> bool {
@@ -981,6 +1122,142 @@ mod tests {
         ));
 
         unsafe { std::env::remove_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR") };
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn jfrog_requests_secrets_only_for_reviewed_authenticated_commands() {
+        let _guard = crate::global_test_env_lock().lock().unwrap();
+        let dir = temp_dir("env-wrapper-secretless-jfrog");
+        let env_names = [
+            "JFROG_ACCESS_TOKEN",
+            "JFROG_CLI_PLUGINS_SERVER",
+            "JFROG_CLI_SERVER_ID",
+            "JFROG_PASSWORD",
+            "JFROG_USER",
+        ];
+        let previous_env = env_names.map(|name| (name, std::env::var_os(name)));
+        unsafe {
+            std::env::set_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR", &dir);
+            for name in env_names {
+                std::env::remove_var(name);
+            }
+        }
+
+        for command in ["jf", "jfrog"] {
+            let stub = stubs(wrapper("jfrog-cli").unwrap())
+                .find(|stub| stub.command == command)
+                .unwrap();
+            let script_path = dir.join(command);
+            let script = stub_script(stub, &Path::new("/opt/homebrew/bin").join(command));
+            let invocation = |values: &[&str]| {
+                std::iter::once(script_path.clone().into_os_string())
+                    .chain(values.iter().map(OsString::from))
+                    .collect::<Vec<_>>()
+            };
+            let secretless = |values: &[&str]| {
+                invocation_is_secretless(&script_path, script.as_bytes(), &invocation(values))
+            };
+
+            for args in [
+                &[][..],
+                &["--help"][..],
+                &["--version"][..],
+                &["--ai-help", "config", "show"][..],
+                &["config", "export"][..],
+                &["login"][..],
+                &["completion", "zsh"][..],
+                &["mcp", "show"][..],
+                &["plugin", "install", "hello-frog"][..],
+                &["rt", "repo-template", "template.json"][..],
+                &["rt", "build-add-dependencies", "target/release/*"][..],
+                &["rt", "build-add-git", "."][..],
+                &["agent", "skills", "list", "--harness", "codex"][..],
+                &["api", "docs", "search", "artifact"][..],
+                &["future-command"][..],
+                &["custom-plugin", "run"][..],
+            ] {
+                assert!(secretless(args), "{command} {args:?}");
+            }
+            for args in [
+                &["--ai-help", "rt", "search", "private/*"][..],
+                &["rt", "s", "private/*"][..],
+                &["rt", "upload", "dist/*", "repo/"][..],
+                &["rt", "bad", "--from-rt", "repo/*"][..],
+                &["rt", "bag", "--config", "issues.yaml"][..],
+                &["agent", "skills", "list", "--repo", "skills-local"][..],
+                &["agent", "plugins", "delete", "hello", "--version", "1.0.0"][..],
+                &[
+                    "agent",
+                    "plugins",
+                    "list",
+                    "--harness",
+                    "codex",
+                    "--check-updates",
+                ][..],
+                &["api", "api/system/ping"][..],
+                &["at", "p"][..],
+                &["worker", "ls"][..],
+                &["npm", "--", "install"][..],
+                &["npm", "--version"][..],
+                &["npm", "-v"][..],
+                &["rt", "upload", "--", "--help"][..],
+            ] {
+                assert!(!secretless(args), "{command} {args:?}");
+            }
+            for args in [
+                &["rt", "search", "private/*", "--url=https://other.jfrog.io"][..],
+                &["rt", "search", "private/*", "--server-id", "other"][..],
+                &[
+                    "rt",
+                    "search",
+                    "private/*",
+                    "--access-token",
+                    "caller-token",
+                ][..],
+                &[
+                    "rt",
+                    "search",
+                    "private/*",
+                    "--user=caller",
+                    "--password=caller-password",
+                ][..],
+                &[
+                    "ide",
+                    "setup",
+                    "vscode",
+                    "https://other.jfrog.io/artifactory/api/aieditorextensions/repo",
+                ][..],
+            ] {
+                assert!(secretless(args), "{command} {args:?}");
+            }
+
+            unsafe { std::env::set_var("JFROG_CLI_PLUGINS_SERVER", "plugins") };
+            assert!(!secretless(&["plugin", "install", "hello-frog"]));
+            assert!(!secretless(&["plugin", "p"]));
+            unsafe { std::env::remove_var("JFROG_CLI_PLUGINS_SERVER") };
+
+            assert!(!invocation_is_secretless(
+                &script_path,
+                format!("{script}# changed\n").as_bytes(),
+                &invocation(&["config", "show"]),
+            ));
+            assert!(!invocation_is_secretless(
+                &script_path,
+                script.as_bytes(),
+                &[PathBuf::from("/tmp/not-the-stub").into_os_string()],
+            ));
+        }
+
+        unsafe {
+            std::env::remove_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR");
+            for (name, value) in previous_env {
+                match value {
+                    Some(value) => std::env::set_var(name, value),
+                    None => std::env::remove_var(name),
+                }
+            }
+        }
         let _ = fs::remove_dir_all(dir);
     }
 
