@@ -116,6 +116,10 @@ pub(crate) fn invocation_is_secretless(
                 "validate",
             ],
         ),
+        "netlify" => netlify_invocation_is_secretless(
+            args,
+            std::env::var_os("NETLIFY_DB_BRANCH").is_some_and(|value| !value.is_empty()),
+        ),
         _ => false,
     }
 }
@@ -205,6 +209,124 @@ fn npm_invocation_is_secretless(args: &[OsString]) -> bool {
             | "v"
             | "whoami"
     )
+}
+
+// Reviewed against Netlify CLI v27.4.3. Keep this list positive: local dev,
+// build-helper, and passthrough commands can launch project code that must not
+// inherit the account token merely because Netlify can optionally use it.
+fn netlify_invocation_is_secretless(args: &[OsString], remote_database_branch: bool) -> bool {
+    if args.iter().any(|arg| arg == "--help" || arg == "-h")
+        || args.iter().any(|arg| {
+            arg == "--auth" || arg.to_str().is_some_and(|arg| arg.starts_with("--auth="))
+        })
+    {
+        return true;
+    }
+
+    let mut command_index = 0;
+    while args.get(command_index).is_some_and(|arg| {
+        matches!(
+            arg.to_str(),
+            Some("--verbose" | "--telemetry-disable" | "--telemetry-enable" | "--")
+        )
+    }) {
+        command_index += 1;
+    }
+    let Some(command) = args.get(command_index).and_then(|arg| arg.to_str()) else {
+        return true;
+    };
+    if matches!(command, "-V" | "-v" | "--version" | "help" | "version") || command.starts_with('-')
+    {
+        return true;
+    }
+
+    let command_args = &args[command_index + 1..];
+    let needs_secret = match command {
+        "agents:create" | "agents:run" | "agents:list" | "agents:show" | "agents:stop"
+        | "blob:delete" | "blob:get" | "blob:list" | "blob:set" | "blobs:delete" | "blobs:get"
+        | "blobs:list" | "blobs:set" | "claim" | "clone" | "create" | "env:clone"
+        | "env:delete" | "env:get" | "env:import" | "env:list" | "env:migrate" | "env:remove"
+        | "env:set" | "env:unset" | "init" | "link" | "log" | "logs" | "open" | "open:admin"
+        | "open:site" | "sites:create" | "sites:delete" | "sites:list" | "sites:search"
+        | "status" | "status:hooks" | "teams:list" | "watch" => true,
+        "api" => {
+            !has_netlify_flag(command_args, "--list", None)
+                && netlify_first_positional(command_args, &["--data", "-d"]).is_some()
+        }
+        "build" => !has_netlify_flag(command_args, "--offline", Some("-o")),
+        "deploy" => !has_netlify_flag(command_args, "--allow-anonymous", None),
+        "recipes" => {
+            netlify_option_value(command_args, "--name") == Some("blobs-migrate")
+                || netlify_first_positional(command_args, &[]) == Some("blobs-migrate")
+        }
+        "database" | "db" => {
+            let first = netlify_first_positional(command_args, &[]);
+            let second = first.and_then(|first| {
+                let index = command_args.iter().position(|arg| arg == first)?;
+                netlify_first_positional(&command_args[index + 1..], &[])
+            });
+            matches!((first, second), (Some("migrations"), Some("pull")))
+                || remote_database_branch
+                    && (first == Some("status")
+                        || matches!((first, second), (Some("migrations"), Some("reset"))))
+                || (first == Some("status")
+                    || matches!((first, second), (Some("migrations"), Some("reset"))))
+                    && has_netlify_flag(command_args, "--branch", Some("-b"))
+        }
+        _ => false,
+    };
+    !needs_secret
+}
+
+fn has_netlify_flag(args: &[OsString], long: &str, short: Option<&str>) -> bool {
+    args.iter().any(|arg| {
+        arg == long
+            || short.is_some_and(|short| {
+                arg == short
+                    || arg
+                        .to_str()
+                        .is_some_and(|arg| arg.len() > short.len() && arg.starts_with(short))
+            })
+            || arg
+                .to_str()
+                .is_some_and(|arg| arg.starts_with(&format!("{long}=")))
+    })
+}
+
+fn netlify_option_value<'a>(args: &'a [OsString], option: &str) -> Option<&'a str> {
+    args.iter().enumerate().find_map(|(index, arg)| {
+        let arg = arg.to_str()?;
+        arg.strip_prefix(&format!("{option}=")).or_else(|| {
+            (arg == option)
+                .then(|| args.get(index + 1)?.to_str())
+                .flatten()
+        })
+    })
+}
+
+fn netlify_first_positional<'a>(
+    args: &'a [OsString],
+    extra_options_with_values: &[&str],
+) -> Option<&'a str> {
+    const OPTIONS_WITH_VALUES: &[&str] = &[
+        "--auth",
+        "--cwd",
+        "--filter",
+        "--http-proxy",
+        "--http-proxy-certificate-filename",
+    ];
+    let mut index = 0;
+    while index < args.len() {
+        let arg = args[index].to_str()?;
+        if OPTIONS_WITH_VALUES.contains(&arg) || extra_options_with_values.contains(&arg) {
+            index += 2;
+        } else if arg.starts_with('-') {
+            index += 1;
+        } else {
+            return Some(arg);
+        }
+    }
+    None
 }
 
 fn secret_gate(wrapper: &EnvWrapper) -> SecretGateDescriptor {
@@ -791,6 +913,7 @@ const fn stub(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::ffi::OsStringExt;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
@@ -978,6 +1101,94 @@ mod tests {
             &script_path,
             format!("{script}# changed\n").as_bytes(),
             &args(&["root"]),
+        ));
+
+        unsafe { std::env::remove_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR") };
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn netlify_requests_secrets_only_for_reviewed_remote_commands() {
+        let _guard = crate::global_test_env_lock().lock().unwrap();
+        let dir = temp_dir("env-wrapper-secretless-netlify");
+        unsafe { std::env::set_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR", &dir) };
+        let script_path = dir.join("netlify");
+        let script = stub_script(
+            &wrapper("netlify-cli").unwrap().primary,
+            Path::new("/opt/homebrew/bin/netlify"),
+        );
+        let args = |values: &[&str]| {
+            std::iter::once(script_path.clone().into_os_string())
+                .chain(values.iter().map(OsString::from))
+                .collect::<Vec<_>>()
+        };
+
+        for command in [
+            vec![],
+            vec!["help", "deploy"],
+            vec!["--verbose", "--version"],
+            vec!["--verbose", "functions:list"],
+            vec!["functions:build"],
+            vec!["functions:create", "hello", "--template", "hello-world"],
+            vec!["functions:invoke", "hello"],
+            vec!["functions:serve"],
+            vec!["dev"],
+            vec!["dev:exec", "npm", "run", "build"],
+            vec!["serve"],
+            vec!["logs:function", "hello"],
+            vec!["api", "--list"],
+            vec!["api"],
+            vec!["build", "--offline"],
+            vec!["deploy", "--allow-anonymous"],
+            vec!["database", "status"],
+            vec!["db", "migrations", "new"],
+            vec!["recipes", "vscode"],
+            vec!["login", "--new"],
+            vec!["sites:list", "--auth", "supplied-token"],
+            vec!["sites:list", "--auth=supplied-token"],
+            vec!["future-command"],
+        ] {
+            assert!(
+                invocation_is_secretless(&script_path, script.as_bytes(), &args(&command)),
+                "netlify {command:?}",
+            );
+        }
+        for command in [
+            vec!["status"],
+            vec!["--verbose", "sites:list"],
+            vec!["agents:run", "fix the build"],
+            vec!["env:get", "API_TOKEN"],
+            vec!["api", "getSite"],
+            vec!["api", "--data", "{}", "getSite"],
+            vec!["build"],
+            vec!["deploy"],
+            vec!["database", "migrations", "pull"],
+            vec!["database", "status", "--branch", "preview"],
+            vec!["database", "status", "-bpreview"],
+            vec!["recipes", "blobs-migrate", "store"],
+        ] {
+            assert!(
+                !invocation_is_secretless(&script_path, script.as_bytes(), &args(&command)),
+                "netlify {command:?}",
+            );
+        }
+        assert!(!netlify_invocation_is_secretless(
+            &args(&["database", "migrations", "reset"])[1..],
+            true,
+        ));
+        assert!(!invocation_is_secretless(
+            &script_path,
+            format!("{script}# changed\n").as_bytes(),
+            &args(&["functions:list"]),
+        ));
+        assert!(invocation_is_secretless(
+            &script_path,
+            script.as_bytes(),
+            &[
+                script_path.clone().into_os_string(),
+                OsString::from_vec(vec![0xff]),
+                OsString::from("status"),
+            ],
         ));
 
         unsafe { std::env::remove_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR") };

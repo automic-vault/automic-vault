@@ -21,10 +21,39 @@ public func genericSecretGateRequestClassification(
     let words = arguments.map { $0.lowercased() }
     guard !words.isEmpty else { return .unknown }
     if gateID == "stripe" { return stripeRequestClassification(words) }
+    if gateID == "netlify-cli" { return netlifyRequestClassification(words) }
     if words == ["help"] || words == ["--help"] || words == ["version"] || words == ["--version"] {
         return .readOnly
     }
     guard let policy = secretGateCommandPolicies[gateID] else { return .unknown }
+    let candidates = (1...min(3, words.count)).reversed().map {
+        words.prefix($0).joined(separator: " ")
+    }
+    for candidate in candidates {
+        if policy.secretDump.contains(candidate) { return .secretDump }
+        if policy.readOnly.contains(candidate) { return .readOnly }
+        if policy.mutating.contains(candidate) { return .mutating }
+    }
+    return .unknown
+}
+
+private func netlifyRequestClassification(_ arguments: [String]) -> SecretGateRequestClassification {
+    let words = arguments.drop(while: { $0 == "--verbose" })
+    guard !words.isEmpty else { return .unknown }
+    if ["help", "--help", "version", "--version", "-v"].contains(words.first!) {
+        return .readOnly
+    }
+    if (words.starts(with: ["database", "status"]) || words.starts(with: ["db", "status"]))
+        && words.contains("--show-credentials")
+    {
+        return .secretDump
+    }
+    if words.first == "recipes"
+        && (words.contains("blobs-migrate") || words.contains("--name=blobs-migrate"))
+    {
+        return .mutating
+    }
+    guard let policy = secretGateCommandPolicies["netlify-cli"] else { return .unknown }
     let candidates = (1...min(3, words.count)).reversed().map {
         words.prefix($0).joined(separator: " ")
     }
@@ -148,7 +177,11 @@ private let secretGateCommandPolicies: [String: SecretGateCommandPolicy] = [
     "k6": .init("inspect", "run,cloud"),
     "luarocks": .init("search,show,list,which", "install,remove,upload,publish"),
     "minio-mc": .init("ls,stat,find,du,tree", "cp,mv,rm,mb,rb,mirror", secretDump: "alias export"),
-    "netlify-cli": .init("status,sites list,functions list", "deploy,sites create,sites delete,functions create", secretDump: "env list,env get"),
+    "netlify-cli": .init(
+        "agents:list,agents:show,blob:list,blobs:list,database status,database migrations pull,db status,db migrations pull,log,logs,open,open:admin,open:site,sites:list,sites:search,status,status:hooks,teams:list,watch",
+        "agents:create,agents:run,agents:stop,blob:delete,blob:set,blobs:delete,blobs:set,build,claim,clone,create,deploy,env:clone,env:delete,env:import,env:migrate,env:remove,env:set,env:unset,init,link,sites:create,sites:delete",
+        secretDump: "blob:get,blobs:get,env:get,env:list"
+    ),
     "node": .init(
         "access list,access get,audit,audit signatures,diff,dist-tag ls,doctor,org ls,outdated,owner ls,ping,profile get,search,find,s,se,stage list,stage view,stars,team ls,token list,trust list,view,info,show,v,whoami",
         "access,audit fix,ci,clean-install,ic,install-clean,isntall-clean,deprecate,dist-tag,dist-tags,install,add,i,in,ins,inst,insta,instal,isnt,isnta,isntal,isntall,install-ci-test,cit,clean-install-test,sit,install-test,it,logout,org,ogr,owner,author,profile,publish,stage,star,team,token,trust,undeprecate,unpublish,unstar,update,u,up,upgrade,udpate",

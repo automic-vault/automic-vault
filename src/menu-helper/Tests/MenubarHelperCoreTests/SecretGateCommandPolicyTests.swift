@@ -27,7 +27,7 @@ import Testing
         "k6": ["inspect", "script.js"],
         "luarocks": ["search", "example"],
         "minio-mc": ["ls", "alias/bucket"],
-        "netlify-cli": ["sites", "list"],
+        "netlify-cli": ["sites:list"],
         "node": ["view", "example"],
         "pnpm": ["view", "example"],
         "pulumi": ["stack", "ls"],
@@ -57,6 +57,41 @@ import Testing
             "missing read-only policy for \(gateID)"
         )
     }
+}
+
+@Test func netlifyPolicyClassifiesCurrentCommandsAndLeadingOptions() {
+    let readOnly = [
+        ["sites:list"],
+        ["--verbose", "agents:show", "agent-id"],
+        ["database", "status", "--branch", "preview"],
+        ["db", "migrations", "pull"],
+    ]
+    for arguments in readOnly {
+        #expect(genericSecretGateRequestClassification(gateID: "netlify-cli", arguments: arguments) == .readOnly)
+    }
+
+    let mutating = [
+        ["agents:run", "fix the build"],
+        ["env:set", "KEY", "value"],
+        ["recipes", "blobs-migrate", "store"],
+        ["recipes", "--name=blobs-migrate", "store"],
+    ]
+    for arguments in mutating {
+        #expect(genericSecretGateRequestClassification(gateID: "netlify-cli", arguments: arguments) == .mutating)
+    }
+
+    #expect(genericSecretGateRequestClassification(
+        gateID: "netlify-cli",
+        arguments: ["database", "status", "--branch", "preview", "--show-credentials"]
+    ) == .secretDump)
+    #expect(genericSecretGateRequestClassification(
+        gateID: "netlify-cli",
+        arguments: ["blobs:get", "store", "key"]
+    ) == .secretDump)
+    #expect(genericSecretGateRequestClassification(
+        gateID: "netlify-cli",
+        arguments: ["api", "getSite"]
+    ) == .unknown)
 }
 
 @Test func genericPoliciesClassifyMutationsSecretsAndUnknowns() {
