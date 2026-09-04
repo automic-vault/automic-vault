@@ -17,7 +17,7 @@ import Testing
         "doctl": ["account", "get"],
         "flyctl": ["apps", "list"],
         "glab": ["repo", "view"],
-        "gotify": ["health"],
+        "gotify": ["version"],
         "gptcommit": ["--version"],
         "grafanactl": ["resources", "list"],
         "heroku": ["apps"],
@@ -122,4 +122,8 @@ import Testing
     #expect(genericSecretGateRequestClassification(gateID: "node", arguments: ["stage", "list"]) == .readOnly)
     #expect(genericSecretGateRequestClassification(gateID: "node", arguments: ["stage", "publish"]) == .mutating)
     #expect(genericSecretGateRequestClassification(gateID: "node", arguments: ["ls"]) == .unknown)
+}
+
+@Test func gotifyPolicyClassifiesWatchAsMutating() {
+    #expect(genericSecretGateRequestClassification(gateID: "gotify", arguments: ["watch", "date"]) == .mutating)
 }

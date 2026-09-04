@@ -91,6 +91,7 @@ pub(crate) fn invocation_is_secretless(
     let args = &args[1..];
     match stub.command {
         "npm" => npm_invocation_is_secretless(args),
+        "gotify" => gotify_invocation_is_secretless(args),
         "pnpm" => {
             local_command(
                 args,
@@ -205,6 +206,47 @@ fn npm_invocation_is_secretless(args: &[OsString]) -> bool {
             | "v"
             | "whoami"
     )
+}
+
+// Reviewed against gotify/cli v2.4.0. Only message delivery consumes the
+// application token. `watch` remains credentialed because it delivers changes;
+// arguments after `--` do not alter the routing decision.
+fn gotify_invocation_is_secretless(args: &[OsString]) -> bool {
+    let Some(args) = args
+        .iter()
+        .map(|arg| arg.to_str())
+        .collect::<Option<Vec<_>>>()
+    else {
+        return true;
+    };
+    let option_end = args
+        .iter()
+        .position(|arg| *arg == "--")
+        .unwrap_or(args.len());
+    let option_args = &args[..option_end];
+    if option_args
+        .iter()
+        .any(|arg| matches!(*arg, "--help" | "-h" | "--version" | "-v"))
+        || std::env::var_os("GOTIFY_TOKEN").is_some_and(|value| !value.is_empty())
+    {
+        return true;
+    }
+
+    match option_args.first().copied() {
+        Some("push" | "p" | "watch") => gotify_has_token_option(option_args),
+        _ => true,
+    }
+}
+
+fn gotify_has_token_option(args: &[&str]) -> bool {
+    args.iter().enumerate().any(|(index, argument)| {
+        if *argument == "--token" {
+            return args.get(index + 1).is_some_and(|value| !value.is_empty());
+        }
+        argument
+            .strip_prefix("--token=")
+            .is_some_and(|value| !value.is_empty())
+    })
 }
 
 fn secret_gate(wrapper: &EnvWrapper) -> SecretGateDescriptor {
@@ -981,6 +1023,84 @@ mod tests {
         ));
 
         unsafe { std::env::remove_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR") };
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn gotify_requests_secrets_only_for_message_delivery() {
+        let _guard = crate::global_test_env_lock().lock().unwrap();
+        let dir = temp_dir("env-wrapper-secretless-gotify");
+        let previous_token = std::env::var_os("GOTIFY_TOKEN");
+        unsafe {
+            std::env::set_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR", &dir);
+            std::env::remove_var("GOTIFY_TOKEN");
+        }
+        let script_path = dir.join("gotify");
+        let script = stub_script(
+            &wrapper("gotify").unwrap().primary,
+            Path::new("/opt/homebrew/bin/gotify"),
+        );
+        let args = |values: &[&str]| {
+            std::iter::once(script_path.clone().into_os_string())
+                .chain(values.iter().map(OsString::from))
+                .collect::<Vec<_>>()
+        };
+
+        for command in [
+            vec![],
+            vec!["--help"],
+            vec!["--version"],
+            vec!["help", "push"],
+            vec!["init"],
+            vec!["config"],
+            vec!["version"],
+            vec!["v"],
+            vec!["future-command"],
+            vec!["push", "--help"],
+            vec!["watch", "--help"],
+            vec!["--future-option", "push", "message"],
+            vec!["push", "--token", "provided", "message"],
+            vec!["p", "--token=provided", "message"],
+            vec!["watch", "--token=provided", "--", "sh", "script.sh"],
+        ] {
+            assert!(
+                invocation_is_secretless(&script_path, script.as_bytes(), &args(&command)),
+                "gotify {command:?}",
+            );
+        }
+        for command in [
+            vec!["push", "message"],
+            vec!["p", "message"],
+            vec!["push", "--token=", "message"],
+            vec!["push", "--token", "", "message"],
+            vec!["watch", "date"],
+            vec!["watch", "--", "sh", "script.sh"],
+        ] {
+            assert!(
+                !invocation_is_secretless(&script_path, script.as_bytes(), &args(&command)),
+                "gotify {command:?}",
+            );
+        }
+
+        unsafe { std::env::set_var("GOTIFY_TOKEN", "already-provided") };
+        assert!(invocation_is_secretless(
+            &script_path,
+            script.as_bytes(),
+            &args(&["push", "message"]),
+        ));
+        assert!(!invocation_is_secretless(
+            &script_path,
+            format!("{script}# changed\n").as_bytes(),
+            &args(&["push", "message"]),
+        ));
+
+        unsafe {
+            match previous_token {
+                Some(value) => std::env::set_var("GOTIFY_TOKEN", value),
+                None => std::env::remove_var("GOTIFY_TOKEN"),
+            }
+            std::env::remove_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR");
+        }
         let _ = fs::remove_dir_all(dir);
     }
 
