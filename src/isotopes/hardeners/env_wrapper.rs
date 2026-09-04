@@ -90,6 +90,7 @@ pub(crate) fn invocation_is_secretless(
     }
     let args = &args[1..];
     match stub.command {
+        "grafanactl" => grafanactl_invocation_is_secretless(args),
         "npm" => npm_invocation_is_secretless(args),
         "pnpm" => {
             local_command(
@@ -118,6 +119,97 @@ pub(crate) fn invocation_is_secretless(
         ),
         _ => false,
     }
+}
+
+// Reviewed against grafana/grafanactl v0.1.10. Keep this as a positive list:
+// config manipulation is local, while config check and every runnable
+// resources command contact Grafana. Explicit context/server selection must
+// not inherit a credential migrated from the default context.
+fn grafanactl_invocation_is_secretless(args: &[OsString]) -> bool {
+    let Some(args) = args
+        .iter()
+        .map(|arg| arg.to_str())
+        .collect::<Option<Vec<_>>>()
+    else {
+        return true;
+    };
+    let option_end = args
+        .iter()
+        .position(|arg| *arg == "--")
+        .unwrap_or(args.len());
+    let args = &args[..option_end];
+    if args
+        .iter()
+        .any(|arg| matches!(*arg, "--help" | "-h" | "--version"))
+        || grafanactl_uses_another_context(args)
+    {
+        return true;
+    }
+
+    let mut path = Vec::new();
+    let mut index = 0;
+    while index < args.len() && path.len() < 2 {
+        let argument = args[index];
+        if matches!(argument, "--config" | "--context") {
+            if index + 1 >= args.len() {
+                return true;
+            }
+            index += 2;
+            continue;
+        }
+        if matches!(argument, "--no-color" | "--verbose")
+            || argument.starts_with("--no-color=")
+            || argument.starts_with("--verbose=")
+            || argument
+                .strip_prefix('-')
+                .is_some_and(|value| !value.is_empty() && value.chars().all(|ch| ch == 'v'))
+            || argument.starts_with("--config=")
+            || argument.starts_with("--context=")
+        {
+            index += 1;
+            continue;
+        }
+        if argument.starts_with('-') {
+            return true;
+        }
+        path.push(argument);
+        index += 1;
+    }
+
+    !matches!(
+        path.as_slice(),
+        ["config", "check"]
+            | [
+                "resources",
+                "delete" | "edit" | "get" | "list" | "pull" | "push" | "serve" | "validate"
+            ]
+    )
+}
+
+fn grafanactl_uses_another_context(args: &[&str]) -> bool {
+    if [
+        "GRAFANACTL_CONFIG",
+        "GRAFANACTL_ENV_ASSIGNMENTS",
+        "GRAFANA_SERVER",
+        "GRAFANA_TOKEN",
+        "GRAFANA_USER",
+    ]
+    .iter()
+    .any(|key| std::env::var_os(key).is_some_and(|value| !value.is_empty()))
+    {
+        return true;
+    }
+
+    args.iter().enumerate().any(|(index, argument)| {
+        if matches!(*argument, "--config" | "--context") {
+            return args.get(index + 1).is_some_and(|value| !value.is_empty());
+        }
+        ["--config=", "--context="].iter().any(|prefix| {
+            argument
+                .strip_prefix(prefix)
+                .is_some_and(|value| !value.is_empty())
+        })
+    })
 }
 
 fn local_command(args: &[OsString], commands: &[&str]) -> bool {
@@ -981,6 +1073,115 @@ mod tests {
         ));
 
         unsafe { std::env::remove_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR") };
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn grafanactl_requests_secrets_only_for_default_context_remote_commands() {
+        let _guard = crate::global_test_env_lock().lock().unwrap();
+        let dir = temp_dir("env-wrapper-secretless-grafanactl");
+        let context_vars = [
+            "GRAFANACTL_CONFIG",
+            "GRAFANACTL_ENV_ASSIGNMENTS",
+            "GRAFANA_SERVER",
+            "GRAFANA_TOKEN",
+            "GRAFANA_USER",
+        ];
+        let previous_values = context_vars.map(|name| std::env::var_os(name));
+        unsafe {
+            std::env::set_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR", &dir);
+            for name in context_vars {
+                std::env::remove_var(name);
+            }
+        }
+        let script_path = dir.join("grafanactl");
+        let script = stub_script(
+            &wrapper("grafanactl").unwrap().primary,
+            Path::new("/opt/homebrew/bin/grafanactl"),
+        );
+        let args = |values: &[&str]| {
+            std::iter::once(script_path.clone().into_os_string())
+                .chain(values.iter().map(OsString::from))
+                .collect::<Vec<_>>()
+        };
+
+        for command in [
+            vec![],
+            vec!["--help"],
+            vec!["--version"],
+            vec!["help", "resources"],
+            vec!["config", "view"],
+            vec!["config", "view", "--raw"],
+            vec!["config", "current-context"],
+            vec!["config", "list-contexts"],
+            vec!["config", "set", "current-context", "dev"],
+            vec!["config", "unset", "contexts.dev"],
+            vec!["config", "use-context", "dev"],
+            vec!["future-command"],
+            vec!["resources", "future-command"],
+            vec!["--future-option", "resources", "get", "dashboards/foo"],
+            vec!["resources", "--config", "/tmp/other.yaml", "get"],
+            vec!["resources", "get", "--context=staging", "dashboards/foo"],
+            vec!["config", "set", "name", "--", "arbitrary value"],
+        ] {
+            assert!(
+                invocation_is_secretless(&script_path, script.as_bytes(), &args(&command)),
+                "grafanactl {command:?}",
+            );
+        }
+        for command in [
+            vec!["config", "check"],
+            vec!["resources", "delete", "dashboards/foo"],
+            vec!["resources", "edit", "dashboards/foo"],
+            vec!["resources", "get", "dashboards/foo"],
+            vec!["resources", "list"],
+            vec!["resources", "pull", "dashboards/foo"],
+            vec!["resources", "push", "dashboards/foo"],
+            vec!["resources", "serve"],
+            vec!["resources", "serve", "--script", "sh generate.sh"],
+            vec!["resources", "validate"],
+            vec!["--no-color", "resources", "-vv", "list"],
+            vec!["--no-color=false", "--verbose=2", "resources", "list"],
+            vec!["resources", "--config", "", "get", "dashboards/foo"],
+            vec!["resources", "get", "--", "--config", "/tmp/selector"],
+        ] {
+            assert!(
+                !invocation_is_secretless(&script_path, script.as_bytes(), &args(&command)),
+                "grafanactl {command:?}",
+            );
+        }
+
+        for name in context_vars {
+            unsafe { std::env::set_var(name, "already-provided") };
+            assert!(invocation_is_secretless(
+                &script_path,
+                script.as_bytes(),
+                &args(&["resources", "get", "dashboards/foo"]),
+            ));
+            unsafe { std::env::remove_var(name) };
+        }
+        unsafe { std::env::set_var("GRAFANA_TOKEN", "") };
+        assert!(!invocation_is_secretless(
+            &script_path,
+            script.as_bytes(),
+            &args(&["resources", "get", "dashboards/foo"]),
+        ));
+        unsafe { std::env::set_var("GRAFANA_TOKEN", "already-provided") };
+        assert!(!invocation_is_secretless(
+            &script_path,
+            format!("{script}# changed\n").as_bytes(),
+            &args(&["resources", "get", "dashboards/foo"]),
+        ));
+
+        unsafe {
+            for (name, value) in context_vars.into_iter().zip(previous_values) {
+                match value {
+                    Some(value) => std::env::set_var(name, value),
+                    None => std::env::remove_var(name),
+                }
+            }
+            std::env::remove_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR");
+        }
         let _ = fs::remove_dir_all(dir);
     }
 
