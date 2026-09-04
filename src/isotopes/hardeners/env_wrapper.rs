@@ -90,6 +90,7 @@ pub(crate) fn invocation_is_secretless(
     }
     let args = &args[1..];
     match stub.command {
+        "argocd" => argocd_invocation_is_secretless(args),
         "npm" => npm_invocation_is_secretless(args),
         "pnpm" => {
             local_command(
@@ -118,6 +119,386 @@ pub(crate) fn invocation_is_secretless(
         ),
         _ => false,
     }
+}
+
+fn argocd_invocation_is_secretless(args: &[OsString]) -> bool {
+    if argocd_help_requested(args) {
+        return true;
+    }
+    let Some(command_index) = argocd_command_index(args) else {
+        return true;
+    };
+    let Some(command) = args[command_index].to_str() else {
+        return true;
+    };
+
+    if matches!(
+        command,
+        "completion" | "login" | "relogin" | "logout" | "context" | "ctx" | "configure" | "admin"
+    ) || command == "account"
+        && args
+            .get(command_index + 1)
+            .is_some_and(|subcommand| subcommand == "bcrypt")
+        || command == "version" && argocd_flag_is_present(&args[command_index + 1..], "--client")
+    {
+        return true;
+    }
+
+    let needs_auth_token = argocd_builtin_command_needs_auth_token(&args[command_index..]);
+    !needs_auth_token || argocd_credentials_are_supplied(args)
+}
+
+// Reviewed against Argo CD CLI v3.5.2. Unknown commands stay tokenless because
+// Argo CD executes unknown top-level commands as environment-inheriting plugins.
+fn argocd_builtin_command_needs_auth_token(args: &[OsString]) -> bool {
+    const COMMANDS: &str = "version,
+app create,app get,app diff,app set,app unset,app sync,app history,app rollback,app list,app delete,app wait,app manifests,app terminate-op,app edit,app patch,app get-resource,app patch-resource,app delete-resource,app actions list,app actions run,app resources,app logs,app add-source,app remove-source,app confirm-deletion,
+appset get,appset create,appset list,appset delete,appset generate,
+cluster add,cluster set,cluster get,cluster rm,cluster list,cluster rotate-auth,
+repo add,repo rm,repo list,repo get,repocreds add,repocreds rm,repocreds list,
+account update-password,account get-user-info,account whoami,account can-i,account list,account get,account generate-token,account delete-token,account session-token,
+cert add-tls,cert add-ssh,cert rm,cert list,gpg list,gpg get,gpg add,gpg rm,
+proj create,proj get,proj delete,proj list,proj set,proj edit,proj add-signature-key,proj remove-signature-key,proj add-destination,proj remove-destination,proj add-source,proj remove-source,proj allow-cluster-resource,proj deny-cluster-resource,proj allow-namespace-resource,proj deny-namespace-resource,proj add-orphaned-ignore,proj remove-orphaned-ignore,proj add-source-namespace,proj remove-source-namespace,proj add-destination-service-account,proj remove-destination-service-account,
+proj role add-policy,proj role remove-policy,proj role create,proj role delete,proj role create-token,proj role token-create,proj role list-tokens,proj role list-token,proj role token-list,proj role delete-token,proj role token-delete,proj role remove-token,proj role list,proj role get,proj role add-group,proj role remove-group,
+proj windows disable-manual-sync,proj windows enable-manual-sync,proj windows disable-sync-overrun,proj windows enable-sync-overrun,proj windows add,proj windows delete,proj windows update,proj windows list,
+proj source-integrity git policies list,proj source-integrity git policies delete,proj source-integrity git policies add,proj source-integrity git policies update";
+    let Some(words) = args
+        .iter()
+        .take(5)
+        .map(|arg| arg.to_str())
+        .collect::<Option<Vec<_>>>()
+    else {
+        return false;
+    };
+    (1..=words.len()).rev().any(|length| {
+        let candidate = words[..length].join(" ");
+        COMMANDS.split(',').any(|known| known.trim() == candidate)
+            || candidate.strip_prefix("project ").is_some_and(|candidate| {
+                COMMANDS
+                    .split(',')
+                    .any(|known| known.trim() == format!("proj {candidate}"))
+            })
+    })
+}
+
+fn argocd_help_requested(args: &[OsString]) -> bool {
+    for (index, argument) in args.iter().enumerate() {
+        if argument == "--" {
+            break;
+        }
+        if matches!(argument.to_str(), Some("--help" | "-h" | "--version"))
+            && index
+                .checked_sub(1)
+                .and_then(|previous| args[previous].to_str())
+                .is_none_or(|previous| !previous.starts_with('-'))
+        {
+            return true;
+        }
+    }
+    false
+}
+
+fn argocd_command_index(args: &[OsString]) -> Option<usize> {
+    const OPTIONS_WITH_VALUES: &[&str] = &[
+        "--config",
+        "--server",
+        "--server-crt",
+        "--client-crt",
+        "--client-crt-key",
+        "--auth-token",
+        "--grpc-web-root-path",
+        "--logformat",
+        "--loglevel",
+        "--header",
+        "-H",
+        "--port-forward-namespace",
+        "--http-retry-max",
+        "--argocd-context",
+        "--server-name",
+        "--controller-name",
+        "--redis-haproxy-name",
+        "--redis-name",
+        "--repo-server-name",
+        "--redis-compress",
+        "--kube-context",
+    ];
+    const BOOLEAN_OPTIONS: &[&str] = &[
+        "--plaintext",
+        "--insecure",
+        "--grpc-web",
+        "--port-forward",
+        "--core",
+        "--prompts-enabled",
+    ];
+
+    let mut index = 0;
+    while index < args.len() {
+        let argument = args[index].to_str()?;
+        if argument == "--" || matches!(argument, "--help" | "-h" | "--version") {
+            return None;
+        }
+        if OPTIONS_WITH_VALUES.contains(&argument) {
+            index += 2;
+            continue;
+        }
+        if OPTIONS_WITH_VALUES
+            .iter()
+            .any(|option| argument.starts_with(&format!("{option}=")))
+            || BOOLEAN_OPTIONS.contains(&argument)
+            || BOOLEAN_OPTIONS
+                .iter()
+                .any(|option| argument.starts_with(&format!("{option}=")))
+        {
+            index += 1;
+            continue;
+        }
+        return (!argument.starts_with('-')).then_some(index);
+    }
+    None
+}
+
+fn argocd_credentials_are_supplied(args: &[OsString]) -> bool {
+    let environment_options = match std::env::var("ARGOCD_OPTS") {
+        Ok(options) => match shell_words(&options) {
+            Some(options) => options.into_iter().map(OsString::from).collect::<Vec<_>>(),
+            None => return true,
+        },
+        Err(_) => Vec::new(),
+    };
+
+    if argocd_option_value(args, "--auth-token")
+        .or_else(|| argocd_option_value(&environment_options, "--auth-token"))
+        .is_some_and(|value| !value.is_empty())
+        || argocd_bool_option(args, "--core")
+            .or_else(|| argocd_bool_option(&environment_options, "--core"))
+            .unwrap_or(false)
+    {
+        return true;
+    }
+
+    let context =
+        argocd_option_value(args, "--argocd-context").and_then(|value| value.into_string().ok());
+    let config = argocd_option_value(args, "--config")
+        .or_else(|| argocd_option_value(&environment_options, "--config"))
+        .map(PathBuf::from)
+        .or_else(argocd_default_config_path);
+    config
+        .and_then(|path| fs::read_to_string(path).ok())
+        .is_some_and(|contents| argocd_config_supplies_credentials(&contents, context.as_deref()))
+}
+
+fn argocd_option_value(args: &[OsString], option: &str) -> Option<OsString> {
+    let equals = format!("{option}=");
+    let mut value = None;
+    let mut index = 0;
+    while index < args.len() {
+        if args[index] == "--" {
+            break;
+        }
+        if args[index] == option {
+            value = args.get(index + 1).cloned();
+            index += 2;
+            continue;
+        }
+        if let Some(argument) = args[index].to_str()
+            && let Some(argument_value) = argument.strip_prefix(&equals)
+        {
+            value = Some(OsString::from(argument_value));
+        }
+        index += 1;
+    }
+    value
+}
+
+fn argocd_bool_option(args: &[OsString], option: &str) -> Option<bool> {
+    let equals = format!("{option}=");
+    let mut value = None;
+    for argument in args.iter().take_while(|argument| *argument != "--") {
+        if argument == option {
+            value = Some(true);
+        } else if let Some(argument) = argument.to_str()
+            && let Some(argument_value) = argument.strip_prefix(&equals)
+        {
+            value = Some(argument_value == "true");
+        }
+    }
+    value
+}
+
+fn argocd_flag_is_present(args: &[OsString], flag: &str) -> bool {
+    args.iter().enumerate().any(|(index, argument)| {
+        argument == flag
+            && index
+                .checked_sub(1)
+                .and_then(|previous| args[previous].to_str())
+                .is_none_or(|previous| !matches!(previous, "--output" | "-o"))
+    })
+}
+
+fn argocd_default_config_path() -> Option<PathBuf> {
+    if let Some(dir) = std::env::var_os("ARGOCD_CONFIG_DIR").filter(|value| !value.is_empty()) {
+        return Some(PathBuf::from(dir).join("config"));
+    }
+    let home = std::env::var_os("HOME").map(PathBuf::from)?;
+    let legacy = home.join(".argocd");
+    if legacy.exists() {
+        return Some(legacy.join("config"));
+    }
+    std::env::var_os("XDG_CONFIG_HOME")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .map(|dir| dir.join("argocd/config"))
+        .or_else(|| Some(home.join(".config/argocd/config")))
+}
+
+#[derive(Default)]
+struct ArgocdConfigEntry {
+    name: String,
+    user: String,
+    server: String,
+    auth_token: bool,
+    core: bool,
+}
+
+fn argocd_config_supplies_credentials(contents: &str, selected_context: Option<&str>) -> bool {
+    let mut current_context = String::new();
+    let mut section = "";
+    let mut entry = ArgocdConfigEntry::default();
+    let mut contexts = Vec::new();
+    let mut users = Vec::new();
+    let mut servers = Vec::new();
+
+    let commit = |section: &str,
+                  entry: &mut ArgocdConfigEntry,
+                  contexts: &mut Vec<ArgocdConfigEntry>,
+                  users: &mut Vec<ArgocdConfigEntry>,
+                  servers: &mut Vec<ArgocdConfigEntry>| {
+        let completed = std::mem::take(entry);
+        if completed.name.is_empty() {
+            return;
+        }
+        match section {
+            "contexts" => contexts.push(completed),
+            "users" => users.push(completed),
+            "servers" => servers.push(completed),
+            _ => {}
+        }
+    };
+
+    for line in contents.lines() {
+        if line.starts_with('\t') {
+            return false;
+        }
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        if !line.starts_with(' ') && !trimmed.starts_with("- ") {
+            commit(section, &mut entry, &mut contexts, &mut users, &mut servers);
+            if matches!(trimmed, "contexts:" | "users:" | "servers:") {
+                section = trimmed.trim_end_matches(':');
+                continue;
+            }
+            section = "";
+            if let Some(value) = argocd_yaml_value(trimmed, "current-context:") {
+                current_context = value.to_string();
+            }
+            continue;
+        }
+        let starts_entry = trimmed.starts_with("- ");
+        if starts_entry {
+            commit(section, &mut entry, &mut contexts, &mut users, &mut servers);
+        }
+        let field = trimmed.trim_start_matches("- ");
+        match section {
+            "contexts" => {
+                if let Some(value) = argocd_yaml_value(field, "name:") {
+                    entry.name = value.to_string();
+                } else if let Some(value) = argocd_yaml_value(field, "user:") {
+                    entry.user = value.to_string();
+                } else if let Some(value) = argocd_yaml_value(field, "server:") {
+                    entry.server = value.to_string();
+                }
+            }
+            "users" => {
+                if let Some(value) = argocd_yaml_value(field, "name:") {
+                    entry.name = value.to_string();
+                } else if field.starts_with("auth-token:") {
+                    entry.auth_token = argocd_yaml_value(field, "auth-token:").is_some();
+                }
+            }
+            "servers" => {
+                if let Some(value) = argocd_yaml_value(field, "server:") {
+                    entry.name = value.to_string();
+                } else if let Some(value) = argocd_yaml_value(field, "core:") {
+                    entry.core = value == "true";
+                }
+            }
+            _ => {}
+        }
+    }
+    commit(section, &mut entry, &mut contexts, &mut users, &mut servers);
+
+    let selected = selected_context.unwrap_or(&current_context);
+    let Some(context) = contexts.iter().find(|context| context.name == selected) else {
+        return false;
+    };
+    users
+        .iter()
+        .any(|user| user.name == context.user && user.auth_token)
+        || servers
+            .iter()
+            .any(|server| server.name == context.server && server.core)
+}
+
+fn argocd_yaml_value<'a>(line: &'a str, prefix: &str) -> Option<&'a str> {
+    line.strip_prefix(prefix)
+        .map(str::trim)
+        .filter(|value| !value.is_empty() && *value != "\"\"" && *value != "''")
+        .map(|value| {
+            if value.len() >= 2
+                && ((value.starts_with('"') && value.ends_with('"'))
+                    || (value.starts_with('\'') && value.ends_with('\'')))
+            {
+                &value[1..value.len() - 1]
+            } else {
+                value
+            }
+        })
+}
+
+fn shell_words(value: &str) -> Option<Vec<String>> {
+    let mut words = Vec::new();
+    let mut current = String::new();
+    let mut quote = None;
+    let mut escaped = false;
+    for ch in value.chars() {
+        if escaped {
+            current.push(ch);
+            escaped = false;
+        } else if ch == '\\' {
+            escaped = true;
+        } else if quote.is_some_and(|quoted| quoted == ch) {
+            quote = None;
+        } else if quote.is_some() {
+            current.push(ch);
+        } else if matches!(ch, '\'' | '"') {
+            quote = Some(ch);
+        } else if ch.is_whitespace() {
+            if !current.is_empty() {
+                words.push(std::mem::take(&mut current));
+            }
+        } else {
+            current.push(ch);
+        }
+    }
+    if escaped || quote.is_some() {
+        return None;
+    }
+    if !current.is_empty() {
+        words.push(current);
+    }
+    Some(words)
 }
 
 fn local_command(args: &[OsString], commands: &[&str]) -> bool {
@@ -915,6 +1296,155 @@ mod tests {
         assert!(script.contains("+AKAMAI_ENV_ASSIGNMENTS"));
         assert!(script.contains("for assignment in ${AKAMAI_ENV_ASSIGNMENTS-}"));
         assert!(script.contains("export \"$assignment\""));
+    }
+
+    #[test]
+    fn argocd_requests_its_token_only_for_builtin_api_commands_without_other_auth() {
+        let _guard = crate::global_test_env_lock().lock().unwrap();
+        let dir = temp_dir("env-wrapper-secretless-argocd");
+        let config = dir.join("config");
+        fs::create_dir_all(&dir).unwrap();
+        unsafe {
+            std::env::set_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR", &dir);
+            std::env::remove_var("ARGOCD_OPTS");
+            std::env::remove_var("ARGOCD_AUTH_TOKEN");
+        }
+        let script_path = dir.join("argocd");
+        let script = stub_script(
+            &wrapper("argocd").unwrap().primary,
+            Path::new("/opt/homebrew/bin/argocd"),
+        );
+        let args = |values: &[&str]| {
+            std::iter::once(script_path.clone().into_os_string())
+                .chain(values.iter().map(OsString::from))
+                .collect::<Vec<_>>()
+        };
+
+        for command in [
+            vec![],
+            vec!["--help"],
+            vec!["--version"],
+            vec!["app", "delete", "--help"],
+            vec!["version", "--client"],
+            vec!["completion", "zsh"],
+            vec!["login", "argocd.example.com"],
+            vec!["relogin"],
+            vec!["logout", "argocd.example.com"],
+            vec!["context"],
+            vec!["ctx"],
+            vec!["configure"],
+            vec!["admin", "cluster", "stats"],
+            vec!["account", "bcrypt", "--password", "example"],
+            vec!["future-plugin", "arbitrary", "arguments"],
+            vec!["app"],
+            vec!["app", "future-operation"],
+            vec!["app", "actions", "future-operation"],
+            vec!["proj", "role", "future-operation"],
+            vec![
+                "proj",
+                "source-integrity",
+                "git",
+                "policies",
+                "future-operation",
+            ],
+            vec!["--loglevel", "debug", "admin", "settings", "validate"],
+        ] {
+            assert!(
+                invocation_is_secretless(&script_path, script.as_bytes(), &args(&command)),
+                "argocd {command:?}",
+            );
+        }
+        for command in [
+            vec!["version"],
+            vec!["app", "get", "example"],
+            vec!["app", "create", "example"],
+            vec!["cluster", "list"],
+            vec!["appset", "generate", "appset.yaml"],
+            vec!["repo", "list"],
+            vec!["repocreds", "list"],
+            vec!["project", "list"],
+            vec!["proj", "role", "list", "example"],
+            vec!["proj", "windows", "list", "example"],
+            vec![
+                "proj",
+                "source-integrity",
+                "git",
+                "policies",
+                "list",
+                "example",
+            ],
+            vec!["account", "session-token"],
+            vec!["cert", "list"],
+            vec!["gpg", "get", "key-id"],
+            vec!["--server", "argocd.example.com", "repo", "list"],
+            vec!["version", "--output", "--client"],
+            vec!["--config", "--help", "app", "list"],
+        ] {
+            assert!(
+                !invocation_is_secretless(&script_path, script.as_bytes(), &args(&command)),
+                "argocd {command:?}",
+            );
+        }
+
+        unsafe { std::env::set_var("ARGOCD_AUTH_TOKEN", "protected-token") };
+        assert!(!invocation_is_secretless(
+            &script_path,
+            script.as_bytes(),
+            &args(&["app", "list"]),
+        ));
+        assert!(invocation_is_secretless(
+            &script_path,
+            script.as_bytes(),
+            &args(&["--auth-token", "caller-token", "app", "list"]),
+        ));
+        assert!(invocation_is_secretless(
+            &script_path,
+            script.as_bytes(),
+            &args(&["--core", "app", "list"]),
+        ));
+
+        unsafe { std::env::set_var("ARGOCD_OPTS", "--auth-token='caller token'") };
+        assert!(invocation_is_secretless(
+            &script_path,
+            script.as_bytes(),
+            &args(&["app", "list"]),
+        ));
+        unsafe { std::env::set_var("ARGOCD_OPTS", "--core=false") };
+
+        fs::write(
+            &config,
+            "current-context: prod\ncontexts:\n- name: prod\n  server: https://prod.example.com\n  user: prod\n- name: staging\n  server: https://staging.example.com\n  user: staging\nservers:\n- server: https://prod.example.com\n- server: https://staging.example.com\n  core: true\nusers:\n- name: prod\n  auth-token: config-token\n- name: staging\n  auth-token: \"\"\n",
+        )
+        .unwrap();
+        assert!(invocation_is_secretless(
+            &script_path,
+            script.as_bytes(),
+            &args(&["--config", config.to_str().unwrap(), "app", "list"]),
+        ));
+        assert!(invocation_is_secretless(
+            &script_path,
+            script.as_bytes(),
+            &args(&[
+                "--config",
+                config.to_str().unwrap(),
+                "--argocd-context",
+                "staging",
+                "app",
+                "list",
+            ]),
+        ));
+        assert!(!invocation_is_secretless(
+            &script_path,
+            format!("{script}# changed\n").as_bytes(),
+            &args(&["admin", "dashboard"]),
+        ));
+
+        unsafe {
+            std::env::remove_var("ARGOCD_OPTS");
+            std::env::remove_var("ARGOCD_AUTH_TOKEN");
+            std::env::remove_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR");
+        }
+        let _ = fs::remove_dir_all(dir);
     }
 
     #[test]
