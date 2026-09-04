@@ -1,6 +1,6 @@
 use std::ffi::OsString;
 use std::fs;
-use std::io::{self, IsTerminal, Write};
+use std::io::{self, IsTerminal, Read, Write};
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -90,6 +90,7 @@ pub(crate) fn invocation_is_secretless(
     }
     let args = &args[1..];
     match stub.command {
+        "censys" => censys_invocation_is_secretless(&target, args),
         "npm" => npm_invocation_is_secretless(args),
         "pnpm" => {
             local_command(
@@ -205,6 +206,138 @@ fn npm_invocation_is_secretless(args: &[OsString]) -> bool {
             | "v"
             | "whoami"
     )
+}
+
+fn censys_invocation_is_secretless(target: &Path, args: &[OsString]) -> bool {
+    if !censys_target_uses_legacy_environment(target) {
+        return true;
+    }
+    let Some(command) = args.first().and_then(|arg| arg.to_str()) else {
+        return true;
+    };
+    if args.iter().any(|arg| arg == "--help" || arg == "-h")
+        || matches!(command, "--version" | "-v")
+    {
+        return true;
+    }
+
+    match command {
+        "account" | "subdomains" => censys_search_credentials_are_available(args),
+        "hnri" | "search" | "view" => {
+            censys_has_flag(args, &["-O", "--open"])
+                || censys_search_credentials_are_available(args)
+        }
+        "config" => censys_search_credentials_are_available(args),
+        "asm" => {
+            let Some(subcommand) = args.get(1).and_then(|arg| arg.to_str()) else {
+                return true;
+            };
+            if !matches!(
+                subcommand,
+                "config"
+                    | "add-seeds"
+                    | "delete-seeds"
+                    | "delete-all-seeds"
+                    | "delete-labeled-seeds"
+                    | "replace-labeled-seeds"
+                    | "list-seeds"
+                    | "list-saved-queries"
+                    | "add-saved-query"
+                    | "get-saved-query-by-id"
+                    | "edit-saved-query-by-id"
+                    | "delete-saved-query-by-id"
+                    | "execute-saved-query-by-name"
+                    | "execute-saved-query-by-id"
+                    | "search"
+            ) {
+                return true;
+            }
+            censys_asm_credentials_are_available(&args[1..])
+        }
+        _ => true,
+    }
+}
+
+fn censys_target_uses_legacy_environment(target: &Path) -> bool {
+    let Ok(file) = fs::File::open(target) else {
+        return false;
+    };
+    let mut bytes = Vec::new();
+    if file.take(16 * 1024).read_to_end(&mut bytes).is_err() {
+        return false;
+    }
+    std::str::from_utf8(&bytes).is_ok_and(|contents| {
+        contents.starts_with("#!") && contents.contains("from censys.cli import main")
+    })
+}
+
+fn censys_search_credentials_are_available(args: &[OsString]) -> bool {
+    (censys_has_option(args, "--api-id") && censys_has_option(args, "--api-secret"))
+        || (nonempty_env("CENSYS_API_ID") && nonempty_env("CENSYS_API_SECRET"))
+        || censys_config_has_credentials(&["api_id", "api_secret"])
+}
+
+fn censys_asm_credentials_are_available(args: &[OsString]) -> bool {
+    censys_has_option(args, "--api-key")
+        || nonempty_env("CENSYS_ASM_API_KEY")
+        || censys_config_has_credentials(&["asm_api_key"])
+}
+
+fn censys_has_flag(args: &[OsString], names: &[&str]) -> bool {
+    args.iter()
+        .take_while(|arg| *arg != "--")
+        .any(|arg| names.iter().any(|name| arg == name))
+}
+
+fn censys_has_option(args: &[OsString], name: &str) -> bool {
+    args.iter().take_while(|arg| *arg != "--").any(|arg| {
+        arg == name
+            || arg
+                .to_str()
+                .and_then(|arg| arg.strip_prefix(name))
+                .and_then(|arg| arg.strip_prefix('='))
+                .is_some_and(|value| !value.is_empty())
+    })
+}
+
+fn nonempty_env(name: &str) -> bool {
+    std::env::var_os(name).is_some_and(|value| !value.is_empty())
+}
+
+fn censys_config_has_credentials(keys: &[&str]) -> bool {
+    let path = std::env::var_os("CENSYS_CONFIG_PATH")
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME")
+                .map(|home| PathBuf::from(home).join(".config/censys/censys.cfg"))
+        });
+    let Some(path) = path else { return false };
+    let Ok(contents) = fs::read_to_string(path) else {
+        return false;
+    };
+    let mut found = vec![false; keys.len()];
+    let mut in_default = false;
+    for line in contents.lines() {
+        let line = line.trim();
+        if line.starts_with('[') && line.ends_with(']') {
+            in_default = line.eq_ignore_ascii_case("[DEFAULT]");
+            continue;
+        }
+        if !in_default || line.is_empty() || line.starts_with(['#', ';']) {
+            continue;
+        }
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        if let Some(index) = keys
+            .iter()
+            .position(|candidate| key.trim().eq_ignore_ascii_case(candidate))
+        {
+            found[index] = !value.trim().trim_matches(['\'', '"']).is_empty();
+        }
+    }
+    found.into_iter().all(|value| value)
 }
 
 fn secret_gate(wrapper: &EnvWrapper) -> SecretGateDescriptor {
@@ -791,6 +924,7 @@ const fn stub(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::ffi::OsStringExt;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
@@ -981,6 +1115,212 @@ mod tests {
         ));
 
         unsafe { std::env::remove_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR") };
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn censys_requests_legacy_credentials_only_for_reviewed_api_commands() {
+        let _guard = crate::global_test_env_lock().lock().unwrap();
+        let dir = temp_dir("env-wrapper-secretless-censys");
+        let stub_dir = dir.join("stubs");
+        let legacy_target = dir.join("legacy/censys");
+        let current_target = dir.join("current/censys");
+        let config = dir.join("censys.cfg");
+        fs::create_dir_all(legacy_target.parent().unwrap()).unwrap();
+        fs::create_dir_all(current_target.parent().unwrap()).unwrap();
+        fs::write(
+            &legacy_target,
+            "#!/usr/bin/python3\nfrom censys.cli import main\nmain()\n",
+        )
+        .unwrap();
+        fs::write(&current_target, b"\x7fELF current cencli").unwrap();
+
+        let env_names = [
+            "AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR",
+            "CENSYS_CONFIG_PATH",
+            "CENSYS_API_ID",
+            "CENSYS_API_SECRET",
+            "CENSYS_ASM_API_KEY",
+        ];
+        let previous = env_names.map(|name| (name, std::env::var_os(name)));
+        unsafe {
+            std::env::set_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR", &stub_dir);
+            std::env::set_var("CENSYS_CONFIG_PATH", &config);
+            std::env::remove_var("CENSYS_API_ID");
+            std::env::remove_var("CENSYS_API_SECRET");
+            std::env::remove_var("CENSYS_ASM_API_KEY");
+        }
+
+        let script_path = stub_dir.join("censys");
+        let invocation = |values: Vec<OsString>| {
+            std::iter::once(script_path.clone().into_os_string())
+                .chain(values)
+                .collect::<Vec<_>>()
+        };
+        let legacy_script = stub_script(&wrapper("censys").unwrap().primary, &legacy_target);
+        let current_script = stub_script(&wrapper("censys").unwrap().primary, &current_target);
+        let args = |values: &[&str]| values.iter().map(OsString::from).collect::<Vec<_>>();
+
+        for values in [
+            vec![],
+            vec!["--help"],
+            vec!["search", "--help"],
+            vec!["--version"],
+            vec!["-v"],
+            vec!["future-command"],
+            vec!["auth", "login"],
+            vec!["asm"],
+            vec!["asm", "future-command"],
+            vec!["search", "--open", "services.service_name: SSH"],
+            vec!["view", "-O", "8.8.8.8"],
+            vec!["hnri", "--open"],
+        ] {
+            assert!(
+                invocation_is_secretless(
+                    &script_path,
+                    legacy_script.as_bytes(),
+                    &invocation(args(&values))
+                ),
+                "censys {values:?}",
+            );
+        }
+
+        for values in [
+            vec!["account"],
+            vec!["config"],
+            vec!["hnri"],
+            vec!["search", "services.service_name: SSH"],
+            vec!["search", "--", "--open"],
+            vec!["subdomains", "example.com"],
+            vec!["view", "8.8.8.8"],
+            vec!["asm", "config"],
+            vec!["asm", "list-seeds"],
+            vec!["asm", "add-seeds", "--domain", "example.com"],
+            vec!["asm", "delete-saved-query-by-id", "--query-id", "query-id"],
+            vec![
+                "asm",
+                "execute-saved-query-by-name",
+                "--query-name",
+                "query",
+            ],
+            vec!["asm", "search", "--query", "risks: *"],
+        ] {
+            assert!(
+                !invocation_is_secretless(
+                    &script_path,
+                    legacy_script.as_bytes(),
+                    &invocation(args(&values))
+                ),
+                "censys {values:?}",
+            );
+        }
+
+        for values in [
+            vec!["search", "--api-id=id", "--api-secret=secret", "query"],
+            vec!["account", "--api-id", "id", "--api-secret", "secret"],
+            vec!["asm", "list-seeds", "--api-key=key"],
+        ] {
+            assert!(invocation_is_secretless(
+                &script_path,
+                legacy_script.as_bytes(),
+                &invocation(args(&values)),
+            ));
+        }
+        assert!(!invocation_is_secretless(
+            &script_path,
+            legacy_script.as_bytes(),
+            &invocation(args(&[
+                "search",
+                "--api-id=",
+                "--api-secret=secret",
+                "query"
+            ])),
+        ));
+
+        fs::write(
+            &config,
+            "[DEFAULT]\napi_id = configured\napi_secret = configured\n",
+        )
+        .unwrap();
+        assert!(invocation_is_secretless(
+            &script_path,
+            legacy_script.as_bytes(),
+            &invocation(args(&["search", "query"])),
+        ));
+        assert!(invocation_is_secretless(
+            &script_path,
+            legacy_script.as_bytes(),
+            &invocation(args(&["config"])),
+        ));
+        assert!(!invocation_is_secretless(
+            &script_path,
+            legacy_script.as_bytes(),
+            &invocation(args(&["asm", "list-seeds"])),
+        ));
+        fs::write(
+            &config,
+            "[DEFAULT]\nAPI_ID = configured\nAPI_SECRET = configured\nASM_API_KEY = configured\n",
+        )
+        .unwrap();
+        assert!(invocation_is_secretless(
+            &script_path,
+            legacy_script.as_bytes(),
+            &invocation(args(&["asm", "list-seeds"])),
+        ));
+
+        fs::remove_file(&config).unwrap();
+        unsafe {
+            std::env::set_var("CENSYS_API_ID", "existing-id");
+            std::env::set_var("CENSYS_API_SECRET", "existing-secret");
+            std::env::set_var("CENSYS_ASM_API_KEY", "existing-key");
+        }
+        for values in [
+            vec!["search", "query"],
+            vec!["config"],
+            vec!["asm", "list-seeds"],
+        ] {
+            assert!(invocation_is_secretless(
+                &script_path,
+                legacy_script.as_bytes(),
+                &invocation(args(&values)),
+            ));
+        }
+        unsafe {
+            std::env::remove_var("CENSYS_API_ID");
+            std::env::remove_var("CENSYS_API_SECRET");
+            std::env::remove_var("CENSYS_ASM_API_KEY");
+        }
+
+        for values in [
+            vec!["search", "query"],
+            vec!["view", "8.8.8.8"],
+            vec!["config"],
+        ] {
+            assert!(invocation_is_secretless(
+                &script_path,
+                current_script.as_bytes(),
+                &invocation(args(&values)),
+            ));
+        }
+        assert!(invocation_is_secretless(
+            &script_path,
+            legacy_script.as_bytes(),
+            &invocation(vec![OsString::from_vec(vec![0xff])]),
+        ));
+        assert!(!invocation_is_secretless(
+            &script_path,
+            format!("{legacy_script}# changed\n").as_bytes(),
+            &invocation(args(&["--help"])),
+        ));
+
+        for (name, value) in previous {
+            unsafe {
+                match value {
+                    Some(value) => std::env::set_var(name, value),
+                    None => std::env::remove_var(name),
+                }
+            }
+        }
         let _ = fs::remove_dir_all(dir);
     }
 

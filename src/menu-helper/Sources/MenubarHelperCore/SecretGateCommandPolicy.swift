@@ -21,6 +21,7 @@ public func genericSecretGateRequestClassification(
     let words = arguments.map { $0.lowercased() }
     guard !words.isEmpty else { return .unknown }
     if gateID == "stripe" { return stripeRequestClassification(words) }
+    if gateID == "censys" { return censysRequestClassification(words) }
     if words == ["help"] || words == ["--help"] || words == ["version"] || words == ["--version"] {
         return .readOnly
     }
@@ -34,6 +35,37 @@ public func genericSecretGateRequestClassification(
         if policy.mutating.contains(candidate) { return .mutating }
     }
     return .unknown
+}
+
+// The protected CENSYS_* variables belong to the legacy Python CLI. The
+// current Go CLI uses its own credential store and never reaches this gate.
+private func censysRequestClassification(_ arguments: [String]) -> SecretGateRequestClassification {
+    if arguments.contains("--help") || arguments.contains("-h")
+        || ["--version", "-v"].contains(arguments[0])
+    {
+        return .readOnly
+    }
+    switch arguments[0] {
+    case "account", "hnri", "search", "subdomains", "view":
+        return .readOnly
+    case "config":
+        return .mutating
+    case "asm":
+        guard arguments.count > 1 else { return .unknown }
+        switch arguments[1] {
+        case "list-seeds", "list-saved-queries", "get-saved-query-by-id",
+             "execute-saved-query-by-name", "execute-saved-query-by-id", "search":
+            return .readOnly
+        case "config", "add-seeds", "delete-seeds", "delete-all-seeds",
+             "delete-labeled-seeds", "replace-labeled-seeds", "add-saved-query",
+             "edit-saved-query-by-id", "delete-saved-query-by-id":
+            return .mutating
+        default:
+            return .unknown
+        }
+    default:
+        return .unknown
+    }
 }
 
 private func stripeRequestClassification(_ arguments: [String]) -> SecretGateRequestClassification {
@@ -129,7 +161,7 @@ private let secretGateCommandPolicies: [String: SecretGateCommandPolicy] = [
     "argocd": .init("app get,app list,app diff,cluster get,cluster list,account get-user-info", "app create,app set,app sync,app delete,app rollback", secretDump: "account generate-token"),
     "ast-cli": .init("scan list,scan show,project list,project show", "scan create,scan cancel,project create,project delete"),
     "buf": .init("repository list,module list,organization list", "push,repository create,repository delete"),
-    "censys": .init("search,view,account", "asm seeds add,asm seeds delete"),
+    "censys": .init("", ""),
     "checkov": .init("frameworks", "submit"),
     "circleci": .init("project list,pipeline list,config validate", "pipeline run,context create,context delete,context store-secret"),
     "civo": .init("instance list,instance show,kubernetes list,kubernetes show", "instance create,instance remove,kubernetes create,kubernetes remove", secretDump: "apikey show"),

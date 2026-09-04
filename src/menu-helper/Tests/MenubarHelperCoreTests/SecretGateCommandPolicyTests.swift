@@ -72,6 +72,51 @@ import Testing
     #expect(genericSecretGateRequestClassification(gateID: "flyctl", arguments: []) == .unknown)
 }
 
+@Test func censysPolicyTracksTheLegacyPythonAPITree() {
+    for arguments in [
+        ["account"],
+        ["hnri"],
+        ["search", "services.service_name: SSH"],
+        ["subdomains", "example.com"],
+        ["view", "8.8.8.8"],
+        ["asm", "list-seeds"],
+        ["asm", "list-saved-queries"],
+        ["asm", "get-saved-query-by-id"],
+        ["asm", "execute-saved-query-by-name"],
+        ["asm", "execute-saved-query-by-id"],
+        ["asm", "search"],
+        ["search", "--help"],
+    ] {
+        #expect(genericSecretGateRequestClassification(gateID: "censys", arguments: arguments) == .readOnly)
+    }
+
+    for arguments in [
+        ["config"],
+        ["asm", "config"],
+        ["asm", "add-seeds"],
+        ["asm", "delete-seeds"],
+        ["asm", "delete-all-seeds"],
+        ["asm", "delete-labeled-seeds"],
+        ["asm", "replace-labeled-seeds"],
+        ["asm", "add-saved-query"],
+        ["asm", "edit-saved-query-by-id"],
+        ["asm", "delete-saved-query-by-id"],
+    ] {
+        #expect(genericSecretGateRequestClassification(gateID: "censys", arguments: arguments) == .mutating)
+    }
+
+    for arguments in [
+        ["auth", "login"],
+        ["completion", "zsh"],
+        ["aggregate", "host.location.country"],
+        ["asm"],
+        ["asm", "future-command"],
+        ["future-command"],
+    ] {
+        #expect(genericSecretGateRequestClassification(gateID: "censys", arguments: arguments) == .unknown)
+    }
+}
+
 @Test func stripePolicyClassifiesGeneratedBuiltInAndPluginCommands() {
     let readOnly = [
         ["customers", "list"],
