@@ -37,6 +37,8 @@ public func genericSecretGateRequestClassification(
     return .unknown
 }
 
+// Reviewed against Vault v2.1.0. New commands remain Unknown until their
+// authority and output sensitivity are reviewed.
 private func vaultRequestClassification(_ arguments: [String]) -> SecretGateRequestClassification {
     let words = arguments.prefix { $0 != "--" }.map { $0.lowercased() }
     guard let command = words.first else { return .unknown }

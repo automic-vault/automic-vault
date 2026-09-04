@@ -208,6 +208,8 @@ fn npm_invocation_is_secretless(args: &[OsString]) -> bool {
     )
 }
 
+// Reviewed against Vault v2.1.0. Unknown command paths remain tokenless: a
+// future command must not receive the protected token until its use is known.
 fn vault_invocation_is_secretless(args: &[OsString]) -> bool {
     let Some(args) = args
         .iter()
@@ -1318,6 +1320,7 @@ mod tests {
             vec!["future-command", "--", "payload"],
             vec!["read", "-tls-skip-verify", "secret/example"],
             vec!["read", "-address", "http://vault.example", "secret/example"],
+            vec!["read", "-address=hTtP://vault.example", "secret/example"],
         ] {
             assert!(
                 invocation_is_secretless(&script_path, script.as_bytes(), &args(&command)),
@@ -1327,6 +1330,7 @@ mod tests {
 
         for command in [
             vec!["read", "secret/example"],
+            vec!["read", "-tls-skip-verify=false", "secret/example"],
             vec!["write", "-output-policy=false", "secret/example", "value=x"],
             vec![
                 "agent",
@@ -1397,6 +1401,14 @@ mod tests {
         ));
         unsafe {
             std::env::remove_var("VAULT_ADDR");
+            std::env::set_var("VAULT_SKIP_VERIFY", "false");
+        }
+        assert!(!invocation_is_secretless(
+            &script_path,
+            script.as_bytes(),
+            &args(&["read", "secret/example"]),
+        ));
+        unsafe {
             std::env::set_var("VAULT_SKIP_VERIFY", "true");
         }
         assert!(invocation_is_secretless(
