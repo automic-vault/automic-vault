@@ -106,16 +106,7 @@ pub(crate) fn invocation_is_secretless(
         "twine" => local_command(args, &["check"]),
         "vagrant" => local_command(args, &["global-status", "validate", "version"]),
         "hf" => local_command(args, &["cache"]),
-        "composer" => local_command(
-            args,
-            &[
-                "clear-cache",
-                "clearcache",
-                "licenses",
-                "status",
-                "validate",
-            ],
-        ),
+        "composer" => composer_invocation_is_secretless(args),
         _ => false,
     }
 }
@@ -205,6 +196,260 @@ fn npm_invocation_is_secretless(args: &[OsString]) -> bool {
             | "v"
             | "whoami"
     )
+}
+
+const COMPOSER_COMMANDS: &[(&str, &[&str])] = &[
+    ("about", &["about"]),
+    ("archive", &["archive"]),
+    ("audit", &["audit"]),
+    ("browse", &["browse", "home"]),
+    ("bump", &["bump"]),
+    ("check-platform-reqs", &["check-platform-reqs"]),
+    ("clear-cache", &["clear-cache", "clearcache", "cc"]),
+    ("completion", &["completion", "_complete"]),
+    ("config", &["config"]),
+    ("create-project", &["create-project"]),
+    ("depends", &["depends", "why"]),
+    ("diagnose", &["diagnose"]),
+    ("dump-autoload", &["dump-autoload", "dumpautoload"]),
+    ("exec", &["exec"]),
+    ("fund", &["fund"]),
+    ("global", &["global"]),
+    ("help", &["help"]),
+    ("init", &["init"]),
+    ("install", &["install", "i"]),
+    ("licenses", &["licenses"]),
+    ("list", &["list"]),
+    ("outdated", &["outdated"]),
+    ("policy", &["policy"]),
+    ("prohibits", &["prohibits", "why-not"]),
+    ("reinstall", &["reinstall"]),
+    ("remove", &["remove", "rm", "uninstall"]),
+    ("repository", &["repository", "repo"]),
+    ("require", &["require", "r"]),
+    ("run-script", &["run-script", "run"]),
+    ("search", &["search"]),
+    ("self-update", &["self-update", "selfupdate"]),
+    ("show", &["show", "info"]),
+    ("status", &["status"]),
+    ("suggests", &["suggests"]),
+    ("update", &["update", "u", "upgrade"]),
+    ("validate", &["validate"]),
+];
+
+fn composer_invocation_is_secretless(args: &[OsString]) -> bool {
+    let Some(args) = args
+        .iter()
+        .map(|arg| arg.to_str())
+        .collect::<Option<Vec<_>>>()
+    else {
+        return true;
+    };
+    !composer_invocation_may_need_secret(&args)
+}
+
+fn composer_invocation_may_need_secret(args: &[&str]) -> bool {
+    composer_invocation_may_need_secret_with_options(args, false)
+}
+
+fn composer_invocation_may_need_secret_with_options(
+    args: &[&str],
+    inherited_non_interactive: bool,
+) -> bool {
+    let option_end = args
+        .iter()
+        .position(|arg| *arg == "--")
+        .unwrap_or(args.len());
+    let option_args = &args[..option_end];
+    if option_args
+        .iter()
+        .any(|arg| matches!(*arg, "--help" | "-h" | "--version" | "-V"))
+    {
+        return false;
+    }
+    let non_interactive = inherited_non_interactive
+        || option_args
+            .iter()
+            .any(|arg| matches!(*arg, "--no-interaction" | "-n"));
+    let Some((command, args)) = composer_command_and_args(args) else {
+        return false;
+    };
+    let network_enabled = std::env::var_os("COMPOSER_DISABLE_NETWORK")
+        .is_none_or(|value| value.is_empty() || value == "0");
+
+    // Reviewed against Composer 85ae025. Script aliases, plugin commands,
+    // vendored binaries, and future commands stay tokenless so arbitrary code
+    // never inherits COMPOSER_AUTH merely because Composer launched it.
+    match command {
+        "install" | "create-project" | "update" | "search" | "audit" | "reinstall" | "outdated"
+        | "fund" | "diagnose" | "prohibits" => network_enabled,
+        "require" => composer_require_may_need_secret(args, non_interactive, network_enabled),
+        "remove" => network_enabled && !args.contains(&"--no-update"),
+        "archive" | "browse" => network_enabled && composer_has_positional(args),
+        "config" => composer_config_reads_auth(args),
+        "global" => composer_invocation_may_need_secret_with_options(args, non_interactive),
+        "init" => {
+            network_enabled
+                && !non_interactive
+                && args
+                    .iter()
+                    .any(|arg| *arg == "--repository" || arg.starts_with("--repository="))
+        }
+        "show" => {
+            network_enabled
+                && args[..args
+                    .iter()
+                    .position(|arg| *arg == "--")
+                    .unwrap_or(args.len())]
+                    .iter()
+                    .any(|arg| {
+                        matches!(
+                            *arg,
+                            "--all"
+                                | "--available"
+                                | "-a"
+                                | "--latest"
+                                | "-l"
+                                | "--outdated"
+                                | "-o"
+                        )
+                    })
+        }
+        _ => false,
+    }
+}
+
+fn composer_command_and_args<'a>(args: &'a [&'a str]) -> Option<(&'static str, &'a [&'a str])> {
+    let mut index = 0;
+    while let Some(argument) = args.get(index).copied() {
+        if matches!(
+            argument,
+            "--profile"
+                | "--no-plugins"
+                | "--no-scripts"
+                | "--no-cache"
+                | "--quiet"
+                | "-q"
+                | "--verbose"
+                | "-v"
+                | "-vv"
+                | "-vvv"
+                | "--ansi"
+                | "--no-ansi"
+                | "--no-interaction"
+                | "-n"
+        ) {
+            index += 1;
+        } else if matches!(argument, "--working-dir" | "-d") {
+            index += 2;
+        } else if argument.starts_with("--working-dir=")
+            || (argument.starts_with("-d") && argument.len() > 2)
+        {
+            index += 1;
+        } else if argument.starts_with('-') {
+            return None;
+        } else {
+            return composer_command(argument).map(|command| (command, &args[index + 1..]));
+        }
+    }
+    None
+}
+
+fn composer_command(argument: &str) -> Option<&'static str> {
+    if let Some((command, _)) = COMPOSER_COMMANDS
+        .iter()
+        .find(|(_, aliases)| aliases.contains(&argument))
+    {
+        return Some(command);
+    }
+    let mut matches = COMPOSER_COMMANDS
+        .iter()
+        .filter(|(_, aliases)| aliases.iter().any(|alias| alias.starts_with(argument)))
+        .map(|(command, _)| *command);
+    let command = matches.next()?;
+    matches
+        .all(|candidate| candidate == command)
+        .then_some(command)
+}
+
+fn composer_has_positional(args: &[&str]) -> bool {
+    !composer_positionals(
+        args,
+        &["--working-dir", "-d", "--format", "-f", "--dir", "--file"],
+    )
+    .is_empty()
+}
+
+fn composer_positionals<'a>(args: &[&'a str], options_with_values: &[&str]) -> Vec<&'a str> {
+    let mut positionals = Vec::new();
+    let mut skip_value = false;
+    let mut options_ended = false;
+    for argument in args {
+        if skip_value {
+            skip_value = false;
+        } else if *argument == "--" {
+            options_ended = true;
+        } else if options_with_values.contains(argument) {
+            skip_value = true;
+        } else if options_ended || !argument.starts_with('-') {
+            positionals.push(*argument);
+        }
+    }
+    positionals
+}
+
+fn composer_require_may_need_secret(
+    args: &[&str],
+    non_interactive: bool,
+    network_enabled: bool,
+) -> bool {
+    if !network_enabled {
+        return false;
+    }
+    if !args.contains(&"--no-update") || !non_interactive {
+        return true;
+    }
+    composer_positionals(
+        args,
+        &[
+            "--working-dir",
+            "-d",
+            "--prefer-install",
+            "--audit-format",
+            "--ignore-platform-req",
+            "--apcu-autoloader-prefix",
+        ],
+    )
+    .iter()
+    .any(|package| !package.contains(':') && !package.contains('=') && !package.contains(' '))
+}
+
+fn composer_config_reads_auth(args: &[&str]) -> bool {
+    if args.iter().any(|arg| matches!(*arg, "--list" | "-l")) {
+        return true;
+    }
+    if args
+        .iter()
+        .any(|arg| matches!(*arg, "--editor" | "-e" | "--unset"))
+    {
+        return false;
+    }
+    let positionals = composer_positionals(args, &["--working-dir", "-d", "--file", "-f"]);
+    positionals.len() == 1
+        && matches!(
+            positionals[0].split('.').next(),
+            Some(
+                "bitbucket-oauth"
+                    | "github-oauth"
+                    | "gitlab-oauth"
+                    | "gitlab-token"
+                    | "http-basic"
+                    | "custom-headers"
+                    | "bearer"
+                    | "client-certificate"
+                    | "forgejo-token"
+            )
+        )
 }
 
 fn secret_gate(wrapper: &EnvWrapper) -> SecretGateDescriptor {
@@ -1025,6 +1270,167 @@ mod tests {
         }
 
         unsafe { std::env::remove_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR") };
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn composer_requests_auth_only_for_private_repository_capable_commands() {
+        let _guard = crate::global_test_env_lock().lock().unwrap();
+        let dir = temp_dir("env-wrapper-secretless-composer");
+        unsafe { std::env::set_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR", &dir) };
+        let previous_disable_network = std::env::var_os("COMPOSER_DISABLE_NETWORK");
+        unsafe { std::env::remove_var("COMPOSER_DISABLE_NETWORK") };
+        let script_path = dir.join("composer");
+        let script = stub_script(
+            &wrapper("composer").unwrap().primary,
+            Path::new("/opt/homebrew/bin/composer"),
+        );
+        let args = |values: &[&str]| {
+            std::iter::once(script_path.clone().into_os_string())
+                .chain(values.iter().map(OsString::from))
+                .collect::<Vec<_>>()
+        };
+
+        for command in [
+            vec![],
+            vec!["--help"],
+            vec!["-V"],
+            vec!["install", "--help"],
+            vec!["--profile", "--working-dir", "/tmp", "validate"],
+            vec!["about"],
+            vec!["archive"],
+            vec!["bump"],
+            vec!["check-platform-reqs"],
+            vec!["cc"],
+            vec!["completion"],
+            vec!["config", "preferred-install"],
+            vec![
+                "config",
+                "http-basic.private.example",
+                "user",
+                "replacement",
+            ],
+            vec!["config", "--unset", "bearer.private.example"],
+            vec!["config", "--auth", "--editor"],
+            vec!["depends", "private/package"],
+            vec!["dumpautoload"],
+            vec!["exec", "vendor/bin/tool", "install"],
+            vec!["home"],
+            vec!["-n", "init"],
+            vec!["init"],
+            vec!["-n", "global", "init"],
+            vec!["-n", "require", "--no-update", "private/package:^1"],
+            vec!["-n", "global", "req", "--no-update", "private/package=^1"],
+            vec!["licenses"],
+            vec![
+                "policy",
+                "add-source",
+                "custom",
+                "url",
+                "https://example.invalid/list.json",
+            ],
+            vec!["repo", "list"],
+            vec!["remove", "--no-update", "private/package"],
+            vec!["run-script", "deploy", "--", "install"],
+            vec!["self-update"],
+            vec!["show"],
+            vec!["show", "private/package"],
+            vec!["show", "--", "--available"],
+            vec!["status"],
+            vec!["suggests"],
+            vec!["validate"],
+            vec!["deploy"],
+            vec!["plugin-command", "install"],
+            vec!["future-command"],
+        ] {
+            assert!(
+                invocation_is_secretless(&script_path, script.as_bytes(), &args(&command)),
+                "composer {command:?}",
+            );
+        }
+
+        for command in [
+            vec!["install"],
+            vec!["i"],
+            vec!["ins"],
+            vec!["create-project", "private/package"],
+            vec!["update"],
+            vec!["up"],
+            vec!["search", "private"],
+            vec!["audit"],
+            vec!["require", "private/package:^1"],
+            vec!["req", "private/package:^1"],
+            vec!["-n", "require", "--no-update", "private/package"],
+            vec!["remove", "private/package"],
+            vec!["reinstall", "private/package"],
+            vec!["outdated"],
+            vec!["fund"],
+            vec!["diagnose"],
+            vec!["why-not", "private/package", "2"],
+            vec!["archive", "private/package"],
+            vec!["archive", "--", "private/package"],
+            vec!["browse", "private/package"],
+            vec!["browse", "--", "private/package"],
+            vec![
+                "init",
+                "--repository",
+                "https://private.example.invalid/packages.json",
+            ],
+            vec!["show", "--available", "private/package"],
+            vec!["show", "--latest"],
+            vec!["config", "--list"],
+            vec!["config", "http-basic.private.example"],
+            vec!["config", "--source", "bearer.private.example"],
+            vec!["config", "client-certificate.private.example"],
+            vec!["config", "--", "bearer.private.example"],
+            vec!["global", "require", "private/package:^1"],
+            vec!["--profile", "-d", "/tmp", "require", "private/package:^1"],
+            vec!["install", "--", "--help"],
+        ] {
+            assert!(
+                !invocation_is_secretless(&script_path, script.as_bytes(), &args(&command)),
+                "composer {command:?}",
+            );
+        }
+
+        unsafe { std::env::set_var("COMPOSER_DISABLE_NETWORK", "1") };
+        assert!(invocation_is_secretless(
+            &script_path,
+            script.as_bytes(),
+            &args(&["install"]),
+        ));
+        assert!(!invocation_is_secretless(
+            &script_path,
+            script.as_bytes(),
+            &args(&["config", "github-oauth.github.com"]),
+        ));
+        unsafe { std::env::set_var("COMPOSER_DISABLE_NETWORK", "0") };
+        assert!(!invocation_is_secretless(
+            &script_path,
+            script.as_bytes(),
+            &args(&["install"]),
+        ));
+        assert!(!invocation_is_secretless(
+            &script_path,
+            format!("{script}# changed\n").as_bytes(),
+            &args(&["validate"]),
+        ));
+        assert!(!invocation_is_secretless(
+            &script_path,
+            script.as_bytes(),
+            &[
+                Path::new("/tmp/not-composer").into(),
+                OsString::from("validate")
+            ],
+        ));
+
+        unsafe {
+            std::env::remove_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR");
+            match previous_disable_network {
+                Some(value) => std::env::set_var("COMPOSER_DISABLE_NETWORK", value),
+                None => std::env::remove_var("COMPOSER_DISABLE_NETWORK"),
+            }
+        }
         let _ = fs::remove_dir_all(dir);
     }
 

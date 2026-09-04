@@ -18,6 +18,7 @@ public func genericSecretGateRequestClassification(
     gateID: String,
     arguments: [String]
 ) -> SecretGateRequestClassification {
+    if gateID == "composer" { return composerRequestClassification(arguments) }
     let words = arguments.map { $0.lowercased() }
     guard !words.isEmpty else { return .unknown }
     if gateID == "stripe" { return stripeRequestClassification(words) }
@@ -35,6 +36,152 @@ public func genericSecretGateRequestClassification(
     }
     return .unknown
 }
+
+private func composerRequestClassification(
+    _ arguments: [String],
+    inheritedNonInteractive: Bool = false
+) -> SecretGateRequestClassification {
+    let separator = arguments.firstIndex(of: "--") ?? arguments.endIndex
+    let optionArguments = Array(arguments[..<separator])
+    if optionArguments.contains(where: { ["--help", "-h", "--version", "-V"].contains($0) }) {
+        return .readOnly
+    }
+    let nonInteractive = inheritedNonInteractive
+        || optionArguments.contains(where: { ["--no-interaction", "-n"].contains($0) })
+    guard let (command, commandArguments) = composerCommandAndArguments(arguments) else { return .unknown }
+
+    switch command {
+    case "install", "create-project", "update", "reinstall":
+        return .mutating
+    case "require":
+        if nonInteractive && commandArguments.contains("--no-update") {
+            let packages = composerPositionals(
+                commandArguments,
+                optionsWithValues: [
+                    "--working-dir", "-d", "--prefer-install", "--audit-format",
+                    "--ignore-platform-req", "--apcu-autoloader-prefix",
+                ]
+            )
+            return packages.contains(where: {
+                !$0.contains(":") && !$0.contains("=") && !$0.contains(" ")
+            }) ? .mutating : .unknown
+        }
+        return .mutating
+    case "remove":
+        return commandArguments.contains("--no-update") ? .unknown : .mutating
+    case "search", "audit", "outdated", "fund", "diagnose", "prohibits":
+        return .readOnly
+    case "archive":
+        return composerHasPositional(commandArguments) ? .mutating : .unknown
+    case "browse":
+        return composerHasPositional(commandArguments) ? .readOnly : .unknown
+    case "config":
+        return composerConfigReadsAuth(commandArguments) ? .secretDump : .unknown
+    case "global":
+        return composerRequestClassification(commandArguments, inheritedNonInteractive: nonInteractive)
+    case "init":
+        return !nonInteractive && commandArguments.contains(where: {
+            $0 == "--repository" || $0.hasPrefix("--repository=")
+        }) ? .mutating : .unknown
+    case "show":
+        let optionEnd = commandArguments.firstIndex(of: "--") ?? commandArguments.endIndex
+        return commandArguments[..<optionEnd].contains(where: {
+            ["--all", "--available", "-a", "--latest", "-l", "--outdated", "-o"].contains($0)
+        }) ? .readOnly : .unknown
+    default:
+        return .unknown
+    }
+}
+
+private func composerCommandAndArguments(_ arguments: [String]) -> (String, [String])? {
+    let flags = Set([
+        "--profile", "--no-plugins", "--no-scripts", "--no-cache", "--quiet", "-q",
+        "--verbose", "-v", "-vv", "-vvv", "--ansi", "--no-ansi", "--no-interaction", "-n",
+    ])
+    var index = 0
+    while index < arguments.count {
+        let argument = arguments[index]
+        if flags.contains(argument) {
+            index += 1
+        } else if ["--working-dir", "-d"].contains(argument) {
+            guard index + 1 < arguments.count else { return nil }
+            index += 2
+        } else if argument.hasPrefix("--working-dir=") || (argument.hasPrefix("-d") && argument.count > 2) {
+            index += 1
+        } else if argument.hasPrefix("-") {
+            return nil
+        } else {
+            guard let command = composerCommand(argument) else { return nil }
+            return (command, Array(arguments.dropFirst(index + 1)))
+        }
+    }
+    return nil
+}
+
+private func composerCommand(_ argument: String) -> String? {
+    if composerCommands.contains(argument) { return argument }
+    if let command = composerAliases[argument] { return command }
+    let candidates = Set(
+        composerCommands.filter { $0.hasPrefix(argument) }
+            + composerAliases.compactMap { alias, command in alias.hasPrefix(argument) ? command : nil }
+    )
+    return candidates.count == 1 ? candidates.first : nil
+}
+
+private func composerHasPositional(_ arguments: [String]) -> Bool {
+    !composerPositionals(
+        arguments,
+        optionsWithValues: ["--working-dir", "-d", "--format", "-f", "--dir", "--file"]
+    ).isEmpty
+}
+
+private func composerPositionals(_ arguments: [String], optionsWithValues: Set<String>) -> [String] {
+    var positionals: [String] = []
+    var skipValue = false
+    var optionsEnded = false
+    for argument in arguments {
+        if skipValue {
+            skipValue = false
+        } else if argument == "--" {
+            optionsEnded = true
+        } else if optionsWithValues.contains(argument) {
+            skipValue = true
+        } else if optionsEnded || !argument.hasPrefix("-") {
+            positionals.append(argument)
+        }
+    }
+    return positionals
+}
+
+private func composerConfigReadsAuth(_ arguments: [String]) -> Bool {
+    if arguments.contains(where: { ["--list", "-l"].contains($0) }) { return true }
+    if arguments.contains(where: { ["--editor", "-e", "--unset"].contains($0) }) {
+        return false
+    }
+    let positionals = composerPositionals(
+        arguments,
+        optionsWithValues: ["--working-dir", "-d", "--file", "-f"]
+    )
+    guard positionals.count == 1, let root = positionals[0].split(separator: ".").first else { return false }
+    return composerAuthConfigRoots.contains(String(root))
+}
+
+private let composerCommands = SecretGateCommandPolicy.commands("""
+about,archive,audit,browse,bump,check-platform-reqs,clear-cache,completion,config,create-project,depends,diagnose,dump-autoload,exec,fund,global,help,init,install,licenses,list,outdated,policy,prohibits,reinstall,remove,repository,require,run-script,search,self-update,show,status,suggests,update,validate
+""")
+
+private let composerAliases = [
+    "_complete": "completion", "cc": "clear-cache", "clearcache": "clear-cache",
+    "dumpautoload": "dump-autoload", "home": "browse", "i": "install", "info": "show",
+    "r": "require", "repo": "repository", "rm": "remove", "run": "run-script",
+    "selfupdate": "self-update", "u": "update", "uninstall": "remove", "upgrade": "update",
+    "why": "depends", "why-not": "prohibits",
+]
+
+private let composerAuthConfigRoots = Set([
+    "bitbucket-oauth", "github-oauth", "gitlab-oauth", "gitlab-token", "http-basic",
+    "custom-headers", "bearer", "client-certificate", "forgejo-token",
+])
 
 private func stripeRequestClassification(_ arguments: [String]) -> SecretGateRequestClassification {
     let optionsWithValues = ["--api-key", "--color", "--config", "--device-name", "--log-level", "--project-name", "-p"]
@@ -134,7 +281,7 @@ private let secretGateCommandPolicies: [String: SecretGateCommandPolicy] = [
     "circleci": .init("project list,pipeline list,config validate", "pipeline run,context create,context delete,context store-secret"),
     "civo": .init("instance list,instance show,kubernetes list,kubernetes show", "instance create,instance remove,kubernetes create,kubernetes remove", secretDump: "apikey show"),
     "cloudsmith-cli": .init("whoami,repos list,packages list,packages search", "push,packages delete,repos create,repos delete"),
-    "composer": .init("show,search,outdated,audit,diagnose", "install,update,require,remove,publish", secretDump: "config --auth,config --global --auth"),
+    "composer": .init("", ""),
     "doctl": .init("account get,compute droplet list,compute droplet get,kubernetes cluster list,kubernetes cluster get", "compute droplet create,compute droplet delete,kubernetes cluster create,kubernetes cluster delete"),
     "flyctl": .init("status,apps list,machine list,machine status,secrets list,auth whoami", "deploy,scale,apps create,apps destroy,machine run,machine destroy,secrets set,secrets unset,secrets import", secretDump: "auth token"),
     "glab": .init("repo view,repo list,issue list,issue view,mr list,mr view,pipeline list,pipeline view", "repo create,repo delete,issue create,mr create,pipeline run", secretDump: "auth token,auth status --show-token"),

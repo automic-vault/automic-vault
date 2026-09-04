@@ -123,3 +123,73 @@ import Testing
     #expect(genericSecretGateRequestClassification(gateID: "node", arguments: ["stage", "publish"]) == .mutating)
     #expect(genericSecretGateRequestClassification(gateID: "node", arguments: ["ls"]) == .unknown)
 }
+
+@Test func composerPolicyClassifiesOnlyCredentialedBuiltIns() {
+    for arguments in [
+        ["audit"],
+        ["dia"],
+        ["search", "private"],
+        ["why-not", "private/package", "2"],
+        ["show", "--latest"],
+        ["browse", "private/package"],
+    ] {
+        #expect(genericSecretGateRequestClassification(
+            gateID: "composer",
+            arguments: arguments
+        ) == .readOnly)
+    }
+
+    for arguments in [
+        ["install"],
+        ["ins"],
+        ["req", "private/package:^1"],
+        ["archive", "private/package"],
+        ["archive", "--", "private/package"],
+        ["init", "--repository", "https://private.example.invalid/packages.json"],
+        ["global", "require", "private/package:^1"],
+        ["--profile", "-d", "/tmp", "update"],
+    ] {
+        #expect(genericSecretGateRequestClassification(
+            gateID: "composer",
+            arguments: arguments
+        ) == .mutating)
+    }
+
+    for arguments in [
+        ["config", "http-basic.private.example"],
+        ["config", "client-certificate.private.example"],
+        ["config", "--list"],
+    ] {
+        #expect(genericSecretGateRequestClassification(
+            gateID: "composer",
+            arguments: arguments
+        ) == .secretDump)
+    }
+
+    for arguments in [
+        ["show", "private/package"],
+        ["show", "--", "--available"],
+        ["config", "http-basic.private.example", "user", "replacement"],
+        ["-n", "init"],
+        ["init"],
+        ["-n", "require", "--no-update", "private/package:^1"],
+        ["remove", "--no-update", "private/package"],
+        ["exec", "vendor/bin/tool", "install"],
+        ["run-script", "deploy"],
+        ["plugin-command", "install"],
+    ] {
+        #expect(genericSecretGateRequestClassification(
+            gateID: "composer",
+            arguments: arguments
+        ) == .unknown)
+    }
+
+    #expect(genericSecretGateRequestClassification(
+        gateID: "composer",
+        arguments: ["install", "--help"]
+    ) == .readOnly)
+    #expect(genericSecretGateRequestClassification(
+        gateID: "composer",
+        arguments: ["-V"]
+    ) == .readOnly)
+}
