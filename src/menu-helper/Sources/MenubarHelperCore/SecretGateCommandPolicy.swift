@@ -18,6 +18,7 @@ public func genericSecretGateRequestClassification(
     gateID: String,
     arguments: [String]
 ) -> SecretGateRequestClassification {
+    if gateID == "ast-cli" { return astCLIRequestClassification(arguments) }
     let words = arguments.map { $0.lowercased() }
     guard !words.isEmpty else { return .unknown }
     if gateID == "stripe" { return stripeRequestClassification(words) }
@@ -25,6 +26,84 @@ public func genericSecretGateRequestClassification(
         return .readOnly
     }
     guard let policy = secretGateCommandPolicies[gateID] else { return .unknown }
+    let candidates = (1...min(3, words.count)).reversed().map {
+        words.prefix($0).joined(separator: " ")
+    }
+    for candidate in candidates {
+        if policy.secretDump.contains(candidate) { return .secretDump }
+        if policy.readOnly.contains(candidate) { return .readOnly }
+        if policy.mutating.contains(candidate) { return .mutating }
+    }
+    return .unknown
+}
+
+private func astCLIRequestClassification(_ arguments: [String]) -> SecretGateRequestClassification {
+    let arguments = arguments.map { $0.lowercased() }
+    guard !arguments.isEmpty else { return .unknown }
+    for (index, argument) in arguments.prefix(while: { $0 != "--" }).enumerated() {
+        if ["--help", "-h", "--version"].contains(argument),
+           index == 0 || !arguments[index - 1].hasPrefix("-") {
+            return .readOnly
+        }
+    }
+
+    let optionsWithValues = [
+        "--client-id", "--client-secret", "--proxy", "--proxy-auth-type",
+        "--proxy-ntlm-domain", "--proxy-kerberos-spn", "--proxy-kerberos-krb5-conf",
+        "--proxy-kerberos-ccache", "--timeout", "--base-uri", "--base-auth-uri",
+        "--apikey", "--agent", "--tenant", "--retry", "--retry-delay",
+        "--config-file-path", "--optional-flags", "--log-file", "--log-file-console",
+    ]
+    let booleanOptions = ["--debug", "--insecure", "--ignore-proxy", "--apikey-override"]
+    var index = 0
+    while index < arguments.count {
+        let argument = arguments[index]
+        if optionsWithValues.contains(argument) {
+            guard index + 1 < arguments.count else { return .unknown }
+            index += 2
+        } else if optionsWithValues.contains(where: { argument.hasPrefix("\($0)=") })
+            || booleanOptions.contains(argument)
+            || booleanOptions.contains(where: { argument.hasPrefix("\($0)=") })
+        {
+            index += 1
+        } else if argument.hasPrefix("-") {
+            return .unknown
+        } else {
+            break
+        }
+    }
+    guard index < arguments.count else { return .unknown }
+    let words = Array(arguments[index...])
+
+    if words[0] == "mcp" {
+        return words.count == 1 || words.dropFirst().first == "bridge" ? .mutating : .unknown
+    }
+    if words[0] == "ignore-vulnerability" { return .localWrite }
+    if words[0] == "version" || words[0] == "completion" { return .readOnly }
+    if words[0] == "configure" {
+        return words.dropFirst().first == "show" ? .secretDump : .localWrite
+    }
+    if words.starts(with: ["auth", "register"]) { return .secretDump }
+    if words.starts(with: ["auth", "login"]) || words.starts(with: ["auth", "logout"]) {
+        return .localWrite
+    }
+    if words.starts(with: ["utils", "env"]) { return .secretDump }
+    if words.starts(with: ["utils", "completion"])
+        || words.starts(with: ["utils", "contributor-count"])
+        || words.starts(with: ["utils", "mask"])
+        || words.starts(with: ["hooks", "pre-commit", "secrets-help"])
+        || words.starts(with: ["hooks", "pre-receive", "secrets-scan"])
+    {
+        return .readOnly
+    }
+    if words.starts(with: ["utils", "remediation"])
+        || words.starts(with: ["hooks", "agenthooks", "install"])
+        || words.starts(with: ["hooks", "pre-commit", "secrets-uninstall-git-hook"])
+    {
+        return .localWrite
+    }
+
+    guard let policy = secretGateCommandPolicies["ast-cli"] else { return .unknown }
     let candidates = (1...min(3, words.count)).reversed().map {
         words.prefix($0).joined(separator: " ")
     }
@@ -127,7 +206,10 @@ private let secretGateCommandPolicies: [String: SecretGateCommandPolicy] = [
     "akamai": .init("config list", "config set,config remove", secretDump: "config show"),
     "algolia": .init("profile list", "objects import,objects delete,indices delete", secretDump: "profile get"),
     "argocd": .init("app get,app list,app diff,cluster get,cluster list,account get-user-info", "app create,app set,app sync,app delete,app rollback", secretDump: "account generate-token"),
-    "ast-cli": .init("scan list,scan show,project list,project show", "scan create,scan cancel,project create,project delete"),
+    "ast-cli": .init(
+        "auth validate,chat kics,chat sast,dast-environments list,project branches,project list,project show,project tags,results bfl,results codebashing,results exit-code,results risk-management,results show,scan kics-realtime,scan list,scan logs,scan sca-realtime,scan show,scan tags,scan workflow,triage get-states,triage show,utils learn-more,utils tenant,hooks check-auth,hooks pre-commit secrets-scan,hooks pre-receive validate",
+        "project create,project delete,scan cancel,scan create,scan delete,telemetry ai,triage update,utils import,utils pr azure,utils pr bitbucket,utils pr github,utils pr gitlab,hooks pre-commit secrets-ignore,hooks pre-commit secrets-install-git-hook,hooks pre-commit secrets-update-git-hook,hooks claude-stop,hooks claude-pre-tool-use,hooks claude-pre-file-write,hooks claude-user-prompt-submit,hooks cursor-stop,hooks cursor-before-shell,hooks cursor-before-mcp,hooks cursor-before-file-write,hooks cursor-before-file-read,hooks cursor-after-file-edit,hooks cursor-before-submit-prompt,hooks windsurf-pre-run-command,hooks windsurf-pre-mcp-tool-use,hooks windsurf-pre-user-prompt,hooks windsurf-pre-write-code,hooks windsurf-post-cascade-response,hooks droid-stop,hooks droid-pre-tool-use,hooks droid-pre-file-write,hooks droid-user-prompt-submit,hooks gemini-before-agent,hooks gemini-before-tool,hooks gemini-before-file-tool,hooks gemini-after-agent,hooks copilot-cli-stop,hooks copilot-cli-pre-tool-use,hooks copilot-cli-pre-file-write,hooks copilot-cli-user-prompt-submit"
+    ),
     "buf": .init("repository list,module list,organization list", "push,repository create,repository delete"),
     "censys": .init("search,view,account", "asm seeds add,asm seeds delete"),
     "checkov": .init("frameworks", "submit"),

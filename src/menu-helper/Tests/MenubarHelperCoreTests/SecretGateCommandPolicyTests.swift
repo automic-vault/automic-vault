@@ -72,6 +72,49 @@ import Testing
     #expect(genericSecretGateRequestClassification(gateID: "flyctl", arguments: []) == .unknown)
 }
 
+@Test func astCLIPolicyMatchesVersion2363CommandAuthority() {
+    let readOnly = [
+        ["auth", "validate"],
+        ["project", "list"],
+        ["results", "show"],
+        ["scan", "logs"],
+        ["triage", "get-states"],
+        ["utils", "tenant"],
+        ["hooks", "check-auth"],
+        ["--debug", "--base-uri", "https://example.invalid", "scan", "list"],
+        ["scan", "create", "--help"],
+    ]
+    for arguments in readOnly {
+        #expect(genericSecretGateRequestClassification(gateID: "ast-cli", arguments: arguments) == .readOnly)
+    }
+
+    let mutating = [
+        ["scan", "create"],
+        ["project", "delete"],
+        ["triage", "update"],
+        ["utils", "import"],
+        ["utils", "pr", "github"],
+        ["hooks", "pre-commit", "secrets-ignore"],
+        ["hooks", "claude-pre-tool-use"],
+        ["mcp"],
+        ["mcp", "bridge"],
+        ["--apikey", "--help", "scan", "create"],
+    ]
+    for arguments in mutating {
+        #expect(genericSecretGateRequestClassification(gateID: "ast-cli", arguments: arguments) == .mutating)
+    }
+
+    #expect(genericSecretGateRequestClassification(gateID: "ast-cli", arguments: ["auth", "login"]) == .localWrite)
+    #expect(genericSecretGateRequestClassification(gateID: "ast-cli", arguments: ["configure", "set"]) == .localWrite)
+    #expect(genericSecretGateRequestClassification(gateID: "ast-cli", arguments: ["utils", "remediation", "sca"]) == .localWrite)
+    #expect(genericSecretGateRequestClassification(gateID: "ast-cli", arguments: ["configure", "show"]) == .secretDump)
+    #expect(genericSecretGateRequestClassification(gateID: "ast-cli", arguments: ["utils", "env"]) == .secretDump)
+    #expect(genericSecretGateRequestClassification(gateID: "ast-cli", arguments: ["auth", "register"]) == .secretDump)
+    #expect(genericSecretGateRequestClassification(gateID: "ast-cli", arguments: ["future-command"]) == .unknown)
+    #expect(genericSecretGateRequestClassification(gateID: "ast-cli", arguments: ["scan", "future-command"]) == .unknown)
+    #expect(genericSecretGateRequestClassification(gateID: "ast-cli", arguments: ["mcp", "future-command"]) == .unknown)
+}
+
 @Test func stripePolicyClassifiesGeneratedBuiltInAndPluginCommands() {
     let readOnly = [
         ["customers", "list"],
