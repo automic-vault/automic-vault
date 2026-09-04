@@ -91,6 +91,7 @@ pub(crate) fn invocation_is_secretless(
     let args = &args[1..];
     match stub.command {
         "npm" => npm_invocation_is_secretless(args),
+        "s3cmd" => s3cmd_invocation_is_secretless(args),
         "pnpm" => {
             local_command(
                 args,
@@ -119,6 +120,283 @@ pub(crate) fn invocation_is_secretless(
         _ => false,
     }
 }
+
+// Reviewed against s3cmd 2.4.0. Every real command signs an S3 or CloudFront
+// request; only parser exits and unknown commands run without the migrated
+// AWS/GPG assignment bundle.
+fn s3cmd_invocation_is_secretless(args: &[OsString]) -> bool {
+    let mut command = None;
+    let mut protected_option = false;
+    let mut index = 0;
+    while index < args.len() {
+        let Some(arg) = args[index].to_str() else {
+            return command.is_none();
+        };
+        if arg == "--" {
+            if command.is_none() {
+                command = args.get(index + 1).and_then(|arg| arg.to_str());
+            }
+            break;
+        }
+        if arg == "-" || !arg.starts_with('-') {
+            command.get_or_insert(arg);
+            index += 1;
+            continue;
+        }
+        if arg.starts_with("--") {
+            let (option, attached_value) = arg
+                .split_once('=')
+                .map_or((arg, false), |(key, _)| (key, true));
+            let Some(kind) = s3cmd_long_option(option) else {
+                return true;
+            };
+            if attached_value && kind != S3cmdOption::Value {
+                return true;
+            }
+            match kind {
+                S3cmdOption::LocalExit => return true,
+                S3cmdOption::Protected => protected_option = true,
+                S3cmdOption::Value if !attached_value => index += 1,
+                S3cmdOption::Value | S3cmdOption::Flag => {}
+            }
+            index += 1;
+            continue;
+        }
+
+        let Some((kind, consumes_next)) = s3cmd_short_options(arg) else {
+            return true;
+        };
+        if kind == S3cmdOption::LocalExit {
+            return true;
+        }
+        if consumes_next {
+            index += 1;
+        }
+        index += 1;
+    }
+
+    !protected_option && command.is_none_or(|command| !S3CMD_COMMANDS.contains(&command))
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum S3cmdOption {
+    LocalExit,
+    Protected,
+    Value,
+    Flag,
+}
+
+fn s3cmd_long_option(option: &str) -> Option<S3cmdOption> {
+    let options = [
+        (&["--help", "--version"][..], S3cmdOption::LocalExit),
+        (
+            &["--configure", "--dump-config"][..],
+            S3cmdOption::Protected,
+        ),
+        (S3CMD_VALUE_OPTIONS, S3cmdOption::Value),
+        (S3CMD_FLAG_OPTIONS, S3cmdOption::Flag),
+    ];
+    if let Some(kind) = options
+        .iter()
+        .find_map(|(names, kind)| names.contains(&option).then_some(*kind))
+    {
+        return Some(kind);
+    }
+
+    let mut matches = options.iter().flat_map(|(names, kind)| {
+        names
+            .iter()
+            .filter(move |name| name.starts_with(option))
+            .map(move |_| *kind)
+    });
+    let kind = matches.next()?;
+    matches.next().is_none().then_some(kind)
+}
+
+fn s3cmd_short_options(arg: &str) -> Option<(S3cmdOption, bool)> {
+    let mut flags = arg[1..].chars().peekable();
+    while let Some(flag) = flags.next() {
+        match flag {
+            'h' => return Some((S3cmdOption::LocalExit, false)),
+            'c' | 'D' | 'm' => return Some((S3cmdOption::Value, flags.peek().is_none())),
+            'n' | 's' | 'e' | 'f' | 'r' | 'P' | 'p' | 'M' | 'H' | 'v' | 'd' | 'F' | 'q' | 'l' => {}
+            _ => return None,
+        }
+    }
+    Some((S3cmdOption::Flag, false))
+}
+
+const S3CMD_VALUE_OPTIONS: &[&str] = &[
+    "--config",
+    "--access_key",
+    "--secret_key",
+    "--access_token",
+    "--upload-id",
+    "--acl-grant",
+    "--acl-revoke",
+    "--restore-days",
+    "--restore-priority",
+    "--max-delete",
+    "--limit",
+    "--add-destination",
+    "--exclude",
+    "--exclude-from",
+    "--rexclude",
+    "--rexclude-from",
+    "--include",
+    "--include-from",
+    "--rinclude",
+    "--rinclude-from",
+    "--files-from",
+    "--region",
+    "--bucket-location",
+    "--host",
+    "--host-bucket",
+    "--storage-class",
+    "--access-logging-target-prefix",
+    "--default-mime-type",
+    "--mime-type",
+    "--add-header",
+    "--remove-header",
+    "--server-side-encryption-kms-id",
+    "--encoding",
+    "--add-encoding-exts",
+    "--multipart-chunk-size-mb",
+    "--ws-index",
+    "--ws-error",
+    "--expiry-date",
+    "--expiry-days",
+    "--expiry-prefix",
+    "--cf-add-cname",
+    "--cf-remove-cname",
+    "--cf-comment",
+    "--cf-default-root-object",
+    "--cache-file",
+    "--ca-certs",
+    "--ssl-cert",
+    "--ssl-key",
+    "--limit-rate",
+    "--max-retries",
+    "--content-disposition",
+    "--content-type",
+];
+
+const S3CMD_FLAG_OPTIONS: &[&str] = &[
+    "--dry-run",
+    "--ssl",
+    "--no-ssl",
+    "--encrypt",
+    "--no-encrypt",
+    "--force",
+    "--continue",
+    "--continue-put",
+    "--skip-existing",
+    "--recursive",
+    "--check-md5",
+    "--no-check-md5",
+    "--acl-public",
+    "--acl-private",
+    "--delete-removed",
+    "--no-delete-removed",
+    "--delete-after",
+    "--delay-updates",
+    "--delete-after-fetch",
+    "--preserve",
+    "--no-preserve",
+    "--keep-dirs",
+    "--reduced-redundancy",
+    "--rr",
+    "--no-reduced-redundancy",
+    "--no-rr",
+    "--no-access-logging",
+    "--guess-mime-type",
+    "--no-guess-mime-type",
+    "--no-mime-magic",
+    "--server-side-encryption",
+    "--verbatim",
+    "--disable-multipart",
+    "--list-md5",
+    "--list-allow-unordered",
+    "--human-readable-sizes",
+    "--skip-destination-validation",
+    "--progress",
+    "--no-progress",
+    "--stats",
+    "--enable",
+    "--disable",
+    "--cf-invalidate",
+    "--cf-invalidate-default-index",
+    "--cf-no-invalidate-default-index-root",
+    "--verbose",
+    "--debug",
+    "--follow-symlinks",
+    "--quiet",
+    "--check-certificate",
+    "--no-check-certificate",
+    "--check-hostname",
+    "--no-check-hostname",
+    "--signature-v2",
+    "--no-connection-pooling",
+    "--requester-pays",
+    "--long-listing",
+    "--stop-on-error",
+];
+
+const S3CMD_COMMANDS: &[&str] = &[
+    "mb",
+    "rb",
+    "ls",
+    "la",
+    "put",
+    "get",
+    "del",
+    "rm",
+    "restore",
+    "sync",
+    "du",
+    "info",
+    "cp",
+    "modify",
+    "mv",
+    "setacl",
+    "setversioning",
+    "setownership",
+    "setblockpublicaccess",
+    "setobjectlegalhold",
+    "setobjectretention",
+    "setpolicy",
+    "delpolicy",
+    "setcors",
+    "delcors",
+    "payer",
+    "multipart",
+    "abortmp",
+    "listmp",
+    "accesslog",
+    "sign",
+    "signurl",
+    "fixbucket",
+    "settagging",
+    "gettagging",
+    "deltagging",
+    "ws-create",
+    "ws-delete",
+    "ws-info",
+    "expire",
+    "setlifecycle",
+    "getlifecycle",
+    "dellifecycle",
+    "setnotification",
+    "getnotification",
+    "delnotification",
+    "cflist",
+    "cfinfo",
+    "cfcreate",
+    "cfdelete",
+    "cfmodify",
+    "cfinval",
+    "cfinvalinfo",
+];
 
 fn local_command(args: &[OsString], commands: &[&str]) -> bool {
     args.is_empty()
@@ -978,6 +1256,75 @@ mod tests {
             &script_path,
             format!("{script}# changed\n").as_bytes(),
             &args(&["root"]),
+        ));
+
+        unsafe { std::env::remove_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR") };
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn s3cmd_requests_secrets_only_for_reviewed_credential_uses() {
+        let _guard = crate::global_test_env_lock().lock().unwrap();
+        let dir = temp_dir("env-wrapper-secretless-s3cmd");
+        unsafe { std::env::set_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR", &dir) };
+        let script_path = dir.join("s3cmd");
+        let script = stub_script(
+            &wrapper("s3cmd").unwrap().primary,
+            Path::new("/opt/homebrew/bin/s3cmd"),
+        );
+        let invocation = |values: &[&str]| {
+            std::iter::once(script_path.clone().into_os_string())
+                .chain(values.iter().map(OsString::from))
+                .collect::<Vec<_>>()
+        };
+
+        for args in [
+            vec![],
+            vec!["--help"],
+            vec!["-h"],
+            vec!["ls", "--help"],
+            vec!["--debug", "--version"],
+            vec!["--vers"],
+            vec!["future-command"],
+            vec!["--future-option", "ls"],
+            vec!["--confi", "/tmp/config", "ls"],
+            vec!["--version=true", "ls"],
+            vec!["--", "future-command"],
+            vec!["-qv"],
+            vec!["--dump-config", "--help"],
+        ] {
+            assert!(
+                invocation_is_secretless(&script_path, script.as_bytes(), &invocation(&args)),
+                "s3cmd {args:?}",
+            );
+        }
+
+        for &command in S3CMD_COMMANDS {
+            assert!(
+                !invocation_is_secretless(&script_path, script.as_bytes(), &invocation(&[command]),),
+                "s3cmd {command}",
+            );
+        }
+        for args in [
+            vec!["--config", "/tmp/config", "ls", "s3://bucket"],
+            vec!["--host=objects.example", "du"],
+            vec!["--long-l", "info", "s3://bucket"],
+            vec!["-qvc/tmp/config", "la"],
+            vec!["--", "ls"],
+            vec!["put", "--mime-type", "--help", "file", "s3://bucket"],
+            vec!["--configure"],
+            vec!["--dump-config"],
+        ] {
+            assert!(
+                !invocation_is_secretless(&script_path, script.as_bytes(), &invocation(&args)),
+                "s3cmd {args:?}",
+            );
+        }
+
+        assert!(!invocation_is_secretless(
+            &script_path,
+            format!("{script}# changed\n").as_bytes(),
+            &invocation(&["--version"]),
         ));
 
         unsafe { std::env::remove_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR") };

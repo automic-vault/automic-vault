@@ -72,6 +72,19 @@ import Testing
     #expect(genericSecretGateRequestClassification(gateID: "flyctl", arguments: []) == .unknown)
 }
 
+@Test func s3cmdPolicyCoversTheReviewedCommandCatalog() {
+    for command in ["ls", "multipart", "gettagging", "ws-info", "getlifecycle", "cflist", "cfinvalinfo"] {
+        #expect(genericSecretGateRequestClassification(gateID: "s3cmd", arguments: [command]) == .readOnly)
+    }
+    for command in ["put", "get", "restore", "modify", "setpolicy", "abortmp", "signurl", "fixbucket", "cfmodify"] {
+        #expect(genericSecretGateRequestClassification(gateID: "s3cmd", arguments: [command]) == .mutating)
+    }
+    for command in ["sign", "--configure", "--dump-config"] {
+        #expect(genericSecretGateRequestClassification(gateID: "s3cmd", arguments: [command]) == .secretDump)
+    }
+    #expect(genericSecretGateRequestClassification(gateID: "s3cmd", arguments: ["future-command"]) == .unknown)
+}
+
 @Test func stripePolicyClassifiesGeneratedBuiltInAndPluginCommands() {
     let readOnly = [
         ["customers", "list"],

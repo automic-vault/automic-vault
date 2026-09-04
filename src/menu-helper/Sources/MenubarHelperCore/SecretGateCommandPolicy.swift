@@ -158,7 +158,11 @@ private let secretGateCommandPolicies: [String: SecretGateCommandPolicy] = [
     "pulumi": .init("whoami,stack ls,preview,about,config get", "up,destroy,refresh,import,cancel", secretDump: "config get --show-secrets,stack export --show-secrets"),
     "qwen-code": .init("", "chat,run"),
     "runpodctl": .init("get,list", "create,remove,start,stop", secretDump: "config view"),
-    "s3cmd": .init("ls,la,info,du", "put,get,del,rm,sync,cp,mv,mb,rb", secretDump: "--dump-config"),
+    "s3cmd": .init(
+        "ls,la,du,info,multipart,listmp,gettagging,ws-info,getlifecycle,getnotification,cflist,cfinfo,cfinvalinfo",
+        "mb,rb,put,get,del,rm,restore,sync,cp,modify,mv,setacl,setversioning,setownership,setblockpublicaccess,setobjectlegalhold,setobjectretention,setpolicy,delpolicy,setcors,delcors,payer,abortmp,accesslog,signurl,fixbucket,settagging,deltagging,ws-create,ws-delete,expire,setlifecycle,dellifecycle,setnotification,delnotification,cfcreate,cfdelete,cfmodify,cfinval",
+        secretDump: "sign,--configure,--dump-config"
+    ),
     "sentry-cli": .init("projects list,organizations list,releases list", "send-event,releases new,releases deploys new,upload-dif"),
     "snowflake-cli": .init("object list,object describe,connection test", "object create,object drop,stage copy"),
     "snyk": .init("", "monitor,auth"),
