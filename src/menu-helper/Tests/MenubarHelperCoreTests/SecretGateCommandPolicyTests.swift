@@ -123,3 +123,10 @@ import Testing
     #expect(genericSecretGateRequestClassification(gateID: "node", arguments: ["stage", "publish"]) == .mutating)
     #expect(genericSecretGateRequestClassification(gateID: "node", arguments: ["ls"]) == .unknown)
 }
+
+@Test func qwenAgentPromptsRemainUnknown() {
+    #expect(genericSecretGateRequestClassification(gateID: "qwen-code", arguments: ["--version"]) == .readOnly)
+    #expect(genericSecretGateRequestClassification(gateID: "qwen-code", arguments: ["chat"]) == .unknown)
+    #expect(genericSecretGateRequestClassification(gateID: "qwen-code", arguments: ["run"]) == .unknown)
+    #expect(genericSecretGateRequestClassification(gateID: "qwen-code", arguments: ["review", "run"]) == .unknown)
+}

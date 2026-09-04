@@ -91,6 +91,7 @@ pub(crate) fn invocation_is_secretless(
     let args = &args[1..];
     match stub.command {
         "npm" => npm_invocation_is_secretless(args),
+        "qwen" => qwen_invocation_is_secretless(args),
         "pnpm" => {
             local_command(
                 args,
@@ -118,6 +119,202 @@ pub(crate) fn invocation_is_secretless(
         ),
         _ => false,
     }
+}
+
+// Reviewed against @qwen-code/qwen-code 0.23.0. Keep this positive Secret
+// route exact: every unlisted management command runs without the migrated
+// environment assignment bundle.
+fn qwen_invocation_is_secretless(args: &[OsString]) -> bool {
+    if qwen_early_exit(args) {
+        return true;
+    }
+    if args
+        .iter()
+        .take_while(|arg| arg.as_os_str() != "--")
+        .filter_map(|arg| arg.to_str())
+        .any(|arg| {
+            arg.starts_with('-') && !arg.starts_with("--") && arg.len() > 2 && !arg.contains('=')
+        })
+    {
+        // Qwen/yargs accepts some compact short-option clusters, but their
+        // interaction with the default agent command is not command-like.
+        return false;
+    }
+
+    let Some((command, command_index)) = qwen_next_word(args, 0) else {
+        return args
+            .iter()
+            .take_while(|arg| arg.as_os_str() != "--")
+            .any(|arg| {
+                arg.to_str()
+                    .is_some_and(|arg| arg.starts_with('-') && !qwen_known_option(arg))
+            });
+    };
+    match command {
+        "auth" | "hook" | "hooks" | "extensions" | "sessions" | "update" => true,
+        "serve" => false,
+        "mcp" => {
+            let subcommand = if command_index == 0 && args.get(1).is_some_and(|arg| arg == "--") {
+                args.get(2).and_then(|arg| arg.to_str())
+            } else {
+                qwen_next_word(args, command_index + 1).map(|(subcommand, _)| subcommand)
+            };
+            subcommand != Some("reconnect")
+        }
+        "channel" => qwen_next_word(args, command_index + 1)
+            .is_none_or(|(subcommand, _)| !matches!(subcommand, "start" | "daemon-worker")),
+        "review" => qwen_next_word(args, command_index + 1)
+            .is_none_or(|(subcommand, _)| subcommand != "run"),
+        // Qwen's default command treats every other positional as an agent prompt.
+        _ => false,
+    }
+}
+
+fn qwen_early_exit(args: &[OsString]) -> bool {
+    args.iter()
+        .take_while(|arg| arg.as_os_str() != "--")
+        .filter_map(|arg| arg.to_str())
+        .any(|arg| {
+            matches!(
+                arg,
+                "--help"
+                    | "-h"
+                    | "--help=true"
+                    | "-h=true"
+                    | "--version"
+                    | "-v"
+                    | "--version=true"
+                    | "-v=true"
+                    | "--list-extensions"
+                    | "-l"
+                    | "--list-extensions=true"
+                    | "-l=true"
+            ) || arg.starts_with('-')
+                && !arg.starts_with("--")
+                && arg.len() > 2
+                && arg[1..].chars().all(|flag| "dhvlsyc".contains(flag))
+                && arg[1..].chars().any(|flag| "hvl".contains(flag))
+        })
+}
+
+fn qwen_next_word(args: &[OsString], mut index: usize) -> Option<(&str, usize)> {
+    while index < args.len() {
+        let arg = args[index].to_str()?;
+        if arg == "--" {
+            return None;
+        }
+        if !arg.starts_with('-') {
+            return Some((arg, index));
+        }
+        if !qwen_known_option(arg) {
+            return None;
+        }
+        if qwen_value_option(arg) && !arg.contains('=') {
+            index += 1;
+        } else if qwen_boolean_option(arg)
+            && args
+                .get(index + 1)
+                .and_then(|arg| arg.to_str())
+                .is_some_and(|arg| matches!(arg, "true" | "false"))
+        {
+            index += 1;
+        }
+        index += 1;
+    }
+    None
+}
+
+fn qwen_known_option(arg: &str) -> bool {
+    qwen_value_option(arg) || qwen_boolean_option(arg)
+}
+
+fn qwen_value_option(arg: &str) -> bool {
+    matches!(
+        arg.split_once('=').map_or(arg, |(flag, _)| flag),
+        "--telemetry-target"
+            | "--telemetry-otlp-endpoint"
+            | "--telemetry-otlp-protocol"
+            | "--telemetry-outfile"
+            | "--proxy"
+            | "--model"
+            | "-m"
+            | "--fallback-model"
+            | "--prompt"
+            | "-p"
+            | "--prompt-interactive"
+            | "-i"
+            | "--system-prompt"
+            | "--append-system-prompt"
+            | "--output-style"
+            | "--sandbox-image"
+            | "--approval-mode"
+            | "--channel"
+            | "--allowed-mcp-server-names"
+            | "--mcp-config"
+            | "--allowed-tools"
+            | "--extensions"
+            | "-e"
+            | "--include-directories"
+            | "--add-dir"
+            | "--openai-logging-dir"
+            | "--openai-api-key"
+            | "--openai-base-url"
+            | "--input-format"
+            | "--output-format"
+            | "-o"
+            | "--json-fd"
+            | "--json-file"
+            | "--json-schema"
+            | "--input-file"
+            | "--resume"
+            | "-r"
+            | "--session-id"
+            | "--worktree"
+            | "--max-session-turns"
+            | "--max-wall-time"
+            | "--max-tool-calls"
+            | "--max-subagent-depth"
+            | "--core-tools"
+            | "--exclude-tools"
+            | "--disabled-slash-commands"
+            | "--auth-type"
+            | "--sandbox-session-id"
+    )
+}
+
+fn qwen_boolean_option(arg: &str) -> bool {
+    matches!(
+        arg.split_once('=').map_or(arg, |(flag, _)| flag),
+        "--help"
+            | "-h"
+            | "--version"
+            | "-v"
+            | "--telemetry"
+            | "--telemetry-log-prompts"
+            | "--debug"
+            | "-d"
+            | "--bare"
+            | "--safe-mode"
+            | "--insecure"
+            | "--chat-recording"
+            | "--sandbox"
+            | "-s"
+            | "--yolo"
+            | "-y"
+            | "--acp"
+            | "--experimental-acp"
+            | "--experimental-skills"
+            | "--experimental-lsp"
+            | "--restore-ask-user-question"
+            | "--list-extensions"
+            | "-l"
+            | "--openai-logging"
+            | "--screen-reader"
+            | "--include-partial-messages"
+            | "--continue"
+            | "-c"
+            | "--fork-session"
+    )
 }
 
 fn local_command(args: &[OsString], commands: &[&str]) -> bool {
@@ -978,6 +1175,92 @@ mod tests {
             &script_path,
             format!("{script}# changed\n").as_bytes(),
             &args(&["root"]),
+        ));
+
+        unsafe { std::env::remove_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR") };
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn qwen_requests_secrets_only_for_agent_execution() {
+        let _guard = crate::global_test_env_lock().lock().unwrap();
+        let dir = temp_dir("env-wrapper-secretless-qwen");
+        unsafe { std::env::set_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR", &dir) };
+        let script_path = dir.join("qwen");
+        let script = stub_script(
+            &wrapper("qwen-code").unwrap().primary,
+            Path::new("/opt/homebrew/bin/qwen"),
+        );
+        let invocation = |values: &[&str]| {
+            std::iter::once(script_path.clone().into_os_string())
+                .chain(values.iter().map(OsString::from))
+                .collect::<Vec<_>>()
+        };
+
+        for args in [
+            vec!["--version"],
+            vec!["--version=true"],
+            vec!["--debug", "--help"],
+            vec!["--help=true"],
+            vec!["--list-extensions", "ignored-query"],
+            vec!["--telemetry-target", "local", "sessions", "ps"],
+            vec!["mcp"],
+            vec!["mcp", "list"],
+            vec!["mcp", "--", "list"],
+            vec!["mcp", "approve", "example"],
+            vec!["mcp", "future-command"],
+            vec!["extensions", "install", "example"],
+            vec!["auth"],
+            vec!["hooks"],
+            vec!["sessions", "list"],
+            vec!["update"],
+            vec!["channel", "status"],
+            vec!["channel", "pairing", "list", "telegram"],
+            vec!["channel", "future-command"],
+            vec!["review", "drive", "--script", "env"],
+            vec!["review", "submit"],
+            vec!["review", "future-command"],
+            vec!["review", "run", "--help"],
+            vec!["--future-option", "mcp", "list"],
+            vec!["-dl"],
+        ] {
+            assert!(
+                invocation_is_secretless(&script_path, script.as_bytes(), &invocation(&args)),
+                "qwen {args:?}",
+            );
+        }
+
+        for args in [
+            vec![],
+            vec!["fix", "the", "tests"],
+            vec!["future-command"],
+            vec!["chat"],
+            vec!["--prompt", "fix the tests"],
+            vec!["--debug"],
+            vec!["--help=false"],
+            vec!["--version=false"],
+            vec!["--", "--help"],
+            vec!["serve"],
+            vec!["--debug", "serve"],
+            vec!["mcp", "reconnect", "example"],
+            vec!["mcp", "--", "reconnect", "--all"],
+            vec!["--debug", "mcp", "reconnect", "--all"],
+            vec!["channel", "start", "telegram"],
+            vec!["channel", "daemon-worker"],
+            vec!["review", "run", "123"],
+            vec!["-dy"],
+            vec!["-ds", "sessions", "ps"],
+        ] {
+            assert!(
+                !invocation_is_secretless(&script_path, script.as_bytes(), &invocation(&args)),
+                "qwen {args:?}",
+            );
+        }
+
+        assert!(!invocation_is_secretless(
+            &script_path,
+            format!("{script}# changed\n").as_bytes(),
+            &invocation(&["--version"]),
         ));
 
         unsafe { std::env::remove_var("AUTOMIC_VAULT_TEST_ENV_WRAPPER_STUB_DIR") };

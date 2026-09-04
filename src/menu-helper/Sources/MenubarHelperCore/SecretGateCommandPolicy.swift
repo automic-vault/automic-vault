@@ -156,7 +156,9 @@ private let secretGateCommandPolicies: [String: SecretGateCommandPolicy] = [
     ),
     "pnpm": .init("view,info,search,audit,outdated,why,list", "publish,unpublish,deprecate,add,remove,update", secretDump: "config get"),
     "pulumi": .init("whoami,stack ls,preview,about,config get", "up,destroy,refresh,import,cancel", secretDump: "config get --show-secrets,stack export --show-secrets"),
-    "qwen-code": .init("", "chat,run"),
+    // Qwen has no `chat` command and treats arbitrary positionals (including
+    // "chat" and "run") as agent prompts whose authority cannot be inferred.
+    "qwen-code": .init("", ""),
     "runpodctl": .init("get,list", "create,remove,start,stop", secretDump: "config view"),
     "s3cmd": .init("ls,la,info,du", "put,get,del,rm,sync,cp,mv,mb,rb", secretDump: "--dump-config"),
     "sentry-cli": .init("projects list,organizations list,releases list", "send-event,releases new,releases deploys new,upload-dif"),
