@@ -109,6 +109,51 @@ fn av_scan_json_can_run_one_detector() {
 }
 
 #[test]
+fn av_scan_json_runs_agy_and_antigravity_cockpit_detectors() {
+    let home = temp_home("agy-targeted");
+    let gemini_dir = home.join(".gemini");
+    let cockpit_dir = home.join(".antigravity_cockpit");
+    fs::create_dir_all(&gemini_dir).unwrap();
+    fs::create_dir_all(&cockpit_dir).unwrap();
+    fs::write(
+        gemini_dir.join("oauth_creds.json"),
+        r#"{"access_token":"ya29.sample","refresh_token":"1//sample"}"#,
+    )
+    .unwrap();
+    fs::write(
+        cockpit_dir.join("credentials.json"),
+        r#"{"accounts":{"u":{"accessToken":"ya29.sample","refreshToken":"1//sample"}}}"#,
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_av"))
+        .args(["scan", "--json", "--detector", "agy"])
+        .env("HOME", &home)
+        .output()
+        .unwrap();
+    let agy_stdout = stdout(&output);
+
+    assert!(output.status.success());
+    assert!(agy_stdout.contains(r#""source":"agy""#));
+    assert!(agy_stdout.contains(".gemini/oauth_creds.json"));
+    assert!(!agy_stdout.contains(".antigravity_cockpit/credentials.json"));
+
+    let cockpit_output = Command::new(env!("CARGO_BIN_EXE_av"))
+        .args(["scan", "--json", "--detector", "antigravity-cockpit"])
+        .env("HOME", &home)
+        .output()
+        .unwrap();
+    let cockpit_stdout = stdout(&cockpit_output);
+
+    assert!(cockpit_output.status.success());
+    assert!(cockpit_stdout.contains(r#""source":"antigravity-cockpit""#));
+    assert!(cockpit_stdout.contains(".antigravity_cockpit/credentials.json"));
+    assert!(!cockpit_stdout.contains(".gemini/oauth_creds.json"));
+
+    let _ = fs::remove_dir_all(home);
+}
+
+#[test]
 fn av_scan_git_credential_fill_does_not_invoke_configured_helpers() {
     let home = temp_home("git-credential-fill-passive");
     let marker = home.join("helper-invoked");

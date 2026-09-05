@@ -5,10 +5,12 @@ use crate::Finding;
 use crate::path_security::USER_WRITABLE_PATH_REASON;
 
 mod acli;
+mod agy;
 mod akamai;
 mod algolia;
 mod aliyun_cli;
 mod ansible;
+mod antigravity_cockpit;
 mod argocd;
 mod ast_cli;
 mod astra;
@@ -221,10 +223,12 @@ macro_rules! detector {
 
 const DETECTORS: &[Detector] = &[
     detector!(acli),
+    detector!(agy),
     detector!(akamai),
     detector!(algolia),
     detector!(aliyun_cli),
     detector!(ansible),
+    detector!(antigravity_cockpit),
     detector!(argocd),
     detector!(ast_cli),
     detector!(astra),
@@ -406,8 +410,8 @@ pub(crate) fn findings_for(
 
     let mut findings = Vec::new();
     for detector in DETECTORS {
-        let name = detector_name(detector.module);
-        if !selected.is_empty() && !selected.contains(name.as_str()) {
+        let candidate = detector_name(detector.module);
+        if !selected.is_empty() && !selected.contains(candidate.as_str()) {
             continue;
         }
         let mut detected = (detector.findings)(home);
@@ -419,7 +423,7 @@ pub(crate) fn findings_for(
             }
         }
         findings.extend(detected.into_iter().map(|finding| DetectorResult {
-            detectors: vec![name.clone()],
+            detectors: vec![candidate.clone()],
             finding,
         }));
     }
@@ -645,7 +649,7 @@ mod tests {
 
     #[test]
     fn scan_runs_every_registered_isotope() {
-        assert_eq!(DETECTORS.len(), 157);
+        assert_eq!(DETECTORS.len(), 159);
     }
 
     #[test]
@@ -656,6 +660,7 @@ mod tests {
             .map(|detector| detector.name.clone())
             .collect::<Vec<_>>();
 
+        assert!(names.contains(&"agy".to_string()));
         assert!(!names.contains(&"aws".to_string()));
         assert!(!names.contains(&"aws-cli".to_string()));
         assert!(names.contains(&"aws-cli-credentials-file".to_string()));
@@ -944,5 +949,13 @@ mod tests {
         assert_eq!(merged.len(), 2);
         assert_eq!(merged[0].source, "bash+zsh");
         assert_eq!(merged[1].source, "macOS");
+    }
+
+    #[test]
+    fn findings_for_accepts_registered_detectors() {
+        let home = Path::new("/Users/tester");
+        assert!(findings_for(home, &["agy".to_string()]).is_ok());
+        assert!(findings_for(home, &["antigravity-cockpit".to_string()]).is_ok());
+        assert!(findings_for(home, &["unknown-detector".to_string()]).is_err());
     }
 }
