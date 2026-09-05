@@ -78,7 +78,7 @@ actor SecretProxyCoordinator {
     typealias DestinationApproval = @MainActor @Sendable (
         ProxyDestinationRequest,
         ApprovalCancellation
-    ) -> ProxyDestinationDecision
+    ) async -> ProxyDestinationDecision
 
     private struct DestinationRule: Hashable {
         let origin: String
