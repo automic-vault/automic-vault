@@ -281,6 +281,23 @@ pub(crate) fn install_privileged(digest: &str, archive: &Path) -> Result<(), Str
     Ok(())
 }
 
+pub(crate) fn secret_gate() -> SecretGateDescriptor {
+    let keys = vec!["WRANGLER_AUTH_*".to_string()];
+    SecretGateDescriptor {
+        id: "wrangler",
+        key_patterns: keys.clone(),
+        routes: vec![SecretGateRoute {
+            operation: "keys",
+            script_path: None,
+            target_path: "/opt/av/wrangler/Wrangler.app/Contents/MacOS/wrangler".to_string(),
+            caller_identifiers: vec!["com.automicvault.wrangler"],
+            key_patterns: keys,
+            replace_existing_env: true,
+            allow_missing_keys: false,
+        }],
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -330,21 +347,5 @@ mod tests {
         ] {
             assert!(!safe_archive_path(path), "{path}");
         }
-    }
-}
-pub(crate) fn secret_gate() -> SecretGateDescriptor {
-    let keys = vec!["WRANGLER_AUTH_*".to_string()];
-    SecretGateDescriptor {
-        id: "wrangler",
-        key_patterns: keys.clone(),
-        routes: vec![SecretGateRoute {
-            operation: "keys",
-            script_path: None,
-            target_path: "/opt/av/wrangler/Wrangler.app/Contents/MacOS/wrangler".to_string(),
-            caller_identifiers: vec!["com.automicvault.wrangler"],
-            key_patterns: keys,
-            replace_existing_env: true,
-            allow_missing_keys: false,
-        }],
     }
 }
