@@ -22,9 +22,9 @@ public func genericSecretGateRequestClassification(
     if gateID == "transifex-cli" { return transifexRequestClassification(arguments) }
     if gateID == "travis" { return travisRequestClassification(arguments) }
     if gateID == "vault" { return vaultRequestClassification(arguments) }
-    if gateID == "virustotal-cli" { return virustotalRequestClassification(words) }
     var words = arguments.map { $0.lowercased() }
     guard !words.isEmpty else { return .unknown }
+    if gateID == "virustotal-cli" { return virustotalRequestClassification(words) }
     if gateID == "stripe" { return stripeRequestClassification(words) }
     if gateID == "netlify-cli" { return netlifyRequestClassification(words) }
     if gateID == "node" { return npmRequestClassification(arguments) }
