@@ -17,6 +17,14 @@ const TAP_FORMULA_ROOT: &str =
     "https://raw.githubusercontent.com/automic-vault/homebrew-isotopes/main/Formula";
 const MAX_ARCHIVE_BYTES: u64 = 128 * 1024 * 1024;
 
+pub(crate) const WRANGLER: Spec = Spec {
+    hardener: "wrangler",
+    formula: "wrangler-isotope",
+    repository: "wrangler",
+    primary: "wrangler",
+    binaries: &["wrangler"],
+    test_path: "AUTOMIC_VAULT_TEST_WRANGLER_TARGET",
+};
 pub(crate) const GH: Spec = Spec {
     hardener: "gh",
     formula: "gh-cli",
@@ -237,6 +245,14 @@ pub(crate) fn plan(spec: Spec) -> Result<InstallPlan, String> {
             let manifest = current_manifest(spec)?;
             let current = fs::read_to_string(receipt_path(spec)).ok();
             if current.as_deref().map(str::trim) != Some(manifest.sha256.as_str()) {
+                if spec.hardener == WRANGLER.hardener
+                    && let Some(brew) = brew_path()
+                {
+                    return Ok(InstallPlan::Homebrew {
+                        brew,
+                        conflict: conflicting_formula(spec),
+                    });
+                }
                 return Ok(InstallPlan::Direct {
                     manifest,
                     update: true,
@@ -261,6 +277,9 @@ pub(crate) fn target(spec: Spec) -> PathBuf {
     if let Some(path) = crate::test_env_var(spec.test_path) {
         return path.into();
     }
+    if spec.hardener == WRANGLER.hardener {
+        return super::wrangler::TARGET.into();
+    }
     brew_path()
         .map(|_| brew_target(spec))
         .unwrap_or_else(|| direct_target(spec))
@@ -273,7 +292,11 @@ pub(crate) fn detect(spec: Spec) -> HardenerDetection {
     let mut detection =
         HardenerDetection::command(exists, spec.primary, Some(target_text.clone()), target_text);
     detection.commands[0].isotope = Some(Doctor {
-        identifier: spec.primary,
+        identifier: if spec.hardener == WRANGLER.hardener {
+            "com.automicvault.wrangler"
+        } else {
+            spec.primary
+        },
         formula_url: formula_url(spec),
         repository: spec.repository,
         receipt_path: is_direct_target(spec, &target)
@@ -314,6 +337,9 @@ pub(crate) fn install_privileged(
     sha256: &str,
     archive: &Path,
 ) -> Result<(), String> {
+    if hardener == WRANGLER.hardener {
+        return super::wrangler::install_privileged(sha256, archive);
+    }
     let spec = spec(hardener).ok_or_else(|| format!("unknown isotope `{hardener}`"))?;
     if crate::test_env_var("AUTOMIC_VAULT_TEST_ISOTOPE_DIRECT_DIR").is_none()
         && super::effective_uid() != 0
@@ -454,6 +480,9 @@ fn install_and_verify_with_homebrew(spec: Spec, brew: &Path) -> Result<(), Strin
     if !status.success() {
         return Err(format!("Homebrew isotope installation failed: {status}"));
     }
+    if spec.hardener == WRANGLER.hardener {
+        return install_direct(spec, &current_manifest(spec)?);
+    }
     let target = target(spec);
     if !executable(&target) || !signature_valid(&target, spec.primary) {
         return Err(format!(
@@ -483,7 +512,15 @@ fn restore_homebrew_conflict(spec: Spec, brew: &Path, conflict: &str) -> Result<
 fn install_direct(spec: Spec, manifest: &Manifest) -> Result<(), String> {
     let temporary = TemporaryDirectory::new(spec.hardener)?;
     let archive = temporary.path.join("isotope.tgz");
-    download(&manifest.url, &archive)?;
+    download(
+        &manifest.url,
+        &archive,
+        if spec.hardener == WRANGLER.hardener {
+            super::wrangler::MAX_ARCHIVE_BYTES
+        } else {
+            MAX_ARCHIVE_BYTES
+        },
+    )?;
     let actual = sha256_file(&archive)?;
     if actual != manifest.sha256 {
         return Err(format!(
@@ -517,6 +554,9 @@ fn extract_and_verify(
     archive: &Path,
     destination: &Path,
 ) -> Result<Vec<PathBuf>, String> {
+    if spec.hardener == WRANGLER.hardener {
+        return super::wrangler::extract_and_verify(archive, destination).map(|path| vec![path]);
+    }
     let expected = spec
         .binaries
         .iter()
@@ -617,8 +657,8 @@ fn fetch(url: &str, timeout: u32) -> Result<String, String> {
         .map_err(|err| format!("failed to read {url}: {err}"))
 }
 
-fn download(url: &str, destination: &Path) -> Result<(), String> {
-    let mut body = get(url, 120)?.into_reader().take(MAX_ARCHIVE_BYTES + 1);
+fn download(url: &str, destination: &Path, limit: u64) -> Result<(), String> {
+    let mut body = get(url, 120)?.into_reader().take(limit + 1);
     let mut output = OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -627,8 +667,10 @@ fn download(url: &str, destination: &Path) -> Result<(), String> {
         .map_err(|err| format!("failed to create {}: {err}", destination.display()))?;
     let size = io::copy(&mut body, &mut output)
         .map_err(|err| format!("failed to download {url}: {err}"))?;
-    if size > MAX_ARCHIVE_BYTES {
-        return Err("refusing an isotope archive larger than 128 MiB".into());
+    if size > limit {
+        return Err(format!(
+            "refusing an isotope archive larger than {limit} bytes"
+        ));
     }
     output
         .sync_all()
@@ -748,17 +790,21 @@ fn direct_receipt_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("/usr/local/share/automic-vault/isotopes"))
 }
 
-fn receipt_path(spec: Spec) -> PathBuf {
+pub(super) fn receipt_path(spec: Spec) -> PathBuf {
     direct_receipt_dir().join(format!("{}.sha256", spec.formula))
 }
 
 fn is_direct_target(spec: Spec, path: &Path) -> bool {
     path == direct_target(spec)
+        || (spec.hardener == WRANGLER.hardener && path == Path::new(super::wrangler::TARGET))
 }
 
 fn installed(spec: Spec, path: &Path) -> bool {
     if crate::test_env_var(spec.test_path).is_some() {
         return path.exists();
+    }
+    if spec.hardener == WRANGLER.hardener {
+        return super::wrangler::verify_installed().is_ok();
     }
     if !executable(path) {
         return false;
@@ -814,8 +860,8 @@ fn formula_url(spec: Spec) -> String {
 
 fn spec(hardener: &str) -> Option<Spec> {
     [
-        GH, STRIPE, SUPABASE, OPENTOFU, OXIDE, FASTLY, GOAT, RAILWAY, ORDERCLI, OPENHUE, UAA,
-        PLUMBER, ALIYUN, WAKATIME, RCLONE, KUBECTL, SQLCMD,
+        WRANGLER, GH, STRIPE, SUPABASE, OPENTOFU, OXIDE, FASTLY, GOAT, RAILWAY, ORDERCLI, OPENHUE,
+        UAA, PLUMBER, ALIYUN, WAKATIME, RCLONE, KUBECTL, SQLCMD,
     ]
     .into_iter()
     .find(|spec| spec.hardener == hardener)
@@ -876,8 +922,8 @@ pub(crate) fn copy_new(source: &Path, destination: &Path) -> Result<(), String> 
         .map_err(|err| format!("failed to sync {}: {err}", destination.display()))
 }
 
-struct TemporaryDirectory {
-    path: PathBuf,
+pub(super) struct TemporaryDirectory {
+    pub(super) path: PathBuf,
 }
 
 impl TemporaryDirectory {
@@ -885,7 +931,7 @@ impl TemporaryDirectory {
         Self::new_in(&std::env::temp_dir(), label)
     }
 
-    fn new_in(parent: &Path, label: &str) -> Result<Self, String> {
+    pub(super) fn new_in(parent: &Path, label: &str) -> Result<Self, String> {
         let path = parent.join(format!(
             "av-isotope-{label}-{}-{}",
             std::process::id(),
@@ -1018,6 +1064,57 @@ sha256 "29e7f73c54cc1c278b7431bc04d581b468ca033d1782c39c87034515ae5d7070""#,
             std::env::remove_var("AUTOMIC_VAULT_TEST_ISOTOPE_BREW_PATH");
             std::env::remove_var("AUTOMIC_VAULT_TEST_ISOTOPE_FORMULA");
         }
+    }
+
+    #[test]
+    fn wrangler_receipt_updates_preserve_homebrew_selection() {
+        let _guard = crate::global_test_env_lock().lock().unwrap();
+        let directory = TemporaryDirectory::new("wrangler-plan").unwrap();
+        let target = directory.path.join("wrangler");
+        fs::write(&target, "installed").unwrap();
+        let digest = "a".repeat(64);
+        let formula = format!(
+            "url \"https://github.com/automic-vault/wrangler/releases/download/v4.129.0/cli-4.129.0.tgz\"\nsha256 \"{digest}\""
+        );
+        let variables = [
+            (WRANGLER.test_path, target.as_os_str()),
+            (
+                "AUTOMIC_VAULT_TEST_ISOTOPE_DIRECT_DIR",
+                directory.path.as_os_str(),
+            ),
+            (
+                "AUTOMIC_VAULT_TEST_ISOTOPE_BREW_PATH",
+                std::ffi::OsStr::new("/test/brew"),
+            ),
+            (
+                "AUTOMIC_VAULT_TEST_ISOTOPE_FORMULA",
+                std::ffi::OsStr::new(&formula),
+            ),
+            (
+                "AUTOMIC_VAULT_TEST_ISOTOPE_CONFLICT",
+                std::ffi::OsStr::new("upstream-wrangler"),
+            ),
+        ];
+        for (key, value) in variables {
+            unsafe {
+                std::env::set_var(key, value);
+            }
+        }
+        let receipt = receipt_path(WRANGLER);
+        fs::create_dir_all(receipt.parent().unwrap()).unwrap();
+        fs::write(&receipt, "old-digest").unwrap();
+        let update = plan(WRANGLER);
+        fs::write(&receipt, format!("{digest}\n")).unwrap();
+        let current = plan(WRANGLER);
+        for (key, _) in variables {
+            unsafe {
+                std::env::remove_var(key);
+            }
+        }
+        assert!(
+            matches!(update, Ok(InstallPlan::Homebrew { conflict: Some(conflict), .. }) if conflict == "upstream-wrangler")
+        );
+        assert!(matches!(current, Ok(InstallPlan::Ready)));
     }
 
     #[test]

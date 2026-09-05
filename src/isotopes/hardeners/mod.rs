@@ -26,6 +26,7 @@ pub(crate) mod terraform;
 pub(crate) mod terraform_release;
 pub(crate) mod uaa_cli;
 pub(crate) mod wakatime_cli;
+pub(crate) mod wrangler;
 
 unsafe extern "C" {
     fn geteuid() -> u32;
@@ -322,6 +323,7 @@ pub(crate) fn metadata() -> Vec<HardenerMetadata> {
         gated_hardener!(sqlcmd, "sqlcmd"),
         gated_hardener!(homebrew, "brew"),
         gated_hardener!(gh_cli, "gh"),
+        gated_hardener!(wrangler, "wrangler"),
         gated_hardener!(stripe_cli, "stripe"),
         ungated_hardener!(sudo, "sudo"),
         gated_hardener!(supabase, "supabase"),
@@ -363,6 +365,7 @@ pub(crate) fn secret_gates() -> Vec<SecretGateDescriptor> {
         sqlcmd::secret_gate(),
         homebrew::secret_gate(),
         gh_cli::secret_gate(),
+        wrangler::secret_gate(),
         stripe_cli::secret_gate(),
         supabase::secret_gate(),
         wakatime_cli::secret_gate(),
