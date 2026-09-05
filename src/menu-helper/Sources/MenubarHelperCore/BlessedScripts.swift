@@ -551,3 +551,18 @@ private func saveBlessedScripts(_ scripts: [BlessedScript], service: String, acc
         accessibility: .afterFirstUnlock
     )
 }
+
+public func activeBlessedScriptPromptExplanation(
+    script: BlessedScript,
+    gateID: String?,
+    launcherAllowsOperation: Bool
+) -> String {
+    guard let gateID, launcherAllowsOperation else {
+        return "This request exceeds the stored authority. Approval applies only to this request."
+    }
+    if script.capabilities[gateID] == nil {
+        return "The Blessed Script’s declared Capabilities narrow gate policy for this execution and lack a \(gateID) Capability. Approval applies only to this request."
+    } else {
+        return "The Blessed Script’s declared Capabilities narrow gate policy for this execution and exceed the declared \(gateID) Capability. Approval applies only to this request."
+    }
+}
