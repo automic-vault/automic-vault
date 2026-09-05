@@ -148,7 +148,7 @@ fn verify_bundle(bundle: &Path, protected: bool) -> Result<(), String> {
     }
     let canonical = fs::canonicalize(bundle).map_err(|error| error.to_string())?;
     walk(bundle, &canonical, protected)?;
-    let requirement = "=anchor apple generic and certificate leaf[subject.OU] = ZU76A67LGU and identifier \"com.automicvault.wrangler\"";
+    let requirement = "=anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and certificate leaf[subject.OU] = ZU76A67LGU and identifier \"com.automicvault.wrangler\"";
     let status = command("/usr/bin/codesign")
         .args([
             "--verify",

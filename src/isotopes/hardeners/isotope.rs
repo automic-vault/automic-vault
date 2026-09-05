@@ -250,7 +250,7 @@ pub(crate) fn plan(spec: Spec) -> Result<InstallPlan, String> {
                 {
                     return Ok(InstallPlan::Homebrew {
                         brew,
-                        conflict: None,
+                        conflict: conflicting_formula(spec),
                     });
                 }
                 return Ok(InstallPlan::Direct {
