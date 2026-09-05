@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 
 const KEYCHAIN_SERVICE: &str = "com.automicvault.isotope";
 const TRAVIS_TOKEN_ENV_KEY: &str = "TRAVIS_TOKEN";
+const TRAVIS_COM_ENDPOINT: &str = "https://api.travis-ci.com/";
 
 pub trait CredentialStore {
     fn store_secret(&self, key: &str, value: &str) -> Result<(), String>;
@@ -28,17 +29,40 @@ pub fn migrate_credentials_file(path: &Path, store: &dyn CredentialStore) -> Res
     };
 
     let tokens = config_access_tokens(&contents);
-    if tokens.is_empty() {
-        return Ok(false);
-    }
     if tokens.len() > 1 {
         return Err("multiple Travis access tokens found; migrate them manually".to_string());
     }
+    let (guarded, has_endpoints) = guard_token_storage(&contents);
+    if !config_access_tokens(&guarded).is_empty() {
+        return Err("Travis access token is outside the supported endpoints config".to_string());
+    }
+    if tokens.is_empty() {
+        if !has_endpoints || guarded == contents {
+            return Ok(false);
+        }
+        fs::write(path, guarded)
+            .map_err(|err| format!("failed to write {}: {err}", path.display()))?;
+        return Ok(true);
+    }
 
     store.store_secret(TRAVIS_TOKEN_ENV_KEY, &tokens[0])?;
-    fs::write(path, remove_access_token_lines(&contents))
-        .map_err(|err| format!("failed to write {}: {err}", path.display()))?;
+    fs::write(path, guarded).map_err(|err| format!("failed to write {}: {err}", path.display()))?;
     Ok(true)
+}
+
+pub(super) fn default_config_is_safe_for_token() -> bool {
+    uses_default_config_path()
+        && travis_config_path()
+            .ok()
+            .and_then(|path| fs::read_to_string(path).ok())
+            .is_some_and(|contents| {
+                let (guarded, has_endpoints) = guard_token_storage(&contents);
+                has_endpoints && guarded == contents && config_uses_official_authority(&contents)
+            })
+}
+
+fn uses_default_config_path() -> bool {
+    std::env::var_os("TRAVIS_CONFIG_PATH").is_none_or(|value| value.is_empty())
 }
 
 fn travis_config_path() -> Result<PathBuf, String> {
@@ -76,8 +100,10 @@ fn line_access_token(line: &str) -> Option<String> {
     Some(value.to_string())
 }
 
-fn line_has_access_token(line: &str) -> bool {
-    line_access_token(line).is_some()
+fn line_is_access_token(line: &str) -> bool {
+    line.trim()
+        .split_once(':')
+        .is_some_and(|(key, _)| key.trim() == "access_token")
 }
 
 fn yaml_scalar_value(value: &str) -> Option<&str> {
@@ -88,16 +114,83 @@ fn yaml_scalar_value(value: &str) -> Option<&str> {
     Some(value.trim_matches('"').trim_matches('\'').trim())
 }
 
-fn remove_access_token_lines(contents: &str) -> String {
+fn guard_token_storage(contents: &str) -> (String, bool) {
     let mut output = String::new();
+    let mut in_endpoints = false;
+    let mut active_endpoint = false;
+    let mut endpoint_guarded = false;
+    let mut has_endpoints = false;
+
     for line in contents.lines() {
-        if line_has_access_token(line) {
+        let trimmed = line.trim();
+        let indentation = line.len() - line.trim_start_matches(' ').len();
+        let structural = !trimmed.is_empty() && !trimmed.starts_with('#');
+
+        if in_endpoints && structural && indentation == 2 && trimmed.ends_with(':') {
+            if active_endpoint && !endpoint_guarded {
+                output.push_str("    access_token: ''\n");
+            }
+            active_endpoint = true;
+            endpoint_guarded = false;
+            has_endpoints = true;
+        } else if in_endpoints && structural && indentation == 0 {
+            if active_endpoint && !endpoint_guarded {
+                output.push_str("    access_token: ''\n");
+            }
+            in_endpoints = false;
+            active_endpoint = false;
+        } else if in_endpoints && active_endpoint && line_is_access_token(line) {
+            output.push_str(&" ".repeat(indentation));
+            output.push_str("access_token: ''\n");
+            endpoint_guarded = true;
             continue;
         }
+
         output.push_str(line);
         output.push('\n');
+        if !in_endpoints && indentation == 0 && trimmed == "endpoints:" {
+            in_endpoints = true;
+        }
     }
-    output
+    if in_endpoints && active_endpoint && !endpoint_guarded {
+        output.push_str("    access_token: ''\n");
+    }
+    if !contents.ends_with('\n') {
+        output.pop();
+    }
+    (output, has_endpoints)
+}
+
+fn config_uses_official_authority(contents: &str) -> bool {
+    let mut in_endpoints = false;
+    for line in contents.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        let indentation = line.len() - line.trim_start_matches(' ').len();
+        if indentation == 0 {
+            in_endpoints = trimmed == "endpoints:";
+        }
+        if in_endpoints && indentation == 2 && trimmed.ends_with(':') {
+            if trimmed.trim_end_matches(':').trim_matches(['\'', '"']) != TRAVIS_COM_ENDPOINT {
+                return false;
+            }
+            continue;
+        }
+        let Some((key, value)) = trimmed.split_once(':') else {
+            continue;
+        };
+        let key = key.trim();
+        let value = yaml_scalar_value(value).unwrap_or_default();
+        if key == "enterprise"
+            || key == "insecure" && !matches!(value, "" | "false")
+            || matches!(key, "default_endpoint" | "endpoint") && value != TRAVIS_COM_ENDPOINT
+        {
+            return false;
+        }
+    }
+    true
 }
 
 impl CredentialStore for KeychainCredentialStore {
@@ -205,7 +298,7 @@ mod tests {
         );
         assert_eq!(
             fs::read_to_string(&path).unwrap(),
-            "endpoints:\n  https://api.travis-ci.com/:\n    insecure: false\n"
+            "endpoints:\n  https://api.travis-ci.com/:\n    access_token: ''\n    insecure: false\n"
         );
         fs::remove_file(path).unwrap();
     }
@@ -242,6 +335,51 @@ mod tests {
         assert!(!migrate_credentials_file(&path, &store).unwrap());
         assert!(store.values.borrow().is_empty());
         fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn guards_every_endpoint_without_storing_a_secret() {
+        let path = std::env::temp_dir().join(format!("travis-guard-{}", std::process::id()));
+        fs::write(
+            &path,
+            "endpoints:\n  https://one.example/:\n    insecure: false\n  https://two.example/:\n    enterprise: true\nrepos: {}\n",
+        )
+        .unwrap();
+        let store = TestCredentialStore::default();
+
+        assert!(migrate_credentials_file(&path, &store).unwrap());
+        assert!(store.values.borrow().is_empty());
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            "endpoints:\n  https://one.example/:\n    insecure: false\n    access_token: ''\n  https://two.example/:\n    enterprise: true\n    access_token: ''\nrepos: {}\n"
+        );
+        assert!(!migrate_credentials_file(&path, &store).unwrap());
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn only_the_guarded_official_config_is_safe_for_token_routing() {
+        let official = "endpoints:\n  https://api.travis-ci.com/:\n    access_token: ''\n";
+        let (guarded, has_endpoints) = guard_token_storage(official);
+        assert!(has_endpoints);
+        assert_eq!(guarded, official);
+        assert!(config_uses_official_authority(official));
+
+        assert!(!config_uses_official_authority(
+            "default_endpoint: https://enterprise.example/api\nendpoints:\n  https://api.travis-ci.com/:\n    access_token: ''\n"
+        ));
+        assert!(!config_uses_official_authority(
+            "endpoints:\n  https://enterprise.example/api:\n    access_token: ''\n"
+        ));
+        assert!(!config_uses_official_authority(
+            "endpoints:\n  https://api.travis-ci.com/:\n    access_token: ''\nrepos:\n  owner/repo:\n    endpoint: https://enterprise.example/api\n"
+        ));
+        assert!(!config_uses_official_authority(
+            "endpoints:\n  https://api.travis-ci.com/:\n    access_token: ''\nenterprise: {}\n"
+        ));
+        assert!(!config_uses_official_authority(
+            "endpoints:\n  https://api.travis-ci.com/:\n    access_token: ''\n    insecure: true\n"
+        ));
     }
 
     #[test]
