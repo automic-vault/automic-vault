@@ -6,3 +6,10 @@ public func isWranglerCredentialKey(_ key: String) -> Bool {
     return !encoded.isEmpty && encoded.utf8.count.isMultiple(of: 2)
         && encoded.utf8.allSatisfy { (48...57).contains($0) || (65...70).contains($0) }
 }
+
+/// Refresh must not copy a Project Value into the Global Value mutation path.
+public func wranglerCredentialSelectionIsSupported(_ selected: SelectedSecretValues) -> Bool {
+    selected.names.allSatisfy {
+        isWranglerCredentialKey($0) && selected.source(for: $0) == .global
+    }
+}

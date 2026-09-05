@@ -17,6 +17,9 @@ binds each credential read to the Target and working directory. The app admits
 only the Automic Vault signing identity at the installed path. OAuth access
 and refresh tokens share one opaque Credential per profile in Secret Custody;
 profile names use reversible hexadecimal encoding under `WRANGLER_AUTH_`.
+The initial OAuth store supports Global Values only. A selected Project Value
+fails closed so refresh cannot copy it into the Global Value mutation path.
+Source-bound refresh and deletion are required before supporting Project Values.
 Secret mutations use the existing approved mutation path. Credential reads use
 the existing Authorization Request and recording-before-release path.
 

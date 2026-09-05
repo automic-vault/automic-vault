@@ -7,3 +7,16 @@ import Testing
         #expect(!isWranglerCredentialKey(key))
     }
 }
+
+@Test func wranglerRefreshCannotBroadenAProjectCredential() {
+    let key = "WRANGLER_AUTH_64656661756C74"
+    func selection(_ source: StoredSecretValueSource) -> SelectedSecretValues {
+        SelectedSecretValues(values: [key: StoredSecretValue(
+            source: source, keychainAccount: key, accessibility: .whenUnlocked,
+            keychainProperties: []
+        )])
+    }
+    #expect(wranglerCredentialSelectionIsSupported(selection(.global)))
+    #expect(!wranglerCredentialSelectionIsSupported(selection(.projectDirectory("/project"))))
+    #expect(wranglerCredentialSelectionIsSupported(SelectedSecretValues(values: [:])))
+}
