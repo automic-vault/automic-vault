@@ -105,6 +105,18 @@ pub(super) fn wsk_selected_props_have_auth() -> bool {
     wsk::selected_props_have_auth()
 }
 
+pub(super) fn vultr_config_has_api_key(path: Option<&std::path::Path>) -> bool {
+    vultr::config_has_api_key(path)
+}
+
+pub(super) fn virustotal_default_config_is_safe_for_api_key() -> bool {
+    virustotal_cli::default_config_is_safe_for_api_key()
+}
+
+pub(super) fn travis_default_config_is_safe_for_token() -> bool {
+    travis::default_config_is_safe_for_token()
+}
+
 #[unsafe(no_mangle)]
 unsafe extern "C" fn isotope_store_generic_password_json(
     service: *const std::ffi::c_char,
