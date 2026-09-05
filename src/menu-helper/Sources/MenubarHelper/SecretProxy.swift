@@ -475,7 +475,7 @@ actor SecretProxyCoordinator {
             reason: decision == .allowForSession ? "Allowed for Proxy Session" : "Allowed once"
         )
         guard appendAccessRequestRecord(record) else {
-            deny(sessionID: sessionID, requestID: requestID, reason: "authorization audit log is unavailable")
+            deny(sessionID: sessionID, requestID: requestID, reason: "Authorization History is unavailable")
             return
         }
         guard !cancellation.isCanceled else { return }
