@@ -25,7 +25,8 @@ the existing Authorization Request and recording-before-release path.
 
 Every Wrangler credential read is initially Unknown and requires Approval.
 A later reviewed command catalog can permit automic authorization. This is a
-native credential-store integration, not environment-wrapper Secret routing.
+native credential-store integration using the Secret Gate surface; no wrapper
+stub injects Credentials into a project-selected Node process.
 Denial and transport failure do not fall back to upstream credential storage.
 
 ## Consequences
@@ -36,3 +37,21 @@ Project code and build helpers can still observe Secrets after Application;
 this is not process containment. Existing upstream credentials remain exposed
 until explicitly removed. This decision does not weaken the Detector or claim
 that installing the Isotope alone migrates credentials.
+
+## Installation
+
+The fork publishes `cli-<version>.tgz`, pinned by the signed tap's
+`wrangler-isotope` formula. Homebrew installs the distribution into its keg.
+`av harden wrangler` uses the existing Isotope download, digest, privileged
+installer, and receipt path to install the verified bundle under `/opt/av/wrangler`.
+The same verified archive supports installation without Homebrew. There is no
+`.pkg` installer. A Homebrew upgrade requires re-running the Hardener to replace
+the protected runtime; Doctor compares its protected receipt with the tap digest.
+
+This extends ADR 0031's protected multi-file prefix to a fork-owned Isotope.
+The installer stages a root-owned copy, rechecks its digest, restricts archive
+paths, uses secure extraction without archived ownership or ACLs, and verifies
+the bundle and native resources before replacement. Only Node and workerd may
+have the JIT entitlement; library validation and other runtime protections stay
+active. The embedded bootstrap independently checks ownership, effective write
+access, and the complete signature before loading resources.

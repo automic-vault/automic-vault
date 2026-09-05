@@ -13,3 +13,8 @@ public func wranglerCredentialSelectionIsSupported(_ selected: SelectedSecretVal
         isWranglerCredentialKey($0) && selected.source(for: $0) == .global
     }
 }
+
+/// Until mutations bind the selected source, only Global Values are supported.
+public func wranglerCredentialMutationIsSupported(key: String, hasProjectDirectory: Bool) -> Bool {
+    !hasProjectDirectory && isWranglerCredentialKey(key)
+}

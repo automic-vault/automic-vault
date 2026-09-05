@@ -461,6 +461,10 @@ where
                 let result = hardeners::kubectl::run(stdout, yes);
                 return finish_hardening(result, "kubectl", stdout, stderr);
             }
+            if target == "wrangler" {
+                let result = hardeners::wrangler::run(stdout, yes);
+                return finish_hardening(result, "wrangler", stdout, stderr);
+            }
             if target == "gh" || target == "gh-cli" {
                 let result = hardeners::gh_cli::run(stdout, yes);
                 return finish_hardening(result, "gh", stdout, stderr);

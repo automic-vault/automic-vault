@@ -20,3 +20,10 @@ import Testing
     #expect(!wranglerCredentialSelectionIsSupported(selection(.projectDirectory("/project"))))
     #expect(wranglerCredentialSelectionIsSupported(SelectedSecretValues(values: [:])))
 }
+
+@Test func wranglerMutationsRejectProjectValues() {
+    let key = "WRANGLER_AUTH_64656661756C74"
+    #expect(wranglerCredentialMutationIsSupported(key: key, hasProjectDirectory: false))
+    #expect(!wranglerCredentialMutationIsSupported(key: key, hasProjectDirectory: true))
+    #expect(!wranglerCredentialMutationIsSupported(key: "GH_TOKEN_GITHUB_COM", hasProjectDirectory: false))
+}

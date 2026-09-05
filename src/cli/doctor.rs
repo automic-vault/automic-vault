@@ -1659,6 +1659,7 @@ mod tests {
                         matches!(
                             hardener.name,
                             "aliyun-cli"
+                                | "wrangler"
                                 | "gh"
                                 | "goat"
                                 | "ordercli"

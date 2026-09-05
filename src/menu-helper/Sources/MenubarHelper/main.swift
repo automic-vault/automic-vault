@@ -3542,14 +3542,14 @@ private final class ApprovalServer: @unchecked Sendable {
         case .save where isTrustedGhCaller(path: callerPath, signing: signing):
             handleGhSave(message, on: peer, cancellation: cancellation, caller: mutationCaller)
         case .wranglerSave where isTrustedWranglerCaller(path: callerPath, signing: signing):
-            guard let key = xpc_dictionary_get_string(message, "key"), isWranglerCredentialKey(String(cString: key)) else {
-                reply(peer, to: message, ok: false, error: "invalid Wrangler Secret Name")
+            guard let key = xpc_dictionary_get_string(message, "key"), wranglerCredentialMutationIsSupported(key: String(cString: key), hasProjectDirectory: xpc_dictionary_get_value(message, "project_directory") != nil) else {
+                reply(peer, to: message, ok: false, error: "Wrangler mutations require a Global Value in the Wrangler namespace")
                 return
             }
             handleSave(message, on: peer, cancellation: cancellation, caller: mutationCaller)
         case .wranglerDelete where isTrustedWranglerCaller(path: callerPath, signing: signing):
-            guard let key = xpc_dictionary_get_string(message, "key"), isWranglerCredentialKey(String(cString: key)) else {
-                reply(peer, to: message, ok: false, error: "invalid Wrangler Secret Name")
+            guard let key = xpc_dictionary_get_string(message, "key"), wranglerCredentialMutationIsSupported(key: String(cString: key), hasProjectDirectory: xpc_dictionary_get_value(message, "project_directory") != nil) else {
+                reply(peer, to: message, ok: false, error: "Wrangler mutations require a Global Value in the Wrangler namespace")
                 return
             }
             handleDelete(message, on: peer, cancellation: cancellation, caller: mutationCaller)
