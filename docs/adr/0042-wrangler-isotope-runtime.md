@@ -1,6 +1,6 @@
 # ADR 0042: Bind Wrangler Secret Use to a fixed signed runtime
 
-Status: proposed
+Status: accepted
 
 ## Decision
 
