@@ -1067,6 +1067,57 @@ sha256 "29e7f73c54cc1c278b7431bc04d581b468ca033d1782c39c87034515ae5d7070""#,
     }
 
     #[test]
+    fn wrangler_receipt_updates_preserve_homebrew_selection() {
+        let _guard = crate::global_test_env_lock().lock().unwrap();
+        let directory = TemporaryDirectory::new("wrangler-plan").unwrap();
+        let target = directory.path.join("wrangler");
+        fs::write(&target, "installed").unwrap();
+        let digest = "a".repeat(64);
+        let formula = format!(
+            "url \"https://github.com/automic-vault/wrangler/releases/download/v4.129.0/cli-4.129.0.tgz\"\nsha256 \"{digest}\""
+        );
+        let variables = [
+            (WRANGLER.test_path, target.as_os_str()),
+            (
+                "AUTOMIC_VAULT_TEST_ISOTOPE_DIRECT_DIR",
+                directory.path.as_os_str(),
+            ),
+            (
+                "AUTOMIC_VAULT_TEST_ISOTOPE_BREW_PATH",
+                std::ffi::OsStr::new("/test/brew"),
+            ),
+            (
+                "AUTOMIC_VAULT_TEST_ISOTOPE_FORMULA",
+                std::ffi::OsStr::new(&formula),
+            ),
+            (
+                "AUTOMIC_VAULT_TEST_ISOTOPE_CONFLICT",
+                std::ffi::OsStr::new("upstream-wrangler"),
+            ),
+        ];
+        for (key, value) in variables {
+            unsafe {
+                std::env::set_var(key, value);
+            }
+        }
+        let receipt = receipt_path(WRANGLER);
+        fs::create_dir_all(receipt.parent().unwrap()).unwrap();
+        fs::write(&receipt, "old-digest").unwrap();
+        let update = plan(WRANGLER);
+        fs::write(&receipt, format!("{digest}\n")).unwrap();
+        let current = plan(WRANGLER);
+        for (key, _) in variables {
+            unsafe {
+                std::env::remove_var(key);
+            }
+        }
+        assert!(
+            matches!(update, Ok(InstallPlan::Homebrew { conflict: Some(conflict), .. }) if conflict == "upstream-wrangler")
+        );
+        assert!(matches!(current, Ok(InstallPlan::Ready)));
+    }
+
+    #[test]
     fn formula_parser_accepts_only_the_expected_release_and_digest() {
         let formula = r#"
           url "https://github.com/automic-vault/gh-cli/releases/download/v2.97.0/cli-2.97.0.tgz"

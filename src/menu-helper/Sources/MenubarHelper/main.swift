@@ -3906,7 +3906,7 @@ private final class ApprovalServer: @unchecked Sendable {
             // ponytail: Global Values only until OAuth refresh mutations bind the selected source.
             if isTrustedWranglerCaller(path: callerPath, signing: signing),
                !wranglerCredentialSelectionIsSupported(selected) {
-                throw AppError("Wrangler OAuth currently supports Global Values only")
+                throw AppError("Wrangler OAuth requires Global Values in the Wrangler namespace")
             }
             request = approvalRequestWithCredentialContext(kubectlRequest.selecting(selected))
         } catch {
