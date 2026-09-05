@@ -156,7 +156,7 @@ private actor PhoneApprovalRelayWorker {
         canceled.insert(requestID)
         guard pending.removeValue(forKey: requestID) != nil else { return }
         canceled.remove(requestID)
-        if let relay { try? await relay.send(.cancel(requestID)) }
+        if let relay { try? await relay.publishCancellation(requestID) }
         published.remove(requestID)
         await disconnectIfIdle()
     }
@@ -293,6 +293,7 @@ private actor PhoneApprovalRelayWorker {
             case .temporaryWriteAccess: .temporaryWriteAccess
             }
             resultHandler(response.requestID, result)
+            try? await relay.publishCancellation(response.requestID)
         case .sync:
             try await relay.send(.presence(try presence()))
             for request in pending.values { try await relay.send(.request(request)) }

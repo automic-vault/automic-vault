@@ -75,6 +75,10 @@ public struct ApprovalCrypto: Sendable {
         identifier(label: "registration:\(deviceID)")
     }
 
+    public func notificationIdentifier(requestID: UUID) -> String {
+        identifier(label: "notification:\(requestID.uuidString)")
+    }
+
     private func key(purpose: String) -> SymmetricKey {
         HKDF<SHA256>.deriveKey(
             inputKeyMaterial: rootKey,
@@ -405,6 +409,25 @@ public struct PhoneApprovalTicket: Codable, Equatable, Sendable {
         }
         return result
     }
+}
+
+public struct PhoneApprovalCancellation: Codable, Equatable, Sendable {
+    public let version: UInt16
+    public let requestID: UUID
+
+    public init(requestID: UUID) {
+        version = 1
+        self.requestID = requestID
+    }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        version = try values.decode(UInt16.self, forKey: .version)
+        requestID = try values.decode(UUID.self, forKey: .requestID)
+        guard version == 1 else { throw ApprovalProtocolError.unsupportedVersion }
+    }
+
+    private enum CodingKeys: String, CodingKey { case version, requestID }
 }
 
 public struct ApprovalMacPresence: Codable, Equatable, Sendable {
