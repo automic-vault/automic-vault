@@ -385,3 +385,68 @@ func malformedBlessedScriptManifestsFailClosed(_ source: String) {
         #expect(error.localizedDescription == "invalid av inject shebang")
     }
 }
+
+@Test func blessedScriptNarrowedPolicyExplanationIdentifiesMissingCapability() {
+    let script = BlessedScript(
+        path: "/tmp/deploy.sh",
+        checksum: "checksum",
+        keys: [],
+        target: "/bin/sh",
+        replaceExistingEnv: false,
+        allowMissingKeys: false,
+        capabilities: ["aws": .fullExceptSecretDumps],
+        launchers: []
+    )
+
+    let explanation = activeBlessedScriptPromptExplanation(
+        script: script,
+        gateID: "gpg-signing",
+        launcherAllowsOperation: true
+    )
+    #expect(explanation == "The Blessed Script’s declared Capabilities narrow gate policy for this execution and lack a gpg-signing Capability. Approval applies only to this request.")
+}
+
+@Test func blessedScriptNarrowedPolicyExplanationIdentifiesExceededCapability() {
+    let script = BlessedScript(
+        path: "/tmp/deploy.sh",
+        checksum: "checksum",
+        keys: [],
+        target: "/bin/sh",
+        replaceExistingEnv: false,
+        allowMissingKeys: false,
+        capabilities: ["gh": .readOnly],
+        launchers: []
+    )
+
+    let explanation = activeBlessedScriptPromptExplanation(
+        script: script,
+        gateID: "gh",
+        launcherAllowsOperation: true
+    )
+    #expect(explanation == "The Blessed Script’s declared Capabilities narrow gate policy for this execution and exceed the declared gh Capability. Approval applies only to this request.")
+}
+
+@Test func blessedScriptNarrowedPolicyExplanationFallsBackWhenLauncherDoesNotAllow() {
+    let script = BlessedScript(
+        path: "/tmp/deploy.sh",
+        checksum: "checksum",
+        keys: [],
+        target: "/bin/sh",
+        replaceExistingEnv: false,
+        allowMissingKeys: false,
+        capabilities: ["aws": .fullExceptSecretDumps],
+        launchers: []
+    )
+
+    #expect(activeBlessedScriptPromptExplanation(
+        script: script,
+        gateID: "gpg-signing",
+        launcherAllowsOperation: false
+    ) == "This request exceeds the stored authority. Approval applies only to this request.")
+
+    #expect(activeBlessedScriptPromptExplanation(
+        script: script,
+        gateID: nil,
+        launcherAllowsOperation: true
+    ) == "This request exceeds the stored authority. Approval applies only to this request.")
+}

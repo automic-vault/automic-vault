@@ -4309,9 +4309,20 @@ private final class ApprovalServer: @unchecked Sendable {
         )
         let promptBlessing: BlessedScriptPromptContext?
         if let activeBlessing {
+            let launcherAllowsOperation = if configuredGate != nil,
+                                             let resolvedPolicy,
+                                             let classification {
+                secretGateProtectionAllows(resolvedPolicy.protection, classification: classification)
+            } else {
+                false
+            }
             promptBlessing = BlessedScriptPromptContext(
                 script: activeBlessing,
-                explanation: "This request exceeds the stored authority. Approval applies only to this request."
+                explanation: activeBlessedScriptPromptExplanation(
+                    script: activeBlessing,
+                    gateID: configuredGate?.id,
+                    launcherAllowsOperation: launcherAllowsOperation
+                )
             )
         } else if let scriptApproval,
                   let script = matchingBlessedScriptExecution(
@@ -13116,6 +13127,38 @@ private func runApprovalSelfCheck() -> Int32 {
     )
     collapsedPrompt.layoutSubtreeIfNeeded()
     let collapsedHeight = collapsedPrompt.fittingSize.height
+    let narrowedPrompt = NSHostingView(
+        rootView: ApprovalPromptView(
+            content: ApprovalPromptContent(
+                requesterName: requester.name,
+                requesterIconPath: requester.iconPath,
+                command: "git commit -S",
+                commandPath: "/usr/local/bin/git",
+                title: "Sign this Git operation?",
+                detail: "Automic Vault will use your default GPG signing credential.",
+                automaticApprovalExplanation: nil,
+                operation: operationClassificationTitle(.localWrite),
+                accessLevel: "Allow Signing",
+                temporaryGrantUnavailableReason: nil,
+                cwd: "/tmp",
+                keys: "AV_GPG_PRIVATE_KEY",
+                blessing: BlessedScriptPromptContext(
+                    script: promptBlessing.script,
+                    explanation: activeBlessedScriptPromptExplanation(
+                        script: promptBlessing.script,
+                        gateID: "gpg-signing",
+                        launcherAllowsOperation: true
+                    )
+                ),
+                processSecurity: promptProcessSecurity,
+                sections: []
+            ),
+            temporaryGrantCandidate: nil,
+            decide: { _ in }
+        )
+    )
+    narrowedPrompt.layoutSubtreeIfNeeded()
+    let narrowedHeight = narrowedPrompt.fittingSize.height
     let compactSize = NSHostingView(
         rootView: ApprovalPromptView(
             content: promptContent,
@@ -13163,6 +13206,21 @@ private func runApprovalSelfCheck() -> Int32 {
           promptBlessing.script.capabilities["gh"] == .readOnly,
           approvalPromptCapabilitySummary(promptBlessing.script)
             == "gh: Read Only • stripe: Write Access",
+          activeBlessedScriptPromptExplanation(
+              script: promptBlessing.script,
+              gateID: "gpg-signing",
+              launcherAllowsOperation: true
+          ) == "The Blessed Script’s declared Capabilities narrow gate policy for this execution and lack a gpg-signing Capability. Approval applies only to this request.",
+          activeBlessedScriptPromptExplanation(
+              script: promptBlessing.script,
+              gateID: "gh",
+              launcherAllowsOperation: true
+          ) == "The Blessed Script’s declared Capabilities narrow gate policy for this execution and exceed the declared gh Capability. Approval applies only to this request.",
+          activeBlessedScriptPromptExplanation(
+              script: promptBlessing.script,
+              gateID: "gpg-signing",
+              launcherAllowsOperation: false
+          ) == "This request exceeds the stored authority. Approval applies only to this request.",
           approvalPromptSecretNames(
               requested: ["PUBLISH_TOKEN", "AWS_ACCESS_KEY_ID"],
               blessed: ["PUBLISH_TOKEN", "AWS_SECRET_ACCESS_KEY"]
@@ -13177,6 +13235,7 @@ private func runApprovalSelfCheck() -> Int32 {
           automaticApprovalExplanation.contains("Approval is required to fail closed"),
           containsDragRegion(collapsedPrompt),
           collapsedHeight > 0,
+          narrowedHeight > 0,
           compactSize.width == 420,
           compactSize.height < collapsedHeight,
           SecretMutation.save(
