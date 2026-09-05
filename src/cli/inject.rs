@@ -234,7 +234,20 @@ fn exec(mut options: Options, stderr: &mut dyn Write) -> i32 {
         )
     });
     let prepared = if secretless {
-        resolve_target(&options.target).map(|target| (target, secretless_environment(&options)))
+        let substitute_empty = verified_script
+            .as_ref()
+            .and_then(|script| script.path.file_name())
+            .is_some_and(|name| name == "pnpm");
+        let s3cmd = verified_script
+            .as_ref()
+            .and_then(|script| script.path.file_name())
+            .is_some_and(|name| name == "s3cmd");
+        resolve_target(&options.target).map(|target| {
+            (
+                target,
+                secretless_environment(&options, substitute_empty, s3cmd),
+            )
+        })
     } else {
         prepare_injection(
             &options,
@@ -287,10 +300,44 @@ fn exec(mut options: Options, stderr: &mut dyn Write) -> i32 {
     1
 }
 
-fn secretless_environment(options: &Options) -> BTreeMap<OsString, OsString> {
+fn secretless_environment(
+    options: &Options,
+    substitute_empty: bool,
+    s3cmd: bool,
+) -> BTreeMap<OsString, OsString> {
     let mut env = std::env::vars_os().collect::<BTreeMap<_, _>>();
     for key in &options.keys {
-        env.remove(std::ffi::OsStr::new(key));
+        if substitute_empty {
+            // pnpm expands NODE_AUTH_TOKEN while loading .npmrc and warns when
+            // it is absent. An empty value is unauthenticated and stays quiet.
+            env.insert(OsString::from(key), OsString::new());
+        } else {
+            env.remove(std::ffi::OsStr::new(key));
+        }
+    }
+    if s3cmd {
+        for key in [
+            "AWS_ACCESS_KEY",
+            "AWS_SECRET_KEY",
+            "AWS_SESSION_TOKEN",
+            "AWS_SECURITY_TOKEN",
+            "AWS_CREDENTIAL_FILE",
+            "AWS_PROFILE",
+            "S3CMD_GPG_PASSPHRASE",
+        ] {
+            env.remove(std::ffi::OsStr::new(key));
+        }
+        // s3cmd otherwise probes instance metadata while loading its blanked
+        // config, even when it will only print usage or reject a command.
+        env.insert("AWS_ACCESS_KEY_ID".into(), "AUTOMIC_VAULT_TOKENLESS".into());
+        env.insert(
+            "AWS_SECRET_ACCESS_KEY".into(),
+            "AUTOMIC_VAULT_TOKENLESS".into(),
+        );
+        env.insert(
+            "S3CMD_GPG_PASSPHRASE".into(),
+            "AUTOMIC_VAULT_TOKENLESS".into(),
+        );
     }
     env
 }
@@ -1597,11 +1644,81 @@ mod tests {
             shebang_script: None,
         };
 
-        let env = secretless_environment(&options);
+        let env = secretless_environment(&options, false, false);
 
         unsafe { std::env::remove_var("SOME_SECRET") };
         assert!(!env.contains_key(std::ffi::OsStr::new("SOME_SECRET")));
         assert!(env.contains_key(std::ffi::OsStr::new("PATH")));
+    }
+
+    #[test]
+    fn pnpm_secretless_environment_substitutes_an_empty_token() {
+        let _guard = crate::global_test_env_lock().lock().unwrap();
+        unsafe { std::env::set_var("NODE_AUTH_TOKEN", "ambient") };
+        let options = Options {
+            replace_existing_env: false,
+            allow_missing_keys: true,
+            keys: vec!["NODE_AUTH_TOKEN".into()],
+            target: "/bin/echo".into(),
+            args: Vec::new(),
+            shebang_script: None,
+        };
+
+        let env = secretless_environment(&options, true, false);
+
+        unsafe { std::env::remove_var("NODE_AUTH_TOKEN") };
+        assert_eq!(
+            env.get(std::ffi::OsStr::new("NODE_AUTH_TOKEN")),
+            Some(&OsString::new())
+        );
+    }
+
+    #[test]
+    fn s3cmd_secretless_environment_cannot_resolve_ambient_credentials() {
+        let _guard = crate::global_test_env_lock().lock().unwrap();
+        for (key, value) in [
+            ("AWS_ACCESS_KEY", "ambient-access"),
+            ("AWS_SECRET_KEY", "ambient-secret"),
+            ("AWS_SESSION_TOKEN", "ambient-session"),
+            ("AWS_PROFILE", "ambient-profile"),
+            ("S3CMD_GPG_PASSPHRASE", "ambient-passphrase"),
+        ] {
+            unsafe { std::env::set_var(key, value) };
+        }
+        let options = Options {
+            replace_existing_env: false,
+            allow_missing_keys: true,
+            keys: vec!["S3CMD_ENV_ASSIGNMENTS".into()],
+            target: "/bin/sh".into(),
+            args: Vec::new(),
+            shebang_script: None,
+        };
+
+        let env = secretless_environment(&options, false, true);
+
+        for key in [
+            "AWS_ACCESS_KEY",
+            "AWS_SECRET_KEY",
+            "AWS_SESSION_TOKEN",
+            "AWS_PROFILE",
+            "S3CMD_GPG_PASSPHRASE",
+        ] {
+            unsafe { std::env::remove_var(key) };
+        }
+        assert_eq!(
+            env.get(std::ffi::OsStr::new("AWS_ACCESS_KEY_ID")),
+            Some(&OsString::from("AUTOMIC_VAULT_TOKENLESS"))
+        );
+        assert_eq!(
+            env.get(std::ffi::OsStr::new("AWS_SECRET_ACCESS_KEY")),
+            Some(&OsString::from("AUTOMIC_VAULT_TOKENLESS"))
+        );
+        assert_eq!(
+            env.get(std::ffi::OsStr::new("S3CMD_GPG_PASSPHRASE")),
+            Some(&OsString::from("AUTOMIC_VAULT_TOKENLESS"))
+        );
+        assert!(!env.contains_key(std::ffi::OsStr::new("AWS_PROFILE")));
+        assert!(!env.contains_key(std::ffi::OsStr::new("AWS_SESSION_TOKEN")));
     }
 
     #[test]

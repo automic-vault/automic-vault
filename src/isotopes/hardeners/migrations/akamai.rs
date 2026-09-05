@@ -52,6 +52,98 @@ fn edgerc_path() -> Result<PathBuf, String> {
     Ok(home.join(".edgerc"))
 }
 
+pub(super) fn caller_has_credentials(edgerc: Option<&Path>, section: &str) -> bool {
+    let prefix = match env_section_prefix(section) {
+        Ok(prefix) => format!("AKAMAI_{prefix}"),
+        Err(_) => return false,
+    };
+    if ["CLIENT_TOKEN", "CLIENT_SECRET", "ACCESS_TOKEN"]
+        .iter()
+        .all(|key| {
+            std::env::var_os(format!("{prefix}{key}")).is_some_and(|value| !value.is_empty())
+        })
+    {
+        return true;
+    }
+
+    let path = edgerc
+        .map(Path::to_path_buf)
+        .or_else(|| {
+            std::env::var_os("AKAMAI_EDGERC")
+                .filter(|value| !value.is_empty())
+                .map(PathBuf::from)
+        })
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".edgerc")));
+    let Some(path) = path else { return false };
+    let Ok(contents) = fs::read_to_string(path) else {
+        return false;
+    };
+    edgerc_section_has_credentials(&contents, section)
+}
+
+pub(super) fn command_is_installed(command: &str) -> bool {
+    let Some(home) = std::env::var_os("AKAMAI_CLI_HOME")
+        .filter(|value| !value.is_empty())
+        .or_else(|| std::env::var_os("HOME"))
+    else {
+        return false;
+    };
+    let Ok(packages) = fs::read_dir(PathBuf::from(home).join(".akamai-cli/src")) else {
+        return false;
+    };
+    packages.filter_map(Result::ok).any(|package| {
+        let path = package.path();
+        let package_name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .and_then(|name| name.strip_prefix("cli-"));
+        let Ok(contents) = fs::read(path.join("cli.json")) else {
+            return false;
+        };
+        let Ok(metadata) = serde_json::from_slice::<serde_json::Value>(&contents) else {
+            return false;
+        };
+        metadata["commands"].as_array().is_some_and(|commands| {
+            commands.iter().any(|candidate| {
+                let Some(name) = candidate["name"].as_str() else {
+                    return false;
+                };
+                let name = name.to_ascii_lowercase();
+                command == name
+                    || candidate["aliases"].as_array().is_some_and(|aliases| {
+                        aliases.iter().any(|alias| alias.as_str() == Some(command))
+                    })
+                    || package_name.is_some_and(|package| command == format!("{package}/{name}"))
+            })
+        })
+    })
+}
+
+fn edgerc_section_has_credentials(contents: &str, wanted: &str) -> bool {
+    let mut section = String::new();
+    let mut values = Vec::new();
+    for line in contents.lines() {
+        if let Some(name) = section_name(line) {
+            section = name.to_string();
+            continue;
+        }
+        if (section == wanted || section.is_empty() && wanted == "default")
+            && let Some((key, value)) = config_value(line)
+        {
+            values.push((key.to_ascii_lowercase(), value));
+        }
+    }
+    ["host", "client_token", "client_secret", "access_token"]
+        .iter()
+        .all(|key| {
+            values
+                .iter()
+                .rev()
+                .find(|(candidate, _)| candidate == key)
+                .is_some_and(|(_, value)| !value.is_empty())
+        })
+}
+
 fn config_has_edgegrid_secrets(contents: &str) -> bool {
     config_values(contents).any(|(key, value)| {
         matches!(
