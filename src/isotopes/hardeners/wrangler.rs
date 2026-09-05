@@ -8,6 +8,8 @@ use super::{HardenerDetection, SecretGateDescriptor, SecretGateRoute, isotope};
 
 pub(crate) const TARGET: &str = "/opt/av/wrangler/Wrangler.app/Contents/MacOS/wrangler";
 const PREFIX: &str = "/opt/av/wrangler";
+// The pinned Node runtime and workerd make this multi-file archive about 196 MiB.
+pub(super) const MAX_ARCHIVE_BYTES: u64 = 512 * 1024 * 1024;
 
 pub(crate) fn run(stdout: &mut dyn Write, yes: bool) -> Result<(), String> {
     super::PrivilegeMode::Mixed.require_user("wrangler", false)?;
@@ -108,8 +110,8 @@ fn verify_bundle(bundle: &Path, protected: bool) -> Result<(), String> {
                 return Err("Wrangler resource link escapes bundle".into());
             }
         } else if metadata.is_dir() || metadata.is_file() {
-            if metadata.mode() & 0o022 != 0 {
-                return Err("Wrangler resource is writable by group or others".into());
+            if metadata.mode() & 0o7022 != 0 {
+                return Err("Wrangler resource has unsafe permissions".into());
             }
             if metadata.is_file() {
                 let mut magic = [0; 4];

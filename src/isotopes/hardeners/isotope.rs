@@ -516,7 +516,7 @@ fn install_direct(spec: Spec, manifest: &Manifest) -> Result<(), String> {
         &manifest.url,
         &archive,
         if spec.hardener == WRANGLER.hardener {
-            512 * 1024 * 1024
+            super::wrangler::MAX_ARCHIVE_BYTES
         } else {
             MAX_ARCHIVE_BYTES
         },
