@@ -63,6 +63,35 @@ fn av_doctor_omits_unhardened_tools_and_reports_hardened_stubs() {
 }
 
 #[test]
+fn av_doctor_reports_a_target_occupying_its_reserved_launcher_path() {
+    let root = temp_dir();
+    let stubs = root.join("stubs");
+    fs::create_dir_all(&stubs).unwrap();
+    let sentry_cli = stubs.join("sentry-cli");
+    executable(&sentry_cli);
+
+    let output = av(&root)
+        .args(["doctor", "sentry-cli", "--json"])
+        .env("PATH", &stubs)
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(1));
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let issues = report["results"][0]["issues"].as_array().unwrap();
+    assert_eq!(issues.len(), 1);
+    assert_eq!(issues[0]["kind"], "target_at_launcher_path");
+    assert_eq!(issues[0]["stub_path"], sentry_cli.display().to_string());
+    assert_eq!(issues[0]["resolved_path"], sentry_cli.display().to_string());
+    let remediation = issues[0]["remediation"].as_str().unwrap();
+    assert!(remediation.contains("Review and preserve the executable"));
+    assert!(remediation.contains("leaving"));
+    assert!(!remediation.contains("exec sentry-cli"));
+
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn av_doctor_rejects_unknown_commands() {
     let output = Command::new(env!("CARGO_BIN_EXE_av"))
         .args(["doctor", "definitely-not-a-hardener"])

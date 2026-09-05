@@ -528,8 +528,13 @@ fn aws_update_issue(
 
 fn diagnose_command(hardener: &str, command: &HardenerCommand, path: &OsStr) -> Vec<DoctorIssue> {
     let mut issues = Vec::new();
+    let launcher_collision = executable_at_reserved_launcher_path(command);
     if !executable(Path::new(&command.target_path)) {
-        issues.push(target_issue(hardener, command));
+        issues.push(if let Some(stub) = launcher_collision {
+            target_at_launcher_path_issue(hardener, command, stub)
+        } else {
+            target_issue(hardener, command)
+        });
     }
     issues.extend(
         command
@@ -538,7 +543,7 @@ fn diagnose_command(hardener: &str, command: &HardenerCommand, path: &OsStr) -> 
             .filter(|required| !executable(Path::new(&required.path)))
             .map(|required| dependency_issue(hardener, command, required)),
     );
-    if has_stub_checks(command) {
+    if has_stub_checks(command) && launcher_collision.is_none() {
         let stub_issues = stub_issues(hardener, command);
         let stub_is_healthy = stub_issues.is_empty();
         issues.extend(stub_issues);
@@ -557,6 +562,36 @@ fn diagnose_command(hardener: &str, command: &HardenerCommand, path: &OsStr) -> 
         }
     }
     issues
+}
+
+fn executable_at_reserved_launcher_path(command: &HardenerCommand) -> Option<&str> {
+    // Environment wrappers retain the bare Command name only when they could
+    // not resolve a separate Target outside the reserved Launcher path.
+    (Path::new(&command.target_path) == Path::new(&command.name))
+        .then(|| command.stub_path.as_deref())
+        .flatten()
+        .filter(|stub| executable(Path::new(stub)))
+}
+
+fn target_at_launcher_path_issue(
+    hardener: &str,
+    command: &HardenerCommand,
+    stub: &str,
+) -> DoctorIssue {
+    DoctorIssue {
+        kind: "target_at_launcher_path",
+        command: Some(command.name.clone()),
+        message: format!(
+            "{} has an executable at its reserved Automic Vault Launcher path {stub}, but no separate Target is available",
+            command.name
+        ),
+        remediation: format!(
+            "Review and preserve the executable at {stub}. Move or reinstall the Target under a different directory on PATH, leaving {stub} absent, then run `av harden {hardener}`. The Hardener will show the exact Target path before installing the Launcher and will not overwrite the existing executable."
+        ),
+        stub_path: command.stub_path.clone(),
+        target_path: None,
+        resolved_path: Some(stub.to_string()),
+    }
 }
 
 fn isotope_path_issue(
