@@ -363,6 +363,7 @@ pub(crate) fn secret_gates() -> Vec<SecretGateDescriptor> {
         sqlcmd::secret_gate(),
         homebrew::secret_gate(),
         gh_cli::secret_gate(),
+        wrangler_secret_gate(),
         stripe_cli::secret_gate(),
         supabase::secret_gate(),
         wakatime_cli::secret_gate(),
@@ -371,6 +372,23 @@ pub(crate) fn secret_gates() -> Vec<SecretGateDescriptor> {
     ];
     gates.extend(env_wrapper::secret_gates());
     gates
+}
+
+fn wrangler_secret_gate() -> SecretGateDescriptor {
+    let keys = vec!["WRANGLER_AUTH_*".to_string()];
+    SecretGateDescriptor {
+        id: "wrangler",
+        key_patterns: keys.clone(),
+        routes: vec![SecretGateRoute {
+            operation: "keys",
+            script_path: None,
+            target_path: "/opt/av/wrangler/Wrangler.app/Contents/MacOS/wrangler".to_string(),
+            caller_identifiers: vec!["com.automicvault.wrangler"],
+            key_patterns: keys,
+            replace_existing_env: true,
+            allow_missing_keys: false,
+        }],
+    }
 }
 
 fn gpg_signing_gate() -> SecretGateDescriptor {

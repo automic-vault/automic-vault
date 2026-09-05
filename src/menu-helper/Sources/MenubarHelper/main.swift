@@ -3212,6 +3212,7 @@ private final class ApprovalServer: @unchecked Sendable {
         (identifier "com.automicvault" or identifier "com.automicvault.av" or \
         identifier "com.automicvault.av-brew-stub" or \
         identifier "com.automicvault.varlock-plugin-helper" or \
+        identifier "com.automicvault.wrangler" or \
         identifier "gh" or identifier "com.github.cli" or identifier "stripe" or \
         identifier "supabase" or identifier "supabase-go" or identifier "com.supabase.cli")
         """
@@ -3540,6 +3541,18 @@ private final class ApprovalServer: @unchecked Sendable {
             handleDelete(message, on: peer, cancellation: cancellation, caller: mutationCaller)
         case .save where isTrustedGhCaller(path: callerPath, signing: signing):
             handleGhSave(message, on: peer, cancellation: cancellation, caller: mutationCaller)
+        case .wranglerSave where isTrustedWranglerCaller(path: callerPath, signing: signing):
+            guard let key = xpc_dictionary_get_string(message, "key"), isWranglerCredentialKey(String(cString: key)) else {
+                reply(peer, to: message, ok: false, error: "invalid Wrangler Secret Name")
+                return
+            }
+            handleSave(message, on: peer, cancellation: cancellation, caller: mutationCaller)
+        case .wranglerDelete where isTrustedWranglerCaller(path: callerPath, signing: signing):
+            guard let key = xpc_dictionary_get_string(message, "key"), isWranglerCredentialKey(String(cString: key)) else {
+                reply(peer, to: message, ok: false, error: "invalid Wrangler Secret Name")
+                return
+            }
+            handleDelete(message, on: peer, cancellation: cancellation, caller: mutationCaller)
         case .ghSave where isTrustedGhCaller(path: callerPath, signing: signing):
             handleGhSave(message, on: peer, cancellation: cancellation, caller: mutationCaller)
         case .delete where isTrustedGhCaller(path: callerPath, signing: signing):
@@ -8299,6 +8312,9 @@ private func isAllowedCaller(path: String, signing: SigningInfo) -> Bool {
     if isTrustedAvCaller(path: path, signing: signing) {
         return true
     }
+    if isTrustedWranglerCaller(path: path, signing: signing) {
+        return true
+    }
     if isTrustedGhCaller(path: path, signing: signing) {
         return true
     }
@@ -8326,6 +8342,12 @@ private func isTrustedMenuHelperCaller(path: String, signing: SigningInfo) -> Bo
 private func isTrustedAvCaller(path: String, signing: SigningInfo) -> Bool {
     URL(fileURLWithPath: path).lastPathComponent == "av"
         && signing.identifier == "com.automicvault.av"
+}
+
+private func isTrustedWranglerCaller(path: String, signing: SigningInfo) -> Bool {
+    path == "/opt/av/wrangler/Wrangler.app/Contents/MacOS/wrangler"
+        && signing.identifier == "com.automicvault.wrangler"
+        && signing.teamIdentifier == "ZU76A67LGU"
 }
 
 private func isTrustedGhCaller(path: String, signing: SigningInfo) -> Bool {
@@ -8493,6 +8515,8 @@ private func classifySecretGateRequest(
     switch gateID {
     case "gpg-signing":
         return .localWrite
+    case "wrangler":
+        return .unknown
     case "gh":
         return ghRequestClassification(request.args)
     case "docker":

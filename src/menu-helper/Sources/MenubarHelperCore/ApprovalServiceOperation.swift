@@ -63,6 +63,8 @@ public enum ApprovalServiceOperation: String, CaseIterable, Sendable {
     case bless
     case delete
     case openWindow = "open-window"
+    case wranglerSave = "wrangler-save"
+    case wranglerDelete = "wrangler-delete"
     case ghSave = "gh-save"
     case ghDelete = "gh-delete"
     case stripeSave = "stripe-save"
