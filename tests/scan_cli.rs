@@ -109,6 +109,104 @@ fn av_scan_json_can_run_one_detector() {
 }
 
 #[test]
+fn av_scan_json_runs_gemini_cli_and_antigravity_cockpit_detectors() {
+    let home = temp_home("gemini-cli-targeted");
+    let gemini_dir = home.join(".gemini");
+    let cockpit_dir = home.join(".antigravity_cockpit");
+    fs::create_dir_all(&gemini_dir).unwrap();
+    fs::create_dir_all(&cockpit_dir).unwrap();
+    fs::write(
+        gemini_dir.join("oauth_creds.json"),
+        r#"{"access_token":"ya29.sample","refresh_token":"1//sample"}"#,
+    )
+    .unwrap();
+    fs::write(
+        cockpit_dir.join("credentials.json"),
+        r#"{"accounts":{"u":{"accessToken":"ya29.sample","refreshToken":"1//sample"}}}"#,
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_av"))
+        .args(["scan", "--json", "--detector", "gemini-cli"])
+        .env("HOME", &home)
+        .output()
+        .unwrap();
+    let gemini_stdout = stdout(&output);
+
+    assert!(output.status.success());
+    assert!(gemini_stdout.contains(r#""source":"gemini-cli""#));
+    assert!(gemini_stdout.contains(".gemini/oauth_creds.json"));
+    assert!(!gemini_stdout.contains(".antigravity_cockpit/credentials.json"));
+
+    let cockpit_output = Command::new(env!("CARGO_BIN_EXE_av"))
+        .args(["scan", "--json", "--detector", "antigravity-cockpit"])
+        .env("HOME", &home)
+        .output()
+        .unwrap();
+    let cockpit_stdout = stdout(&cockpit_output);
+
+    assert!(cockpit_output.status.success());
+    assert!(cockpit_stdout.contains(r#""source":"antigravity-cockpit""#));
+    assert!(cockpit_stdout.contains(".antigravity_cockpit/credentials.json"));
+    assert!(!cockpit_stdout.contains(".gemini/oauth_creds.json"));
+
+    let _ = fs::remove_dir_all(home);
+}
+
+#[test]
+#[cfg(unix)]
+fn av_scan_json_reports_unsearchable_credential_parent_directory() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let home = temp_home("unsearchable-parent-scan");
+    let gemini_dir = home.join(".gemini");
+    let cockpit_dir = home.join(".antigravity_cockpit");
+    fs::create_dir_all(&gemini_dir).unwrap();
+    fs::create_dir_all(&cockpit_dir).unwrap();
+    fs::write(
+        gemini_dir.join("oauth_creds.json"),
+        r#"{"access_token":"ya29.sample"}"#,
+    )
+    .unwrap();
+    fs::write(
+        cockpit_dir.join("credentials.json"),
+        r#"{"accessToken":"sample"}"#,
+    )
+    .unwrap();
+
+    let gemini_perms = fs::metadata(&gemini_dir).unwrap().permissions();
+    let cockpit_perms = fs::metadata(&cockpit_dir).unwrap().permissions();
+    fs::set_permissions(&gemini_dir, fs::Permissions::from_mode(0o000)).unwrap();
+    fs::set_permissions(&cockpit_dir, fs::Permissions::from_mode(0o000)).unwrap();
+
+    let gemini_output = Command::new(env!("CARGO_BIN_EXE_av"))
+        .args(["scan", "--json", "--detector", "gemini-cli"])
+        .env("HOME", &home)
+        .output()
+        .unwrap();
+
+    let cockpit_output = Command::new(env!("CARGO_BIN_EXE_av"))
+        .args(["scan", "--json", "--detector", "antigravity-cockpit"])
+        .env("HOME", &home)
+        .output()
+        .unwrap();
+
+    let _ = fs::set_permissions(&gemini_dir, gemini_perms);
+    let _ = fs::set_permissions(&cockpit_dir, cockpit_perms);
+    let _ = fs::remove_dir_all(&home);
+
+    assert!(gemini_output.status.success());
+    let gemini_stdout = stdout(&gemini_output);
+    assert!(gemini_stdout.contains(r#""source":"gemini-cli""#));
+    assert!(gemini_stdout.contains("could not be read"));
+
+    assert!(cockpit_output.status.success());
+    let cockpit_stdout = stdout(&cockpit_output);
+    assert!(cockpit_stdout.contains(r#""source":"antigravity-cockpit""#));
+    assert!(cockpit_stdout.contains("could not be read"));
+}
+
+#[test]
 fn av_scan_git_credential_fill_does_not_invoke_configured_helpers() {
     let home = temp_home("git-credential-fill-passive");
     let marker = home.join("helper-invoked");
