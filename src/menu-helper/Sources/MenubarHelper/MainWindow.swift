@@ -426,6 +426,10 @@ final class DashboardModel: ObservableObject {
         return sessions.first
     }
 
+    var scriptsNeedingReblessingCount: Int {
+        items(for: .blessedScripts).filter { $0.blessingStatus == "Changed" }.count
+    }
+
     func count(for section: DashboardSection) -> Int {
         guard searchQuery.isEmpty else { return items(for: section).count }
         return switch section {
@@ -1644,6 +1648,12 @@ func runDashboardSearchSelfCheck() -> Int32 {
     var changedSnapshot = DashboardSnapshot.empty
     changedSnapshot.blessedScripts = [changedScript]
     let changedModel = DashboardModel(snapshot: changedSnapshot)
+    guard model.scriptsNeedingReblessingCount == 0,
+          changedModel.scriptsNeedingReblessingCount == 1
+    else { return 1 }
+    changedModel.searchText = "no matching script"
+    guard changedModel.scriptsNeedingReblessingCount == 0 else { return 1 }
+    changedModel.searchText = ""
     changedModel.reviewChanges(to: changedScript)
     guard changedModel.pendingBlessing?.scriptData == currentScriptData,
           changedModel.pendingBlessing?.previousContents == previousScriptData,
@@ -1651,6 +1661,11 @@ func runDashboardSearchSelfCheck() -> Int32 {
           blessedScriptDiff(previous: previousScriptData, current: currentScriptData)?.contains("+ echo current") == true
     else { return 1 }
     changedModel.cancelPendingBlessing()
+    guard (try? previousScriptData.write(to: changedScriptURL)) != nil,
+          changedModel.scriptsNeedingReblessingCount == 0,
+          (try? FileManager.default.removeItem(at: changedScriptURL)) != nil,
+          changedModel.scriptsNeedingReblessingCount == 0
+    else { return 1 }
     model.selectSection(.secretGates)
     guard model.items.first?.title == "npm" else { return 1 }
     model.selectSection(.detectors)
@@ -2024,6 +2039,7 @@ private struct DashboardSidebarView: View {
                 .lineLimit(1)
             Spacer(minLength: 0)
             let count = model.count(for: section)
+            let reblessingCount = section == .blessedScripts ? model.scriptsNeedingReblessingCount : 0
             if count > 0 {
                 if section == .detectors, model.snapshot.flaggedDetectorCount > 0, model.selectedSection != .detectors {
                     DetectorCountPill(
@@ -2034,6 +2050,12 @@ private struct DashboardSidebarView: View {
                 } else if section == .doctor, model.selectedSection != .doctor {
                     DetectorCountPill(count: count, color: .red)
                         .fixedSize()
+                } else if section == .blessedScripts,
+                          model.selectedSection != .blessedScripts,
+                          reblessingCount > 0 {
+                    DetectorCountPill(count: reblessingCount, color: .orange)
+                        .fixedSize()
+                        .accessibilityLabel("Scripts needing reblessing: \(reblessingCount)")
                 } else {
                     SidebarCountText(count: count)
                         .fixedSize()
