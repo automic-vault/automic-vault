@@ -20,15 +20,21 @@ mint new access tokens and call Gemini services without authentication prompts.
 ## Mitigation
 
 Delete `~/.gemini/oauth_creds.json` and authenticate via short-lived environment
-credentials, or configure Gemini CLI's encrypted file storage support with
-`GEMINI_FORCE_ENCRYPTED_FILE_STORAGE=true`.
+credentials such as `GOOGLE_APPLICATION_CREDENTIALS` or `GOOGLE_CLOUD_ACCESS_TOKEN`.
+
+While Gemini CLI supports token storage migration via the OS Keychain, it falls
+back to an encrypted file (`~/.gemini/gemini-credentials.json`) when native
+keychain storage is unavailable or when `GEMINI_FORCE_ENCRYPTED_FILE_STORAGE=true`
+is set. This fallback derives its AES key entirely from static metadata (the
+application name, hostname, and username). Any process running under the user's
+account can reconstruct the key and decrypt the credentials. Do not rely on
+encrypted-file storage alone to resolve same-user credential exposure.
 
 ## Why This is not Yet Hardened
 
 Gemini CLI defaults to storing OAuth credentials on disk in plaintext JSON rather
-than using the macOS Keychain, and does not provide a pluggable credential-helper
-interface. While an encrypted file backend can be forced through environment
-variables, Automic Vault does not yet provide a verified wrapper or dedicated
-secret gate for the tool.
+than enforcing native macOS Keychain custody, and does not provide a pluggable
+credential-helper interface. Automic Vault does not yet provide a verified wrapper
+or dedicated secret gate for Gemini CLI.
 
 [Open an issue to discuss a safer integration](https://github.com/automic-vault/automic-vault/issues).
