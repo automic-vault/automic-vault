@@ -5,7 +5,6 @@ use crate::Finding;
 use crate::path_security::USER_WRITABLE_PATH_REASON;
 
 mod acli;
-mod agy;
 mod akamai;
 mod algolia;
 mod aliyun_cli;
@@ -50,6 +49,7 @@ mod firebase_cli;
 mod flyctl;
 mod gallery_dl;
 mod gcli;
+mod gemini_cli;
 pub(crate) mod gh_cli;
 mod git;
 mod glab;
@@ -223,7 +223,6 @@ macro_rules! detector {
 
 const DETECTORS: &[Detector] = &[
     detector!(acli),
-    detector!(agy),
     detector!(akamai),
     detector!(algolia),
     detector!(aliyun_cli),
@@ -272,6 +271,7 @@ const DETECTORS: &[Detector] = &[
     detector!(flyctl),
     detector!(gallery_dl),
     detector!(gcli),
+    detector!(gemini_cli),
     detector!(gh_cli::hosts_token, "gh-cli-hosts-token"),
     detector!(gh_cli::keychain_access, "gh-cli-keychain-access"),
     detector!(git::credential_fill, "git-credential-fill"),
@@ -660,7 +660,7 @@ mod tests {
             .map(|detector| detector.name.clone())
             .collect::<Vec<_>>();
 
-        assert!(names.contains(&"agy".to_string()));
+        assert!(names.contains(&"gemini-cli".to_string()));
         assert!(!names.contains(&"aws".to_string()));
         assert!(!names.contains(&"aws-cli".to_string()));
         assert!(names.contains(&"aws-cli-credentials-file".to_string()));
@@ -954,7 +954,7 @@ mod tests {
     #[test]
     fn findings_for_accepts_registered_detectors() {
         let home = Path::new("/Users/tester");
-        assert!(findings_for(home, &["agy".to_string()]).is_ok());
+        assert!(findings_for(home, &["gemini-cli".to_string()]).is_ok());
         assert!(findings_for(home, &["antigravity-cockpit".to_string()]).is_ok());
         assert!(findings_for(home, &["unknown-detector".to_string()]).is_err());
     }

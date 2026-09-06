@@ -13,18 +13,22 @@ pub fn install_insecurity_reasons() -> Result<Vec<String>, String> {
 }
 
 fn cockpit_insecurity_reasons_for(path: &Path) -> Vec<String> {
-    if !path.exists() {
-        return Vec::new();
-    }
-    match std::fs::read_to_string(path) {
-        Ok(contents) => match cockpit_file_has_credentials(&contents) {
-            Ok(true) => vec![format!(
-                "Antigravity Cockpit credentials contain plaintext tokens: {}",
-                path.display()
-            )],
-            Ok(false) => Vec::new(),
+    match path.try_exists() {
+        Ok(false) => return Vec::new(),
+        Ok(true) => match std::fs::read_to_string(path) {
+            Ok(contents) => match cockpit_file_has_credentials(&contents) {
+                Ok(true) => vec![format!(
+                    "Antigravity Cockpit credentials contain plaintext tokens: {}",
+                    path.display()
+                )],
+                Ok(false) => Vec::new(),
+                Err(_) => vec![format!(
+                    "Antigravity Cockpit credentials could not be parsed and may contain plaintext credentials: {}",
+                    path.display()
+                )],
+            },
             Err(_) => vec![format!(
-                "Antigravity Cockpit credentials could not be parsed and may contain plaintext credentials: {}",
+                "Antigravity Cockpit credentials could not be read and may contain plaintext credentials: {}",
                 path.display()
             )],
         },
@@ -234,6 +238,30 @@ mod tests {
         assert!(cockpit_reasons[0].contains("could not be read"));
 
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn reports_when_parent_directory_is_unsearchable() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = temporary_directory("unsearchable-parent");
+        let cockpit_dir = directory.join(".antigravity_cockpit");
+        std::fs::create_dir_all(&cockpit_dir).unwrap();
+        let path = cockpit_dir.join("credentials.json");
+        std::fs::write(&path, r#"{"accessToken":"sample"}"#).unwrap();
+
+        let original_perms = std::fs::metadata(&cockpit_dir).unwrap().permissions();
+        std::fs::set_permissions(&cockpit_dir, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+        let reasons = cockpit_insecurity_reasons_for(&path);
+
+        let _ = std::fs::set_permissions(&cockpit_dir, original_perms);
+        let _ = std::fs::remove_dir_all(&directory);
+
+        assert_eq!(reasons.len(), 1);
+        assert!(reasons[0].contains("could not be read"));
+        assert!(reasons[0].ends_with(&path.display().to_string()));
     }
 
     #[test]

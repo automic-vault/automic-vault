@@ -13,23 +13,27 @@ pub fn install_insecurity_reasons() -> Result<Vec<String>, String> {
 }
 
 fn oauth_insecurity_reasons_for(path: &Path) -> Vec<String> {
-    if !path.exists() {
-        return Vec::new();
-    }
-    match std::fs::read_to_string(path) {
-        Ok(contents) => match oauth_file_has_credentials(&contents) {
-            Ok(true) => vec![format!(
-                "agy OAuth credentials contain plaintext tokens: {}",
-                path.display()
-            )],
-            Ok(false) => Vec::new(),
+    match path.try_exists() {
+        Ok(false) => return Vec::new(),
+        Ok(true) => match std::fs::read_to_string(path) {
+            Ok(contents) => match oauth_file_has_credentials(&contents) {
+                Ok(true) => vec![format!(
+                    "Gemini CLI OAuth credentials contain plaintext tokens: {}",
+                    path.display()
+                )],
+                Ok(false) => Vec::new(),
+                Err(_) => vec![format!(
+                    "Gemini CLI OAuth credentials could not be parsed and may contain plaintext credentials: {}",
+                    path.display()
+                )],
+            },
             Err(_) => vec![format!(
-                "agy OAuth credentials could not be parsed and may contain plaintext credentials: {}",
+                "Gemini CLI OAuth credentials could not be read and may contain plaintext credentials: {}",
                 path.display()
             )],
         },
         Err(_) => vec![format!(
-            "agy OAuth credentials could not be read and may contain plaintext credentials: {}",
+            "Gemini CLI OAuth credentials could not be read and may contain plaintext credentials: {}",
             path.display()
         )],
     }
@@ -47,7 +51,7 @@ fn oauth_path_in(home: Option<&OsStr>) -> Result<PathBuf, String> {
 
 fn oauth_file_has_credentials(contents: &str) -> Result<bool, String> {
     let value: serde_json::Value = serde_json::from_str(contents)
-        .map_err(|err| format!("failed to parse agy OAuth JSON: {err}"))?;
+        .map_err(|err| format!("failed to parse Gemini CLI OAuth JSON: {err}"))?;
     let Some(object) = value.as_object() else {
         return Ok(false);
     };
@@ -77,7 +81,7 @@ fn is_nonempty_string(value: Option<&serde_json::Value>) -> bool {
 }
 
 pub(crate) fn findings(home: &std::path::Path) -> Vec<crate::Finding> {
-    super::radioisotope::findings("agy", install_insecurity_reasons, home)
+    super::radioisotope::findings("gemini-cli", install_insecurity_reasons, home)
 }
 
 #[cfg(test)]
@@ -146,7 +150,7 @@ mod tests {
 
         let reasons = oauth_insecurity_reasons_for(&path);
         assert_eq!(reasons.len(), 1);
-        assert!(reasons[0].starts_with("agy OAuth credentials contain plaintext tokens: "));
+        assert!(reasons[0].starts_with("Gemini CLI OAuth credentials contain plaintext tokens: "));
         assert!(reasons[0].ends_with(&path.display().to_string()));
 
         std::fs::remove_dir_all(dir).unwrap();
@@ -179,6 +183,30 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
+    fn reports_when_parent_directory_is_unsearchable() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = temporary_directory("unsearchable-parent");
+        let gemini_dir = directory.join(".gemini");
+        std::fs::create_dir_all(&gemini_dir).unwrap();
+        let path = gemini_dir.join("oauth_creds.json");
+        std::fs::write(&path, r#"{"access_token":"ya29.sample"}"#).unwrap();
+
+        let original_perms = std::fs::metadata(&gemini_dir).unwrap().permissions();
+        std::fs::set_permissions(&gemini_dir, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+        let reasons = oauth_insecurity_reasons_for(&path);
+
+        let _ = std::fs::set_permissions(&gemini_dir, original_perms);
+        let _ = std::fs::remove_dir_all(&directory);
+
+        assert_eq!(reasons.len(), 1);
+        assert!(reasons[0].contains("could not be read"));
+        assert!(reasons[0].ends_with(&path.display().to_string()));
+    }
+
+    #[test]
     fn scan_discovers_oauth_credential_file() {
         let home = temporary_directory("scan-oauth");
         let gemini_dir = home.join(".gemini");
@@ -191,7 +219,7 @@ mod tests {
 
         let findings = findings(&home);
         assert_eq!(findings.len(), 1);
-        assert_eq!(findings[0].source, "agy");
+        assert_eq!(findings[0].source, "gemini-cli");
         assert_eq!(findings[0].affected.len(), 1);
         assert_eq!(
             findings[0].affected[0].path,
