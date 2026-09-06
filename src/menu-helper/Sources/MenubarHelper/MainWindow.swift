@@ -18,6 +18,27 @@ private let directAccessDocumentationURL = URL(
 private let launcherBundleDocumentationURL = URL(
     string: "https://github.com/automic-vault/automic-vault/blob/main/docs/signed-cli-launchers.md"
 )!
+private let choosingAMechanismDocumentationURL = URL(
+    string: "https://github.com/automic-vault/automic-vault/blob/main/docs/choosing-a-mechanism.md"
+)!
+private let detectionAndHardeningDocumentationURL = URL(
+    string: "https://github.com/automic-vault/automic-vault/blob/main/docs/domain-language.md#detection-and-hardening"
+)!
+private let toolHardeningDocumentationURL = URL(
+    string: "https://github.com/automic-vault/automic-vault/blob/main/docs/architecture.md#tool-hardening"
+)!
+private let authorizationGatesDocumentationURL = URL(
+    string: "https://github.com/automic-vault/automic-vault/blob/main/README.md#authorization-gates"
+)!
+private let blessedScriptsDocumentationURL = URL(
+    string: "https://github.com/automic-vault/automic-vault/blob/main/README.md#blessed-scripts"
+)!
+private let secretProxyDocumentationURL = URL(
+    string: "https://github.com/automic-vault/automic-vault/blob/main/docs/secret-proxy.md"
+)!
+private let authorizationHistoryDocumentationURL = URL(
+    string: "https://github.com/automic-vault/automic-vault/blob/main/docs/domain-language.md#authorization-history"
+)!
 
 enum AutomaticApprovalFeedback: String, CaseIterable, Identifiable {
     case notification
@@ -2350,11 +2371,17 @@ private struct EmptyListView: View {
     let section: DashboardSection
 
     var body: some View {
-        Text(emptyText)
-            .font(.system(size: 13, weight: .medium))
-            .foregroundStyle(.tertiary)
-            .multilineTextAlignment(.center)
-            .padding()
+        VStack(spacing: 6) {
+            Text(emptyText)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(.tertiary)
+                .multilineTextAlignment(.center)
+            if let learnMoreURL {
+                Link("Learn more", destination: learnMoreURL)
+                    .font(.system(size: 12))
+            }
+        }
+        .padding()
     }
 
     private var emptyText: String {
@@ -2369,6 +2396,21 @@ private struct EmptyListView: View {
         case .proxySessions: "Active `av proxy` sessions appear here while their target process is running"
         case .secretUsage: "Authorization History records requests and their authorization decisions"
         case .settings: "Settings control how Automic Vault behaves"
+        }
+    }
+
+    private var learnMoreURL: URL? {
+        switch section {
+        case .detectors: detectionAndHardeningDocumentationURL
+        case .doctor: detectionAndHardeningDocumentationURL
+        case .hardenedTools: toolHardeningDocumentationURL
+        case .secretGates: authorizationGatesDocumentationURL
+        case .blessedScripts: blessedScriptsDocumentationURL
+        case .launcherBundles: launcherBundleDocumentationURL
+        case .allSecrets: choosingAMechanismDocumentationURL
+        case .proxySessions: secretProxyDocumentationURL
+        case .secretUsage: authorizationHistoryDocumentationURL
+        case .settings: nil
         }
     }
 }
