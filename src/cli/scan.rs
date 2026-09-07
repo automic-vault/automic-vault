@@ -634,7 +634,7 @@ mod tests {
             .iter()
             .map(|gate| gate["id"].as_str().unwrap())
             .collect::<std::collections::BTreeSet<_>>();
-        let standalone_gate_ids = std::collections::BTreeSet::from(["gpg-signing"]);
+        let standalone_gate_ids = std::collections::BTreeSet::from(["gpg-signing", "ssh-agent"]);
         assert_eq!(
             catalog_gate_ids
                 .difference(&hardener_gate_ids)

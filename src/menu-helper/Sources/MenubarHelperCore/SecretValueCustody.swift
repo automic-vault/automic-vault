@@ -111,7 +111,7 @@ public struct SecretValueCustody: Sendable {
         self.adapter = adapter
     }
 
-    public func bind(names: [String], cwd: String) throws -> SelectedSecretValues {
+    public func bind(names: [String], cwd: String, globalOnly: Bool = false) throws -> SelectedSecretValues {
         guard !names.isEmpty else { return SelectedSecretValues(values: [:]) }
         let repairStatus = adapter.repairPendingMutation()
         if repairStatus != errSecSuccess {
@@ -128,7 +128,7 @@ public struct SecretValueCustody: Sendable {
             throw SecretValueCustodyError.inventoryUnavailable(status)
         }
         return SelectedSecretValues(
-            values: try resolveStoredSecretValues(names: names, cwd: cwd, secrets: secrets)
+            values: try resolveStoredSecretValues(names: names, cwd: cwd, secrets: secrets, globalOnly: globalOnly)
         )
     }
 

@@ -1266,10 +1266,78 @@ pub(super) fn approve_gpg_signing(
     Err("GPG signing approval is only available on macOS".into())
 }
 
+pub(super) fn approve_ssh_agent(
+    args: Vec<String>,
+    socket: i32,
+    signing: bool,
+) -> Result<SecretValues, String> {
+    #[cfg(target_os = "macos")]
+    {
+        let request = ApprovalRequest {
+            op: if signing {
+                "ssh-sign"
+            } else {
+                "ssh-identities"
+            },
+            keys: Vec::new(),
+            target: std::env::current_exe()
+                .and_then(std::fs::canonicalize)
+                .map_err(|e| e.to_string())?
+                .to_string_lossy()
+                .into_owned(),
+            args,
+            cwd: "/".into(),
+            replace_existing_env: false,
+            allow_missing_keys: false,
+            env_conflicts: Vec::new(),
+            shebang_script: None,
+            script_data: None,
+            snapshot_incompatible_interpreter: None,
+            tool: Some("ssh-agent"),
+            docker_server_url: None,
+            terraform_hostname: None,
+            aliyun_profile: None,
+            oxide_scope: None,
+            fastly_scope: None,
+            sqlcmd_scope: None,
+            goat_scope: None,
+            ordercli_scope: None,
+            openhue_scope: None,
+            uaa_scope: None,
+            railway_scope: None,
+            kubectl_scope: None,
+            wakatime_api_url: None,
+        };
+        xpc_approve_request_with_socket(
+            &request,
+            &[if signing {
+                "AV_SSH_CREDENTIAL".into()
+            } else {
+                "public_key".into()
+            }],
+            Some(socket),
+        )
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (args, socket, signing);
+        Err("SSH Agent requires macOS".into())
+    }
+}
+
 #[cfg(target_os = "macos")]
 fn xpc_approve_request(
     request: &ApprovalRequest,
     response_keys: &[String],
+) -> Result<SecretValues, String> {
+    xpc_approve_request_with_socket(request, response_keys, None)
+}
+
+#[cfg(target_os = "macos")]
+fn xpc_approve_request_with_socket(
+    request: &ApprovalRequest,
+    response_keys: &[String],
+    socket: Option<i32>,
 ) -> Result<SecretValues, String> {
     use std::os::raw::{c_char, c_int, c_void};
 
@@ -1291,6 +1359,7 @@ fn xpc_approve_request(
             message: XpcObject,
         ) -> XpcObject;
         fn xpc_dictionary_create_empty() -> XpcObject;
+        fn xpc_dictionary_set_fd(dict: XpcObject, key: *const c_char, fd: c_int);
         fn xpc_dictionary_set_bool(xdict: XpcObject, key: *const c_char, value: bool);
         fn xpc_dictionary_get_bool(xdict: XpcObject, key: *const c_char) -> bool;
         fn xpc_dictionary_set_string(xdict: XpcObject, key: *const c_char, value: *const c_char);
@@ -1365,6 +1434,9 @@ fn xpc_approve_request(
     }
 
     unsafe {
+        if let Some(fd) = socket {
+            xpc_dictionary_set_fd(message, c"ssh_socket".as_ptr(), fd);
+        }
         set_string(message, b"op\0", request.op)?;
         set_string(message, b"target\0", &request.target)?;
         set_string(message, b"cwd\0", &request.cwd)?;

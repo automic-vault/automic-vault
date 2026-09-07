@@ -610,12 +610,14 @@ public struct SecretGate: Equatable, Identifiable, Sendable {
     public var defaultPolicyLabel: String {
         appPolicies.isEmpty ? "All Verified Launchers" : "All Other Verified Launchers"
     }
-    public var displayName: String { id == "node" ? "npm" : id }
+    public var displayName: String { id == "ssh-agent" ? "SSH Agent" : id == "node" ? "npm" : id }
     public var authorizationGateName: String {
-        id == "node" ? "npm Authorization Gate" : "\(id.uppercased()) Authorization Gate"
+        if id == "ssh-agent" { return "SSH Agent Authorization Gate" }
+        return id == "node" ? "npm Authorization Gate" : "\(id.uppercased()) Authorization Gate"
     }
 
     public var availableProtections: [SecretGateProtection] {
+        if id == "ssh-agent" { return [.noAccess, .fullExceptSecretDumps] }
         if id == "gpg-signing" {
             return [.noAccess, .readOnlyAndLocalWrites]
         }
@@ -638,11 +640,14 @@ public struct SecretGate: Equatable, Identifiable, Sendable {
     }
 
     public var initialProtection: SecretGateProtection {
-        if id == "gpg-signing" || id == "kubectl" { return .noAccess }
+        if id == "ssh-agent" || id == "gpg-signing" || id == "kubectl" { return .noAccess }
         return id == "brew" ? .readOnlyAndUpdates : .readOnly
     }
 
     public func normalizedProtection(_ protection: SecretGateProtection) -> SecretGateProtection {
+        if id == "ssh-agent" {
+            return protection.allows(.mutating) ? .fullExceptSecretDumps : .noAccess
+        }
         if id == "gpg-signing" {
             return protection.allows(.localWrite) ? .readOnlyAndLocalWrites : .noAccess
         }
@@ -663,6 +668,9 @@ public struct SecretGate: Equatable, Identifiable, Sendable {
 
     public func protectionTitle(_ protection: SecretGateProtection) -> String {
         let protection = normalizedProtection(protection)
+        if id == "ssh-agent" {
+            return protection == .fullExceptSecretDumps ? "Allow Authentication" : "Approval Required"
+        }
         if id == "gpg-signing" {
             return protection == .readOnlyAndLocalWrites ? "Allow Signing" : "Approval Required"
         }
@@ -671,6 +679,11 @@ public struct SecretGate: Equatable, Identifiable, Sendable {
 
     public func protectionSubtitle(_ protection: SecretGateProtection) -> String {
         let protection = normalizedProtection(protection)
+        if id == "ssh-agent" {
+            return protection == .fullExceptSecretDumps
+                ? "Recognized SSH authentication signatures are automically authorized"
+                : "Every SSH authentication signature requires Approval"
+        }
         if id == "gpg-signing" {
             return protection == .readOnlyAndLocalWrites
                 ? "Recognized GPG signing requests are automically authorized"
@@ -1081,6 +1094,7 @@ public func dashboardSecretGateDescriptors(
     }
     return activeHardenerGates + catalog.filter {
         !hardenerGateIDs.contains($0.id)
+            && ($0.id != "ssh-agent" || storedSecretNames.contains(sshCredentialSecretName))
             && ($0.id != "gpg-signing"
                 || storedSecretNames.contains(gpgDefaultPrivateKeySecretName)
                 || storedSecretNames.contains(gpgAlternatePrivateKeySecretName))
@@ -1867,10 +1881,11 @@ public enum StoredSecretSelectionError: Error, LocalizedError, Equatable {
 public func resolveStoredSecretValues(
     names: [String],
     cwd: String,
-    secrets: [StoredSecret]
+    secrets: [StoredSecret],
+    globalOnly: Bool = false
 ) throws -> [String: StoredSecretValue] {
     guard !names.isEmpty else { return [:] }
-    let rank = Dictionary(
+    let rank = globalOnly ? [:] : Dictionary(
         uniqueKeysWithValues: try physicalDirectoryAncestors(cwd).enumerated().map { ($1, $0) }
     )
     let byName = Dictionary(uniqueKeysWithValues: secrets.map { ($0.account, $0) })

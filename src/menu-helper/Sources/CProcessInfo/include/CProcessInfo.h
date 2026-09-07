@@ -20,6 +20,11 @@ typedef struct {
     char path[PROC_PIDPATHINFO_MAXSIZE];
 } AVProcessIdentity;
 
+bool av_original_parent_tracking_available(void);
+bool av_original_parent_identity(const AVProcessIdentity *child, AVProcessIdentity *parent_out);
+bool av_socket_peer_identity(int fd, AVProcessIdentity *identity_out);
+ssize_t av_process_arguments_data(pid_t pid, char *out, size_t out_len);
+bool av_process_cwd(pid_t pid, char *out, size_t out_len);
 bool av_peer_pid(int fd, pid_t *pid_out);
 bool av_process_identity(pid_t pid, AVProcessIdentity *identity_out);
 bool av_process_arguments(pid_t pid, char *out, size_t out_len);

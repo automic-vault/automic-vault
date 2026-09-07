@@ -82,6 +82,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return formatter
     }()
     private var approval: ApprovalServer?
+    private let sshAgent = SSHAgentRuntime.shared
     private var scanWorkItem: DispatchWorkItem?
     private var scanBurstStartedAt: TimeInterval?
     private var pendingFullScan = false
@@ -359,6 +360,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             try approval.start()
             self.approval = approval
+            sshAgent.startObserving()
             scheduleScan(after: 0)
             scanQueue.async { [weak self] in
                 let metadata = loadDetectorMetadata(avExecutableURL: avExecutableURL())
@@ -384,6 +386,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func stopServices() {
+        sshAgent.stop()
         temporaryAccessGrants.cancelAll()
         refreshTemporaryAccessGrants()
         temporaryAccessGrantTimer?.invalidate()
@@ -1967,6 +1970,79 @@ func avExecutableURL() -> URL {
     return URL(fileURLWithPath: "/usr/local/bin/av")
 }
 
+private func sshAgentPeerArguments(_ pid: pid_t) -> [String]? {
+    var buffer = [CChar](repeating: 0, count: 64 * 1024)
+    let count = av_process_arguments_data(pid, &buffer, buffer.count)
+    guard count > 0,
+          let text = String(bytes: buffer.prefix(count).map { UInt8(bitPattern: $0) }, encoding: .utf8)
+    else { return nil }
+    return text.split(separator: "\0", omittingEmptySubsequences: false).dropLast().map(String.init)
+}
+
+private func sshAgentPeerCWD(_ pid: pid_t) -> String? {
+    var buffer = [CChar](repeating: 0, count: 4096)
+    guard av_process_cwd(pid, &buffer, buffer.count) else { return nil }
+    return String(decoding: buffer.prefix(while: { $0 != 0 }).map { UInt8(bitPattern: $0) }, as: UTF8.self)
+}
+
+// An SSH client cannot stand in as its own Launcher. Every ancestor must be the
+// same execution that parented its child, preventing an exec into an allowed app.
+private func sshAgentLaunchers(for identity: AVProcessIdentity) -> [LauncherIdentity] {
+    var child = identity
+    for _ in 0..<32 {
+        var parent = AVProcessIdentity()
+        guard av_original_parent_identity(&child, &parent) else { return [] }
+        let candidates = launcherIdentities(pid: parent.pid, identity: parent)
+            .filter { $0.runtimeProtection.allowsSecretGateAccess }
+        if !candidates.isEmpty { return candidates }
+        child = parent
+    }
+    return []
+}
+
+/// Retains the kernel socket evidence through Approval and release.
+private final class SSHAgentPeer: Sendable {
+    let socket: FileHandle
+    let identity: AVProcessIdentity
+    let configuration: SSHAgentConfiguration
+    let launchers: [LauncherIdentity]
+    let arguments: [String]
+    let cwd: String
+    let helperIdentity: AVProcessIdentity
+
+    init(socket: FileHandle, identity: AVProcessIdentity, configuration: SSHAgentConfiguration,
+         launchers: [LauncherIdentity], arguments: [String], cwd: String,
+         helperIdentity: AVProcessIdentity) {
+        self.socket = socket
+        self.identity = identity
+        self.configuration = configuration
+        self.launchers = launchers
+        self.arguments = arguments
+        self.cwd = cwd
+        self.helperIdentity = helperIdentity
+    }
+
+    func validate() throws {
+        var current = AVProcessIdentity()
+        var helper = AVProcessIdentity()
+        guard av_process_identity(helperIdentity.pid, &helper), sameProcessIdentity(helperIdentity, helper),
+              let signing = liveSigningInfo(pid: helper.pid),
+              signing.mainExecutable == pathString(helperIdentity),
+              signing.identifier == "com.automicvault.av", signing.runtimeProtection == .hardened,
+              av_socket_peer_identity(socket.fileDescriptor, &current),
+              sameProcessIdentity(identity, current), pathString(identity) == pathString(current),
+              sshAgentPeerArguments(current.pid) == arguments, sshAgentPeerCWD(current.pid) == cwd,
+              loadSSHAgentConfiguration() == configuration, configuration.enabled,
+              launcherBundleIntegrityError(for: current) == nil
+        else { throw AppError("SSH agent connection or configuration changed") }
+        let live = sshAgentLaunchers(for: current)
+        guard !launchers.isEmpty, launchers.allSatisfy({ expected in
+            live.contains { $0.designatedRequirement == expected.designatedRequirement
+                && $0.runtimeProtection == expected.runtimeProtection }
+        }) else { throw AppError("SSH Verified Launcher changed before signing") }
+    }
+}
+
 private struct ApprovalRequest {
     let op: String
     let keys: [String]
@@ -1985,6 +2061,7 @@ private struct ApprovalRequest {
     let credentialScope: String?
     let credentialParent: CredentialHelperParent?
     let selectedSecretValues: SelectedSecretValues
+    let sshPeer: SSHAgentPeer?
 
     init(
         op: String,
@@ -2003,7 +2080,8 @@ private struct ApprovalRequest {
         detail: String?,
         credentialScope: String? = nil,
         credentialParent: CredentialHelperParent? = nil,
-        selectedSecretValues: SelectedSecretValues = SelectedSecretValues(values: [:])
+        selectedSecretValues: SelectedSecretValues = SelectedSecretValues(values: [:]),
+        sshPeer: SSHAgentPeer? = nil
     ) {
         self.op = op
         self.keys = keys
@@ -2022,6 +2100,7 @@ private struct ApprovalRequest {
         self.credentialScope = credentialScope
         self.credentialParent = credentialParent
         self.selectedSecretValues = selectedSecretValues
+        self.sshPeer = sshPeer
     }
 
     func selecting(_ values: SelectedSecretValues) -> ApprovalRequest {
@@ -2042,7 +2121,8 @@ private struct ApprovalRequest {
             detail: detail,
             credentialScope: credentialScope,
             credentialParent: credentialParent,
-            selectedSecretValues: values
+            selectedSecretValues: values,
+            sshPeer: sshPeer
         )
     }
 
@@ -2064,7 +2144,8 @@ private struct ApprovalRequest {
             detail: detail,
             credentialScope: credentialScope,
             credentialParent: credentialParent,
-            selectedSecretValues: selectedSecretValues
+            selectedSecretValues: selectedSecretValues,
+            sshPeer: sshPeer
         )
     }
 
@@ -2109,7 +2190,7 @@ private struct ApprovalRequest {
                 )
             },
             selectedSecretValues: selectedSecretValues,
-            policy: awsRequestMayUseLongLivedCredentials(self)
+            policy: op == "ssh-sign" || awsRequestMayUseLongLivedCredentials(self)
                 ? .freshApprovalRequired
                 : .reusable
         )
@@ -2999,6 +3080,7 @@ private func temporaryAccessGrantCandidate(
         agentTaskContext: agentTaskContext
     ) == nil,
     let gate, let launcher, let agentTaskContext,
+    gate.id != "ssh-agent",
     let runtimeRequirement = launcher.runtimeProtection.secretGateAdmissionRequirement
     else {
         return nil
@@ -3432,7 +3514,15 @@ private final class ApprovalServer: @unchecked Sendable {
                 return
             }
             reply(peer, to: message, ok: true, error: nil, value: "1")
-        case .gpgSign where isTrustedAvCaller(path: callerPath, signing: signing):
+        case .sshIdentities where isTrustedAvCaller(path: callerPath, signing: signing):
+            let config = loadSSHAgentConfiguration()
+            guard config.enabled, !config.publicKey.isEmpty else {
+                reply(peer, to: message, ok: false, error: "SSH Agent is disabled or unconfigured")
+                return
+            }
+            reply(peer, to: message, ok: true, error: nil, secrets: ["public_key": config.publicKey])
+        case .gpgSign where isTrustedAvCaller(path: callerPath, signing: signing),
+             .sshSign where isTrustedAvCaller(path: callerPath, signing: signing):
             handleInject(
                 message,
                 on: peer,
@@ -3749,7 +3839,15 @@ private final class ApprovalServer: @unchecked Sendable {
             reply(peer, to: message, ok: false, error: "invalid approval request")
             return
         }
-        var launchers = launcherIdentities(for: identity)
+        do {
+            parsedRequest = try sshAgentRequest(from: message, request: parsedRequest,
+                                              helperIdentity: identity, helperPath: callerPath)
+        } catch {
+            reply(peer, to: message, ok: false, error: error.localizedDescription)
+            return
+        }
+        let originIdentity = parsedRequest.sshPeer?.identity ?? identity
+        var launchers = parsedRequest.sshPeer?.launchers ?? launcherIdentities(for: identity)
         if launchers.isEmpty, let launcher = launcherIdentity(pid: pid, identity: identity) {
             launchers.append(launcher)
         }
@@ -3901,8 +3999,13 @@ private final class ApprovalServer: @unchecked Sendable {
             }
             let selected = try secretValueCustody.bind(
                 names: selectionNames,
-                cwd: kubectlRequest.cwd
+                cwd: kubectlRequest.cwd,
+                globalOnly: kubectlRequest.sshPeer != nil
             )
+            if kubectlRequest.sshPeer != nil,
+               selected.source(for: sshCredentialSecretName) != .global {
+                throw AppError("SSH Agent requires the Global Value of its credential")
+            }
             // ponytail: Global Values only until OAuth refresh mutations bind the selected source.
             if isTrustedWranglerCaller(path: callerPath, signing: signing),
                !wranglerCredentialSelectionIsSupported(selected) {
@@ -3920,19 +4023,19 @@ private final class ApprovalServer: @unchecked Sendable {
             reply(peer, to: message, ok: false, error: error.localizedDescription)
             return
         }
-        let scriptApproval = scriptApproval(for: request)
-        let processChains = retainedProcessChains(for: identity)
+        let scriptApproval = request.sshPeer == nil ? scriptApproval(for: request) : nil
+        let processChains = request.sshPeer == nil ? retainedProcessChains(for: identity) : []
         let keepsDetachedProcessAccess = UserDefaults.standard.bool(
             forKey: keepLauncherAccessForDetachedProcessesDefaultsKey
         )
-        let ancestorFallbackPath = launcherFallbackPath(for: identity)
+        let ancestorFallbackPath = launcherFallbackPath(for: originIdentity)
         let launcherFallbackPath = ancestorFallbackPath ?? callerPath
         let launcher = executionOrigin(
             among: launchers,
             callerPID: pid,
             ancestorFallbackPath: ancestorFallbackPath
         )
-        let activeBlessing = activeBlessedScript(pid: pid, identity: identity)
+        let activeBlessing = request.sshPeer == nil ? activeBlessedScript(pid: pid, identity: identity) : nil
         if let script = activeBlessing {
             if handleBlessedCapability(
                 script,
@@ -4047,6 +4150,10 @@ private final class ApprovalServer: @unchecked Sendable {
             signing: signing,
             descriptors: secretGateDescriptors
         )
+        if request.sshPeer != nil, configuredGate?.id != "ssh-agent" {
+            reply(peer, to: message, ok: false, error: "SSH Agent Gate is unavailable")
+            return
+        }
         let authorizationGate = configuredGate.map {
             RetainedAuthorizationGate.secretGate($0.id)
         } ?? .directSecret
@@ -4082,7 +4189,7 @@ private final class ApprovalServer: @unchecked Sendable {
         let classification = configuredGate.map {
             classifySecretGateRequest(gateID: $0.id, request: request)
         }
-        let currentAgentTaskContext = agentTaskContext(pid: pid)
+        let currentAgentTaskContext = request.sshPeer == nil ? agentTaskContext(pid: pid) : nil
         let retainedProcessExplanation: String?
         if !keepsDetachedProcessAccess,
            retainedBlessingMatch != nil,
@@ -4397,6 +4504,7 @@ private final class ApprovalServer: @unchecked Sendable {
                    isAllowedCaller(path: currentCallerPath, signing: currentSigning),
                    let configuredGate,
                    let classification,
+                   request.sshPeer == nil,
                    let currentAgentTaskContext = agentTaskContext(pid: pid),
                    self.handleTemporaryAccessGrant(
                        request: request,
@@ -6429,6 +6537,60 @@ private final class ApprovalServer: @unchecked Sendable {
         )
     }
 
+    private func sshAgentRequest(
+        from message: xpc_object_t, request: ApprovalRequest,
+        helperIdentity: AVProcessIdentity, helperPath: String
+    ) throws -> ApprovalRequest {
+        guard request.op == "ssh-sign" else {
+            guard request.tool != "ssh-agent" else { throw AppError("SSH requires the agent protocol") }
+            return request
+        }
+        guard request.tool == "ssh-agent", request.target == helperPath,
+              request.keys.isEmpty, validSSHSigningArguments(request.args),
+              !request.replaceExistingEnv, !request.allowMissingKeys,
+              request.envConflicts.isEmpty, request.shebangScript == nil, request.scriptData == nil,
+              request.snapshotIncompatibleInterpreter == nil,
+              let signing = liveSigningInfo(pid: helperIdentity.pid),
+              signing.mainExecutable == helperPath, signing.runtimeProtection == .hardened,
+              signing.identifier == "com.automicvault.av",
+              xpc_dictionary_get_value(message, "ssh_socket") != nil
+        else { throw AppError("Invalid SSH agent signing request") }
+        let fd = xpc_dictionary_dup_fd(message, "ssh_socket")
+        guard fd >= 0 else { throw AppError("SSH socket evidence is unavailable") }
+        let socket = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+        var origin = AVProcessIdentity()
+        guard av_socket_peer_identity(fd, &origin), origin.euid == helperIdentity.euid,
+              origin.audit_session_id == helperIdentity.audit_session_id,
+              launcherBundleIntegrityError(for: origin) == nil,
+              let arguments = sshAgentPeerArguments(origin.pid), !arguments.isEmpty
+        else { throw AppError("SSH socket peer cannot be verified") }
+        let config = loadSSHAgentConfiguration()
+        let publicFields = config.publicKey.split(separator: " ")
+        guard config.enabled, publicFields.count >= 2,
+              let publicBytes = Data(base64Encoded: String(publicFields[1])),
+              request.args[1] == "public-key-sha256=" + SHA256.hash(data: publicBytes)
+                .map({ String(format: "%02x", $0) }).joined()
+        else { throw AppError("SSH Agent is disabled or the requested key does not match") }
+        let launchers = sshAgentLaunchers(for: origin)
+        guard !launchers.isEmpty else { throw AppError("SSH authentication requires a live Verified Launcher ancestor with verifiable original process ancestry") }
+        guard let cwd = sshAgentPeerCWD(origin.pid) else {
+            throw AppError("SSH peer working directory is unavailable")
+        }
+        let originPeer = SSHAgentPeer(socket: socket, identity: origin, configuration: config,
+                                     launchers: launchers, arguments: arguments, cwd: cwd,
+                                     helperIdentity: helperIdentity)
+        try originPeer.validate()
+        return ApprovalRequest(
+            op: "ssh-sign", keys: [sshCredentialSecretName], target: helperPath,
+            args: request.args + ["socket-peer=\(pathString(origin))"] + arguments,
+            cwd: cwd, replaceExistingEnv: false, allowMissingKeys: false,
+            envConflicts: [], shebangScript: nil, scriptData: nil, tool: "ssh-agent",
+            title: "Authenticate with your SSH credential?",
+            detail: "The SSH Agent will sign this authentication request using your shared SSH credential. This can grant remote access, including writes. Destination restrictions are not configured. Shared or forwarded connections inherit the local client’s Launcher attribution.",
+            sshPeer: originPeer
+        )
+    }
+
     private func dockerCredentialRequest(
         from message: xpc_object_t,
         request: ApprovalRequest,
@@ -7799,12 +7961,21 @@ private final class ApprovalServer: @unchecked Sendable {
         activateAfterRecording: () -> Void = {},
         release: (ApprovedPayload) -> Void
     ) throws -> Bool {
+        try request.sshPeer?.validate()
         let transaction = try prepareApprovedFulfillment(
             for: request,
             awsRegistration: awsRegistration
         )
+        try request.sshPeer?.validate()
         return transaction.commit(
-            record: { onAccessRequest(record) },
+            record: {
+                do {
+                    try request.sshPeer?.validate()
+                    guard onAccessRequest(record) else { return false }
+                    try request.sshPeer?.validate()
+                    return true
+                } catch { return false }
+            },
             activate: { material in
                 if let registration = material.awsRegistration {
                     installAWSRegistration(registration, pid: pid, identity: identity)
@@ -7812,6 +7983,7 @@ private final class ApprovalServer: @unchecked Sendable {
                 activateAfterRecording()
             },
             observe: { material in
+                guard request.sshPeer == nil else { return }
                 recordLiveSecretUse(
                     request: request,
                     payload: material.payload,
@@ -8127,7 +8299,7 @@ private final class ApprovalServer: @unchecked Sendable {
             return nil
         }
         let op = String(cString: opPointer)
-        guard op == "inject" || op == "keys" || op == "authorize" || op == "gpg-sign"
+        guard op == "inject" || op == "keys" || op == "authorize" || op == "gpg-sign" || op == "ssh-sign"
             || op == "docker-get" || op == "goat-get" || op == "ordercli-get" || op == "openhue-get" || op == "plumber-get" || op == "uaa-get" || op == "railway-get"
             || op == "oxide-get" || op == "fastly-get" || op == "sqlcmd-get" || op == "terraform-get" || op == "aliyun-get" || op == "wakatime-get"
             || op == "rclone-get" || op == "kubectl-get"
@@ -8529,6 +8701,8 @@ private func classifySecretGateRequest(
     request: ApprovalRequest
 ) -> SecretGateRequestClassification {
     switch gateID {
+    case "ssh-agent":
+        return .mutating
     case "gpg-signing":
         return .localWrite
     case "wrangler":
@@ -10450,7 +10624,7 @@ private func approvalProcessSecurity(
 ) -> ApprovalProcessSecurity {
     let automicVaultTeamIdentifier = selfTeamIdentifier()
     var identities = approvalProcessIdentities(
-        gateClientPID: gateClientPID,
+        gateClientPID: request.sshPeer?.identity.pid ?? gateClientPID,
         launcherPID: launcher?.pid
     )
     if let launcher,
@@ -10467,10 +10641,13 @@ private func approvalProcessSecurity(
         ))
     }
     if !identities.contains(where: { $0.pid == gateClientPID }) {
+        var helper = AVProcessIdentity()
+        let execution = av_process_identity(gateClientPID, &helper)
+            ? approvalProcessExecution(pid: gateClientPID, identity: helper) : nil
         identities.insert(ApprovalProcessIdentity(
             pid: gateClientPID,
             path: gateClientPath,
-            execution: nil
+            execution: execution
         ), at: 0)
     }
 
@@ -11295,6 +11472,14 @@ private func showApprovalAlert(
     compact: Bool = false
 ) -> ApprovalDecision {
     guard cancellation?.isCanceled != true else { return .canceled }
+    let sshTimer = request.sshPeer.map { peer in
+        let timer = Timer(timeInterval: 1, repeats: true) { _ in
+            do { try peer.validate() } catch { cancellation?.cancel() }
+        }
+        RunLoop.main.add(timer, forMode: .modalPanel)
+        return timer
+    }
+    defer { sshTimer?.invalidate() }
     let receivedAt = Date()
     let requester = approvalPromptRequester(launcher: launcher, fallback: launcherFallbackPath)
     let processSecurity = approvalProcessSecurity(
@@ -11488,6 +11673,9 @@ private func prettyShellCommand(target: String, args: [String]) -> String {
 }
 
 private func approvalPromptCommand(_ request: ApprovalRequest, scriptPath: String? = nil) -> String {
+    if let peer = request.sshPeer {
+        return ([pathString(peer.identity)] + peer.arguments.dropFirst()).map(shellQuote).joined(separator: " ")
+    }
     let parts = authorizationCommandParts(request, scriptPath: scriptPath)
     let resolvedScript = scriptPath ?? resolvedShebangScriptPath(request)
     let invokedScript = resolvedScript.flatMap { path in

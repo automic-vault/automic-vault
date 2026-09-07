@@ -88,6 +88,9 @@ its optional passphrase in one protected Secret, `AV_SSH_CREDENTIAL`.
 
 Each request binds the live local socket peer, its Verified Launcher, the signed
 `av` Gate Client and signing Target, and the exact authentication payload.
+The Verified Launcher must be a live original ancestor: the socket peer cannot
+represent itself as a Launcher. Every parent execution must match the kernel's
+original-parent evidence; unavailable or changed ancestry denies use.
 The gate defaults to **Approval Required** and offers **Allow Authentication**
 for recognized SSH authentication signatures. This delegates authentication,
 including access that may permit remote writes; it is not Read Only authority.

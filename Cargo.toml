@@ -33,6 +33,8 @@ pgp = { version = "0.20", default-features = false }
 rand = "0.8"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+ssh-key = { version = "0.6.7", features = ["ed25519", "p256", "p384", "p521", "encryption"] }
+signature = "2.2"
 subtle = "2.6"
 tokio = { version = "1.53", features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 toml = "0.9"

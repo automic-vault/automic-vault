@@ -23,13 +23,30 @@ mode-0700 directory. It implements bounded identity enumeration and SSH user
 authentication signing from RFC 9987. Unsupported operations, including adding
 keys, PKCS#11 loading, arbitrary signing and unrecognized flags, fail closed.
 Use RustCrypto's SSH key implementation for OpenSSH decoding, decryption and
-signatures; never invoke the ambient system agent or write usable keys to disk.
+signatures for Ed25519 and ECDSA keys. RSA is rejected because the available
+RustCrypto RSA implementation has the unpatched
+[RUSTSEC-2023-0071](https://rustsec.org/advisories/RUSTSEC-2023-0071.html) timing
+advisory; another reviewed implementation is required before enabling RSA.
+Never invoke the ambient system agent or write usable keys to disk.
 
 For each signature the helper passes the connected socket over authenticated
 XPC, binding the exact bounded payload digest, public key and signature flags.
-The menu app obtains the socket peer's kernel audit token and verifies its PID
-version, start time, user and audit session against the still-live process.
-Launcher attribution starts from that peer, never the long-running helper.
+The menu app obtains the socket peer's kernel audit token, matches the socket's
+recorded executable UUID, and verifies that the live process owns the exact
+connected endpoint through kernel descriptor information. `LOCAL_PEERTOKEN`
+alone is insufficient: macOS resolves the most recent accessor's current task,
+including after exec or PID reuse. UUID is corroborating data, not code identity.
+Each request retains and revalidates the peer's PID version, start time, user,
+audit session, arguments and working directory.
+
+Launcher attribution follows only live original ancestors. Each parent must
+match the child's kernel-recorded parent unique ID and original parent PID
+version. The peer cannot represent itself as a Launcher, and session-leader or
+retained-provenance fallback is unavailable. This prevents a socket sender or
+its parent from gaining a different Launcher's authority by executing an
+allow-listed app after preparing a request. Kernels that cannot provide original
+parent execution versions leave the feature unavailable; Settings explains this.
+The long-running helper never supplies Launcher attribution.
 A Verified Launcher is required even for manual Approval. The signing Target
 remains the signed `av` helper, which alone receives usable credential bytes.
 The peer and Keychain configuration are rechecked before release. Each use must
@@ -45,8 +62,8 @@ never loads private material. Private-key copies outside Automic Vault and keys
 already loaded into other agents remain independent access paths. Settings must
 explain these limits and never silently delete originals or clear another agent.
 
-The socket establishes the local connecting process, not the origin of every
-byte it forwards. Forwarded or shared connections inherit that local client's
+The socket establishes a live local accessor and its original ancestry, not the
+origin of every byte it forwards. Forwarded or shared connections inherit that local client's
 attribution. Hostnames and remote command arguments are context, not verified
 destination restrictions. A subsequent destination policy requires an additional
 review of OpenSSH session binding and forwarding, not trust in client labels.

@@ -181,3 +181,109 @@ bool av_process_environment_value(pid_t pid, const char *key, char *out, size_t 
     free(buffer);
     return true;
 }
+
+// XNU's stable 56-byte PROC_PIDUNIQIDENTIFIERINFO ABI (flavor 17).
+// The original-parent version was reserved on older kernels; zero fails closed.
+// https://github.com/apple-oss-distributions/xnu/blob/main/bsd/sys/proc_info_private.h
+struct av_unique_info {
+    uint8_t uuid[16];
+    uint64_t unique_id, parent_unique_id;
+    int32_t version, original_parent_version;
+    uint64_t reserved[2];
+};
+_Static_assert(sizeof(struct av_unique_info) == 56, "process execution ABI");
+
+static bool unique_info(pid_t pid, struct av_unique_info *info) {
+    return proc_pidinfo(pid, 17, 0, info, sizeof(*info)) == sizeof(*info);
+}
+
+bool av_original_parent_tracking_available(void) {
+    struct av_unique_info info = {0};
+    return unique_info(getpid(), &info) && info.original_parent_version > 0;
+}
+
+bool av_original_parent_identity(const AVProcessIdentity *child, AVProcessIdentity *parent_out) {
+    struct av_unique_info original = {0}, parent = {0};
+    return child->ppid > 1 && unique_info(child->pid, &original) &&
+        original.version == child->pidversion && original.original_parent_version > 0 &&
+        av_process_identity(child->ppid, parent_out) && unique_info(child->ppid, &parent) &&
+        original.parent_unique_id == parent.unique_id &&
+        original.original_parent_version == parent.version && parent.version == parent_out->pidversion &&
+        child->euid == parent_out->euid && child->audit_session_id == parent_out->audit_session_id;
+}
+
+// LOCAL_PEERTOKEN resolves the most recent socket accessor's *current* task.
+// Also require its recorded executable UUID and ownership of the exact peer endpoint.
+bool av_socket_peer_identity(int fd, AVProcessIdentity *identity_out) {
+    audit_token_t token = {0};
+    uint8_t uuid[16] = {0}, zero_uuid[16] = {0};
+    socklen_t token_size = sizeof(token), uuid_size = sizeof(uuid);
+    struct av_unique_info before = {0}, after = {0};
+    struct socket_fdinfo local = {0};
+    if (getsockopt(fd, SOL_LOCAL, LOCAL_PEERTOKEN, &token, &token_size) != 0 ||
+        token_size != sizeof(token) || audit_token_to_euid(token) != geteuid() ||
+        getsockopt(fd, SOL_LOCAL, LOCAL_PEERUUID, uuid, &uuid_size) != 0 || uuid_size != sizeof(uuid) ||
+        memcmp(uuid, zero_uuid, sizeof(uuid)) == 0 ||
+        !av_process_identity(audit_token_to_pid(token), identity_out) ||
+        !unique_info(identity_out->pid, &before) || memcmp(uuid, before.uuid, sizeof(uuid)) != 0 ||
+        before.version != audit_token_to_pidversion(token) ||
+        identity_out->pidversion != before.version || identity_out->euid != audit_token_to_euid(token) ||
+        identity_out->audit_session_id != (uint32_t)audit_token_to_asid(token) ||
+        proc_pidfdinfo(getpid(), fd, PROC_PIDFDSOCKETINFO, &local, sizeof(local)) != sizeof(local) ||
+        local.psi.soi_kind != SOCKINFO_UN || local.psi.soi_type != SOCK_STREAM ||
+        local.psi.soi_proto.pri_un.unsi_conn_so == 0) return false;
+    // Bound inspection rather than allocating from an untrusted descriptor count.
+    struct proc_fdinfo descriptors[4096];
+    int bytes = proc_pidinfo(identity_out->pid, PROC_PIDLISTFDS, 0, descriptors, sizeof(descriptors));
+    if (bytes <= 0 || bytes >= (int)sizeof(descriptors) || bytes % sizeof(descriptors[0]) != 0) return false;
+    bool owns_peer = false;
+    for (size_t i = 0; i < (size_t)bytes / sizeof(descriptors[0]); i++) {
+        if (descriptors[i].proc_fdtype != PROX_FDTYPE_SOCKET) continue;
+        struct socket_fdinfo peer = {0};
+        if (proc_pidfdinfo(identity_out->pid, descriptors[i].proc_fd, PROC_PIDFDSOCKETINFO,
+                          &peer, sizeof(peer)) != sizeof(peer)) continue;
+        if (peer.psi.soi_kind == SOCKINFO_UN && peer.psi.soi_type == SOCK_STREAM &&
+            peer.psi.soi_so == local.psi.soi_proto.pri_un.unsi_conn_so &&
+            peer.psi.soi_proto.pri_un.unsi_conn_so == local.psi.soi_so) {
+            owns_peer = true;
+            break;
+        }
+    }
+    return owns_peer && unique_info(identity_out->pid, &after) &&
+        before.unique_id == after.unique_id && before.version == after.version &&
+        memcmp(before.uuid, after.uuid, sizeof(uuid)) == 0;
+}
+
+bool av_process_cwd(pid_t pid, char *out, size_t out_len) {
+    struct proc_vnodepathinfo info = {0};
+    if (proc_pidinfo(pid, PROC_PIDVNODEPATHINFO, 0, &info, sizeof(info)) != sizeof(info) ||
+        info.pvi_cdir.vip_path[0] != '/' || strlen(info.pvi_cdir.vip_path) >= out_len) return false;
+    strlcpy(out, info.pvi_cdir.vip_path, out_len);
+    return true;
+}
+
+// Preserve every argument boundary, including empty strings and embedded newlines.
+ssize_t av_process_arguments_data(pid_t pid, char *out, size_t out_len) {
+    if (out_len <= sizeof(int)) return -1;
+    size_t len = out_len;
+    int mib[] = { CTL_KERN, KERN_PROCARGS2, pid };
+    if (sysctl(mib, 3, out, &len, NULL, 0) != 0 || len <= sizeof(int)) return -1;
+    int argc = 0;
+    memcpy(&argc, out, sizeof(argc));
+    if (argc <= 0) return -1;
+    char *cursor = out + sizeof(argc), *end = out + len;
+    size_t path_len = strnlen(cursor, (size_t)(end - cursor));
+    if (path_len == (size_t)(end - cursor)) return -1;
+    cursor += path_len + 1;
+    while (cursor < end && *cursor == 0) cursor++;
+    char *start = cursor;
+    for (int i = 0; i < argc; i++) {
+        if (cursor >= end) return -1;
+        size_t size = strnlen(cursor, (size_t)(end - cursor));
+        if (size == (size_t)(end - cursor)) return -1;
+        cursor += size + 1;
+    }
+    size_t bytes = (size_t)(cursor - start);
+    memmove(out, start, bytes);
+    return (ssize_t)bytes;
+}

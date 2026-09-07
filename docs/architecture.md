@@ -159,8 +159,11 @@ See [ADR 0019](adr/0019-gpg-signing-gate.md).
 The optional SSH Agent Gate uses a Unix socket served by the bundled signed
 `av ssh-agent` Target. The helper passes a duplicate of each connected socket
 over authenticated XPC. The Mac derives the local peer's execution identity from
-its kernel audit token, resolves that peer's Verified Launcher, and binds the
-bounded SSH authentication payload digest before authorizing. It rechecks the
+its kernel audit token, recorded executable UUID and live endpoint ownership,
+then resolves a Verified Launcher through kernel-bound original parent
+executions. The peer cannot be its own Launcher. Unsupported kernels and changed
+ancestry deny use. The bounded SSH authentication payload digest is bound before
+authorizing. It rechecks the
 peer and credential configuration before releasing the single Global Value of
 `AV_SSH_CREDENTIAL`. The helper signs in memory and returns only the signature.
 Private keys are never added to the system agent. There is no decision reuse,

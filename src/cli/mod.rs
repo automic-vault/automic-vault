@@ -26,6 +26,7 @@ mod save;
 mod scan;
 mod shell_secrets;
 pub(crate) mod sqlcmd_credential;
+mod ssh_agent;
 pub(crate) mod terraform_credential;
 pub(crate) mod uaa_credential;
 pub(crate) mod wakatime_credential;
@@ -343,6 +344,8 @@ where
             }
         }
         Some("__secret-gates-json") if rest.is_empty() => scan::run_secret_gates_json(stdout),
+        Some("ssh-agent") => ssh_agent::run(rest, stderr),
+        Some("__ssh-public-key") => ssh_agent::public_key(stdout, stderr),
         Some("gpg-sign") => gpg_sign::run(rest, stdout, stderr),
         Some("__gpg-public-key") if rest.is_empty() => gpg_sign::validate(stdout, stderr),
         Some("__gpg-generate-key") if rest.is_empty() => gpg_sign::generate(stdout, stderr),

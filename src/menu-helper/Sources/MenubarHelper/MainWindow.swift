@@ -344,6 +344,12 @@ final class DashboardModel: ObservableObject {
                     detail: "Store GPG signing credentials, configure Git, and select Verified Launchers that use an alternate key."
                 ),
                 DashboardItem(
+                    id: "ssh-agent",
+                    title: "SSH Agent",
+                    subtitle: "Authorize SSH authentication",
+                    detail: "Use one protected SSH credential for every Verified Launcher."
+                ),
+                DashboardItem(
                     id: "secret-name-access",
                     title: "Secret Name Access",
                     subtitle: "Verified Launchers allowed to run av list",
@@ -1794,6 +1800,7 @@ func runDashboardSearchSelfCheck() -> Int32 {
         "detached-process-access",
         "verified-launcher-helpers",
         "gpg-signing",
+        "ssh-agent",
         "secret-name-access",
         "about",
     ],
@@ -2222,6 +2229,8 @@ private struct DashboardDetailView: View {
                         .padding(.top, 32)
                         .padding(.bottom, 28)
                         .frame(maxWidth: .infinity, alignment: .leading)
+                } else if model.selectedItem?.id == "ssh-agent" {
+                    SSHAgentSettingsView(onCredentialSaved: model.reload, onOpenGate: { model.showSecretGate(id: "ssh-agent") })
                 } else if model.selectedItem?.id == "gpg-signing" {
                     GPGSigningSettingsView(onCredentialSaved: model.reload)
                         .padding(.horizontal, 22)
@@ -4329,6 +4338,184 @@ private struct VerifiedLauncherHelpersSettingsView: View {
     }
 }
 
+private struct SSHAgentSettingsView: View {
+    let onCredentialSaved: () -> Void
+    let onOpenGate: () -> Void
+    @StateObject private var approval = AuthorityApprovalState()
+    @ObservedObject private var runtime = SSHAgentRuntime.shared
+    @State private var config = loadSSHAgentConfiguration()
+    @State private var importing = false
+    @State private var status = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            Text("SSH Agent").font(.system(size: 24, weight: .semibold))
+            Text("Authorize SSH authentication with one credential shared across Verified Launchers.")
+                .foregroundStyle(.secondary)
+            Toggle("Enable SSH Agent", isOn: Binding(get: { config.enabled }, set: { setEnabled($0) }))
+                .disabled(config.publicKey.isEmpty || approval.isPending("enable") || (!SSHAgentRuntime.isSupported && !config.enabled))
+            if !SSHAgentRuntime.isSupported {
+                Text("This macOS version cannot provide the original process ancestry required by SSH Agent.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Text("Every signature requires Approval until you change the SSH Agent Authorization Gate’s Access Level. Allow Authentication can grant remote access, including writes.")
+                .font(.caption).foregroundStyle(.secondary)
+            Button(config.publicKey.isEmpty ? "Import SSH Credential…" : "Replace SSH Credential…") {
+                importing = true
+            }
+            if !config.publicKey.isEmpty {
+                Text("Public key").font(.headline)
+                Text(config.publicKey).font(.system(.caption, design: .monospaced))
+                    .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+                Button("Copy Public Key") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(config.publicKey, forType: .string)
+                }
+                Button("Open Authorization Gate") { onOpenGate() }
+            }
+            Divider()
+            Button("Configure OpenSSH") {
+                do {
+                    try configureOpenSSHAgent(enabled: true)
+                    status = "Configured ~/.ssh/config to use the Automic Vault SSH agent."
+                } catch { status = error.localizedDescription }
+            }.disabled(!config.enabled)
+            Button("Remove OpenSSH Configuration") {
+                do {
+                    try configureOpenSSHAgent(enabled: false)
+                    status = "Removed Automic Vault’s SSH configuration block."
+                } catch { status = error.localizedDescription }
+            }
+            Text("Other agent clients can use SSH_AUTH_SOCK=\(sshAgentSocketURL().path). Disabling the agent leaves OpenSSH configured to fail closed until you remove its configuration.")
+                .font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+            InfoBlock(title: "Existing access paths", text: "Importing does not delete your original private key, its Keychain passphrase, or keys loaded in another agent. These remain independent access paths. After verifying the new setup, remove the old copies and agent entries yourself. Explicit IdentityFile settings may still select other keys.")
+            InfoBlock(title: "Local Launcher boundary", text: "Destination-specific restrictions are not provided. Clients need a live Verified Launcher ancestor; a client cannot act as its own Launcher. Shared or forwarded connections carry requests under that ancestor’s attribution. OpenSSH configuration disables forwarding by default.")
+            if !runtime.status.isEmpty { InfoBlock(title: "SSH Agent", text: runtime.status) }
+            if !status.isEmpty { InfoBlock(title: "Status", text: status) }
+        }
+        .sheet(isPresented: $importing) {
+            SSHCredentialSheetView { publicKey in
+                config = loadSSHAgentConfiguration()
+                status = "Saved SSH credential in the Data Protection Keychain."
+                onCredentialSaved()
+            }
+        }
+        .onDisappear { approval.cancelAll() }
+    }
+
+    private func setEnabled(_ enabled: Bool) {
+        if !enabled { persistEnabled(false); return }
+        let reviewed = loadSSHAgentConfiguration()
+        approval.request("enable", title: "Enable SSH Agent?",
+                         detail: "Make this SSH credential available through its Authorization Gate: \(reviewed.publicKey). Every Verified Launcher uses the same credential. Existing gate policy applies.") { allowed in
+            guard allowed else { return }
+            guard loadSSHAgentConfiguration() == reviewed else {
+                status = "The SSH credential changed while awaiting Approval. Review it and try again."
+                return
+            }
+            persistEnabled(true)
+        }
+    }
+
+    private func persistEnabled(_ enabled: Bool) {
+        var next = loadSSHAgentConfiguration()
+        next.enabled = enabled
+        next.generation = UUID()
+        let result = saveSSHAgentConfiguration(next)
+        guard result == errSecSuccess else { status = "Could not save SSH Agent setting: \(result)"; return }
+        config = next
+        NotificationCenter.default.post(name: .sshAgentConfigurationChanged, object: nil)
+    }
+}
+
+private struct SSHCredentialSheetView: View {
+    let onSaved: (String) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @StateObject private var approval = AuthorityApprovalState()
+    @State private var privateKey = ""
+    @State private var passphrase = ""
+    @State private var busy = false
+    @State private var error = ""
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Text("OpenSSH private key").font(.caption)
+                TextEditor(text: $privateKey)
+                    .font(.system(.caption, design: .monospaced)).frame(minHeight: 130)
+                    .accessibilityLabel("SSH private key")
+                SecureField("Passphrase (leave empty if none)", text: $passphrase)
+                Text("Paste a complete OPENSSH PRIVATE KEY block. Ed25519 and ECDSA authentication are supported. Stored private keys are never displayed. Replacing the credential cannot recover the previous private key.")
+                    .font(.caption).foregroundStyle(.secondary)
+                if !error.isEmpty { Text(error).foregroundStyle(.red) }
+            }.formStyle(.grouped).disabled(busy)
+                .navigationTitle("Import SSH Credential")
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Cancel") { dismiss() }.disabled(busy)
+                    }
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button(busy ? "Saving…" : "Save") { submit() }
+                            .disabled(privateKey.isEmpty || busy)
+                    }
+                }
+        }.frame(width: 560, height: 420)
+            .interactiveDismissDisabled(busy)
+            .onDisappear { privateKey = ""; passphrase = ""; approval.cancelAll() }
+    }
+
+    private func submit() {
+        busy = true
+        let credential = ["private_key": privateKey, "passphrase": passphrase]
+        let executable = Bundle.main.executableURL
+        Task {
+            do {
+                let publicKey = try await validateSSHCredential(credential, executable: executable)
+                approval.request("save", title: "Store this SSH credential?",
+                                 detail: "Replace the shared SSH credential for every Verified Launcher. Public key: \(publicKey)") { allowed in
+                    guard allowed else { busy = false; return }
+                    do {
+                        let data = try JSONEncoder().encode(credential)
+                        // Disable first: a partial write cannot combine an old public key with new private material.
+                        var config = loadSSHAgentConfiguration()
+                        let enabled = config.enabled
+                        config.enabled = false
+                        config.generation = UUID()
+                        var result = saveSSHAgentConfiguration(config)
+                        guard result == errSecSuccess else { throw SSHAgentError.failed("Keychain error \(result)") }
+                        result = saveStoredSecret(account: sshCredentialSecretName,
+                                                  value: String(decoding: data, as: UTF8.self))
+                        guard result == errSecSuccess else { throw SSHAgentError.failed("Keychain error \(result)") }
+                        config.publicKey = publicKey
+                        config.enabled = enabled
+                        result = saveSSHAgentConfiguration(config)
+                        guard result == errSecSuccess else { throw SSHAgentError.failed("Keychain error \(result)") }
+                        privateKey = ""; passphrase = ""
+                        NotificationCenter.default.post(name: .sshAgentConfigurationChanged, object: nil)
+                        onSaved(publicKey)
+                        dismiss()
+                    } catch {
+                        self.error = error.localizedDescription; busy = false
+                        NotificationCenter.default.post(name: .sshAgentConfigurationChanged, object: nil)
+                    }
+                }
+            } catch { self.error = error.localizedDescription; busy = false }
+        }
+    }
+}
+
+@concurrent
+private func validateSSHCredential(_ credential: [String: String], executable: URL?) async throws -> String {
+    let input = try JSONEncoder().encode(credential)
+    guard input.count <= 1024 * 1024 else { throw SSHAgentError.failed("SSH credential exceeds 1 MiB") }
+    let output = try runBundledCredentialCommand(arguments: ["__ssh-public-key"],
+        input: input, mainExecutableURL: executable)
+    guard let publicKey = String(data: output, encoding: .utf8), !publicKey.isEmpty else {
+        throw SSHAgentError.failed("Could not derive the SSH public key")
+    }
+    return publicKey
+}
+
 private struct GPGSigningSettingsView: View {
     @StateObject private var approval = AuthorityApprovalState()
     let onCredentialSaved: () -> Void
@@ -4722,7 +4909,7 @@ private func generateAndSaveAlternateGPGCredential(
     mainExecutableURL: URL?
 ) async throws -> String {
     let request = try JSONEncoder().encode(["name": name, "email": email])
-    let privateKeyData = try runBundledGPGCommand(
+    let privateKeyData = try runBundledCredentialCommand(
         arguments: ["__gpg-generate-key"],
         input: request,
         mainExecutableURL: mainExecutableURL
@@ -4742,7 +4929,7 @@ private func deriveGPGPublicKey(
     privateKey: String,
     mainExecutableURL: URL?
 ) throws -> String {
-    let output = try runBundledGPGCommand(
+    let output = try runBundledCredentialCommand(
         arguments: ["__gpg-public-key"],
         input: Data(privateKey.utf8),
         mainExecutableURL: mainExecutableURL
@@ -4753,12 +4940,7 @@ private func deriveGPGPublicKey(
     return publicKey
 }
 
-private func runBundledGPGCommand(
-    arguments: [String],
-    input inputData: Data,
-    mainExecutableURL: URL?
-) throws -> Data {
-    let process = Process()
+func validatedBundledAVURL(mainExecutableURL: URL?) throws -> URL {
     let executable = try bundledExecutableURL(
         named: "av",
         beside: mainExecutableURL
@@ -4782,6 +4964,16 @@ private func runBundledGPGCommand(
           let teamIdentifier = selfTeamIdentifier(),
           signing[kSecCodeInfoTeamIdentifier] as? String == teamIdentifier
     else { throw GPGSigningConfigurationError.bundledExecutableUnavailable(executable.path) }
+    return executable
+}
+
+func runBundledCredentialCommand(
+    arguments: [String],
+    input inputData: Data,
+    mainExecutableURL: URL?
+) throws -> Data {
+    let process = Process()
+    let executable = try validatedBundledAVURL(mainExecutableURL: mainExecutableURL)
     process.executableURL = executable
     process.arguments = arguments
     let inputPipe = Pipe()
