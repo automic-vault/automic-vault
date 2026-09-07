@@ -55,6 +55,10 @@ Automic Vault decides whether a complete operation may use it.
   authorizes private-key use and may select an alternate credential for exact
   Verified Launchers.
 
+- The optional SSH agent authorizes each authentication signature using one
+  credential shared across Verified Launchers. SSH clients receive signatures,
+  never the private key. Destination-specific restrictions are not provided.
+
 ## Claim boundaries
 
 User-facing copy must preserve these limits:

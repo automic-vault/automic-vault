@@ -156,6 +156,18 @@ confined to the adjacent signed `av` process and the Keychain-owning menu app,
 which stores it after deriving its public key.
 See [ADR 0019](adr/0019-gpg-signing-gate.md).
 
+The optional SSH Agent Gate uses a Unix socket served by the bundled signed
+`av ssh-agent` Target. The helper passes a duplicate of each connected socket
+over authenticated XPC. The Mac derives the local peer's execution identity from
+its kernel audit token, resolves that peer's Verified Launcher, and binds the
+bounded SSH authentication payload digest before authorizing. It rechecks the
+peer and credential configuration before releasing the single Global Value of
+`AV_SSH_CREDENTIAL`. The helper signs in memory and returns only the signature.
+Private keys are never added to the system agent. There is no decision reuse,
+Blessing, Temporary Access Grant, or retained provenance at this gate. Settings
+stores its enabled state and public key in the Data Protection Keychain.
+See [ADR 0043](adr/0043-ssh-agent-gate.md).
+
 ### Launcher Packaging
 
 Launcher Bundles let one unsigned Mach-O command-line tool participate as a

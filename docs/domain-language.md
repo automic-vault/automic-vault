@@ -78,6 +78,24 @@ this gate is signing, it exposes only **Approval Required** and **Allow
 Signing**. Allow Signing is the GPG-specific presentation of Local Write. The
 gate defaults to Approval Required.
 
+### SSH Agent Gate
+
+The built-in Tool-specific Secret Gate for SSH authentication signatures through
+Automic Vault's optional SSH agent. One SSH Credential is used for every
+Verified Launcher; there are no Launcher-specific credential selectors or
+Project Values at this gate. The credential contains an OpenSSH private key and
+its optional passphrase in one protected Secret, `AV_SSH_CREDENTIAL`.
+
+Each request binds the live local socket peer, its Verified Launcher, the signed
+`av` Gate Client and signing Target, and the exact authentication payload.
+The gate defaults to **Approval Required** and offers **Allow Authentication**
+for recognized SSH authentication signatures. This delegates authentication,
+including access that may permit remote writes; it is not Read Only authority.
+Public-key enumeration does not apply a Secret. Agent key mutation and arbitrary
+signing are unsupported. No destination-specific authority is claimed. A local
+client that forwards or shares its connection can carry other software's
+requests under its Launcher attribution.
+
 ### Proxy Session
 
 A live, memory-only Secret Proxy Gate context bound to one complete command and
