@@ -121,6 +121,7 @@ private actor PhoneApprovalRelayWorker {
     private let resultHandler: ResultHandler
     private var generation: UInt64
     private var pending: [UUID: PhoneApprovalRequest] = [:]
+    private var cancellations: [UUID: PhoneApprovalRequest] = [:]
     private var canceled: Set<UUID> = []
     private var published: Set<UUID> = []
     private var relay: ApprovalRelayClient?
@@ -154,10 +155,18 @@ private actor PhoneApprovalRelayWorker {
     func cancel(_ requestID: UUID, generation: UInt64) async {
         guard self.generation == generation else { return }
         canceled.insert(requestID)
-        guard pending.removeValue(forKey: requestID) != nil else { return }
+        guard let request = pending.removeValue(forKey: requestID) else { return }
         canceled.remove(requestID)
-        if let relay { try? await relay.send(.cancel(requestID)) }
         published.remove(requestID)
+        cancellations[requestID] = request
+        startConnectionIfNeeded()
+        if let relay {
+            do {
+                try await publishCancellationIfNeeded(request, relay: relay)
+            } catch {
+                await relay.disconnect()
+            }
+        }
         await disconnectIfIdle()
     }
 
@@ -174,12 +183,13 @@ private actor PhoneApprovalRelayWorker {
         if let relay { await relay.disconnect() }
         relay = nil
         pending.removeAll()
+        cancellations.removeAll()
         canceled.removeAll()
         published.removeAll()
     }
 
     private func startConnectionIfNeeded() {
-        guard !pending.isEmpty, connectionTask == nil else { return }
+        guard hasWork, connectionTask == nil else { return }
         let connectionID = UUID()
         self.connectionID = connectionID
         connectionTask = Task { [weak self] in
@@ -189,7 +199,7 @@ private actor PhoneApprovalRelayWorker {
 
     private func runConnection(connectionID: UUID) async {
         var retrySeconds: UInt64 = 1
-        while self.connectionID == connectionID && !Task.isCancelled && !pending.isEmpty {
+        while self.connectionID == connectionID && !Task.isCancelled && hasWork {
             var activeRelay: ApprovalRelayClient?
             var heartbeatTask: Task<Void, Never>?
             do {
@@ -197,7 +207,7 @@ private actor PhoneApprovalRelayWorker {
                 let relay = try ApprovalRelayClient(endpoint: phoneApprovalRelayURL, rootKeyData: key)
                 activeRelay = relay
                 try await relay.connect(peerID: "mac-\(macID)")
-                guard self.connectionID == connectionID, !pending.isEmpty else {
+                guard self.connectionID == connectionID, hasWork else {
                     await relay.disconnect()
                     return
                 }
@@ -207,11 +217,14 @@ private actor PhoneApprovalRelayWorker {
                 for request in Array(pending.values) {
                     try await publishIfNeeded(request, relay: relay)
                 }
+                for request in Array(cancellations.values) {
+                    try await publishCancellationIfNeeded(request, relay: relay)
+                }
                 retrySeconds = 1
                 heartbeatTask = Task { [weak self] in
                     await self?.maintainConnection(relay, connectionID: connectionID)
                 }
-                while self.connectionID == connectionID && !Task.isCancelled && !pending.isEmpty {
+                while self.connectionID == connectionID && !Task.isCancelled && hasWork {
                     try await handle(try await relay.receive(), relay: relay)
                 }
             } catch {}
@@ -224,7 +237,7 @@ private actor PhoneApprovalRelayWorker {
             if let activeRelay { await activeRelay.disconnect() }
             guard self.connectionID == connectionID,
                   !Task.isCancelled,
-                  !pending.isEmpty else { break }
+                  hasWork else { break }
             try? await Task.sleep(for: .seconds(retrySeconds))
             retrySeconds = min(retrySeconds * 2, 30)
         }
@@ -250,16 +263,25 @@ private actor PhoneApprovalRelayWorker {
         }
     }
 
+    private func publishCancellationIfNeeded(
+        _ request: PhoneApprovalRequest,
+        relay: ApprovalRelayClient
+    ) async throws {
+        guard cancellations[request.id] != nil else { return }
+        try await relay.publishCancellation(request)
+        cancellations.removeValue(forKey: request.id)
+    }
+
     private func maintainConnection(
         _ relay: ApprovalRelayClient,
         connectionID: UUID
     ) async {
         do {
-            while self.connectionID == connectionID && !Task.isCancelled && !pending.isEmpty {
+            while self.connectionID == connectionID && !Task.isCancelled && hasWork {
                 try await Task.sleep(for: .seconds(30))
                 guard self.connectionID == connectionID,
                       !Task.isCancelled,
-                      !pending.isEmpty else { return }
+                      hasWork else { return }
                 try await relay.ping()
             }
         } catch is CancellationError {
@@ -270,7 +292,7 @@ private actor PhoneApprovalRelayWorker {
     }
 
     private func disconnectIfIdle() async {
-        guard pending.isEmpty else { return }
+        guard !hasWork else { return }
         connectionID = nil
         connectionTask?.cancel()
         connectionTask = nil
@@ -279,6 +301,8 @@ private actor PhoneApprovalRelayWorker {
         published.removeAll()
         if let relay { await relay.disconnect() }
     }
+
+    private var hasWork: Bool { !pending.isEmpty || !cancellations.isEmpty }
 
     private func handle(_ message: ApprovalWireMessage, relay: ApprovalRelayClient) async throws {
         switch message {
@@ -377,14 +401,15 @@ final class PhoneApprovalCoordinator {
         }
     }
 
+    @discardableResult
     func approveAuthorityChange(
         title: String,
         detail: String,
         completion: @escaping (Bool) -> Void
-    ) {
+    ) -> UUID? {
         guard isEnabled else {
             completion(true)
-            return
+            return nil
         }
         do {
             let request = try PhoneApprovalRequest(
@@ -402,18 +427,10 @@ final class PhoneApprovalCoordinator {
                 )]
             )
             try submit(request) { result in completion(result == .approved) }
+            return request.id
         } catch {
             completion(false)
-        }
-    }
-
-    func requestDisable(completion: @escaping (Bool) -> Void) {
-        requestAuthorityChangeApproval(
-            title: "Disable iPhone Approval",
-            detail: "Future human Approvals will return to this Mac. Existing requests will be canceled."
-        ) { [weak self] approved in
-            if approved { self?.disableAfterPhoneApproval() }
-            completion(approved)
+            return nil
         }
     }
 
@@ -467,11 +484,12 @@ final class PhoneApprovalCoordinator {
 }
 
 @MainActor
+@discardableResult
 func requestAuthorityChangeApproval(
     title: String,
     detail: String,
     completion: @escaping (Bool) -> Void
-) {
+) -> UUID? {
     if TouchIDApproval.isEnabled {
         if TouchIDApproval.isAvailable {
             Task {
@@ -479,14 +497,14 @@ func requestAuthorityChangeApproval(
                     reason: "Approve this Automic Vault authority change"
                 ))
             }
-            return
+            return nil
         }
         guard PhoneApprovalCoordinator.shared.isEnabled else {
             completion(false)
-            return
+            return nil
         }
     }
-    PhoneApprovalCoordinator.shared.approveAuthorityChange(
+    return PhoneApprovalCoordinator.shared.approveAuthorityChange(
         title: title,
         detail: detail,
         completion: completion

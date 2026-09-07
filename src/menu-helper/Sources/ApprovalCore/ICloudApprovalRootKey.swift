@@ -21,16 +21,7 @@ public struct ICloudApprovalRootKey: Sendable {
     public init() {}
 
     public func loadOrCreate() throws -> Data {
-        switch read() {
-        case .success(let key): return key
-        case .failure(.unavailable(errSecItemNotFound)):
-            let key = try generate()
-            let status = add(key)
-            if status == errSecSuccess { return key }
-            if status == errSecDuplicateItem, case .success(let winner) = read() { return winner }
-            throw ICloudApprovalRootKeyError.unavailable(status)
-        case .failure(let error): throw error
-        }
+        try loadOrCreateApprovalRootKey(read: read, generate: generate, add: add)
     }
 
     public func load() throws -> Data {
@@ -41,22 +32,16 @@ public struct ICloudApprovalRootKey: Sendable {
     }
 
     public func rotate() throws -> Data {
-        let key = try generate()
-        let status = SecItemUpdate(primaryKey as CFDictionary, [
-            kSecValueData as String: key,
-        ] as CFDictionary)
-        if status == errSecItemNotFound {
-            let addStatus = add(key)
-            guard addStatus == errSecSuccess else {
-                throw ICloudApprovalRootKeyError.unavailable(addStatus)
-            }
-        } else if status != errSecSuccess {
-            throw ICloudApprovalRootKeyError.unavailable(status)
-        }
-        guard case .success(let stored) = read(), stored == key else {
-            throw ICloudApprovalRootKeyError.invalidKey
-        }
-        return key
+        try rotateApprovalRootKey(
+            read: read,
+            generate: generate,
+            update: { key in
+                SecItemUpdate(self.primaryKey as CFDictionary, [
+                    kSecValueData as String: key,
+                ] as CFDictionary)
+            },
+            add: add
+        )
     }
 
     private func read() -> Result<Data, ICloudApprovalRootKeyError> {
@@ -103,6 +88,45 @@ public struct ICloudApprovalRootKey: Sendable {
         }
         return data
     }
+}
+
+func loadOrCreateApprovalRootKey(
+    read: () -> Result<Data, ICloudApprovalRootKeyError>,
+    generate: () throws -> Data,
+    add: (Data) -> OSStatus
+) throws -> Data {
+    switch read() {
+    case .success(let key): return key
+    case .failure(.unavailable(errSecItemNotFound)):
+        let key = try generate()
+        let status = add(key)
+        if status == errSecSuccess { return key }
+        if status == errSecDuplicateItem, case .success(let winner) = read() { return winner }
+        throw ICloudApprovalRootKeyError.unavailable(status)
+    case .failure(let error): throw error
+    }
+}
+
+func rotateApprovalRootKey(
+    read: () -> Result<Data, ICloudApprovalRootKeyError>,
+    generate: () throws -> Data,
+    update: (Data) -> OSStatus,
+    add: (Data) -> OSStatus
+) throws -> Data {
+    let key = try generate()
+    let status = update(key)
+    if status == errSecItemNotFound {
+        let addStatus = add(key)
+        guard addStatus == errSecSuccess else {
+            throw ICloudApprovalRootKeyError.unavailable(addStatus)
+        }
+    } else if status != errSecSuccess {
+        throw ICloudApprovalRootKeyError.unavailable(status)
+    }
+    guard case .success(let stored) = read(), stored == key else {
+        throw ICloudApprovalRootKeyError.invalidKey
+    }
+    return key
 }
 
 public enum ApprovalNotificationPreferencesError: Error, Equatable {

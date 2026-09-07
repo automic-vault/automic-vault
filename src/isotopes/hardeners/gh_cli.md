@@ -2,14 +2,19 @@
 
 ## How Automic Vault Hardens `gh`
 
+The official macOS `gh` executable is Developer ID signed. Upstream still
+delegates Keychain reads to `/usr/bin/security` and provides `gh auth token`,
+which prints the credential to standard output. Code signing establishes the
+executable's identity and integrity; it does not authorize credential use.
+
 We provide a [patched version] of `gh`. `av harden gh` installs it from our
 [tap] when Homebrew is available, or installs the same signed release directly
-at `/usr/local/bin/gh`. The patches are concerned with:
+at `/usr/local/bin/gh`. The Isotope:
 
-1. Is codesigned such that `gh` (and only `gh`) can access its
-   secure credentials.
-2. Ensures that authenticated `gh` usage goes via the Automic Vault Secret Gate
-   system.
+1. Is Automic Vault-signed so the gate can bind the Gate Client and Target.
+2. Keeps the credential in Automic Vault custody instead of an upstream
+   `gh:<host>` Keychain item accessible through `/usr/bin/security`.
+3. Routes authenticated operations through the `gh` Secret Gate.
 
 [patched version]: https://github.com/automic-vault/gh-cli
 [tap]: https://github.com/automic-vault/homebrew-isotopes

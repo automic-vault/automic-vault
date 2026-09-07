@@ -36,6 +36,16 @@ import Testing
     ]) == .unsafeEntitlements(["com.apple.security.get-task-allow"]))
 }
 
+@Test func liveApplePlatformCodeIsIntrinsicallyRuntimeProtected() {
+    #expect(launcherRuntimeProtection(signingInformation: [
+        kSecCodeInfoFlags: 0,
+        kSecCodeInfoStatus: SecCodeStatus.platform.rawValue,
+    ]) == .hardened)
+    #expect(launcherRuntimeProtection(signingInformation: [
+        kSecCodeInfoFlags: SecCodeStatus.platform.rawValue,
+    ]) == .hardenedRuntimeMissing)
+}
+
 @Test func injectionAndDebuggingExceptionsPreventSecretGateAdmission() {
     let unsafe: Set<String> = [
         "com.apple.security.cs.allow-dyld-environment-variables",

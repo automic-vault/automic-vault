@@ -313,13 +313,11 @@ fn configured_hosts(hosts_paths: &[PathBuf]) -> BTreeMap<String, Option<String>>
 pub(super) fn security_find_generic_password(
     service: &str,
     account: Option<&str>,
-) -> Option<String> {
+) -> Result<Option<String>, String> {
     security_find_generic_password_result(service, account)
-        .ok()
-        .flatten()
 }
 
-fn security_find_generic_password_result(
+pub(super) fn security_find_generic_password_result(
     service: &str,
     account: Option<&str>,
 ) -> Result<Option<String>, String> {
@@ -333,20 +331,22 @@ fn security_find_generic_password_result(
         .output()
         .map_err(|err| format!("failed to run security: {err}"))?;
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        if stderr.contains("could not be found")
-            || stderr.contains("The specified item could not be found")
-        {
+        if output.status.code() == Some(44) {
             return Ok(None);
         }
+        let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(format!(
             "failed to read legacy keychain item (service {service:?}, account {account:?}): {}",
             stderr.trim()
         ));
     }
-    Ok(decode_legacy_keychain_password(
-        String::from_utf8_lossy(&output.stdout).trim(),
-    ))
+    decode_legacy_keychain_password(String::from_utf8_lossy(&output.stdout).trim())
+        .map(Some)
+        .ok_or_else(|| {
+            format!(
+                "legacy keychain item (service {service:?}, account {account:?}) contained an unsupported or malformed value"
+            )
+        })
 }
 
 fn decode_legacy_keychain_password(value: &str) -> Option<String> {

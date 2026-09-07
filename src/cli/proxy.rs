@@ -427,12 +427,17 @@ fn start_session(request: &StartRequest) -> Result<SessionEnvironment, String> {
     let result = (|| -> Result<SessionEnvironment, String> {
         unsafe {
             if xpc_get_type(reply) == std::ptr::addr_of!(_xpc_type_error).cast() {
-                let value = xpc_dictionary_get_string(reply, _xpc_error_key_description);
-                Err(if value.is_null() {
-                    "Proxy Session XPC connection failed".into()
+                if crate::approval_service_connection_invalid(reply) {
+                    Err(crate::approval_service_unavailable_message(service).into())
                 } else {
-                    CStr::from_ptr(value).to_string_lossy().into_owned()
-                })
+                    let value = xpc_dictionary_get_string(reply, _xpc_error_key_description);
+                    let error = if value.is_null() {
+                        "Proxy Session XPC connection failed".into()
+                    } else {
+                        CStr::from_ptr(value).to_string_lossy().into_owned()
+                    };
+                    Err(error)
+                }
             } else if !xpc_dictionary_get_bool(reply, b"ok\0".as_ptr().cast()) {
                 Err(get_string(reply, b"error\0").unwrap_or_else(|| "Proxy Session denied".into()))
             } else {

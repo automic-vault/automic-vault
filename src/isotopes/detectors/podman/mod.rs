@@ -18,7 +18,7 @@ pub fn install_insecurity_reasons() -> Result<Vec<String>, String> {
     Ok(Vec::new())
 }
 
-fn candidate_auth_paths() -> Result<Vec<PathBuf>, String> {
+pub(crate) fn candidate_auth_paths() -> Result<Vec<PathBuf>, String> {
     if let Some(path) = std::env::var_os("REGISTRY_AUTH_FILE").filter(|value| !value.is_empty()) {
         return Ok(vec![PathBuf::from(path)]);
     }

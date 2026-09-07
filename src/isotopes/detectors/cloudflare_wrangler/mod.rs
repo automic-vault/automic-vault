@@ -8,7 +8,7 @@ pub fn install_is_insecure() -> Result<bool, String> {
 
 pub fn install_insecurity_reasons() -> Result<Vec<String>, String> {
     let mut reasons = Vec::new();
-    for path in candidate_auth_files()? {
+    for path in candidate_auth_files("toml")? {
         if path.exists() && wrangler_auth_file_contains_secret(&read_to_string(&path)?) {
             reasons.push(format!(
                 "Wrangler auth config contains plaintext Cloudflare tokens: {}",
@@ -16,12 +16,26 @@ pub fn install_insecurity_reasons() -> Result<Vec<String>, String> {
             ));
         }
     }
+    for path in candidate_auth_files("enc")? {
+        if !path.exists() {
+            continue;
+        }
+        let Some(account) = path.file_stem().and_then(|value| value.to_str()) else {
+            continue;
+        };
+        if let Some(reason) = encrypted_auth_file_reason(
+            &path,
+            super::gh_cli::keychain_item_allows_security_tool("wrangler", account),
+        ) {
+            reasons.push(reason);
+        }
+    }
     reasons.sort();
     reasons.dedup();
     Ok(reasons)
 }
 
-fn candidate_auth_files() -> Result<Vec<PathBuf>, String> {
+fn candidate_auth_files(extension: &str) -> Result<Vec<PathBuf>, String> {
     let home = home_dir()?;
     let mut roots = vec![
         home.join(".wrangler"),
@@ -34,14 +48,14 @@ fn candidate_auth_files() -> Result<Vec<PathBuf>, String> {
 
     let mut paths = Vec::new();
     for root in roots {
-        paths.push(root.join("config/default.toml"));
+        paths.push(root.join(format!("config/default.{extension}")));
         if let Ok(entries) = std::fs::read_dir(root.join("config")) {
             for entry in entries.flatten() {
                 if entry
                     .file_type()
                     .map(|kind| kind.is_file())
                     .unwrap_or(false)
-                    && entry.path().extension().and_then(|value| value.to_str()) == Some("toml")
+                    && entry.path().extension().and_then(|value| value.to_str()) == Some(extension)
                 {
                     paths.push(entry.path());
                 }
@@ -49,6 +63,20 @@ fn candidate_auth_files() -> Result<Vec<PathBuf>, String> {
         }
     }
     Ok(paths)
+}
+
+fn encrypted_auth_file_reason(path: &Path, key_access: Result<bool, String>) -> Option<String> {
+    match key_access {
+        Ok(true) => Some(format!(
+            "Wrangler encrypted auth config uses a Keychain encryption key retrievable non-interactively through /usr/bin/security: {}",
+            path.display()
+        )),
+        Ok(false) => None,
+        Err(error) => Some(format!(
+            "Wrangler encrypted auth config Keychain access could not be inspected ({error}): {}",
+            path.display()
+        )),
+    }
 }
 
 fn home_dir() -> Result<PathBuf, String> {
@@ -107,6 +135,30 @@ mod tests {
         assert!(!wrangler_auth_file_contains_secret(
             "scopes = [\"user:read\"]\n"
         ));
+    }
+
+    #[test]
+    fn reports_encrypted_auth_only_when_key_access_is_exposed_or_unknown() {
+        let path = Path::new("/tmp/default.enc");
+        assert!(encrypted_auth_file_reason(path, Ok(false)).is_none());
+        assert!(
+            encrypted_auth_file_reason(path, Ok(true))
+                .unwrap()
+                .contains("retrievable non-interactively")
+        );
+        assert!(
+            encrypted_auth_file_reason(path, Err("inspection failed".to_string()))
+                .unwrap()
+                .contains("could not be inspected")
+        );
+    }
+
+    #[test]
+    fn documentation_explains_why_wrangler_keyring_is_not_hardened() {
+        let documentation = include_str!("detector.md");
+        assert!(documentation.contains("wrangler login --use-keyring"));
+        assert!(documentation.contains("`/usr/bin/security`"));
+        assert!(documentation.contains("Authorization Gate"));
     }
 }
 

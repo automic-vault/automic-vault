@@ -110,8 +110,24 @@ pub(crate) fn keychain_services_allow_security_tool(services: &[String]) -> Resu
     macos_keychain::keychain_allows_security_tool(services)
 }
 
+#[cfg(target_os = "macos")]
+pub(crate) fn keychain_item_allows_security_tool(
+    service: &str,
+    account: &str,
+) -> Result<bool, String> {
+    macos_keychain::keychain_item_allows_security_tool(service, account)
+}
+
 #[cfg(not(target_os = "macos"))]
 pub(crate) fn keychain_services_allow_security_tool(_services: &[String]) -> Result<bool, String> {
+    Ok(false)
+}
+
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn keychain_item_allows_security_tool(
+    _service: &str,
+    _account: &str,
+) -> Result<bool, String> {
     Ok(false)
 }
 
@@ -361,6 +377,18 @@ mod macos_keychain {
     pub(super) fn keychain_allows_security_tool(services: &[String]) -> Result<bool, String> {
         for service in services {
             if service_allows_security_tool(service)? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    pub(super) fn keychain_item_allows_security_tool(
+        service: &str,
+        account: &str,
+    ) -> Result<bool, String> {
+        for item in service_items(service)? {
+            if item_account(item.0)? == account && item_allows_security_tool(item.0)? {
                 return Ok(true);
             }
         }

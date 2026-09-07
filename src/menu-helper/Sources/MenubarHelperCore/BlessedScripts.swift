@@ -240,25 +240,50 @@ public func blessedScriptDiff(previous: Data, current: Data) -> [String]? {
         if case .insert(let offset, let line, _) = change { return (offset, line) }
         preconditionFailure("Expected an insertion")
     })
-    var rows = ["--- Blessed", "+++ Current"]
+    var rows: [(text: String, oldLine: Int?, newLine: Int?)] = []
     var oldIndex = 0
     var newIndex = 0
     while oldIndex < old.count || newIndex < new.count {
         if let removed = removals[oldIndex] {
-            rows.append("- \(removed)")
+            rows.append(("- \(removed)", oldIndex + 1, nil))
             oldIndex += 1
         } else if let inserted = insertions[newIndex] {
-            rows.append("+ \(inserted)")
+            rows.append(("+ \(inserted)", nil, newIndex + 1))
             newIndex += 1
         } else if oldIndex < old.count, newIndex < new.count {
-            rows.append("  \(old[oldIndex])")
+            rows.append(("  \(old[oldIndex])", oldIndex + 1, newIndex + 1))
             oldIndex += 1
             newIndex += 1
         } else {
             break
         }
     }
-    return rows
+
+    let context = 3
+    let changed = rows.indices.filter { rows[$0].oldLine == nil || rows[$0].newLine == nil }
+    var hunks: [Range<Int>] = []
+    for index in changed {
+        let range = max(rows.startIndex, index - context)..<min(rows.endIndex, index + context + 1)
+        if let last = hunks.last, range.lowerBound <= last.upperBound {
+            hunks[hunks.count - 1] = last.lowerBound..<max(last.upperBound, range.upperBound)
+        } else {
+            hunks.append(range)
+        }
+    }
+
+    var output = ["--- Blessed", "+++ Current"]
+    for hunk in hunks {
+        let oldLines = hunk.compactMap { rows[$0].oldLine }
+        let newLines = hunk.compactMap { rows[$0].newLine }
+        output.append("@@ -\(diffRange(oldLines)) +\(diffRange(newLines)) @@")
+        output.append(contentsOf: hunk.map { rows[$0].text })
+    }
+    return output
+}
+
+private func diffRange(_ lines: [Int]) -> String {
+    guard let first = lines.first else { return "0,0" }
+    return lines.count == 1 ? "\(first)" : "\(first),\(lines.count)"
 }
 
 public enum BlessedScriptManifestError: Error, Equatable, LocalizedError {
@@ -525,4 +550,19 @@ private func saveBlessedScripts(_ scripts: [BlessedScript], service: String, acc
         account: account,
         accessibility: .afterFirstUnlock
     )
+}
+
+public func activeBlessedScriptPromptExplanation(
+    script: BlessedScript,
+    gateID: String?,
+    launcherAllowsOperation: Bool
+) -> String {
+    guard let gateID, launcherAllowsOperation else {
+        return "This request exceeds the stored authority. Approval applies only to this request."
+    }
+    if script.capabilities[gateID] == nil {
+        return "The Blessed Script’s declared Capabilities narrow gate policy for this execution and lack a \(gateID) Capability. Approval applies only to this request."
+    } else {
+        return "The Blessed Script’s declared Capabilities narrow gate policy for this execution and exceed the declared \(gateID) Capability. Approval applies only to this request."
+    }
 }

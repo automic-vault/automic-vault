@@ -13,6 +13,9 @@
     <key>ApprovalRelayURL</key><string>https://approval-relay.automicvault.com</string>
     <key>NSFaceIDUsageDescription</key><string>Automic Vault uses Face ID only when you opt in to authenticate Approvals on this iPhone.</string>
     <key>UILaunchScreen</key><dict/>
+    <key>UIBackgroundModes</key><array>
+        <string>remote-notification</string>
+    </array>
     <key>UISupportedInterfaceOrientations</key><array>
         <string>UIInterfaceOrientationPortrait</string>
         <string>UIInterfaceOrientationLandscapeLeft</string>

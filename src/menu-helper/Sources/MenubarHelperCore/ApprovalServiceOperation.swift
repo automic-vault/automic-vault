@@ -8,7 +8,13 @@ public enum ApprovalServiceOperation: String, CaseIterable, Sendable {
     case uaaHelperVersion = "uaa-helper-version"
     case railwayHelperVersion = "railway-helper-version"
     case oxideHelperVersion = "oxide-helper-version"
+    case fastlyHelperVersion = "fastly-helper-version"
+    case sqlcmdHelperVersion = "sqlcmd-helper-version"
     case terraformHelperVersion = "terraform-helper-version"
+    case aliyunHelperVersion = "aliyun-helper-version"
+    case wakatimeHelperVersion = "wakatime-helper-version"
+    case rcloneHelperVersion = "rclone-helper-version"
+    case kubectlHelperVersion = "kubectl-helper-version"
     case inject
     case varlock
     case keys
@@ -24,7 +30,13 @@ public enum ApprovalServiceOperation: String, CaseIterable, Sendable {
     case uaaGet = "uaa-get"
     case railwayGet = "railway-get"
     case oxideGet = "oxide-get"
+    case fastlyGet = "fastly-get"
+    case sqlcmdGet = "sqlcmd-get"
     case terraformGet = "terraform-get"
+    case aliyunGet = "aliyun-get"
+    case wakatimeGet = "wakatime-get"
+    case rcloneGet = "rclone-get"
+    case kubectlGet = "kubectl-get"
     case dockerSave = "docker-save"
     case dockerDelete = "docker-delete"
     case goatSave = "goat-save"
@@ -39,6 +51,10 @@ public enum ApprovalServiceOperation: String, CaseIterable, Sendable {
     case railwayDelete = "railway-delete"
     case oxideSave = "oxide-save"
     case oxideDelete = "oxide-delete"
+    case fastlySave = "fastly-save"
+    case fastlyDelete = "fastly-delete"
+    case sqlcmdSave = "sqlcmd-save"
+    case sqlcmdDelete = "sqlcmd-delete"
     case terraformSave = "terraform-save"
     case terraformDelete = "terraform-delete"
     case list
@@ -47,6 +63,8 @@ public enum ApprovalServiceOperation: String, CaseIterable, Sendable {
     case bless
     case delete
     case openWindow = "open-window"
+    case wranglerSave = "wrangler-save"
+    case wranglerDelete = "wrangler-delete"
     case ghSave = "gh-save"
     case ghDelete = "gh-delete"
     case stripeSave = "stripe-save"

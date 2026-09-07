@@ -57,6 +57,23 @@ fn user_home() -> Result<PathBuf, String> {
         .ok_or_else(|| "HOME is not set".to_string())
 }
 
+pub(super) fn config_has_api_key(path: Option<&Path>) -> bool {
+    let path = match path {
+        Some(path) => path.to_path_buf(),
+        None => {
+            let Ok(paths) = vultr_config_paths() else {
+                return false;
+            };
+            if fs::metadata(&paths[0]).is_ok() {
+                paths[0].clone()
+            } else {
+                paths[1].clone()
+            }
+        }
+    };
+    fs::read_to_string(path).is_ok_and(|contents| config_contains_api_key(&contents))
+}
+
 fn config_api_key(contents: &str) -> Option<String> {
     contents.lines().find_map(line_api_key)
 }
@@ -308,5 +325,36 @@ mod tests {
             keychain_store_secret(KEYCHAIN_SERVICE, VULTR_API_KEY_ENV_KEY, "value").unwrap_err(),
             "Automic Vault secret storage is only available on macOS"
         );
+    }
+
+    #[test]
+    fn token_routing_honors_the_selected_caller_config() {
+        let _lock = crate::global_test_env_lock().lock().unwrap();
+        let home = std::env::temp_dir().join(format!("vultr-routing-{}", std::process::id()));
+        let app_support = home.join("Library/Application Support/vultr-cli.yaml");
+        let legacy = home.join(".vultr-cli.yaml");
+        let explicit = home.join("explicit.yaml");
+        let previous_home = std::env::var_os("HOME");
+        let _ = fs::remove_dir_all(&home);
+        fs::create_dir_all(app_support.parent().unwrap()).unwrap();
+        unsafe { std::env::set_var("HOME", &home) };
+
+        assert!(!config_has_api_key(None));
+        fs::write(&legacy, "api-key: caller-key\n").unwrap();
+        assert!(config_has_api_key(None));
+        fs::write(&app_support, "output: json\n").unwrap();
+        assert!(!config_has_api_key(None));
+        fs::write(&app_support, "api-key: app-support-key\n").unwrap();
+        assert!(config_has_api_key(None));
+        fs::write(&explicit, "api-key: explicit-key\n").unwrap();
+        assert!(config_has_api_key(Some(&explicit)));
+
+        unsafe {
+            match previous_home {
+                Some(value) => std::env::set_var("HOME", value),
+                None => std::env::remove_var("HOME"),
+            }
+        }
+        fs::remove_dir_all(home).unwrap();
     }
 }

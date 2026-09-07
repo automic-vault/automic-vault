@@ -20,6 +20,18 @@ final class NotificationService: UNNotificationServiceExtension {
             let key = try ICloudApprovalRootKey().load()
             let plaintext = try ApprovalCrypto(rootKeyData: key).open(envelope, purpose: "notification")
             let ticket = try JSONDecoder().decode(PhoneApprovalTicket.self, from: plaintext)
+            content.threadIdentifier = ticket.requestID.uuidString
+            if ticket.canceledAtMilliseconds != nil {
+                content.title = "Approval canceled"
+                let preferences = (try? ApprovalNotificationPreferences.load()) ?? .init()
+                content.body = preferences.showsHost
+                    ? "The request from \(ticket.macName) is no longer waiting."
+                    : "The request is no longer waiting."
+                content.categoryIdentifier = ""
+                contentHandler(content)
+                handler = nil
+                return
+            }
             content.title = "Approval waiting"
             let preferences = (try? ApprovalNotificationPreferences.load()) ?? .init()
             var details: [String] = []
@@ -30,11 +42,10 @@ final class NotificationService: UNNotificationServiceExtension {
             content.body = (["Review the full request on your Mac or open Automic Vault."] + details)
                 .joined(separator: "\n")
             content.categoryIdentifier = ticket.requiresFullReview ? "AV_REVIEW" : "AV_ROUTINE"
-            content.threadIdentifier = ticket.requestID.uuidString
             contentHandler(content)
             handler = nil
         } catch {
-            content.title = "Approval waiting"
+            content.title = "Automic Vault update"
             content.body = "Open Automic Vault to review."
             content.categoryIdentifier = "AV_REVIEW"
             contentHandler(content)

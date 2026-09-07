@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-pub(crate) const DOWNLOAD_URL: &str = "https://awscli.amazonaws.com/AWSCLIV2.pkg";
+pub(crate) const DOWNLOAD_ROOT: &str = "https://awscli.amazonaws.com";
 const CHANGELOG_URL: &str = "https://raw.githubusercontent.com/aws/aws-cli/v2/CHANGELOG.rst";
 pub(crate) const TARGET_PATH: &str = "/opt/av/aws/current/aws";
 const INSTALL_ROOT: &str = "/opt/av/aws";
@@ -17,7 +17,9 @@ const MAX_PACKAGE_BYTES: u64 = 128 * 1024 * 1024;
 const MAX_INSTALLED_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_ENTRIES: u64 = 12_000;
 
-pub(crate) fn download(destination: &Path) -> Result<String, String> {
+pub(crate) fn download(destination: &Path) -> Result<(String, String), String> {
+    let version = latest_version()?;
+    let url = download_url(&version)?;
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .https_only(true)
         .max_redirects(0)
@@ -25,7 +27,7 @@ pub(crate) fn download(destination: &Path) -> Result<String, String> {
         .build()
         .into();
     let mut body = agent
-        .get(DOWNLOAD_URL)
+        .get(&url)
         .call()
         .map_err(|err| format!("failed to download the official AWS CLI package: {err}"))?
         .into_body()
@@ -38,22 +40,27 @@ pub(crate) fn download(destination: &Path) -> Result<String, String> {
         .open(destination)
         .map_err(|err| format!("failed to create {}: {err}", destination.display()))?;
     let size = std::io::copy(&mut body, &mut output)
-        .map_err(|err| format!("failed to download {DOWNLOAD_URL}: {err}"))?;
+        .map_err(|err| format!("failed to download {url}: {err}"))?;
     if size > MAX_PACKAGE_BYTES {
         return Err("refusing an AWS CLI package larger than 128 MiB".into());
     }
     output
         .sync_all()
         .map_err(|err| format!("failed to sync {}: {err}", destination.display()))?;
-    sha256_file(destination)
+    sha256_file(destination).map(|sha256| (version, sha256))
 }
 
-pub(crate) fn install_privileged(expected_sha256: &str, package: &Path) -> Result<(), String> {
+pub(crate) fn install_privileged(
+    expected_version: &str,
+    expected_sha256: &str,
+    package: &Path,
+) -> Result<(), String> {
     if crate::test_env_var("AUTOMIC_VAULT_TEST_AWS_INSTALL_ROOT").is_none()
         && super::effective_uid() != 0
     {
         return Err("official AWS CLI installation requires root".into());
     }
+    validate_version(expected_version)?;
     validate_sha256(expected_sha256)?;
     let root = install_root();
     prepare_install_directory(&root)?;
@@ -73,6 +80,9 @@ pub(crate) fn install_privileged(expected_sha256: &str, package: &Path) -> Resul
     let release = verify_and_extract_package(&trusted_package, &staging.path)?;
     #[cfg(not(target_os = "macos"))]
     return Err("official AWS CLI packages can only be verified on macOS".into());
+
+    #[cfg(target_os = "macos")]
+    require_expected_version(&release.version, expected_version)?;
 
     #[cfg(target_os = "macos")]
     install_payload(&root, &release.payload, &release.version, &actual_sha256)
@@ -124,8 +134,7 @@ pub(crate) fn current_release_valid() -> Result<(), String> {
             target.display()
         ));
     }
-    validate_protected_tree(&release_root, true)?;
-    verify_manifest(&release_root)?;
+    verify_protected_manifest(&release_root)?;
     verify_aws_executable(&target)
 }
 
@@ -153,11 +162,30 @@ pub(crate) fn latest_version() -> Result<String, String> {
         .take(64 * 1024)
         .read_to_string(&mut changelog)
         .map_err(|err| format!("failed to read {CHANGELOG_URL}: {err}"))?;
-    parse_latest_version(&changelog)
+    downloadable_version(&changelog, |version| {
+        let url = download_url(version)?;
+        match agent.head(&url).call() {
+            Ok(_) => Ok(true),
+            Err(ureq::Error::StatusCode(404)) => Ok(false),
+            Err(error) => Err(format!("failed to check {url}: {error}")),
+        }
+    })
 }
 
 pub(crate) fn update_available(installed: &str, latest: &str) -> Result<bool, String> {
     compare_versions(latest, installed).map(|ordering| ordering.is_gt())
+}
+
+fn download_url(version: &str) -> Result<String, String> {
+    validate_version(version)?;
+    Ok(format!("{DOWNLOAD_ROOT}/AWSCLIV2-{version}.pkg"))
+}
+
+fn require_expected_version(actual: &str, expected: &str) -> Result<(), String> {
+    validate_version(expected)?;
+    (actual == expected)
+        .then_some(())
+        .ok_or_else(|| format!("AWS CLI package contains version {actual}, expected {expected}"))
 }
 
 pub(crate) fn target_path() -> PathBuf {
@@ -424,8 +452,7 @@ fn install_payload(root: &Path, payload: &Path, version: &str, sha256: &str) -> 
         manifest.as_bytes(),
         0o444,
     )?;
-    validate_protected_tree(&replacement, true)?;
-    verify_manifest(&replacement)?;
+    verify_protected_manifest(&replacement)?;
 
     fs::rename(&replacement, &destination)
         .map_err(|err| format!("failed to install official AWS CLI: {err}"))?;
@@ -560,22 +587,48 @@ fn compare_versions(left: &str, right: &str) -> Result<std::cmp::Ordering, Strin
 }
 
 fn parse_latest_version(changelog: &str) -> Result<String, String> {
-    let lines = changelog.lines().collect::<Vec<_>>();
-    lines
-        .windows(2)
-        .find_map(|lines| {
-            let version = lines[0].trim();
-            (validate_version(version).is_ok()
-                && lines[1].len() == version.len()
-                && lines[1].bytes().all(|byte| byte == b'='))
-            .then(|| version.to_string())
-        })
+    versions(changelog)
+        .next()
         .ok_or_else(|| "AWS CLI changelog does not begin with a valid release".to_string())
 }
 
+fn downloadable_version(
+    changelog: &str,
+    mut available: impl FnMut(&str) -> Result<bool, String>,
+) -> Result<String, String> {
+    // ponytail: three releases bounds Doctor latency; use vendor release metadata if AWS adds it.
+    for version in versions(changelog).take(3) {
+        if available(&version)? {
+            return Ok(version);
+        }
+    }
+    Err("AWS CLI has no downloadable recent macOS release".into())
+}
+
+fn versions(changelog: &str) -> impl Iterator<Item = String> + '_ {
+    changelog
+        .lines()
+        .zip(changelog.lines().skip(1))
+        .filter_map(|(line, underline)| {
+            let version = line.trim();
+            (validate_version(version).is_ok()
+                && underline.len() == version.len()
+                && underline.bytes().all(|byte| byte == b'='))
+            .then(|| version.to_string())
+        })
+}
+
 fn build_manifest(root: &Path) -> Result<String, String> {
+    build_manifest_with(root, &mut |_, _| Ok(()))
+}
+
+fn build_manifest_with(
+    root: &Path,
+    visit: &mut impl FnMut(&Path, &fs::Metadata) -> Result<(), String>,
+) -> Result<String, String> {
     let mut entries = Vec::new();
     walk(root, &mut |path, metadata| {
+        visit(path, metadata)?;
         let relative = path
             .strip_prefix(root)
             .map_err(|_| "AWS manifest path escaped its root".to_string())?
@@ -604,10 +657,14 @@ fn build_manifest(root: &Path) -> Result<String, String> {
     Ok(entries.join("\n") + "\n")
 }
 
-fn verify_manifest(root: &Path) -> Result<(), String> {
+fn verify_protected_manifest(root: &Path) -> Result<(), String> {
+    validate_protected_entry(
+        root,
+        &fs::symlink_metadata(root).map_err(|err| err.to_string())?,
+    )?;
+    let actual = build_manifest_with(root, &mut validate_protected_entry)?;
     let expected = fs::read_to_string(root.join(".av-manifest"))
         .map_err(|err| format!("official AWS CLI integrity manifest is unavailable: {err}"))?;
-    let actual = build_manifest(root)?;
     if actual == expected {
         Ok(())
     } else {
@@ -637,16 +694,6 @@ fn protect_tree(root: &Path) -> Result<(), String> {
             .map_err(|err| format!("failed to inspect {}: {err}", root.display()))?,
     )?;
     walk(root, protect)
-}
-
-fn validate_protected_tree(root: &Path, include_root: bool) -> Result<(), String> {
-    if include_root {
-        validate_protected_entry(
-            root,
-            &fs::symlink_metadata(root).map_err(|err| err.to_string())?,
-        )?;
-    }
-    walk(root, &mut validate_protected_entry)
 }
 
 fn validate_protected_entry(path: &Path, metadata: &fs::Metadata) -> Result<(), String> {
@@ -1005,6 +1052,48 @@ mod tests {
     }
 
     #[test]
+    fn latest_version_waits_for_the_mac_package() {
+        let changelog = "2.36.22\n=======\nnotes\n\n2.36.21\n=======\nnotes\n";
+        assert_eq!(
+            downloadable_version(changelog, |version| Ok(version == "2.36.21")).unwrap(),
+            "2.36.21"
+        );
+    }
+
+    #[test]
+    fn aws_download_is_bound_to_the_reported_version() {
+        assert_eq!(
+            download_url("2.36.22").unwrap(),
+            "https://awscli.amazonaws.com/AWSCLIV2-2.36.22.pkg"
+        );
+        assert!(download_url("../../latest").is_err());
+        assert!(require_expected_version("2.36.22", "2.36.22").is_ok());
+        assert!(require_expected_version("2.36.21", "2.36.22").is_err());
+    }
+
+    #[test]
+    fn protected_manifest_verification_rejects_unsafe_modes_and_content_changes() {
+        let _guard = crate::global_test_env_lock().lock().unwrap();
+        let root = temp_path("protected-manifest");
+        let release = root.join("release");
+        fs::create_dir_all(&release).unwrap();
+        fs::write(release.join("aws"), "original").unwrap();
+        let manifest = build_manifest(&release).unwrap();
+        fs::write(release.join(".av-manifest"), manifest).unwrap();
+        unsafe { std::env::set_var("AUTOMIC_VAULT_TEST_AWS_INSTALL_ROOT", &root) };
+
+        assert!(verify_protected_manifest(&release).is_ok());
+        fs::set_permissions(release.join("aws"), fs::Permissions::from_mode(0o666)).unwrap();
+        assert!(verify_protected_manifest(&release).is_err());
+        fs::set_permissions(release.join("aws"), fs::Permissions::from_mode(0o644)).unwrap();
+        fs::write(release.join("aws"), "changed").unwrap();
+        assert!(verify_protected_manifest(&release).is_err());
+
+        unsafe { std::env::remove_var("AUTOMIC_VAULT_TEST_AWS_INSTALL_ROOT") };
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn verified_official_package_installs_rehardens_and_detects_corruption() {
         let Some(package) = crate::test_env_var("AUTOMIC_VAULT_TEST_AWS_PACKAGE") else {
             return;
@@ -1015,16 +1104,17 @@ mod tests {
         unsafe { std::env::set_var("AUTOMIC_VAULT_TEST_AWS_INSTALL_ROOT", &root) };
         let digest = sha256_file(Path::new(&package)).unwrap();
 
-        install_privileged(&digest, Path::new(&package)).unwrap();
+        let expected_version = latest_version().unwrap();
+        install_privileged(&expected_version, &digest, Path::new(&package)).unwrap();
         current_release_valid().unwrap();
-        let version = Command::new(target_path())
+        let version_output = Command::new(target_path())
             .arg("--version")
             .env_clear()
             .output()
             .unwrap();
-        assert!(version.status.success());
-        assert!(String::from_utf8_lossy(&version.stdout).contains("aws-cli/2."));
-        install_privileged(&digest, Path::new(&package)).unwrap();
+        assert!(version_output.status.success());
+        assert!(String::from_utf8_lossy(&version_output.stdout).contains("aws-cli/2."));
+        install_privileged(&expected_version, &digest, Path::new(&package)).unwrap();
         current_release_valid().unwrap();
 
         fs::set_permissions(target_path(), fs::Permissions::from_mode(0o755)).unwrap();
@@ -1036,7 +1126,7 @@ mod tests {
             .unwrap();
         assert!(current_release_valid().is_err());
 
-        install_privileged(&digest, Path::new(&package)).unwrap();
+        install_privileged(&expected_version, &digest, Path::new(&package)).unwrap();
         current_release_valid().unwrap();
         let release_root = fs::canonicalize(target_path())
             .unwrap()

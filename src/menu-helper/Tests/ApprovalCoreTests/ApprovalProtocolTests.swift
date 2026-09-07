@@ -131,7 +131,8 @@ import Testing
     #expect(activity.first?.command == "command-50")
     #expect(activity.last?.command == "command-1")
 
-    let replacement = try sampleRequest(id: activity.last!.id, command: "replacement")
+    let oldest = try #require(activity.last)
+    let replacement = try sampleRequest(id: oldest.id, command: "replacement")
     activity = PhoneApprovalActivity.adding(
         .init(request: replacement, outcome: .denied),
         to: activity
@@ -139,6 +140,36 @@ import Testing
     #expect(activity.count == PhoneApprovalActivity.maximumItems)
     #expect(activity.first?.command == "replacement")
     #expect(activity.first?.outcome == .denied)
+
+    let canceled = try sampleRequest(id: activity.last!.id, command: "canceled")
+    activity = PhoneApprovalActivity.adding(.init(canceled: canceled, at: 42), to: activity)
+    let restored = try JSONDecoder().decode(
+        [PhoneApprovalActivity].self,
+        from: JSONEncoder().encode(activity)
+    )
+    #expect(restored.count == PhoneApprovalActivity.maximumItems)
+    #expect(restored.first?.command == "canceled")
+    #expect(restored.first?.outcome == .canceled)
+    #expect(restored.first?.respondedAtMilliseconds == 42)
+}
+
+@Test func canceledNotificationCreatesHistoryWithoutPendingRequest() throws {
+    let request = try sampleRequest(command: "git rebase --continue")
+    let ticket = try PhoneApprovalTicket(canceled: request, at: 42)
+    let restored = try JSONDecoder().decode(
+        PhoneApprovalTicket.self,
+        from: JSONEncoder().encode(ticket)
+    )
+    let activity = try #require(PhoneApprovalActivity(canceled: restored))
+
+    #expect(activity.id == request.id)
+    #expect(activity.command == "git rebase --continue")
+    #expect(activity.outcome == .canceled)
+    #expect(activity.respondedAtMilliseconds == 42)
+
+    let crypto = try ApprovalCrypto(rootKeyData: Data(repeating: 9, count: 32))
+    #expect(crypto.notificationIdentifier(for: request.id).count == 43)
+    #expect(crypto.notificationIdentifier(for: request.id) != crypto.address.room)
 }
 
 private func sampleRequest(

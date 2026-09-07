@@ -84,11 +84,12 @@ public struct DashboardSnapshot: Equatable, Sendable {
         policyService: String = secretGatePoliciesKeychainService
     ) -> DashboardSnapshot {
         _ = resumePendingSecretMutation()
-        let hardenerMetadata = loadHardenerMetadata(avExecutableURL: avExecutableURL)
+        let hardening = loadDashboardHardening(avExecutableURL: avExecutableURL)
+        let hardenerMetadata = hardening.hardeners
         let secrets = loadStoredSecrets(directAccessRules: loadDirectAccessRules())
         let gateDescriptors = dashboardSecretGateDescriptors(
             hardeners: hardenerMetadata,
-            catalog: (try? loadSecretGateDescriptors(avExecutableURL: avExecutableURL)) ?? [],
+            catalog: hardening.secretGates,
             storedSecretNames: Set(secrets.map(\.account))
         )
         _ = initializeSecretGatePolicies(descriptors: gateDescriptors, service: policyService)
@@ -98,7 +99,7 @@ public struct DashboardSnapshot: Equatable, Sendable {
             metadata: hardenerMetadata
         )
         return DashboardSnapshot(
-            detectors: loadDetectorMetadata(avExecutableURL: avExecutableURL),
+            detectors: hardening.detectors,
             detectorFindings: [],
             hardenedTools: hardenedTools,
             hardeners: hardenerMetadata,
@@ -107,7 +108,7 @@ public struct DashboardSnapshot: Equatable, Sendable {
             secretNameAccessApps: loadSecretNameAccessApps(),
             secrets: secrets,
             accessRequests: loadAccessRequestRecords(),
-            doctorIssues: loadDoctorIssues(avExecutableURL: avExecutableURL)
+            doctorIssues: hardening.doctorIssues
         )
     }
 }
@@ -565,16 +566,18 @@ public func launcherRuntimeProtection(
 public func launcherRuntimeProtection(
     signingInformation: [CFString: Any]
 ) -> LauncherRuntimeProtection {
-    let signatureFlags = (
-        signingInformation[kSecCodeInfoStatus] ?? signingInformation[kSecCodeInfoFlags]
-    ) as? NSNumber
+    let liveStatus = signingInformation[kSecCodeInfoStatus] as? NSNumber
+    let signatureFlags = liveStatus
+        ?? (signingInformation[kSecCodeInfoFlags] as? NSNumber)
+    let isPlatformCode = signingInformation[kSecCodeInfoPlatformIdentifier] is NSNumber
+        || (liveStatus?.uint32Value ?? 0) & SecCodeStatus.platform.rawValue != 0
     let entitlements = signingInformation[kSecCodeInfoEntitlementsDict] as? [String: Any] ?? [:]
     let enabledEntitlements = Set(entitlements.compactMap { key, value in
         (value as? NSNumber)?.boolValue == true ? key : nil
     })
     return launcherRuntimeProtection(
         signatureFlags: (signatureFlags?.uint32Value ?? 0) |
-            (signingInformation[kSecCodeInfoPlatformIdentifier] is NSNumber
+            (isPlatformCode
                 ? SecCodeSignatureFlags.runtime.rawValue
                 : 0),
         enabledEntitlements: enabledEntitlements
@@ -604,7 +607,9 @@ public struct SecretGate: Equatable, Identifiable, Sendable {
 
     public var scriptPaths: [String] { routes.compactMap(\.scriptPath).uniqueSorted() }
     public var targetPaths: [String] { routes.map(\.targetPath).uniqueSorted() }
-    public var defaultPolicyLabel: String { appPolicies.isEmpty ? "All Apps" : "All Other Apps" }
+    public var defaultPolicyLabel: String {
+        appPolicies.isEmpty ? "All Verified Launchers" : "All Other Verified Launchers"
+    }
     public var displayName: String { id == "node" ? "npm" : id }
     public var authorizationGateName: String {
         id == "node" ? "npm Authorization Gate" : "\(id.uppercased()) Authorization Gate"
@@ -633,7 +638,7 @@ public struct SecretGate: Equatable, Identifiable, Sendable {
     }
 
     public var initialProtection: SecretGateProtection {
-        if id == "gpg-signing" { return .noAccess }
+        if id == "gpg-signing" || id == "kubectl" { return .noAccess }
         return id == "brew" ? .readOnlyAndUpdates : .readOnly
     }
 
@@ -871,6 +876,27 @@ struct HardenerReport: Codable {
     let hardeners: [HardenerMetadata]
 }
 
+struct DashboardHardening: Sendable {
+    let hardeners: [HardenerMetadata]
+    let detectors: [DetectorMetadata]
+    let secretGates: [SecretGateDescriptor]
+    let doctorIssues: [DoctorIssue]
+}
+
+private struct DashboardHardeningReport: Codable {
+    let hardeners: [HardenerMetadata]
+    let detectors: [DetectorMetadata]
+    let secretGates: [SecretGateDescriptor]
+    let results: [DoctorResult]
+
+    private enum CodingKeys: String, CodingKey {
+        case hardeners
+        case detectors
+        case secretGates = "secret_gates"
+        case results
+    }
+}
+
 private struct SecretGateReport: Codable {
     let secretGates: [SecretGateDescriptor]
 
@@ -920,8 +946,30 @@ public func hardenerMetadata(from hardenersJSON: Data) throws -> [HardenerMetada
     try JSONDecoder().decode(HardenerReport.self, from: hardenersJSON).hardeners
 }
 
+func dashboardHardening(
+    from dashboardJSON: Data,
+    loginShellPATHAvailable: Bool = true
+) throws -> DashboardHardening {
+    let report = try JSONDecoder().decode(DashboardHardeningReport.self, from: dashboardJSON)
+    return DashboardHardening(
+        hardeners: report.hardeners,
+        detectors: report.detectors,
+        secretGates: try validatedSecretGateDescriptors(report.secretGates),
+        doctorIssues: doctorIssues(
+            from: report.results,
+            loginShellPATHAvailable: loginShellPATHAvailable
+        )
+    )
+}
+
 public func secretGateDescriptors(from secretGatesJSON: Data) throws -> [SecretGateDescriptor] {
     let gates = try JSONDecoder().decode(SecretGateReport.self, from: secretGatesJSON).secretGates
+    return try validatedSecretGateDescriptors(gates)
+}
+
+private func validatedSecretGateDescriptors(
+    _ gates: [SecretGateDescriptor]
+) throws -> [SecretGateDescriptor] {
     guard !gates.isEmpty,
           Set(gates.map(\.id)).count == gates.count,
           gates.allSatisfy({ gate in
@@ -941,7 +989,15 @@ public func secretGateDescriptors(from secretGatesJSON: Data) throws -> [SecretG
 }
 
 public func doctorIssues(from doctorJSON: Data, loginShellPATHAvailable: Bool = true) throws -> [DoctorIssue] {
-    var issues = try JSONDecoder().decode(DoctorReport.self, from: doctorJSON).results.flatMap { result in
+    let results = try JSONDecoder().decode(DoctorReport.self, from: doctorJSON).results
+    return doctorIssues(from: results, loginShellPATHAvailable: loginShellPATHAvailable)
+}
+
+private func doctorIssues(
+    from results: [DoctorResult],
+    loginShellPATHAvailable: Bool
+) -> [DoctorIssue] {
+    var issues = results.flatMap { result in
         result.issues.map {
             DoctorIssue(
                 hardener: result.name,
@@ -1037,41 +1093,79 @@ public func loadSecretGates(
     account: String = secretGatePoliciesKeychainAccount
 ) -> [SecretGate] {
     let loadedRecords = loadSecretGatePolicyRecords(service: service, account: account)
+    return descriptors.map {
+        loadedSecretGate(from: $0, policyRecords: loadedRecords)
+    }
+    .sorted { $0.id.localizedStandardCompare($1.id) == .orderedAscending }
+}
+
+private func loadedSecretGate(
+    from descriptor: SecretGateDescriptor,
+    policyRecords loadedRecords: SecretGatePolicyRecordsLoad
+) -> SecretGate {
     let records: [SecretGatePolicyRecord] = switch loadedRecords {
     case .success(let records): records
     case .failure: []
     }
     let policiesAreReadable = if case .success = loadedRecords { true } else { false }
-    return descriptors.map { descriptor in
-        let gateRecords = records.filter { $0.gateID == descriptor.id }
-        let prototype = SecretGate(
-            id: descriptor.id,
-            keyPatterns: descriptor.keyPatterns.uniqueSorted(),
-            routes: descriptor.routes,
-            defaultProtection: .noAccess,
-            appPolicies: []
-        )
-        return SecretGate(
-            id: prototype.id,
-            keyPatterns: prototype.keyPatterns,
-            routes: prototype.routes,
-            defaultProtection: prototype.normalizedProtection(
-                gateRecords.last(where: { $0.requirement == nil })?.protection
-                    ?? (policiesAreReadable ? prototype.initialProtection : .noAccess)
-            ),
-            appPolicies: gateRecords.compactMap { record in
-                record.requirement.map {
-                    SecretGatePolicy(
-                        bundleIdentifier: appIdentifier(from: $0) ?? "unknown",
-                        requirement: $0,
-                        protection: prototype.normalizedProtection(record.protection),
-                        runtimeRequirement: record.resolvedRuntimeRequirement
-                    )
-                }
-            }.uniqueSorted()
-        )
-    }
-    .sorted { $0.id.localizedStandardCompare($1.id) == .orderedAscending }
+    let gateRecords = records.filter { $0.gateID == descriptor.id }
+    let prototype = SecretGate(
+        id: descriptor.id,
+        keyPatterns: descriptor.keyPatterns.uniqueSorted(),
+        routes: descriptor.routes,
+        defaultProtection: .noAccess,
+        appPolicies: []
+    )
+    return SecretGate(
+        id: prototype.id,
+        keyPatterns: prototype.keyPatterns,
+        routes: prototype.routes,
+        defaultProtection: prototype.normalizedProtection(
+            gateRecords.last(where: { $0.requirement == nil })?.protection
+                ?? (policiesAreReadable ? prototype.initialProtection : .noAccess)
+        ),
+        appPolicies: gateRecords.compactMap { record in
+            record.requirement.map {
+                SecretGatePolicy(
+                    bundleIdentifier: appIdentifier(from: $0) ?? "unknown",
+                    requirement: $0,
+                    protection: prototype.normalizedProtection(record.protection),
+                    runtimeRequirement: record.resolvedRuntimeRequirement
+                )
+            }
+        }.uniqueSorted()
+    )
+}
+
+public func reloadSecretGatePolicy(
+    for gate: SecretGate,
+    service: String = secretGatePoliciesKeychainService,
+    account: String = secretGatePoliciesKeychainAccount
+) -> SecretGate {
+    let descriptor = SecretGateDescriptor(
+        id: gate.id,
+        keyPatterns: gate.keyPatterns,
+        routes: gate.routes
+    )
+    return loadedSecretGate(
+        from: descriptor,
+        policyRecords: loadSecretGatePolicyRecords(service: service, account: account)
+    )
+}
+
+public func reloadDashboardAuthorizationState(
+    from snapshot: DashboardSnapshot,
+    blessedScripts: [BlessedScript] = loadBlessedScripts(),
+    secretNameAccessApps: [BlessedScriptLauncher] = loadSecretNameAccessApps(),
+    secrets: [StoredSecret]? = nil,
+    reloadGatePolicy: (SecretGate) -> SecretGate = { reloadSecretGatePolicy(for: $0) }
+) -> DashboardSnapshot {
+    var refreshed = snapshot
+    refreshed.blessedScripts = blessedScripts
+    refreshed.secretNameAccessApps = secretNameAccessApps
+    refreshed.secrets = secrets ?? loadStoredSecrets(directAccessRules: loadDirectAccessRules())
+    refreshed.secretGates = snapshot.secretGates.map(reloadGatePolicy)
+    return refreshed
 }
 
 public func normalizedExecutablePath(_ path: String) -> String {
@@ -1549,6 +1643,41 @@ public func loadStoredSecretsResult(
     service: String = automicVaultKeychainService,
     directAccessRules: [DirectAccessRule] = []
 ) -> StoredSecretsLoad {
+    loadStoredSecretsResult(
+        service: service,
+        directAccessRules: directAccessRules,
+        accessibility: nil
+    )
+}
+
+public func loadStoredSecretsForUseResult(
+    service: String = automicVaultKeychainService,
+    directAccessRules: [DirectAccessRule] = []
+) -> StoredSecretsLoad {
+    retryLockedSecretInventory { accessibility in
+        loadStoredSecretsResult(
+            service: service,
+            directAccessRules: directAccessRules,
+            accessibility: accessibility
+        )
+    }
+}
+
+func retryLockedSecretInventory(
+    _ load: (StoredSecretAccessibility?) -> StoredSecretsLoad
+) -> StoredSecretsLoad {
+    let result = load(nil)
+    if case .failure(errSecInteractionNotAllowed) = result {
+        return load(.afterFirstUnlock)
+    }
+    return result
+}
+
+private func loadStoredSecretsResult(
+    service: String,
+    directAccessRules: [DirectAccessRule],
+    accessibility: StoredSecretAccessibility?
+) -> StoredSecretsLoad {
     let directAccess = Dictionary(grouping: directAccessRules, by: \.secretName)
     var query: [String: Any] = [
         kSecClass as String: kSecClassGenericPassword,
@@ -1557,6 +1686,9 @@ public func loadStoredSecretsResult(
         kSecReturnAttributes as String: true,
         kSecMatchLimit as String: kSecMatchLimitAll,
     ]
+    if let accessibility {
+        query[kSecAttrAccessible as String] = accessibility.keychainValue
+    }
     addCanonicalAccessGroup(to: &query)
     var result: CFTypeRef?
     let status = SecItemCopyMatching(query as CFDictionary, &result)
@@ -2257,13 +2389,16 @@ public func migrateBackgroundKeychainItems(
     secretNameAccessService: String = secretNameAccessKeychainService,
     secretNameAccessAccount: String = secretNameAccessKeychainAccount,
     directAccessService: String = directAccessKeychainService,
-    directAccessAccount: String = directAccessKeychainAccount
+    directAccessAccount: String = directAccessKeychainAccount,
+    gpgSigningService: String = gpgSigningConfigurationService,
+    gpgSigningAccount: String = gpgSigningConfigurationAccount
 ) -> OSStatus {
     for (service, account) in [
         (policyService, policyAccount),
         (accessLogService, accessLogAccount),
         (secretNameAccessService, secretNameAccessAccount),
         (directAccessService, directAccessAccount),
+        (gpgSigningService, gpgSigningAccount),
     ] {
         let status = setKeychainAccessibility(.afterFirstUnlock, service: service, account: account)
         if status != errSecSuccess && status != errSecItemNotFound {
@@ -2597,6 +2732,25 @@ public func loadDetectorMetadata(avExecutableURL: URL) -> [DetectorMetadata] {
 public func loadHardenerMetadata(avExecutableURL: URL) -> [HardenerMetadata] {
     loadJSON(avExecutableURL: avExecutableURL, arguments: ["hardeners", "--json"])
         .flatMap { try? hardenerMetadata(from: $0) } ?? []
+}
+
+func loadDashboardHardening(avExecutableURL: URL) -> DashboardHardening {
+    if let data = loadJSON(
+        avExecutableURL: avExecutableURL,
+        arguments: ["__dashboard-hardening-json"]
+    ), let report = try? dashboardHardening(from: data, loginShellPATHAvailable: false) {
+        return report
+    }
+    let hardeners = loadHardenerMetadata(avExecutableURL: avExecutableURL)
+    let secretGates = (try? loadSecretGateDescriptors(avExecutableURL: avExecutableURL)) ?? []
+    let detectors = loadDetectorMetadata(avExecutableURL: avExecutableURL)
+    let doctorIssues = loadDoctorIssues(avExecutableURL: avExecutableURL)
+    return DashboardHardening(
+        hardeners: hardeners,
+        detectors: detectors,
+        secretGates: secretGates,
+        doctorIssues: doctorIssues
+    )
 }
 
 public func loadSecretGateDescriptors(avExecutableURL: URL) throws -> [SecretGateDescriptor] {

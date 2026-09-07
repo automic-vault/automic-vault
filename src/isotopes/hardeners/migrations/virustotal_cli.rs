@@ -5,6 +5,21 @@ use std::path::{Path, PathBuf};
 
 const KEYCHAIN_SERVICE: &str = "com.automicvault.isotope";
 const VTCLI_APIKEY_ENV_KEY: &str = "VTCLI_APIKEY";
+const OFFICIAL_HOST: &str = "www.virustotal.com";
+const VIPER_CONFIG_EXTENSIONS: &[&str] = &[
+    "json",
+    "toml",
+    "yaml",
+    "yml",
+    "properties",
+    "props",
+    "prop",
+    "hcl",
+    "tfvars",
+    "dotenv",
+    "env",
+    "ini",
+];
 
 pub trait CredentialStore {
     fn store_secret(&self, key: &str, value: &str) -> Result<(), String>;
@@ -46,6 +61,51 @@ fn user_home() -> Result<PathBuf, String> {
     std::env::var_os("HOME")
         .map(PathBuf::from)
         .ok_or_else(|| "HOME is not set".to_string())
+}
+
+pub(super) fn default_config_is_safe_for_api_key() -> bool {
+    let Ok(home) = user_home() else {
+        return false;
+    };
+    let Ok(cwd) = std::env::current_dir() else {
+        return false;
+    };
+    active_vt_config(&home, &cwd).is_none_or(|path| safe_vt_config(&path))
+}
+
+fn active_vt_config(home: &Path, cwd: &Path) -> Option<PathBuf> {
+    [home, cwd].iter().find_map(|directory| {
+        VIPER_CONFIG_EXTENSIONS.iter().find_map(|extension| {
+            let path = directory.join(format!(".vt.{extension}"));
+            fs::metadata(&path)
+                .ok()
+                .filter(|metadata| metadata.is_file())
+                .map(|_| path)
+        })
+    })
+}
+
+fn safe_vt_config(path: &Path) -> bool {
+    path.extension().and_then(|value| value.to_str()) == Some("toml")
+        && fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_file())
+        && fs::read_to_string(path).is_ok_and(|contents| toml_config_is_safe_for_api_key(&contents))
+}
+
+fn toml_config_is_safe_for_api_key(contents: &str) -> bool {
+    let Ok(config) = contents.parse::<toml::Table>() else {
+        return false;
+    };
+    config.iter().all(|(key, value)| {
+        if key.eq_ignore_ascii_case("apikey") {
+            value.as_str() == Some("")
+        } else if key.eq_ignore_ascii_case("host") {
+            value
+                .as_str()
+                .is_some_and(|host| host.is_empty() || host.eq_ignore_ascii_case(OFFICIAL_HOST))
+        } else {
+            true
+        }
+    })
 }
 
 fn toml_string_value_for_key<'a>(contents: &'a str, key: &str) -> Option<&'a str> {
@@ -265,5 +325,42 @@ mod tests {
             keychain_store_secret(KEYCHAIN_SERVICE, VTCLI_APIKEY_ENV_KEY, "value").unwrap_err(),
             "Automic Vault secret storage is only available on macOS"
         );
+    }
+
+    #[test]
+    fn token_routing_requires_the_active_config_to_use_the_official_host() {
+        let dir = std::env::temp_dir().join(format!("vt-config-safety-{}", std::process::id()));
+        let home = dir.join("home");
+        let cwd = dir.join("cwd");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&home).unwrap();
+        fs::create_dir_all(&cwd).unwrap();
+
+        assert!(active_vt_config(&home, &cwd).is_none());
+        fs::write(home.join(".vt.toml"), "host=\"www.virustotal.com\"\n").unwrap();
+        assert!(safe_vt_config(&active_vt_config(&home, &cwd).unwrap()));
+
+        fs::write(home.join(".vt.toml"), "host=\"evil.example\"\n").unwrap();
+        assert!(!safe_vt_config(&active_vt_config(&home, &cwd).unwrap()));
+        fs::write(home.join(".vt.toml"), "apikey=\"caller-key\"\n").unwrap();
+        assert!(!safe_vt_config(&active_vt_config(&home, &cwd).unwrap()));
+        fs::write(home.join(".vt.toml"), "apikey=\"\"\n").unwrap();
+        assert!(safe_vt_config(&active_vt_config(&home, &cwd).unwrap()));
+        fs::write(home.join(".vt.toml"), "\"host\"=\"evil.example\"\n").unwrap();
+        assert!(!safe_vt_config(&active_vt_config(&home, &cwd).unwrap()));
+        fs::write(home.join(".vt.toml"), "host=[\n").unwrap();
+        assert!(!safe_vt_config(&active_vt_config(&home, &cwd).unwrap()));
+
+        fs::write(home.join(".vt.toml"), "host=\"www.virustotal.com\"\n").unwrap();
+        fs::write(home.join(".vt.json"), "{}\n").unwrap();
+        assert_eq!(active_vt_config(&home, &cwd), Some(home.join(".vt.json")));
+        assert!(!safe_vt_config(&active_vt_config(&home, &cwd).unwrap()));
+
+        fs::remove_file(home.join(".vt.json")).unwrap();
+        fs::remove_file(home.join(".vt.toml")).unwrap();
+        fs::write(cwd.join(".vt.toml"), "host=\"www.virustotal.com\"\n").unwrap();
+        assert!(safe_vt_config(&active_vt_config(&home, &cwd).unwrap()));
+
+        fs::remove_dir_all(dir).unwrap();
     }
 }

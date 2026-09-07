@@ -116,3 +116,41 @@ distribution details can change independently of Automic Vault.
 Code signing proves identity and integrity, not intent. Only allow a signing team
 you trust, and keep the terminal or agent app's TCC permissions minimal because
 TCC remains app-scoped.
+
+## Prefer Vendor-Signed Tools
+
+On macOS, install core Tools from the vendor's code-signed distribution when
+one exists. The official [Node.js macOS installer] ships an Apple-notarized
+package, and its `node` executable carries the Node.js
+Foundation Developer ID signature and Hardened Runtime.
+
+macOS can detect changes to the executable, and Automic Vault can revalidate
+the vendor identity and runtime posture when the executable is a Launcher or
+Target. The signature does not authenticate JavaScript, dependencies,
+plug-ins, or native extensions loaded by Node. Code signing proves identity and
+integrity, not intent.
+
+Other vendors ship signed macOS binaries too. Prefer, in order:
+
+1. the official vendor-signed distribution;
+2. a package-manager install that preserves the vendor's signature;
+3. a package-manager-signed build when no suitable vendor-signed artifact
+   exists.
+
+We recommend [mise] for managing runtimes such as Node.js and Python. For
+Node.js, mise installs the vendor's prebuilt binaries, preserving their code
+signatures without a local rebuild. Its [Python backend] defaults to
+`python-build-standalone`, so do not assume every mise-managed runtime carries
+the original vendor's Developer ID signature; choose the vendor's signed
+distribution when that identity is required.
+
+When a package manager builds or re-signs a Tool, the signature identifies that
+package manager's artifact rather than the vendor's release. For the related
+security boundaries, see [Tool Hardening], [Verified upstream Tool releases],
+and the Launcher Bundle requirements above.
+
+[Node.js macOS installer]: https://nodejs.org/en/download
+[mise]: https://mise.jdx.dev/lang/node.html
+[Python backend]: https://mise.jdx.dev/lang/python.html#precompiled-python-binaries
+[Tool Hardening]: architecture.md#tool-hardening
+[Verified upstream Tool releases]: adr/0012-verified-upstream-tool-releases.md

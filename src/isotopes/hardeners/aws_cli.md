@@ -20,6 +20,10 @@ config with the menu app before replacing itself with
 Automic Vault's `credential_process`; that helper only works as an immediate
 child of the registered, still-running AWS process.
 
+Credential-free metadata invocations (`aws --version`, `aws help`, and
+`aws <service> [operation] help`) skip Secret Use and run with an empty AWS
+configuration and a fixed system executable path.
+
 The menu app implements STS `GetSessionToken` and `AssumeRole` directly. It
 caches resulting credentials only for the lifetime of that registered AWS
 process. Nothing is written to disk and credentials are not shared between AWS
@@ -35,7 +39,8 @@ available inside the credential-bearing process.
 
 The Hardener verifies all of the following before activation:
 
-- HTTPS-only download from AWS's fixed release URL, with no redirects;
+- HTTPS-only download from AWS's version-specific release URL, with no redirects;
+- an exact match between the requested changelog version and signed package version;
 - Apple trust, AWS's Developer ID Installer team, notarization, and timestamp;
 - the `com.amazon.aws.cli2` package identity and bounded payload size/count;
 - every native payload component's Amazon Developer ID Application signature,
@@ -88,8 +93,9 @@ closed with a precise error.
 - `av harden aws` verifies the running app and installed CLI, then requests
   elevation to copy and reverify the package, extract it without scripts,
   protect and atomically activate the release, and replace `/usr/local/bin/aws`.
-- `av doctor aws` checks AWS's official v2 changelog and directs you back to the
-  Hardener when a newer release is available.
+- `av doctor aws` checks AWS's official v2 changelog and versioned macOS package
+  availability, then directs you back to the Hardener when a newer downloadable
+  release is available.
 - The AWS process can use any credential it receives for the lifetime and IAM
   scope of that credential. Automic Vault confines issuance to the approved
   invocation; it cannot harden the upstream AWS CLI process itself.

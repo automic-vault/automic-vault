@@ -11,14 +11,13 @@
 - `~/.config/rclone/rclone.conf`
 - `~/.rclone.conf`
 
-## Why This is not Yet Hardened
+## Hardening
 
-The retired `rclone` hardener moved the detected secret to the macOS Keychain,
-then recreated `$RCLONE_CONFIG` inside a temporary directory for each run. We no
-longer consider a temporary plaintext file a sufficient security boundary, so
-this detector remains report-only.
+`av harden rclone` installs the signed rclone Isotope and uses rclone's native
+configuration encryption. The wrapping password remains a Global Value in
+Automic Vault and the verified rclone Target requests it through rclone's native
+password-command interface.
 
-If a narrow environment-variable or credential-helper interface can cover this
-state without writing the secret back to disk, we can reconsider the hardener.
-
-[Open an issue to discuss a safer integration](https://github.com/automic-vault/automic-vault/issues).
+Because one encrypted configuration contains every remote, one approved Secret
+Application unlocks all configured remotes for that rclone process. The Gate
+does not claim per-remote access control.

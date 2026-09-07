@@ -32,9 +32,7 @@ pub(crate) fn run(stdout: &mut dyn Write, yes: bool) -> Result<(), String> {
     .and_then(|()| stdout.flush())
     .map_err(|err| format!("failed to show Keychain notice: {err}"))?;
 
-    if tokens.is_empty() {
-        tokens.extend(read_legacy_keychain_tokens());
-    }
+    tokens.extend(read_legacy_keychain_tokens()?);
     tokens.sort();
     tokens.dedup();
 
@@ -156,26 +154,32 @@ fn read_plaintext_tokens(paths: &[PathBuf]) -> Result<Vec<String>, String> {
     Ok(tokens)
 }
 
-fn read_legacy_keychain_tokens() -> Vec<String> {
+fn read_legacy_keychain_tokens() -> Result<Vec<String>, String> {
     if let Some(token) = crate::test_env_string("AUTOMIC_VAULT_TEST_SUPABASE_LEGACY_TOKEN") {
-        return vec![token];
+        return validate_legacy_keychain_token("test", token).map(|token| vec![token]);
     }
-    KEYCHAIN_ACCOUNTS
-        .iter()
-        .filter_map(|account| security_find_generic_password(KEYCHAIN_SERVICE, account))
-        .collect()
+    if crate::test_keychain_dir().is_some() {
+        return Ok(Vec::new());
+    }
+    let mut tokens = Vec::new();
+    for account in KEYCHAIN_ACCOUNTS {
+        if let Some(token) = security_find_generic_password(KEYCHAIN_SERVICE, account)? {
+            tokens.push(token);
+        }
+    }
+    Ok(tokens)
 }
 
-fn security_find_generic_password(service: &str, account: &str) -> Option<String> {
-    let output = Command::new("/usr/bin/security")
-        .args(["find-generic-password", "-s", service, "-a", account, "-w"])
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let token = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    is_supabase_access_token(&token).then_some(token)
+fn security_find_generic_password(service: &str, account: &str) -> Result<Option<String>, String> {
+    super::gh_cli::security_find_generic_password_result(service, Some(account))?
+        .map(|token| validate_legacy_keychain_token(account, token))
+        .transpose()
+}
+
+fn validate_legacy_keychain_token(account: &str, token: String) -> Result<String, String> {
+    is_supabase_access_token(&token).then_some(token).ok_or_else(|| {
+        format!("legacy Supabase Keychain item for account {account:?} is not a supported access token")
+    })
 }
 
 fn remove_plaintext_token(path: &Path) -> Result<(), String> {
@@ -225,6 +229,7 @@ fn is_supabase_access_token(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::fs::PermissionsExt;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
@@ -293,6 +298,115 @@ mod tests {
         ));
         assert!(!is_supabase_access_token("sbp_short"));
         assert!(!is_supabase_access_token("not-a-token"));
+    }
+
+    #[test]
+    fn normalizes_go_keyring_wrapped_keychain_tokens() {
+        let _guard = crate::global_test_env_lock().lock().unwrap();
+        let security = fake_security(
+            "wrapped-supabase-keychain",
+            "printf '%s\\n' 'go-keyring-base64:c2JwXzAxMjM0NTY3ODlhYmNkZWYwMTIzNDU2Nzg5YWJjZGVmMDEyMzQ1Njc='\n",
+        );
+        unsafe {
+            std::env::set_var("AUTOMIC_VAULT_TEST_SECURITY_PATH", &security);
+        }
+
+        let token = security_find_generic_password(KEYCHAIN_SERVICE, "supabase").unwrap();
+
+        unsafe {
+            std::env::remove_var("AUTOMIC_VAULT_TEST_SECURITY_PATH");
+        }
+        assert_eq!(
+            token.as_deref(),
+            Some("sbp_0123456789abcdef0123456789abcdef01234567")
+        );
+        let _ = fs::remove_file(security);
+    }
+
+    #[test]
+    fn treats_only_item_not_found_as_keychain_absence() {
+        let _guard = crate::global_test_env_lock().lock().unwrap();
+        let security = fake_security(
+            "missing-supabase-keychain",
+            "printf '%s\\n' 'The specified item could not be found in the keychain.' >&2\nexit 44\n",
+        );
+        unsafe {
+            std::env::set_var("AUTOMIC_VAULT_TEST_SECURITY_PATH", &security);
+        }
+
+        let token = security_find_generic_password(KEYCHAIN_SERVICE, "supabase").unwrap();
+
+        unsafe {
+            std::env::remove_var("AUTOMIC_VAULT_TEST_SECURITY_PATH");
+        }
+        assert_eq!(token, None);
+        let _ = fs::remove_file(security);
+    }
+
+    #[test]
+    fn keychain_read_errors_fail_closed() {
+        let _guard = crate::global_test_env_lock().lock().unwrap();
+        let dir = temp_path("denied-supabase-migration");
+        let home = dir.join("home");
+        let supabase = dir.join("supabase");
+        let token_path = home.join(".supabase/access-token");
+        fs::create_dir_all(token_path.parent().unwrap()).unwrap();
+        fs::write(&supabase, "original").unwrap();
+        fs::write(
+            &token_path,
+            "sbp_0123456789abcdef0123456789abcdef01234567\n",
+        )
+        .unwrap();
+        let security = fake_security(
+            "denied-supabase-keychain",
+            "printf '%s\\n' 'user interaction is not allowed' >&2\nexit 1\n",
+        );
+        unsafe {
+            std::env::set_var("HOME", &home);
+            std::env::set_var("AUTOMIC_VAULT_TEST_SUPABASE_CLI_PATH", &supabase);
+            std::env::set_var("AUTOMIC_VAULT_TEST_SECURITY_PATH", &security);
+        }
+
+        let error = run(&mut Vec::new(), true).unwrap_err();
+
+        unsafe {
+            std::env::remove_var("HOME");
+            std::env::remove_var("AUTOMIC_VAULT_TEST_SUPABASE_CLI_PATH");
+            std::env::remove_var("AUTOMIC_VAULT_TEST_SECURITY_PATH");
+        }
+        assert!(error.contains("failed to read legacy keychain item"));
+        assert!(error.contains("user interaction is not allowed"));
+        assert!(token_path.exists());
+        assert_eq!(fs::read_to_string(supabase).unwrap(), "original");
+        let _ = fs::remove_file(security);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn malformed_keychain_values_fail_closed() {
+        let _guard = crate::global_test_env_lock().lock().unwrap();
+        let security = fake_security(
+            "malformed-supabase-keychain",
+            "printf '%s\\n' 'go-keyring-base64:not-base64'\n",
+        );
+        unsafe {
+            std::env::set_var("AUTOMIC_VAULT_TEST_SECURITY_PATH", &security);
+        }
+
+        let error = security_find_generic_password(KEYCHAIN_SERVICE, "supabase").unwrap_err();
+
+        unsafe {
+            std::env::remove_var("AUTOMIC_VAULT_TEST_SECURITY_PATH");
+        }
+        assert!(error.contains("unsupported or malformed value"));
+        let _ = fs::remove_file(security);
+    }
+
+    fn fake_security(label: &str, body: &str) -> PathBuf {
+        let path = temp_path(label);
+        fs::write(&path, format!("#!/bin/sh\n{body}")).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
+        path
     }
 
     fn temp_path(label: &str) -> PathBuf {

@@ -24,8 +24,8 @@ const BREW_USER_UID_FILE: &str = "var/automic/user-uid";
 const LEGACY_CASK_USER_UID_FILE: &str = "var/automic/cask-user-uid";
 const STUB_MARKER_PREFIX: &[u8] = b"AUTOMIC_VAULT_BREW_STUB_V";
 #[cfg(test)]
-const STUB_MARKER: &[u8] = b"AUTOMIC_VAULT_BREW_STUB_V19";
-const STUB_VERSION: u32 = 19;
+const STUB_MARKER: &[u8] = b"AUTOMIC_VAULT_BREW_STUB_V20";
+const STUB_VERSION: u32 = 20;
 const ID_RANGE: std::ops::RangeInclusive<u32> = 550..=599;
 
 #[derive(Debug, PartialEq, Eq)]
@@ -48,6 +48,22 @@ pub(crate) fn run(stdout: &mut dyn Write, yes: bool) -> Result<(), String> {
 
     writeln!(stdout, "╭─ harden brew").ok();
     writeln!(stdout, "│").ok();
+    writeln!(stdout, "◆ defense in depth for most Isotopes").ok();
+    writeln!(
+        stdout,
+        "│  Automic Vault already verifies their code-signing identity before Secret Application."
+    )
+    .ok();
+    writeln!(
+        stdout,
+        "│  Hardening still gates brew writes and prevents same-user code from modifying installed tools."
+    )
+    .ok();
+    writeln!(
+        stdout,
+        "│  Environment-wrapper hardeners are the exception and are being phased out."
+    )
+    .ok();
     writeln!(stdout, "◆ casks are (mostly) UNSUPPORTED").ok();
     writeln!(
         stdout,
@@ -60,6 +76,8 @@ pub(crate) fn run(stdout: &mut dyn Write, yes: bool) -> Result<(), String> {
     )
     .ok();
     writeln!(stdout, "◆ `brew services` is UNSUPPORTED").ok();
+    writeln!(stdout, "│").ok();
+    writeln!(stdout, "◆ this hardener will:").ok();
     writeln!(stdout, "│").ok();
     writeln!(
         stdout,
@@ -761,7 +779,7 @@ fn account_diagnostics(expected_gid: u32) -> Vec<HardenerDiagnostic> {
             shell.as_deref().unwrap_or("missing"),
         ),
         remediation: format!(
-            "Repair it with `sudo dscl . -create /Users/automic PrimaryGroupID {expected_gid}`, `sudo dscl . -create /Users/automic NFSHomeDirectory /opt/homebrew/var/automic`, and `sudo dscl . -create /Users/automic UserShell /usr/bin/false`, then rerun `av doctor brew`."
+            "Repair it with:\n  `sudo dscl . -create /Users/automic PrimaryGroupID {expected_gid}`\n  `sudo dscl . -create /Users/automic NFSHomeDirectory /opt/homebrew/var/automic`\n  `sudo dscl . -create /Users/automic UserShell /usr/bin/false`\nThen rerun:\n  `av doctor brew`"
         ),
         path: None,
     }]
@@ -1521,7 +1539,7 @@ mod tests {
         assert!(is_managed_stub_file(&path));
         assert!(!stub_is_current(&path));
 
-        fs::write(&path, b"AUTOMIC_VAULT_BREW_STUB_V20 future").unwrap();
+        fs::write(&path, b"AUTOMIC_VAULT_BREW_STUB_V21 future").unwrap();
         assert!(stub_is_current(&path));
 
         for invalid in [

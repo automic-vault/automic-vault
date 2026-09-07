@@ -43,10 +43,15 @@ Developer tools and agent harnesses use their existing commands. Automic Vault d
 ### Exposure Detection
 
 Detectors inspect the developer environment without changing it. A Scan produces Findings for supported Exposures and Hazards. It cannot certify the whole environment.
+Detectors do not initiate Secret Use, invoke configured credential helpers, or
+cross an Authorization Gate. They may run trusted configuration-only plumbing
+that cannot apply or disclose a Secret. When passive evidence cannot establish
+runtime behavior, the Detector reports a Hazard rather than performing the
+protected operation.
 
 ### Tool Hardening
 
-Hardeners move supported Tools into a declared Hardened State. Doctor verifies the installed intervention and its dependencies. An Isotope supplies an Automic Vault-compatible build or wrapper where upstream behavior cannot support the required boundary. Each Automic Vault-maintained Tool fork produces and publishes its signed Isotope asset. The signed Isotopes Homebrew tap pins the expected fork release URL and digest. When Homebrew is available, the Hardener installs every tap Isotope through its fully qualified formula. Without Homebrew, executable-only Isotopes are verified against that same manifest and installed directly into `/usr/local/bin`; Automic Vault then assumes responsibility for their updates. Multi-file vendor distributions instead use a verified, root-owned package prefix under `/opt/av/<tool>`, as specified by [ADR 0031](adr/0031-isotope-installation-selection.md).
+Hardeners move supported Tools into a declared Hardened State. Doctor verifies the installed intervention and its dependencies. An Isotope supplies an Automic Vault-compatible build or wrapper where upstream behavior cannot support the required boundary. Each Automic Vault-maintained Tool fork produces and publishes its signed Isotope asset. The signed Isotopes Homebrew tap pins the expected fork release URL and digest. When Homebrew is available, the Hardener installs every tap Isotope through its fully qualified formula. Without Homebrew, executable-only Isotopes are verified against that same manifest and installed directly into `/usr/local/bin`; Automic Vault then assumes responsibility for their updates. Multi-file vendor distributions instead use a verified, root-owned package prefix under `/opt/av/<tool>`, as specified by [ADR 0031](adr/0031-isotope-installation-selection.md). The multi-file Wrangler Isotope uses the same protected prefix after its tap formula is installed, as specified by [ADR 0042](adr/0042-wrangler-isotope-runtime.md).
 
 Hardener detection is point-in-time diagnostic state, not runtime authorization
 evidence. Runtime Authorization consumes static Gate definitions and performs
@@ -260,6 +265,45 @@ menu shows any available Verified Launcher attribution, Target, and Secret
 Names. Process liveness changes display state only: it grants no authority and
 cannot revoke Secret Values already released.
 
+The kubectl credential helper additionally binds Secret Application to the
+exact kubeconfig user and normalized Kubernetes API server supplied through
+Kubernetes' native `ExecCredential` request. The signed kubectl Isotope remains
+unmodified; its Hardened Runtime identity establishes the Target boundary, not
+operation intent. kubectl operations therefore classify as Unknown and require
+Approval unless a later design introduces independently verified operation
+context.
+
+The Fastly CLI Hardener migrates only named static tokens for the official
+Fastly API endpoint. Its signed Isotope stores a non-secret marker in Fastly's
+config and invokes the `av` Gate Client to load, store, or forget the selected
+token. The menu helper binds Secret Application to the live Developer
+ID-signed, Hardened Runtime Fastly Target, its complete arguments, token name,
+official endpoint, and derived Secret Name. SSO, legacy profiles, alternate
+endpoints, and unknown auth fields fail closed. Fastly API operations classify
+as Unknown; explicit token-reveal operations classify as a Secret Dump.
+
+The sqlcmd Hardener migrates basic-auth passwords from the default modern
+`~/.sqlcmd/sqlconfig` into Secret Custody. Its signed Isotope retains only an
+`@av` marker and non-secret user, context, and endpoint metadata, and invokes
+fixed Gate Client operations for password reads, stores, and deletion. The menu
+helper binds Secret Application to the live Developer ID-signed, Hardened
+Runtime sqlcmd Target, its complete arguments, selected user profile, endpoint,
+and derived Secret Name. Custom sqlconfig paths, unsupported authentication,
+unknown fields, malformed markers, and missing Secret Values fail closed. SQL
+execution remains Unknown; raw config and connection-string output classify as
+Secret Dumps.
+
+Podman uses the same registry credential-helper protocol as Docker, but its
+macOS remote client resolves credentials locally before sending an
+`X-Registry-Auth` header to the Linux service. The Podman Hardener keeps Red
+Hat's Developer ID-signed, Hardened Runtime client at `/opt/podman/bin/podman`,
+selects a dedicated Automic Vault launcher as the user's global containers/image
+credential helper, and replaces migrated plaintext entries with registry-only
+helper markers. Docker and Podman share the registry credential Secret format,
+but each remains governed by its own Authorization Gate and exact launcher.
+Because the upstream remote protocol builds a header from every configured
+registry credential, Podman credential reads classify as a Secret Dump.
+
 Grants are memory-only and running countdowns use both wall-clock and monotonic
 deadlines. Suspending freezes the lesser remaining duration from those clocks
 and makes the grant ineligible to authorize requests. Resuming creates new
@@ -281,6 +325,31 @@ Authorization Record.
 ## Identity model
 
 The policy identity is the Launcher's designated requirement, checked against the live process and its launch chain. Paths, process identifiers, names, and icons help the user recognize software but do not establish identity. Hardened Runtime requirements and rejected entitlements form part of launcher eligibility.
+
+An app's declared main executable may represent the app after its code signature
+and exact membership in the app's resource seal are validated. A non-main
+executable may represent the app only as an enabled Verified Launcher Helper
+whose exact app and helper signing identities appear in the positive catalog.
+The catalog combines reviewed built-in associations with associations the user
+explicitly approves after signed, sealed helpers are discovered while adding an
+app as a Verified Launcher. Discovery grants no authority. The approval UI lists
+each exact helper identity and relative path. User-approved associations bind
+both, and the UI warns that enabling one makes it represent the app at every
+Authorization Gate where that app has a current or future rule.
+User-approved associations and disabled catalog entries are stored in the Data
+Protection Keychain; missing or malformed stored configuration fails closed
+except that a genuinely absent record uses the built-in defaults. Runtime
+verification binds the live helper to the on-disk executable, validates the app
+executable, and validates the exact helper as a required, unaltered member of
+the app's resource seal.
+Unrelated app resources are not Launcher Identity evidence and are not scanned.
+If targeted resource validation is unavailable, Automic Vault falls back to
+complete bundle validation. Other bundle-contained executables do not inherit
+the app identity. Launcher Bundles retain their complete enrolled-bundle and
+payload verification. See [ADR 0020](adr/0020-app-launcher-main-executable.md)
+and [ADR 0033](adr/0033-targeted-app-launcher-validation.md).
+User-approved associations are defined by
+[ADR 0034](adr/0034-user-approved-launcher-helpers.md).
 
 Eligible Launchers must enable Hardened Runtime or be Apple platform binaries
 signed as part of a macOS release, for which macOS applies the runtime
@@ -460,10 +529,15 @@ with Unknown operation risk, Secret Disclosure, Unconstrained Secret
 Application, or a security warning require review in the full iPhone app.
 Notification content is redacted on the lock screen and never includes Secret
 values. The iPhone does not persist Authorization History. It may keep at most
-50 protected, device-local iPhone Activity entries for responses successfully
-sent from that phone. These summaries omit Secret Names, working directories,
-and expanded request details, are excluded from backup, and do not claim that
-the Mac accepted a response.
+50 protected, device-local Request History entries for responses successfully
+sent from that phone and pending requests whose cancellation the iPhone
+received from the Mac. Cancellations carry the same encrypted, redacted request
+summary in a silent background notification so the app can record them without
+alerting the user. iOS may delay, throttle, or discard background delivery, so
+Request History is a convenience and is not guaranteed complete. These
+summaries omit Secret Names, working directories, and
+expanded request details, are excluded from backup, and do not claim that the
+Mac accepted a response, allowed an operation, or why it canceled a request.
 
 Before signing and transmitting any allow response, the iPhone app verifies a
 current iPhone Approval subscription from StoreKit's signed transaction ledger.
@@ -582,13 +656,19 @@ recurring mutable or injectable harness up to Verified Launcher requirements.
 An enrolled Launcher Bundle payload representing its own bundle is not Retained
 Launcher Provenance and does not require this setting.
 
-While any Temporary Access Grant exists, a non-activating strip remains visible
-directly below the menu-bar item with every scoped grant, second-accurate
-remaining active time, suspension state, successful-use count, last-use time,
-and Add 10 Minutes, End, and countdown-toggle actions. The menu mirrors these
-actions and the shield turns orange. Automatic-request notifications stack
-below the strip. This continuous presentation is part of the temporary
-escalation's safety model, not a source of authority.
+While any Temporary Access Grant exists, a non-activating strip shows directly
+below the menu-bar item with every scoped grant, second-accurate remaining active
+time, suspension state, successful-use count, last-use time, and Add 10 Minutes,
+End, and countdown-toggle actions. The menu mirrors these actions and the shield
+turns orange. Automatic-request notifications stack below the strip.
+
+An off-by-default setting may collapse the strip after five seconds into a
+visible warning tab at the nearest horizontal screen edge. Selecting that tab,
+or the matching menu action, restores the complete strip and restarts the delay.
+A newly created grant always restores the complete strip. The orange menu-bar
+shield, active-grant menu entries, and immediate End action remain continuously
+available. This continuous indication is part of the temporary escalation's
+safety model, not a source of authority. See [ADR 0041](adr/0041-collapsible-temporary-access-grant-strip.md).
 
 ## Source of truth
 

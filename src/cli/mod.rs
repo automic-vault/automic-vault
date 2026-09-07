@@ -2,13 +2,16 @@ use std::ffi::OsString;
 use std::io::{IsTerminal, Write};
 use std::path::PathBuf;
 
+pub(crate) mod aliyun_credential;
 mod aws;
 mod bless;
 pub(crate) mod docker_credential;
 pub(crate) mod doctor;
+pub(crate) mod fastly_credential;
 pub(crate) mod goat_credential;
 mod gpg_sign;
 mod inject;
+pub(crate) mod kubectl_credential;
 mod launcher_bundle;
 mod list;
 mod open;
@@ -18,11 +21,14 @@ pub(crate) mod oxide_credential;
 pub(crate) mod plumber_credential;
 mod proxy;
 pub(crate) mod railway_credential;
+pub(crate) mod rclone_password;
 mod save;
 mod scan;
 mod shell_secrets;
+pub(crate) mod sqlcmd_credential;
 pub(crate) mod terraform_credential;
 pub(crate) mod uaa_credential;
+pub(crate) mod wakatime_credential;
 
 use crate::isotopes::hardeners;
 
@@ -53,7 +59,7 @@ modes:
 more:
   $ open https://www.automicvault.com/docs/";
 
-pub(crate) const INSTALL_REVISION: u32 = 38;
+pub(crate) const INSTALL_REVISION: u32 = 47;
 
 pub(crate) fn bash_shell_secret_insecurity_reasons() -> Result<Vec<String>, String> {
     shell_secrets::bash_reasons()
@@ -238,12 +244,17 @@ where
                 }
             }
         }
-        Some("__install-aws-release") if rest.len() == 2 => {
-            let Some(sha256) = rest[0].to_str() else {
+        Some("__install-aws-release") if rest.len() == 3 => {
+            let Some(version) = rest[0].to_str() else {
+                let _ = writeln!(stderr, "av: invalid AWS release version");
+                return 2;
+            };
+            let Some(sha256) = rest[1].to_str() else {
                 let _ = writeln!(stderr, "av: invalid AWS release digest");
                 return 2;
             };
-            match hardeners::aws_cli::install_aws_release(sha256, &PathBuf::from(&rest[1])) {
+            match hardeners::aws_cli::install_aws_release(version, sha256, &PathBuf::from(&rest[2]))
+            {
                 Ok(()) => 0,
                 Err(err) => {
                     let _ = writeln!(stderr, "av: {err}");
@@ -263,6 +274,15 @@ where
         }
         Some("__install-docker-helper") if rest.is_empty() => {
             match hardeners::docker::install_privileged() {
+                Ok(()) => 0,
+                Err(err) => {
+                    let _ = writeln!(stderr, "av: {err}");
+                    1
+                }
+            }
+        }
+        Some("__install-podman-helper") if rest.is_empty() => {
+            match hardeners::podman::install_privileged() {
                 Ok(()) => 0,
                 Err(err) => {
                     let _ = writeln!(stderr, "av: {err}");
@@ -313,6 +333,15 @@ where
         }
         Some("detectors") if rest == [OsString::from("--json")] => scan::run_detectors_json(stdout),
         Some("hardeners") if rest == [OsString::from("--json")] => scan::run_hardeners_json(stdout),
+        Some("__dashboard-hardening-json") if rest.is_empty() => {
+            match scan::run_dashboard_hardening_json(stdout) {
+                Ok(code) => code,
+                Err(err) => {
+                    let _ = writeln!(stderr, "av: {err}");
+                    1
+                }
+            }
+        }
         Some("__secret-gates-json") if rest.is_empty() => scan::run_secret_gates_json(stdout),
         Some("gpg-sign") => gpg_sign::run(rest, stdout, stderr),
         Some("__gpg-public-key") if rest.is_empty() => gpg_sign::validate(stdout, stderr),
@@ -366,6 +395,10 @@ where
                 let result = hardeners::docker::run(stdout, yes);
                 return finish_hardening(result, "docker", stdout, stderr);
             }
+            if target == "podman" {
+                let result = hardeners::podman::run(stdout, yes);
+                return finish_hardening(result, "podman", stdout, stderr);
+            }
             if target == "terraform" || target == "terraform-core" {
                 let result =
                     hardeners::terraform::run(hardeners::terraform::Tool::Terraform, stdout, yes);
@@ -379,6 +412,18 @@ where
             if target == "oxide" || target == "oxide-cli" {
                 let result = hardeners::oxide_cli::run(stdout, yes);
                 return finish_hardening(result, "oxide-cli", stdout, stderr);
+            }
+            if target == "fastly" || target == "fastly-cli" {
+                let result = hardeners::fastly_cli::run(stdout, yes);
+                return finish_hardening(result, "fastly-cli", stdout, stderr);
+            }
+            if target == "sqlcmd" {
+                let result = hardeners::sqlcmd::run(stdout, yes);
+                return finish_hardening(result, "sqlcmd", stdout, stderr);
+            }
+            if target == "aliyun" || target == "aliyun-cli" {
+                let result = hardeners::aliyun_cli::run(stdout, yes);
+                return finish_hardening(result, "aliyun-cli", stdout, stderr);
             }
             if target == "goat" {
                 let result = hardeners::goat::run(stdout, yes);
@@ -403,6 +448,22 @@ where
             if target == "plumber" {
                 let result = hardeners::plumber::run(stdout, yes);
                 return finish_hardening(result, "plumber", stdout, stderr);
+            }
+            if target == "wakatime" || target == "wakatime-cli" {
+                let result = hardeners::wakatime_cli::run(stdout, yes);
+                return finish_hardening(result, "wakatime-cli", stdout, stderr);
+            }
+            if target == "rclone" {
+                let result = hardeners::rclone::run(stdout, yes);
+                return finish_hardening(result, "rclone", stdout, stderr);
+            }
+            if target == "kubectl" || target == "kubernetes-cli" {
+                let result = hardeners::kubectl::run(stdout, yes);
+                return finish_hardening(result, "kubectl", stdout, stderr);
+            }
+            if target == "wrangler" {
+                let result = hardeners::wrangler::run(stdout, yes);
+                return finish_hardening(result, "wrangler", stdout, stderr);
             }
             if target == "gh" || target == "gh-cli" {
                 let result = hardeners::gh_cli::run(stdout, yes);
@@ -458,14 +519,21 @@ where
             aws::credentials(Some("official-v2"), stdout, stderr)
         }
         Some("docker-credential") => docker_credential::run(rest, stdout, stderr),
+        Some("podman-credential") => docker_credential::run_podman(rest, stdout, stderr),
         Some("terraform-credential") => terraform_credential::run(rest, stdout, stderr),
+        Some("aliyun-credential") => aliyun_credential::run(rest, stdout, stderr),
         Some("oxide-credential") => oxide_credential::run(rest, stdout, stderr),
+        Some("fastly-credential") => fastly_credential::run(rest, stdout, stderr),
+        Some("sqlcmd-credential") => sqlcmd_credential::run(rest, stdout, stderr),
         Some("goat-credential") => goat_credential::run(rest, stdout, stderr),
+        Some("kubectl-credential") => kubectl_credential::run(rest, stdout, stderr),
         Some("ordercli-credential") => ordercli_credential::run(rest, stdout, stderr),
         Some("openhue-credential") => openhue_credential::run(rest, stdout, stderr),
         Some("plumber-credential") => plumber_credential::run(rest, stdout, stderr),
         Some("uaa-credential") => uaa_credential::run(rest, stdout, stderr),
         Some("railway-credential") => railway_credential::run(rest, stdout, stderr),
+        Some("wakatime-credential") => wakatime_credential::run(rest, stdout, stderr),
+        Some("rclone-password") => rclone_password::run(rest, stdout, stderr),
         Some("list" | "ls") => list::run(rest, stdout, stderr),
         Some("bless") => bless::run(rest, stderr),
         Some("open") => {
@@ -676,6 +744,33 @@ mod tests {
 
         assert_eq!(code, 0);
         assert_eq!(stderr, "");
+    }
+
+    #[test]
+    fn private_dashboard_hardening_report_combines_hardeners_and_doctor() {
+        let _guard = crate::global_test_env_lock().lock().unwrap();
+        unsafe {
+            std::env::set_var("AUTOMIC_VAULT_TEST_AWS_STUB_PATH", "/nonexistent");
+        }
+
+        let (code, stdout, stderr) = run_args(&["av", "__dashboard-hardening-json"]);
+
+        unsafe { std::env::remove_var("AUTOMIC_VAULT_TEST_AWS_STUB_PATH") };
+        let report: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+        assert_eq!(code, 0);
+        assert_eq!(stderr, "");
+        assert!(
+            report["hardeners"]
+                .as_array()
+                .is_some_and(|items| !items.is_empty())
+        );
+        assert!(
+            report["detectors"]
+                .as_array()
+                .is_some_and(|items| !items.is_empty())
+        );
+        assert!(report["secret_gates"].is_array());
+        assert!(report["results"].is_array());
     }
 
     #[test]

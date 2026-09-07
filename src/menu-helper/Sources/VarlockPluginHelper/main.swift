@@ -14,10 +14,26 @@ private func fail(_ message: String) -> Never {
     exit(1)
 }
 
+private func canonicalWorkingDirectory() -> String? {
+    var resolved = [CChar](repeating: 0, count: Int(PATH_MAX))
+    guard realpath(FileManager.default.currentDirectoryPath, &resolved) != nil else { return nil }
+    return resolved.withUnsafeBytes { bytes in
+        String(bytes: bytes.prefix { $0 != 0 }, encoding: .utf8)
+    }
+}
+
 if CommandLine.arguments.dropFirst().elementsEqual(["--protocol-version"]) {
     print(varlockProtocolVersion)
     exit(0)
 }
+
+#if DEBUG
+if CommandLine.arguments.dropFirst().elementsEqual(["--test-canonical-working-directory"]) {
+    guard let cwd = canonicalWorkingDirectory() else { fail("working directory is unavailable") }
+    print(cwd)
+    exit(0)
+}
+#endif
 
 guard 4...(maximumSecretNames + 3) ~= CommandLine.arguments.count else {
     fail("expected a protocol version, schema digest, and between 1 and \(maximumSecretNames) Secret Names")
@@ -44,8 +60,7 @@ guard Set(secretNames).count == secretNames.count,
 else {
     fail("invalid Secret Name")
 }
-let cwd = URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true)
-    .resolvingSymlinksInPath().path
+guard let cwd = canonicalWorkingDirectory() else { fail("working directory is unavailable") }
 
 let connection = xpc_connection_create_mach_service(approvalService, nil, 0)
 guard xpc_connection_set_peer_code_signing_requirement(

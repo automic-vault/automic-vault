@@ -2,11 +2,15 @@
 
 ## Summary
 
+- Homebrew hardening is defense in depth for most Isotopes. Automic Vault
+  already verifies their code-signing identity before Secret Application.
+- It gates `brew install` and other Homebrew writes, and prevents same-user code
+  from modifying installed command-line tools such as `node`.
+- Environment-wrapper hardeners do not have the same Isotope identity boundary
+  and are gradually being phased out.
 - Only `brew` can alter `/opt/homebrew`.
 - Hardened Homebrew manages formulae and a narrow class of CLI-only casks.
 - Homebrew services are incompatible with hardened Homebrew.
-- Approval gates can be configured to stop agents installing things behind your
-  back.
 
 **Homebrew shell completions are unavailable while hardened.** Completion files
 remain protected inside `/opt/homebrew`; the launcher never copies them into a
@@ -23,16 +27,21 @@ The root phase creates the `automic` user and `vault` group when needed, owns
 
 ## Rationale
 
-Modern macOS has numerous protections to prevent malware or agents from
-altering installed sofware.
+Most Isotopes are code signed. Before Automic Vault applies a Secret to one of
+them, its Secret Gate verifies the Isotope's code-signing identity. Malware that
+modifies or replaces the Isotope therefore cannot use it to obtain the Secret.
+Homebrew hardening adds defense in depth for these tools; it is not their
+primary Secret Application boundary.
 
-These protections apply to `.apps` and other bundle types, not to command line
-tools. Command line tools are protected by their parent `.app` which is often
-a Terminal but nowadays is often an Agent Harness.
+Homebrew hardening still adds an Execution Gate for `brew install` and other
+writes. It also makes `/opt/homebrew` unavailable for same-user modification,
+so malware or an agent cannot replace an installed command-line tool such as
+`node`. This protects the integrity of Homebrew-installed tools whether or not
+they use a Secret.
 
-Thus we need to apply UNIX security permissions to our command line tools to
-ensure what is installed *remains what is installed*. Automic Vault hardening
-is that solution.
+Environment-wrapper hardeners are the exception. They wrap mutable upstream
+commands rather than rely on a signed Isotope identity, so protecting their
+installed Targets remains more important until those wrappers are phased out.
 
 ## Details
 

@@ -1,6 +1,6 @@
 [package]
 name = "av"
-version = "3.18.1"
+version = "4.5.0"
 edition = "2024"
 
 [profile.release]
@@ -9,6 +9,12 @@ lto = "fat"
 codegen-units = 1
 strip = "symbols"
 panic = "abort"
+
+# Exercise optimized code with isolated test fixtures. Shipped release binaries keep
+# debug assertions disabled and therefore continue to ignore AUTOMIC_VAULT_TEST_* overrides.
+[profile.test-release]
+inherits = "release"
+debug-assertions = true
 
 [dependencies]
 axum = { version = "0.8", features = ["ws"] }

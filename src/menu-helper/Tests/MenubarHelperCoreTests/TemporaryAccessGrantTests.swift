@@ -19,6 +19,61 @@ private func scope(
     )
 }
 
+@Test func temporaryGrantPresentationExplainsEligibility() {
+    #expect(operationClassificationTitle(.readOnly) == "Read Only")
+    #expect(operationClassificationTitle(.localWrite) == "Local Write")
+    #expect(operationClassificationTitle(.update) == "Homebrew Update")
+    #expect(operationClassificationTitle(.mutating)
+        == "Local Write, System Write, Remote Write, or a combination")
+    #expect(operationClassificationTitle(.secretDump)
+        == "Elevated Secret Application or Secret Disclosure")
+    #expect(operationClassificationTitle(.unknown) == "Unknown")
+
+    let agent = AgentTaskContext(provider: .codex, id: codexID)
+    #expect(temporaryAccessGrantUnavailableReason(
+        hasToolSpecificGate: true,
+        classification: .unknown,
+        launcherRuntimeProtection: .hardened,
+        agentTaskContext: agent
+    ) == "10-minute Write Access excludes Unknown operations.")
+    #expect(temporaryAccessGrantUnavailableReason(
+        hasToolSpecificGate: false,
+        classification: nil,
+        launcherRuntimeProtection: .hardened,
+        agentTaskContext: agent
+    ) == "10-minute Write Access is unavailable at the Direct Secret Gate.")
+    #expect(temporaryAccessGrantUnavailableReason(
+        hasToolSpecificGate: true,
+        classification: .readOnly,
+        launcherRuntimeProtection: .hardened,
+        agentTaskContext: agent
+    ) == "10-minute Write Access is available only for recognized write operations.")
+    #expect(temporaryAccessGrantUnavailableReason(
+        hasToolSpecificGate: true,
+        classification: .secretDump,
+        launcherRuntimeProtection: .hardened,
+        agentTaskContext: agent
+    ) == "10-minute Write Access excludes Elevated Secret Application and Secret Disclosure.")
+    #expect(temporaryAccessGrantUnavailableReason(
+        hasToolSpecificGate: true,
+        classification: .mutating,
+        launcherRuntimeProtection: nil,
+        agentTaskContext: agent
+    ) == "10-minute Write Access requires an eligible Verified Launcher and runtime posture.")
+    #expect(temporaryAccessGrantUnavailableReason(
+        hasToolSpecificGate: true,
+        classification: .mutating,
+        launcherRuntimeProtection: .hardened,
+        agentTaskContext: nil
+    ) == "10-minute Write Access requires a recognized Codex task or Claude Code session.")
+    #expect(temporaryAccessGrantUnavailableReason(
+        hasToolSpecificGate: true,
+        classification: .mutating,
+        launcherRuntimeProtection: .hardened,
+        agentTaskContext: agent
+    ) == nil)
+}
+
 @Test func recognizedAgentEnvironmentProducesExactContext() throws {
     let codex = try #require(AgentTaskContext(environment: [
         "CODEX_THREAD_ID": codexID.uuidString.lowercased(),

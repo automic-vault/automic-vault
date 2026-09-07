@@ -2,51 +2,65 @@
 
 ## Trigger Conditions
 
+- The effective GitHub helper chain contains an ambient credential helper.
 - Git config delegates GitHub credentials to an untrusted `gh auth
   git-credential` helper.
-- `git credential fill` returns a GitHub password or token for github.com.
+- `osxkeychain` is effective and Keychain metadata confirms an Internet password
+  for `github.com`.
+- A signed Automic Vault `gh` helper is configured without first resetting
+  inherited helpers.
+- Git cannot safely resolve the effective helper configuration.
 
 A GitHub helper is not a Finding when an empty helper first resets inherited
 helpers and every effective helper is an absolute path to the signed Automic
 Vault `gh` Isotope. That helper requests the token through the `gh` Secret Gate
 instead of making it ambient authority.
 
+The Detector resolves includes and configuration precedence with
+`/usr/bin/git config`. It never runs `git credential fill` or invokes a
+configured helper.
+
 ## Sensitive Files
 
 - `~/.gitconfig`
 - `$XDG_CONFIG_HOME/git/config`
 - `~/.config/git/config`
+- Included Git config files reported by `git config --show-origin`
+- GitHub Internet-password metadata in the macOS Keychain
 
 ## Mitigation
 
-For an untrusted helper, remove the helper that returned the GitHub token,
-reject the cached credential, and move GitHub remotes to SSH. A signed Automic
+For an ambient or untrusted helper, remove the affected configuration and any
+matching cached credential, then move GitHub remotes to SSH. A signed Automic
 Vault `gh` Isotope may remain when it is the complete effective helper chain.
 
 ## Confirm the Finding
 
-Ask Git what it can return without a prompt:
+Inspect the fully expanded helper configuration without invoking a helper:
 
 ```sh
-printf 'protocol=https\nhost=github.com\n\n' |
-  GIT_TERMINAL_PROMPT=0 GCM_INTERACTIVE=never git credential fill
+git config --includes --show-origin --get-regexp \
+  '^credential\..*\.helper$|^credential\.helper$'
+security find-internet-password -s github.com -r htps
 ```
 
-Any non-empty `password=` line confirms the finding. Clean output has no
-`password=` line. Git may print the username or report that it could not read a
-password.
+The first command shows helper values and their source files. The second prints
+metadata only; it does not request the password value. `av doctor gh` verifies
+whether an absolute `gh` helper is the signed Isotope.
 
-Do not paste this command's output into an issue or chat. It may contain the
-token.
-
-Git does not identify the helper that supplied a live credential. Inspect the
-affected Git config when `av scan` reports a file and line. Otherwise, review
-the configured helpers. `av doctor gh` verifies whether `gh` resolves to the
-signed Isotope:
+To exercise the credential path explicitly, a user may run:
 
 ```sh
-git config --global --get-all credential.helper
-git config --global --get-all credential.https://github.com.helper
+printf 'protocol=https\nhost=github.com\n\n' | git credential fill
+```
+
+That command is not part of Scan. It invokes configured helpers, may request
+Automic Vault Approval, and may print a usable credential. Do not paste its
+output into an issue or chat.
+
+Review the configured helpers and verify the Isotope with:
+
+```sh
 av doctor gh
 ```
 
@@ -78,8 +92,7 @@ Delete untrusted helper lines that provide GitHub HTTPS credentials, including:
 ```
 
 Keychain Access may also contain a Git or GitHub Internet password. Search for
-`github.com`, remove the item used by Git, and run the credential-fill check
-again.
+`github.com` and remove the item used by Git.
 
 ## Move GitHub Remotes to SSH
 
@@ -122,21 +135,21 @@ git remote set-url origin "$(git remote get-url origin |
 ssh -T git@github.com
 git fetch
 git push --dry-run
-printf 'protocol=https\nhost=github.com\n\n' |
-  GIT_TERMINAL_PROMPT=0 GCM_INTERACTIVE=never git credential fill
+git config --includes --show-origin --get-regexp \
+  '^credential\..*\.helper$|^credential\.helper$'
 av scan
 ```
 
-The last credential-fill command must not print `password=`.
+An SSH-only setup has no effective GitHub HTTPS helper. A hardened HTTPS setup
+has one reset followed only by the signed Automic Vault `gh` Isotope.
 
 ## Caveats
 
-This detector queries `github.com`. A live finding may have no affected file
-because Git does not report which helper returned the credential. SSH agent
-access remains available to processes in your login session after you unlock
-the key, but Git no longer exposes a reusable HTTPS token through its helper
-protocol.
+This detector inspects helper configuration for `github.com`. It reports an
+arbitrary configured helper as a Hazard even when that helper currently has no
+cached credential. `osxkeychain` is reported only when password-item metadata
+for `github.com` exists. Secret values are never requested.
 
 The signed-Isotope exception fails closed. Relative helper commands, a missing
-reset, other effective helpers, config includes, an invalid signature, or any
-other uncertainty preserve the live probe or Finding.
+reset, other effective helpers, an invalid signature, or inspection failure
+remain Findings. Includes are resolved through Git's configuration plumbing.

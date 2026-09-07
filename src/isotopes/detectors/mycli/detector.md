@@ -2,7 +2,9 @@
 
 ## Trigger Conditions
 
-- mycli config contains credentials.
+- A mycli config contains a non-empty `password`, `passwd`, or `ssh_password`
+  field.
+- A mycli DSN contains a password in its URL user information.
 
 ## Sensitive Files
 
@@ -17,7 +19,15 @@ then recreated `~/.myclirc` inside a temporary directory for each run. We no
 longer consider a temporary plaintext file a sufficient security boundary, so
 this detector remains report-only.
 
-If a narrow environment-variable or credential-helper interface can cover this
-state without writing the secret back to disk, we can reconsider the hardener.
+mycli natively supports [`use_keyring = True`](https://www.mycli.net/credentials).
+With a password-free DSN, mycli prompts for the password on first use and stores
+it in the system Keychain for later connections. This removes the
+plaintext-config Exposure, and the Detector already ignores password-free DSNs.
+
+The native keyring is a storage boundary, not an Automic Vault Secret Gate. It
+does not bind Secret Application to a complete Authorization Request or produce
+an Authorization Record, so it is not Automic Vault Hardened State. We do not
+build an Isotope for mycli because signing its Python interpreter would not
+authenticate the mutable application source and dependencies it loads.
 
 [Open an issue to discuss a safer integration](https://github.com/automic-vault/automic-vault/issues).

@@ -10,14 +10,18 @@
 - `~/Library/Application Support/fastly/config.toml`
 - `~/.fastly/config.toml`
 
-## Why This is not Yet Hardened
+## Hardening
 
-The retired `fastly` hardener moved the detected secret to the macOS Keychain,
-then recreated `$XDG_CONFIG_HOME/fastly/config.toml` inside a temporary
-directory for each run. We no longer consider a temporary plaintext file a
-sufficient security boundary, so this detector remains report-only.
+Run `av harden fastly-cli`. The Hardener installs the signed Fastly Isotope,
+migrates named static tokens into Automic Vault, and leaves only token metadata
+and the non-secret `@av` marker in Fastly's config.
 
-If a narrow environment-variable or credential-helper interface can cover this
-state without writing the secret back to disk, we can reconsider the hardener.
+SSO, legacy profiles, alternate endpoints, and unknown auth fields are not
+rewritten. Resolve those manually before hardening.
 
-[Open an issue to discuss a safer integration](https://github.com/automic-vault/automic-vault/issues).
+If more than `~/Library/Application Support/fastly/config.toml` exists among
+the sensitive files above, move or merge the legacy config into that active
+path first. Go's `os.UserConfigDir` never consults `$XDG_CONFIG_HOME` on
+macOS, so that variable never selects where the live Fastly Target reads or
+writes; a config found only there is inactive. The Hardener will not guess
+which credential set should win.

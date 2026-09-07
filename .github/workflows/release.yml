@@ -192,7 +192,7 @@ jobs:
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
           POSTHOG_API_KEY: ${{ vars.POSTHOG_API_KEY }}
-        run: /bin/bash scripts/build.sh --release-artifact --version "$VERSION"
+        run: /bin/bash scripts/build.sh --release-artifact --wmo --version "$VERSION"
 
       - name: Verify signed release artifact
         shell: bash
@@ -202,6 +202,12 @@ jobs:
           codesign --verify --deep --strict "target/swift/Automic Vault.app"
           codesign --verify "$dmg"
           xcrun stapler validate "$dmg"
+
+      - name: Test signed release boundaries
+        shell: bash
+        run: >-
+          scripts/test-menu-helper-self-checks.sh --signed
+          "target/swift/Automic Vault.app/Contents/MacOS/AutomicVaultMenubar"
 
       - name: Stage release inputs
         shell: bash

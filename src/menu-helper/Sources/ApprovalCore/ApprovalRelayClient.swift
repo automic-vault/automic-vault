@@ -32,6 +32,8 @@ public struct ApprovalDeviceRegistration: Codable, Equatable, Sendable {
 private struct ApprovalRelayPublication: Codable {
     let message: ApprovalCiphertext
     let notification: ApprovalCiphertext
+    let notificationID: String
+    let silent: Bool
 }
 
 public actor ApprovalRelayClient {
@@ -107,10 +109,33 @@ public actor ApprovalRelayClient {
     }
 
     public func publish(_ request: PhoneApprovalRequest) async throws {
+        try await publish(
+            message: .request(request),
+            ticket: PhoneApprovalTicket(request: request),
+            requestID: request.id,
+            silent: false
+        )
+    }
+
+    public func publishCancellation(_ request: PhoneApprovalRequest) async throws {
+        try await publish(
+            message: .cancel(request.id),
+            ticket: PhoneApprovalTicket(canceled: request),
+            requestID: request.id,
+            silent: true
+        )
+    }
+
+    private func publish(
+        message: ApprovalWireMessage,
+        ticket: PhoneApprovalTicket,
+        requestID: UUID,
+        silent: Bool
+    ) async throws {
         guard let connection else { throw ApprovalRelayClientError.disconnected }
         try await waitUntilReady(connection)
-        let messageData = try JSONEncoder().encode(ApprovalWireMessage.request(request))
-        let ticketData = try JSONEncoder().encode(PhoneApprovalTicket(request: request))
+        let messageData = try JSONEncoder().encode(message)
+        let ticketData = try JSONEncoder().encode(ticket)
         let notification = try crypto.seal(ticketData, purpose: "notification")
         let notificationData = try JSONEncoder().encode(notification)
         guard notificationData.count <= Self.maximumNotificationBytes else {
@@ -118,7 +143,9 @@ public actor ApprovalRelayClient {
         }
         let publication = ApprovalRelayPublication(
             message: try crypto.seal(messageData, purpose: "transport"),
-            notification: notification
+            notification: notification,
+            notificationID: crypto.notificationIdentifier(for: requestID),
+            silent: silent
         )
         try await post(
             publication,

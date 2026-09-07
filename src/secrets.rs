@@ -1,19 +1,52 @@
 use std::path::PathBuf;
 
 const APPROVAL_SERVICE: &str = "com.automicvault.av2.approval";
-const DOCKER_HELPER_PROTOCOL_VERSION: u64 = 2;
+const ALIYUN_HELPER_PROTOCOL_VERSION: u64 = 1;
+const REGISTRY_HELPER_PROTOCOL_VERSION: u64 = 3;
 const OXIDE_HELPER_PROTOCOL_VERSION: u64 = 1;
+const FASTLY_HELPER_PROTOCOL_VERSION: u64 = 1;
+const SQLCMD_HELPER_PROTOCOL_VERSION: u64 = 1;
 const GOAT_HELPER_PROTOCOL_VERSION: u64 = 1;
+const KUBECTL_HELPER_PROTOCOL_VERSION: u64 = 1;
 const ORDERCLI_HELPER_PROTOCOL_VERSION: u64 = 1;
 const OPENHUE_HELPER_PROTOCOL_VERSION: u64 = 1;
 const PLUMBER_HELPER_PROTOCOL_VERSION: u64 = 1;
 const RAILWAY_HELPER_PROTOCOL_VERSION: u64 = 1;
+const RCLONE_HELPER_PROTOCOL_VERSION: u64 = 1;
 const TERRAFORM_HELPER_PROTOCOL_VERSION: u64 = 1;
 const UAA_HELPER_PROTOCOL_VERSION: u64 = 1;
+const WAKATIME_HELPER_PROTOCOL_VERSION: u64 = 1;
 
 struct XpcReply {
     value: Option<String>,
     names: Vec<String>,
+}
+
+pub(crate) fn ensure_aliyun_helper_ready() -> Result<(), String> {
+    if crate::test_keychain_dir().is_some() {
+        return Ok(());
+    }
+    let reply = xpc_request(
+        "aliyun-helper-version",
+        None,
+        None,
+        None,
+        Some((b"requested_version\0", ALIYUN_HELPER_PROTOCOL_VERSION)),
+    )
+    .map_err(|error| {
+        format!(
+            "Alibaba Cloud credential-helper protocol negotiation failed; update and open the Automic Vault app: {error}"
+        )
+    })?;
+    match reply.value.as_deref() {
+        Some("1") => Ok(()),
+        Some(version) => Err(format!(
+            "the running Automic Vault app reported unsupported Alibaba Cloud helper version {version}"
+        )),
+        None => {
+            Err("the running Automic Vault app returned no Alibaba Cloud helper version".into())
+        }
+    }
 }
 
 pub(crate) fn store_secret(account: &str, value: &str) -> Result<(), String> {
@@ -153,32 +186,33 @@ fn list_secret_names_filtered(global_only: bool) -> Result<Vec<String>, String> 
     .names)
 }
 
-pub(crate) fn ensure_docker_helper_ready() -> Result<(), String> {
+pub(crate) fn ensure_registry_helper_ready() -> Result<(), String> {
     if crate::test_keychain_dir().is_some() {
         return Ok(());
     }
+    // Stable compatibility wire name shared by Docker and Podman registry helpers.
     let reply = xpc_request(
         "docker-helper-version",
         None,
         None,
         None,
-        Some((b"requested_version\0", DOCKER_HELPER_PROTOCOL_VERSION)),
+        Some((b"requested_version\0", REGISTRY_HELPER_PROTOCOL_VERSION)),
     )
     .map_err(|error| {
         format!(
-            "Docker credential-helper protocol negotiation failed; update and open the Automic Vault app: {error}"
+            "Registry credential-helper protocol negotiation failed; update and open the Automic Vault app: {error}"
         )
     })?;
     match reply.value.as_deref() {
-        Some("1") => Ok(()),
+        Some(version) if version == REGISTRY_HELPER_PROTOCOL_VERSION.to_string() => Ok(()),
         Some(version) => Err(format!(
-            "the running Automic Vault app reported unsupported Docker helper version {version}"
+            "the running Automic Vault app reported unsupported registry helper version {version}"
         )),
-        None => Err("the running Automic Vault app returned no Docker helper version".into()),
+        None => Err("the running Automic Vault app returned no registry helper version".into()),
     }
 }
 
-pub(crate) fn store_docker_credential(account: &str, value: &str) -> Result<(), String> {
+pub(crate) fn store_registry_credential(account: &str, value: &str) -> Result<(), String> {
     if let Some(dir) = crate::test_keychain_dir() {
         std::fs::create_dir_all(&dir)
             .map_err(|err| format!("failed to create test keychain dir: {err}"))?;
@@ -186,6 +220,7 @@ pub(crate) fn store_docker_credential(account: &str, value: &str) -> Result<(), 
         return std::fs::write(&path, value)
             .map_err(|err| format!("failed to write {}: {err}", path.display()));
     }
+    // Stable compatibility wire name shared by Docker and Podman.
     xpc_request(
         "docker-save",
         Some((b"key\0", account)),
@@ -196,14 +231,15 @@ pub(crate) fn store_docker_credential(account: &str, value: &str) -> Result<(), 
     .map(|_| ())
 }
 
-pub(crate) fn delete_docker_credential(account: &str, server_url: &str) -> Result<(), String> {
+pub(crate) fn delete_registry_credential(account: &str, server_url: &str) -> Result<(), String> {
     if let Some(dir) = crate::test_keychain_dir() {
         return match std::fs::remove_file(dir.join(account)) {
             Ok(()) => Ok(()),
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(err) => Err(format!("failed to delete test Docker credential: {err}")),
+            Err(err) => Err(format!("failed to delete test registry credential: {err}")),
         };
     }
+    // Stable compatibility wire names and field shared by Docker and Podman.
     xpc_request(
         "docker-delete",
         Some((b"key\0", account)),
@@ -236,6 +272,81 @@ pub(crate) fn ensure_terraform_helper_ready() -> Result<(), String> {
             "the running Automic Vault app reported unsupported Terraform helper version {version}"
         )),
         None => Err("the running Automic Vault app returned no Terraform helper version".into()),
+    }
+}
+
+pub(crate) fn ensure_wakatime_helper_ready() -> Result<(), String> {
+    if crate::test_keychain_dir().is_some() {
+        return Ok(());
+    }
+    let reply = xpc_request(
+        "wakatime-helper-version",
+        None,
+        None,
+        None,
+        Some((b"requested_version\0", WAKATIME_HELPER_PROTOCOL_VERSION)),
+    )
+    .map_err(|error| {
+        format!(
+            "WakaTime credential-helper protocol negotiation failed; update and open the Automic Vault app: {error}"
+        )
+    })?;
+    match reply.value.as_deref() {
+        Some("1") => Ok(()),
+        Some(version) => Err(format!(
+            "the running Automic Vault app reported unsupported WakaTime helper version {version}"
+        )),
+        None => Err("the running Automic Vault app returned no WakaTime helper version".into()),
+    }
+}
+
+pub(crate) fn ensure_rclone_helper_ready() -> Result<(), String> {
+    if crate::test_keychain_dir().is_some() {
+        return Ok(());
+    }
+    let reply = xpc_request(
+        "rclone-helper-version",
+        None,
+        None,
+        None,
+        Some((b"requested_version\0", RCLONE_HELPER_PROTOCOL_VERSION)),
+    )
+    .map_err(|error| {
+        format!(
+            "rclone password-command protocol negotiation failed; update and open the Automic Vault app: {error}"
+        )
+    })?;
+    match reply.value.as_deref() {
+        Some("1") => Ok(()),
+        Some(version) => Err(format!(
+            "the running Automic Vault app reported unsupported rclone helper version {version}"
+        )),
+        None => Err("the running Automic Vault app returned no rclone helper version".into()),
+    }
+}
+
+pub(crate) fn ensure_kubectl_helper_ready() -> Result<(), String> {
+    if crate::test_keychain_dir().is_some() {
+        return Ok(());
+    }
+    let reply = xpc_request(
+        "kubectl-helper-version",
+        None,
+        None,
+        None,
+        Some((b"requested_version\0", KUBECTL_HELPER_PROTOCOL_VERSION)),
+    )
+    .map_err(|error| {
+        format!(
+            "kubectl credential-helper protocol negotiation failed; update and open the Automic Vault app: {error}"
+        )
+    })?;
+    match reply.value.as_deref() {
+        Some("1") => Ok(()),
+        Some(version) => Err(format!(
+            "the running Automic Vault app reported unsupported kubectl helper version {version}"
+        )),
+        None => Err("the running Automic Vault app returned no kubectl helper version".into()),
     }
 }
 
@@ -298,6 +409,124 @@ pub(crate) fn ensure_oxide_helper_ready() -> Result<(), String> {
         )),
         None => Err("the running Automic Vault app returned no Oxide helper version".into()),
     }
+}
+
+pub(crate) fn ensure_fastly_helper_ready() -> Result<(), String> {
+    if crate::test_keychain_dir().is_some() {
+        return Ok(());
+    }
+    let reply = xpc_request(
+        "fastly-helper-version",
+        None,
+        None,
+        None,
+        Some((b"requested_version\0", FASTLY_HELPER_PROTOCOL_VERSION)),
+    )
+    .map_err(|error| {
+        format!(
+            "Fastly credential-helper protocol negotiation failed; update and open the Automic Vault app: {error}"
+        )
+    })?;
+    match reply.value.as_deref() {
+        Some("1") => Ok(()),
+        Some(version) => Err(format!(
+            "the running Automic Vault app reported unsupported Fastly helper version {version}"
+        )),
+        None => Err("the running Automic Vault app returned no Fastly helper version".into()),
+    }
+}
+
+pub(crate) fn ensure_sqlcmd_helper_ready() -> Result<(), String> {
+    if crate::test_keychain_dir().is_some() {
+        return Ok(());
+    }
+    let reply = xpc_request(
+        "sqlcmd-helper-version",
+        None,
+        None,
+        None,
+        Some((b"requested_version\0", SQLCMD_HELPER_PROTOCOL_VERSION)),
+    )
+    .map_err(|error| {
+        format!(
+            "sqlcmd credential-helper protocol negotiation failed; update and open the Automic Vault app: {error}"
+        )
+    })?;
+    match reply.value.as_deref() {
+        Some("1") => Ok(()),
+        Some(version) => Err(format!(
+            "the running Automic Vault app reported unsupported sqlcmd helper version {version}"
+        )),
+        None => Err("the running Automic Vault app returned no sqlcmd helper version".into()),
+    }
+}
+
+pub(crate) fn store_sqlcmd_credential(scope: &str, value: &str) -> Result<(), String> {
+    let (profile, _, _) = crate::cli::sqlcmd_credential::parse_scope(scope)?;
+    let account = crate::cli::sqlcmd_credential::secret_name(&profile);
+    if crate::test_keychain_dir().is_some() {
+        return store_secret(&account, value);
+    }
+    xpc_request(
+        "sqlcmd-save",
+        Some((b"sqlcmd_scope\0", scope)),
+        Some((b"value\0", value)),
+        None,
+        None,
+    )
+    .map(|_| ())
+}
+
+pub(crate) fn delete_sqlcmd_credential(scope: &str, account: &str) -> Result<(), String> {
+    if let Some(dir) = crate::test_keychain_dir() {
+        return match std::fs::remove_file(dir.join(account)) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(format!("failed to delete test sqlcmd credential: {error}")),
+        };
+    }
+    xpc_request(
+        "sqlcmd-delete",
+        Some((b"sqlcmd_scope\0", scope)),
+        None,
+        None,
+        None,
+    )
+    .map(|_| ())
+}
+
+pub(crate) fn store_fastly_credential(scope: &str, value: &str) -> Result<(), String> {
+    let (name, endpoint) = crate::cli::fastly_credential::parse_scope(scope)?;
+    let account = crate::cli::fastly_credential::secret_name(&name, &endpoint);
+    if crate::test_keychain_dir().is_some() {
+        return store_secret(&account, value);
+    }
+    xpc_request(
+        "fastly-save",
+        Some((b"fastly_scope\0", scope)),
+        Some((b"value\0", value)),
+        None,
+        None,
+    )
+    .map(|_| ())
+}
+
+pub(crate) fn delete_fastly_credential(scope: &str, account: &str) -> Result<(), String> {
+    if let Some(dir) = crate::test_keychain_dir() {
+        return match std::fs::remove_file(dir.join(account)) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(format!("failed to delete test Fastly credential: {error}")),
+        };
+    }
+    xpc_request(
+        "fastly-delete",
+        Some((b"fastly_scope\0", scope)),
+        None,
+        None,
+        None,
+    )
+    .map(|_| ())
 }
 
 pub(crate) fn store_oxide_credential(scope: &str, value: &str) -> Result<(), String> {
@@ -775,17 +1004,17 @@ fn xpc_request_with_project_directory(
 
     let result = unsafe {
         if reply_is_error {
-            let error = xpc_dictionary_get_string(reply, _xpc_error_key_description);
-            let error = if error.is_null() {
-                "approval XPC connection failed".into()
+            if crate::approval_service_connection_invalid(reply) {
+                Err(crate::approval_service_unavailable_message(&service).into())
             } else {
-                std::ffi::CStr::from_ptr(error)
-                    .to_string_lossy()
-                    .into_owned()
-            };
-            if error == "Connection invalid" {
-                Err("Automic Vault approval service is not running; open the menu bar app".into())
-            } else {
+                let error = xpc_dictionary_get_string(reply, _xpc_error_key_description);
+                let error = if error.is_null() {
+                    "approval XPC connection failed".into()
+                } else {
+                    std::ffi::CStr::from_ptr(error)
+                        .to_string_lossy()
+                        .into_owned()
+                };
                 Err(error)
             }
         } else if xpc_dictionary_get_bool(reply, b"ok\0".as_ptr().cast()) {
@@ -847,6 +1076,10 @@ fn xpc_operation_requires_cwd(operation: &str) -> bool {
             | "goat-delete"
             | "oxide-save"
             | "oxide-delete"
+            | "fastly-save"
+            | "fastly-delete"
+            | "sqlcmd-save"
+            | "sqlcmd-delete"
             | "ordercli-save"
             | "ordercli-delete"
             | "openhue-save"
@@ -888,6 +1121,7 @@ mod tests {
         assert!(xpc_operation_requires_cwd("docker-delete"));
         assert!(xpc_operation_requires_cwd("goat-save"));
         assert!(xpc_operation_requires_cwd("oxide-save"));
+        assert!(xpc_operation_requires_cwd("fastly-save"));
         assert!(xpc_operation_requires_cwd("ordercli-save"));
         assert!(xpc_operation_requires_cwd("openhue-save"));
         assert!(xpc_operation_requires_cwd("plumber-save"));

@@ -6,6 +6,7 @@ install=0
 dmg=0
 notarize=0
 release_artifact=0
+wmo=0
 version_supplied=0
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CURRENT_VERSION="$(
@@ -25,6 +26,7 @@ while [[ $# -gt 0 ]]; do
     --dmg) dmg=1 ;;
     --notarize) notarize=1 ;;
     --release-artifact) release_artifact=1; dmg=1; notarize=1 ;;
+    --wmo) wmo=1 ;;
     --version)
       if [[ $# -lt 2 || "$2" == --* ]]; then
         echo "error: --version requires a value" >&2
@@ -35,7 +37,7 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     *)
-      echo "usage: $0 [--run] [--install] [--dmg] [--notarize] [--release-artifact] [--version VERSION]" >&2
+      echo "usage: $0 [--run] [--install] [--dmg] [--notarize] [--release-artifact] [--wmo] [--version VERSION]" >&2
       exit 64
       ;;
   esac
@@ -155,19 +157,27 @@ if [[ ! "$AV_CLI_REVISION" =~ ^[0-9]+$ ]]; then
   echo "error: invalid av install revision: $AV_CLI_REVISION" >&2
   exit 64
 fi
-swift build --build-system xcode -c release --disable-automatic-resolution \
-  --package-path "$MENU_HELPER" \
+swift_build_args=(
+  --build-system xcode
+  -c release
+  --disable-automatic-resolution
+  --package-path "$MENU_HELPER"
   --build-path "$SWIFT_TARGET"
+  --arch arm64
+)
+if [[ "$wmo" -eq 1 ]]; then
+  swift_build_args+=(-Xswiftc -whole-module-optimization)
+else
+  swift_build_args+=(-Xswiftc -no-whole-module-optimization)
+fi
+swift build "${swift_build_args[@]}"
 SWIFT_BIN="$(
-  swift build --build-system xcode -c release --disable-automatic-resolution \
-    --package-path "$MENU_HELPER" \
-    --build-path "$SWIFT_TARGET" \
-    --show-bin-path
+  swift build "${swift_build_args[@]}" --show-bin-path
 )"
 
 rm -rf "$APP" "$ICON_BUILD"
 mkdir -p "$MACOS" "$RESOURCES" "$LAUNCH_AGENTS" "$ICON_BUILD"
-lipo "$SWIFT_BIN/AutomicVaultMenubar" -thin arm64 -output "$MACOS/AutomicVaultMenubar"
+cp "$SWIFT_BIN/AutomicVaultMenubar" "$MACOS/AutomicVaultMenubar"
 cp "$SWIFT_BIN/AutomicVaultLauncher" "$RESOURCES/AutomicVaultLauncher"
 cp "$SWIFT_BIN/AutomicVaultVarlockPlugin" "$RESOURCES/AutomicVaultVarlockPlugin"
 ditto "$SWIFT_BIN/AppUpdater_AppUpdater.bundle" "$RESOURCES/AppUpdater_AppUpdater.bundle"

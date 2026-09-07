@@ -1,4 +1,6 @@
 const RELEASE_WORKFLOW: &str = include_str!("../.github/workflows/release.yml");
+const CI_WORKFLOW: &str = include_str!("../.github/workflows/ci.yml");
+const CARGO_MANIFEST: &str = include_str!("../Cargo.toml");
 const BUILD_SCRIPT: &str = include_str!("../scripts/build.sh");
 const PUBLISH_SCRIPT: &str = include_str!("../scripts/publish.sh");
 const HARDENER_SMOKE_SCRIPT: &str = include_str!("../scripts/smoke-test-hardeners.sh");
@@ -13,6 +15,30 @@ const ACCENT_COLOR: &str =
     include_str!("../src/menu-helper/Resources/Assets.xcassets/AccentColor.colorset/Contents.json");
 const SECRET_PROXY: &str =
     include_str!("../src/menu-helper/Sources/MenubarHelper/SecretProxy.swift");
+const MENU_HELPER_SELF_CHECKS: &str = include_str!("../scripts/test-menu-helper-self-checks.sh");
+
+#[test]
+fn ci_tests_optimized_and_executable_boundaries() {
+    assert!(CARGO_MANIFEST.contains("[profile.test-release]"));
+    assert!(CARGO_MANIFEST.contains("inherits = \"release\""));
+    assert!(CARGO_MANIFEST.contains("debug-assertions = true"));
+    assert!(
+        CI_WORKFLOW
+            .contains("cargo test --profile test-release --all-targets --all-features --locked")
+    );
+    assert!(CI_WORKFLOW.contains("scripts/test-menu-helper-self-checks.sh"));
+    assert!(CI_WORKFLOW.contains("scripts/test-varlock-plugin-helper.sh"));
+}
+
+#[test]
+fn signed_release_exercises_keychain_custody() {
+    assert!(MENU_HELPER_SELF_CHECKS.contains("--self-check-keychain-persistence"));
+    assert!(RELEASE_WORKFLOW.contains("scripts/test-menu-helper-self-checks.sh --signed"));
+    assert!(
+        RELEASE_WORKFLOW
+            .contains("target/swift/Automic Vault.app/Contents/MacOS/AutomicVaultMenubar")
+    );
+}
 
 #[test]
 fn release_workflow_binds_the_dmg_to_reviewed_source() {
@@ -77,12 +103,13 @@ fn release_builds_are_actions_only_and_fail_closed() {
     assert!(PUBLISH_SCRIPT.contains("internalVersionReview"));
     assert!(PUBLISH_SCRIPT.contains("INSTALL_REVISION in src/cli/mod.rs"));
     assert!(PUBLISH_SCRIPT.contains("STUB_VERSION in src/isotopes/hardeners/homebrew.rs"));
+    assert!(PUBLISH_SCRIPT.contains("MARKER update in src/brew_stub/main.rs"));
     assert!(PUBLISH_SCRIPT.contains("bumps-required)"));
     assert!(PUBLISH_SCRIPT.contains("exit 64"));
     assert!(PUBLISH_SCRIPT.contains("update_internal_versions \"$INTERNAL_VERSION_METADATA\""));
     assert!(PUBLISH_SCRIPT.contains("next != current + 1"));
     assert!(PUBLISH_SCRIPT.contains("ls-files --error-unmatch"));
-    assert!(PUBLISH_SCRIPT.contains("expected exactly one numeric assignment"));
+    assert!(PUBLISH_SCRIPT.contains("Homebrew stub marker assignment"));
     assert!(PUBLISH_SCRIPT.contains("--sandbox read-only"));
     assert!(PUBLISH_SCRIPT.contains("approval_policy=\\\"never\\\""));
     assert!(PUBLISH_SCRIPT.contains("shell_environment_policy.inherit=\\\"none\\\""));
@@ -90,21 +117,33 @@ fn release_builds_are_actions_only_and_fail_closed() {
     assert!(PUBLISH_SCRIPT.contains("RESUME_RELEASE=1"));
     assert!(PUBLISH_SCRIPT.contains("retry with: $0 --version $VERSION"));
     assert!(PUBLISH_SCRIPT.contains("-f notes=\"$(<\"$RELEASE_NOTES\")\""));
+    assert!(
+        PUBLISH_SCRIPT
+            .contains("APP_VERSION=\"$previous_version\" \"$ROOT/scripts/build.sh\" --wmo")
+    );
     assert!(RELEASE_WORKFLOW.contains("--notes-file \"$notes\""));
     assert!(!RELEASE_WORKFLOW.contains("--generate-notes"));
-    assert!(
-        RELEASE_WORKFLOW
-            .contains("run: /bin/bash scripts/build.sh --release-artifact --version \"$VERSION\"")
-    );
+    assert!(RELEASE_WORKFLOW.contains(
+        "run: /bin/bash scripts/build.sh --release-artifact --wmo --version \"$VERSION\""
+    ));
     assert!(BUILD_SCRIPT.contains("--release-artifact"));
     assert!(BUILD_SCRIPT.contains("release artifacts may only be built by GitHub Actions"));
     assert!(BUILD_SCRIPT.contains("release checkout does not match GITHUB_SHA"));
     assert!(BUILD_SCRIPT.contains("cargo build --release --locked"));
     assert!(BUILD_SCRIPT.contains("--disable-automatic-resolution"));
-    assert_eq!(BUILD_SCRIPT.matches("--build-system xcode").count(), 2);
-    assert!(BUILD_SCRIPT.contains(
-        "lipo \"$SWIFT_BIN/AutomicVaultMenubar\" -thin arm64 -output \"$MACOS/AutomicVaultMenubar\""
-    ));
+    assert_eq!(
+        BUILD_SCRIPT
+            .matches("swift build \"${swift_build_args[@]}\"")
+            .count(),
+        2
+    );
+    assert!(
+        BUILD_SCRIPT
+            .contains("cp \"$SWIFT_BIN/AutomicVaultMenubar\" \"$MACOS/AutomicVaultMenubar\"")
+    );
+    assert!(BUILD_SCRIPT.contains("--arch arm64"));
+    assert!(BUILD_SCRIPT.contains("-no-whole-module-optimization"));
+    assert!(!BUILD_SCRIPT.contains("lipo "));
     assert!(BUILD_SCRIPT.contains(
         "ditto \"$SWIFT_BIN/AppUpdater_AppUpdater.bundle\" \"$RESOURCES/AppUpdater_AppUpdater.bundle\""
     ));

@@ -1,11 +1,13 @@
 #if !DEBUG
 import Darwin
 import Foundation
+import MenubarHelperCore
 
 final class PostHogTelemetry: @unchecked Sendable {
     static let shared = PostHogTelemetry()
 
     private static let installIDDefaultsKey = "PostHogAnonymousInstallID"
+    private static let lastHeartbeatDefaultsKey = "PostHogLastHeartbeatAttemptAt"
     private let endpoint = URL(string: "https://us.i.posthog.com/i/v0/e/")!
     private let bundle: Bundle
     private let defaults: UserDefaults
@@ -28,6 +30,19 @@ final class PostHogTelemetry: @unchecked Sendable {
 
     func captureExplicitApproval() {
         capture("approve")
+    }
+
+    func captureDailyHeartbeat(now: Date = Date()) -> TimeInterval {
+        guard let apiKey, apiKey.isEmpty == false else { return DailyHeartbeat.interval }
+        let delay = DailyHeartbeat.delay(
+            lastAttemptAt: defaults.object(forKey: Self.lastHeartbeatDefaultsKey) as? Date,
+            now: now
+        )
+        guard delay == 0 else { return delay }
+
+        defaults.set(now, forKey: Self.lastHeartbeatDefaultsKey)
+        capture("automic_vault_heartbeat", apiKey: apiKey, properties: [:])
+        return DailyHeartbeat.interval
     }
 
     private func capture(_ event: String, properties: [String: Any] = [:]) {

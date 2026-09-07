@@ -44,12 +44,17 @@ struct ApprovalRequest {
     tool: Option<&'static str>,
     docker_server_url: Option<String>,
     terraform_hostname: Option<String>,
+    aliyun_profile: Option<String>,
     oxide_scope: Option<String>,
+    fastly_scope: Option<String>,
+    sqlcmd_scope: Option<String>,
     goat_scope: Option<String>,
     ordercli_scope: Option<String>,
     openhue_scope: Option<String>,
     uaa_scope: Option<String>,
     railway_scope: Option<String>,
+    kubectl_scope: Option<String>,
+    wakatime_api_url: Option<String>,
 }
 
 unsafe extern "C" {
@@ -229,7 +234,20 @@ fn exec(mut options: Options, stderr: &mut dyn Write) -> i32 {
         )
     });
     let prepared = if secretless {
-        resolve_target(&options.target).map(|target| (target, secretless_environment(&options)))
+        let substitute_empty = verified_script
+            .as_ref()
+            .and_then(|script| script.path.file_name())
+            .is_some_and(|name| name == "pnpm");
+        let s3cmd = verified_script
+            .as_ref()
+            .and_then(|script| script.path.file_name())
+            .is_some_and(|name| name == "s3cmd");
+        resolve_target(&options.target).map(|target| {
+            (
+                target,
+                secretless_environment(&options, substitute_empty, s3cmd),
+            )
+        })
     } else {
         prepare_injection(
             &options,
@@ -282,10 +300,44 @@ fn exec(mut options: Options, stderr: &mut dyn Write) -> i32 {
     1
 }
 
-fn secretless_environment(options: &Options) -> BTreeMap<OsString, OsString> {
+fn secretless_environment(
+    options: &Options,
+    substitute_empty: bool,
+    s3cmd: bool,
+) -> BTreeMap<OsString, OsString> {
     let mut env = std::env::vars_os().collect::<BTreeMap<_, _>>();
     for key in &options.keys {
-        env.remove(std::ffi::OsStr::new(key));
+        if substitute_empty {
+            // pnpm expands NODE_AUTH_TOKEN while loading .npmrc and warns when
+            // it is absent. An empty value is unauthenticated and stays quiet.
+            env.insert(OsString::from(key), OsString::new());
+        } else {
+            env.remove(std::ffi::OsStr::new(key));
+        }
+    }
+    if s3cmd {
+        for key in [
+            "AWS_ACCESS_KEY",
+            "AWS_SECRET_KEY",
+            "AWS_SESSION_TOKEN",
+            "AWS_SECURITY_TOKEN",
+            "AWS_CREDENTIAL_FILE",
+            "AWS_PROFILE",
+            "S3CMD_GPG_PASSPHRASE",
+        ] {
+            env.remove(std::ffi::OsStr::new(key));
+        }
+        // s3cmd otherwise probes instance metadata while loading its blanked
+        // config, even when it will only print usage or reject a command.
+        env.insert("AWS_ACCESS_KEY_ID".into(), "AUTOMIC_VAULT_TOKENLESS".into());
+        env.insert(
+            "AWS_SECRET_ACCESS_KEY".into(),
+            "AUTOMIC_VAULT_TOKENLESS".into(),
+        );
+        env.insert(
+            "S3CMD_GPG_PASSPHRASE".into(),
+            "AUTOMIC_VAULT_TOKENLESS".into(),
+        );
     }
     env
 }
@@ -358,16 +410,25 @@ fn approval_request(
         tool: None,
         docker_server_url: None,
         terraform_hostname: None,
+        aliyun_profile: None,
         oxide_scope: None,
+        fastly_scope: None,
+        sqlcmd_scope: None,
         goat_scope: None,
         ordercli_scope: None,
         openhue_scope: None,
         uaa_scope: None,
         railway_scope: None,
+        kubectl_scope: None,
+        wakatime_api_url: None,
     })
 }
 
-pub(super) fn docker_credential(key: String, server_url: String) -> Result<String, String> {
+pub(super) fn docker_credential(
+    key: String,
+    server_url: String,
+    tool: &'static str,
+) -> Result<String, String> {
     validate_key_name(&key)?;
     let request = ApprovalRequest {
         op: "docker-get",
@@ -381,15 +442,20 @@ pub(super) fn docker_credential(key: String, server_url: String) -> Result<Strin
         shebang_script: None,
         script_data: None,
         snapshot_incompatible_interpreter: None,
-        tool: Some("docker"),
+        tool: Some(tool),
         docker_server_url: Some(server_url),
         terraform_hostname: None,
+        aliyun_profile: None,
         oxide_scope: None,
+        fastly_scope: None,
+        sqlcmd_scope: None,
         goat_scope: None,
         ordercli_scope: None,
         openhue_scope: None,
         uaa_scope: None,
         railway_scope: None,
+        kubectl_scope: None,
+        wakatime_api_url: None,
     };
     if crate::test_keychain_dir().is_some() {
         return load_test_secret_if_present(&key)?
@@ -397,7 +463,7 @@ pub(super) fn docker_credential(key: String, server_url: String) -> Result<Strin
     }
     xpc_approve_injection(&request)?
         .remove(&key)
-        .ok_or_else(|| format!("Automic Vault returned no Docker credential for {key}"))
+        .ok_or_else(|| format!("Automic Vault returned no registry credential for {key}"))
 }
 
 pub(super) fn terraform_credential(key: String, hostname: String) -> Result<String, String> {
@@ -417,12 +483,17 @@ pub(super) fn terraform_credential(key: String, hostname: String) -> Result<Stri
         tool: Some("terraform"),
         docker_server_url: None,
         terraform_hostname: Some(hostname),
+        aliyun_profile: None,
         oxide_scope: None,
+        fastly_scope: None,
+        sqlcmd_scope: None,
         goat_scope: None,
         ordercli_scope: None,
         openhue_scope: None,
         uaa_scope: None,
         railway_scope: None,
+        kubectl_scope: None,
+        wakatime_api_url: None,
     };
     if crate::test_keychain_dir().is_some() {
         return load_test_secret_if_present(&key)?
@@ -431,6 +502,158 @@ pub(super) fn terraform_credential(key: String, hostname: String) -> Result<Stri
     xpc_approve_injection(&request)?
         .remove(&key)
         .ok_or_else(|| format!("Automic Vault returned no Terraform credential for {key}"))
+}
+
+pub(super) fn aliyun_credential(key: String, profile: String) -> Result<String, String> {
+    validate_key_name(&key)?;
+    let request = ApprovalRequest {
+        op: "aliyun-get",
+        keys: vec![key.clone()],
+        target: String::new(),
+        args: Vec::new(),
+        cwd: crate::path_security::current_working_directory_utf8()?,
+        replace_existing_env: false,
+        allow_missing_keys: false,
+        env_conflicts: Vec::new(),
+        shebang_script: None,
+        script_data: None,
+        snapshot_incompatible_interpreter: None,
+        tool: Some("aliyun-cli"),
+        docker_server_url: None,
+        terraform_hostname: None,
+        aliyun_profile: Some(profile),
+        oxide_scope: None,
+        fastly_scope: None,
+        sqlcmd_scope: None,
+        goat_scope: None,
+        ordercli_scope: None,
+        openhue_scope: None,
+        uaa_scope: None,
+        railway_scope: None,
+        kubectl_scope: None,
+        wakatime_api_url: None,
+    };
+    if crate::test_keychain_dir().is_some() {
+        return load_test_secret_if_present(&key)?
+            .ok_or_else(|| format!("failed to load secret {key}: -25300"));
+    }
+    xpc_approve_injection(&request)?
+        .remove(&key)
+        .ok_or_else(|| format!("Automic Vault returned no Alibaba Cloud credential for {key}"))
+}
+
+pub(super) fn wakatime_credential(key: String, api_url: String) -> Result<String, String> {
+    validate_key_name(&key)?;
+    let request = ApprovalRequest {
+        op: "wakatime-get",
+        keys: vec![key.clone()],
+        target: String::new(),
+        args: Vec::new(),
+        cwd: crate::path_security::current_working_directory_utf8()?,
+        replace_existing_env: false,
+        allow_missing_keys: false,
+        env_conflicts: Vec::new(),
+        shebang_script: None,
+        script_data: None,
+        snapshot_incompatible_interpreter: None,
+        tool: Some("wakatime-cli"),
+        docker_server_url: None,
+        terraform_hostname: None,
+        aliyun_profile: None,
+        oxide_scope: None,
+        fastly_scope: None,
+        sqlcmd_scope: None,
+        goat_scope: None,
+        ordercli_scope: None,
+        openhue_scope: None,
+        uaa_scope: None,
+        railway_scope: None,
+        kubectl_scope: None,
+        wakatime_api_url: Some(api_url),
+    };
+    if crate::test_keychain_dir().is_some() {
+        return load_test_secret_if_present(&key)?
+            .ok_or_else(|| format!("failed to load secret {key}: -25300"));
+    }
+    xpc_approve_injection(&request)?
+        .remove(&key)
+        .ok_or_else(|| format!("Automic Vault returned no WakaTime credential for {key}"))
+}
+
+pub(super) fn rclone_password(key: String) -> Result<String, String> {
+    validate_key_name(&key)?;
+    let request = ApprovalRequest {
+        op: "rclone-get",
+        keys: vec![key.clone()],
+        target: String::new(),
+        args: Vec::new(),
+        cwd: crate::path_security::current_working_directory_utf8()?,
+        replace_existing_env: false,
+        allow_missing_keys: false,
+        env_conflicts: Vec::new(),
+        shebang_script: None,
+        script_data: None,
+        snapshot_incompatible_interpreter: None,
+        tool: Some("rclone"),
+        docker_server_url: None,
+        terraform_hostname: None,
+        aliyun_profile: None,
+        oxide_scope: None,
+        fastly_scope: None,
+        sqlcmd_scope: None,
+        goat_scope: None,
+        ordercli_scope: None,
+        openhue_scope: None,
+        uaa_scope: None,
+        railway_scope: None,
+        kubectl_scope: None,
+        wakatime_api_url: None,
+    };
+    if crate::test_keychain_dir().is_some() {
+        return load_test_secret_if_present(&key)?
+            .ok_or_else(|| format!("failed to load secret {key}: -25300"));
+    }
+    xpc_approve_injection(&request)?
+        .remove(&key)
+        .ok_or_else(|| format!("Automic Vault returned no rclone config password for {key}"))
+}
+
+pub(super) fn kubectl_credential(key: String, scope: String) -> Result<String, String> {
+    validate_key_name(&key)?;
+    let request = ApprovalRequest {
+        op: "kubectl-get",
+        keys: vec![key.clone()],
+        target: String::new(),
+        args: Vec::new(),
+        cwd: crate::path_security::current_working_directory_utf8()?,
+        replace_existing_env: false,
+        allow_missing_keys: false,
+        env_conflicts: Vec::new(),
+        shebang_script: None,
+        script_data: None,
+        snapshot_incompatible_interpreter: None,
+        tool: Some("kubectl"),
+        docker_server_url: None,
+        terraform_hostname: None,
+        aliyun_profile: None,
+        oxide_scope: None,
+        fastly_scope: None,
+        sqlcmd_scope: None,
+        goat_scope: None,
+        ordercli_scope: None,
+        openhue_scope: None,
+        uaa_scope: None,
+        railway_scope: None,
+        kubectl_scope: Some(scope),
+        wakatime_api_url: None,
+    };
+    if crate::test_keychain_dir().is_some() {
+        return load_test_secret_if_present(&key)?
+            .ok_or_else(|| format!("failed to load secret {key}: -25300"));
+    }
+    xpc_approve_injection(&request)?
+        .remove(&key)
+        .ok_or_else(|| format!("Automic Vault returned no kubectl credential for {key}"))
 }
 
 pub(super) fn oxide_credential(key: String, scope: String) -> Result<String, String> {
@@ -450,12 +673,17 @@ pub(super) fn oxide_credential(key: String, scope: String) -> Result<String, Str
         tool: Some("oxide-cli"),
         docker_server_url: None,
         terraform_hostname: None,
+        aliyun_profile: None,
         oxide_scope: Some(scope),
+        fastly_scope: None,
+        sqlcmd_scope: None,
         goat_scope: None,
         ordercli_scope: None,
         openhue_scope: None,
         uaa_scope: None,
         railway_scope: None,
+        kubectl_scope: None,
+        wakatime_api_url: None,
     };
     if crate::test_keychain_dir().is_some() {
         return load_test_secret_if_present(&key)?
@@ -464,6 +692,82 @@ pub(super) fn oxide_credential(key: String, scope: String) -> Result<String, Str
     xpc_approve_injection(&request)?
         .remove(&key)
         .ok_or_else(|| format!("Automic Vault returned no Oxide credential for {key}"))
+}
+
+pub(super) fn fastly_credential(key: String, scope: String) -> Result<String, String> {
+    validate_key_name(&key)?;
+    let request = ApprovalRequest {
+        op: "fastly-get",
+        keys: vec![key.clone()],
+        target: String::new(),
+        args: Vec::new(),
+        cwd: crate::path_security::current_working_directory_utf8()?,
+        replace_existing_env: false,
+        allow_missing_keys: false,
+        env_conflicts: Vec::new(),
+        shebang_script: None,
+        script_data: None,
+        snapshot_incompatible_interpreter: None,
+        tool: Some("fastly-cli"),
+        docker_server_url: None,
+        terraform_hostname: None,
+        aliyun_profile: None,
+        oxide_scope: None,
+        fastly_scope: Some(scope),
+        sqlcmd_scope: None,
+        goat_scope: None,
+        ordercli_scope: None,
+        openhue_scope: None,
+        uaa_scope: None,
+        railway_scope: None,
+        kubectl_scope: None,
+        wakatime_api_url: None,
+    };
+    if crate::test_keychain_dir().is_some() {
+        return load_test_secret_if_present(&key)?
+            .ok_or_else(|| format!("failed to load secret {key}: -25300"));
+    }
+    xpc_approve_injection(&request)?
+        .remove(&key)
+        .ok_or_else(|| format!("Automic Vault returned no Fastly credential for {key}"))
+}
+
+pub(super) fn sqlcmd_credential(key: String, scope: String) -> Result<String, String> {
+    validate_key_name(&key)?;
+    let request = ApprovalRequest {
+        op: "sqlcmd-get",
+        keys: vec![key.clone()],
+        target: String::new(),
+        args: Vec::new(),
+        cwd: crate::path_security::current_working_directory_utf8()?,
+        replace_existing_env: false,
+        allow_missing_keys: false,
+        env_conflicts: Vec::new(),
+        shebang_script: None,
+        script_data: None,
+        snapshot_incompatible_interpreter: None,
+        tool: Some("sqlcmd"),
+        docker_server_url: None,
+        terraform_hostname: None,
+        aliyun_profile: None,
+        oxide_scope: None,
+        fastly_scope: None,
+        sqlcmd_scope: Some(scope),
+        goat_scope: None,
+        railway_scope: None,
+        ordercli_scope: None,
+        uaa_scope: None,
+        openhue_scope: None,
+        wakatime_api_url: None,
+        kubectl_scope: None,
+    };
+    if crate::test_keychain_dir().is_some() {
+        return load_test_secret_if_present(&key)?
+            .ok_or_else(|| format!("failed to load secret {key}: -25300"));
+    }
+    xpc_approve_injection(&request)?
+        .remove(&key)
+        .ok_or_else(|| format!("Automic Vault returned no sqlcmd credential for {key}"))
 }
 
 pub(super) fn goat_credential(key: String, scope: String) -> Result<String, String> {
@@ -483,12 +787,17 @@ pub(super) fn goat_credential(key: String, scope: String) -> Result<String, Stri
         tool: Some("goat"),
         docker_server_url: None,
         terraform_hostname: None,
+        aliyun_profile: None,
         oxide_scope: None,
+        fastly_scope: None,
+        sqlcmd_scope: None,
         goat_scope: Some(scope),
         ordercli_scope: None,
         openhue_scope: None,
         uaa_scope: None,
         railway_scope: None,
+        kubectl_scope: None,
+        wakatime_api_url: None,
     };
     if crate::test_keychain_dir().is_some() {
         return load_test_secret_if_present(&key)?
@@ -516,12 +825,17 @@ pub(super) fn railway_credential(key: String, scope: String) -> Result<String, S
         tool: Some("railway"),
         docker_server_url: None,
         terraform_hostname: None,
+        aliyun_profile: None,
         oxide_scope: None,
+        fastly_scope: None,
+        sqlcmd_scope: None,
         goat_scope: None,
         ordercli_scope: None,
         openhue_scope: None,
         uaa_scope: None,
         railway_scope: Some(scope),
+        kubectl_scope: None,
+        wakatime_api_url: None,
     };
     if crate::test_keychain_dir().is_some() {
         return load_test_secret_if_present(&key)?
@@ -549,12 +863,17 @@ pub(super) fn ordercli_credential(key: String, scope: String) -> Result<String, 
         tool: Some("ordercli"),
         docker_server_url: None,
         terraform_hostname: None,
+        aliyun_profile: None,
         oxide_scope: None,
+        fastly_scope: None,
+        sqlcmd_scope: None,
         goat_scope: None,
         ordercli_scope: Some(scope),
         openhue_scope: None,
         uaa_scope: None,
         railway_scope: None,
+        kubectl_scope: None,
+        wakatime_api_url: None,
     };
     if crate::test_keychain_dir().is_some() {
         return load_test_secret_if_present(&key)?
@@ -582,12 +901,17 @@ pub(super) fn uaa_credential(key: String, scope: String) -> Result<String, Strin
         tool: Some("uaa-cli"),
         docker_server_url: None,
         terraform_hostname: None,
+        aliyun_profile: None,
         oxide_scope: None,
+        fastly_scope: None,
+        sqlcmd_scope: None,
         goat_scope: None,
         ordercli_scope: None,
         openhue_scope: None,
         uaa_scope: Some(scope),
         railway_scope: None,
+        kubectl_scope: None,
+        wakatime_api_url: None,
     };
     if crate::test_keychain_dir().is_some() {
         return load_test_secret_if_present(&key)?
@@ -615,12 +939,17 @@ pub(super) fn openhue_credential(key: String, scope: String) -> Result<String, S
         tool: Some("openhue-cli"),
         docker_server_url: None,
         terraform_hostname: None,
+        aliyun_profile: None,
         oxide_scope: None,
+        fastly_scope: None,
+        sqlcmd_scope: None,
         goat_scope: None,
         ordercli_scope: None,
         openhue_scope: Some(scope),
         uaa_scope: None,
         railway_scope: None,
+        kubectl_scope: None,
+        wakatime_api_url: None,
     };
     if crate::test_keychain_dir().is_some() {
         return load_test_secret_if_present(&key)?
@@ -649,12 +978,17 @@ pub(super) fn plumber_credential(key: String, scope: String) -> Result<String, S
         tool: Some("plumber"),
         docker_server_url: None,
         terraform_hostname: None,
+        aliyun_profile: None,
         oxide_scope: None,
+        fastly_scope: None,
+        sqlcmd_scope: None,
         goat_scope: None,
         ordercli_scope: None,
         openhue_scope: None,
         uaa_scope: None,
         railway_scope: None,
+        kubectl_scope: None,
+        wakatime_api_url: None,
     };
     if crate::test_keychain_dir().is_some() {
         return load_test_secret_if_present(&key)?
@@ -906,12 +1240,17 @@ pub(super) fn approve_gpg_signing(
             tool: Some("gpg-signing"),
             docker_server_url: None,
             terraform_hostname: None,
+            aliyun_profile: None,
             oxide_scope: None,
+            fastly_scope: None,
+            sqlcmd_scope: None,
             goat_scope: None,
             ordercli_scope: None,
             openhue_scope: None,
             uaa_scope: None,
             railway_scope: None,
+            kubectl_scope: None,
+            wakatime_api_url: None,
         },
         response_keys,
     )
@@ -1052,8 +1391,17 @@ fn xpc_approve_request(
         if let Some(hostname) = &request.terraform_hostname {
             set_string(message, b"terraform_hostname\0", hostname)?;
         }
+        if let Some(profile) = &request.aliyun_profile {
+            set_string(message, b"aliyun_profile\0", profile)?;
+        }
         if let Some(scope) = &request.oxide_scope {
             set_string(message, b"oxide_scope\0", scope)?;
+        }
+        if let Some(scope) = &request.fastly_scope {
+            set_string(message, b"fastly_scope\0", scope)?;
+        }
+        if let Some(scope) = &request.sqlcmd_scope {
+            set_string(message, b"sqlcmd_scope\0", scope)?;
         }
         if let Some(scope) = &request.goat_scope {
             set_string(message, b"goat_scope\0", scope)?;
@@ -1069,6 +1417,12 @@ fn xpc_approve_request(
         }
         if let Some(scope) = &request.railway_scope {
             set_string(message, b"railway_scope\0", scope)?;
+        }
+        if let Some(scope) = &request.kubectl_scope {
+            set_string(message, b"kubectl_scope\0", scope)?;
+        }
+        if let Some(api_url) = &request.wakatime_api_url {
+            set_string(message, b"wakatime_api_url\0", api_url)?;
         }
         xpc_dictionary_set_bool(
             message,
@@ -1106,20 +1460,17 @@ fn xpc_approve_request(
 
     let result = unsafe {
         if xpc_get_type(reply) == std::ptr::addr_of!(_xpc_type_error).cast() {
-            let error = xpc_dictionary_get_string(reply, _xpc_error_key_description);
-            let error = if error.is_null() {
-                "approval XPC connection failed".into()
+            if crate::approval_service_connection_invalid(reply) {
+                Err(crate::approval_service_unavailable_message(&service).into())
             } else {
-                std::ffi::CStr::from_ptr(error)
-                    .to_string_lossy()
-                    .into_owned()
-            };
-            if error == "Connection invalid" {
-                Err(
-                    approval_service_unavailable_message(sandbox_denies_mach_lookup(&service))
-                        .into(),
-                )
-            } else {
+                let error = xpc_dictionary_get_string(reply, _xpc_error_key_description);
+                let error = if error.is_null() {
+                    "approval XPC connection failed".into()
+                } else {
+                    std::ffi::CStr::from_ptr(error)
+                        .to_string_lossy()
+                        .into_owned()
+                };
                 Err(error)
             }
         } else {
@@ -1167,34 +1518,6 @@ fn xpc_approve_request(
     result
 }
 
-#[cfg(target_os = "macos")]
-fn sandbox_denies_mach_lookup(service: &std::ffi::CStr) -> bool {
-    use std::os::raw::{c_char, c_int};
-
-    #[link(name = "sandbox")]
-    unsafe extern "C" {
-        fn sandbox_check(pid: libc::pid_t, operation: *const c_char, filter: c_int, ...) -> c_int;
-    }
-
-    const SANDBOX_FILTER_GLOBAL_NAME: c_int = 2;
-    unsafe {
-        sandbox_check(
-            libc::getpid(),
-            c"mach-lookup".as_ptr(),
-            SANDBOX_FILTER_GLOBAL_NAME,
-            service.as_ptr(),
-        ) != 0
-    }
-}
-
-fn approval_service_unavailable_message(sandbox_denied: bool) -> &'static str {
-    if sandbox_denied {
-        "Automic Vault approval service is blocked by this process's sandbox; retry with elevated permissions"
-    } else {
-        "Automic Vault approval service is not running; open the menu bar app"
-    }
-}
-
 fn human_approval_message(decision: &[u8]) -> Option<&'static str> {
     match decision {
         b"approved" => Some("approved"),
@@ -1212,14 +1535,6 @@ mod tests {
         assert_eq!(human_approval_message(b"approved"), Some("approved"));
         assert_eq!(human_approval_message(b"denied"), Some("denied"));
         assert_eq!(human_approval_message(b"unexpected"), None);
-    }
-
-    #[test]
-    fn connection_error_explains_sandbox_denial() {
-        assert_eq!(
-            approval_service_unavailable_message(true),
-            "Automic Vault approval service is blocked by this process's sandbox; retry with elevated permissions"
-        );
     }
 
     fn os(values: &[&str]) -> Vec<OsString> {
@@ -1329,11 +1644,81 @@ mod tests {
             shebang_script: None,
         };
 
-        let env = secretless_environment(&options);
+        let env = secretless_environment(&options, false, false);
 
         unsafe { std::env::remove_var("SOME_SECRET") };
         assert!(!env.contains_key(std::ffi::OsStr::new("SOME_SECRET")));
         assert!(env.contains_key(std::ffi::OsStr::new("PATH")));
+    }
+
+    #[test]
+    fn pnpm_secretless_environment_substitutes_an_empty_token() {
+        let _guard = crate::global_test_env_lock().lock().unwrap();
+        unsafe { std::env::set_var("NODE_AUTH_TOKEN", "ambient") };
+        let options = Options {
+            replace_existing_env: false,
+            allow_missing_keys: true,
+            keys: vec!["NODE_AUTH_TOKEN".into()],
+            target: "/bin/echo".into(),
+            args: Vec::new(),
+            shebang_script: None,
+        };
+
+        let env = secretless_environment(&options, true, false);
+
+        unsafe { std::env::remove_var("NODE_AUTH_TOKEN") };
+        assert_eq!(
+            env.get(std::ffi::OsStr::new("NODE_AUTH_TOKEN")),
+            Some(&OsString::new())
+        );
+    }
+
+    #[test]
+    fn s3cmd_secretless_environment_cannot_resolve_ambient_credentials() {
+        let _guard = crate::global_test_env_lock().lock().unwrap();
+        for (key, value) in [
+            ("AWS_ACCESS_KEY", "ambient-access"),
+            ("AWS_SECRET_KEY", "ambient-secret"),
+            ("AWS_SESSION_TOKEN", "ambient-session"),
+            ("AWS_PROFILE", "ambient-profile"),
+            ("S3CMD_GPG_PASSPHRASE", "ambient-passphrase"),
+        ] {
+            unsafe { std::env::set_var(key, value) };
+        }
+        let options = Options {
+            replace_existing_env: false,
+            allow_missing_keys: true,
+            keys: vec!["S3CMD_ENV_ASSIGNMENTS".into()],
+            target: "/bin/sh".into(),
+            args: Vec::new(),
+            shebang_script: None,
+        };
+
+        let env = secretless_environment(&options, false, true);
+
+        for key in [
+            "AWS_ACCESS_KEY",
+            "AWS_SECRET_KEY",
+            "AWS_SESSION_TOKEN",
+            "AWS_PROFILE",
+            "S3CMD_GPG_PASSPHRASE",
+        ] {
+            unsafe { std::env::remove_var(key) };
+        }
+        assert_eq!(
+            env.get(std::ffi::OsStr::new("AWS_ACCESS_KEY_ID")),
+            Some(&OsString::from("AUTOMIC_VAULT_TOKENLESS"))
+        );
+        assert_eq!(
+            env.get(std::ffi::OsStr::new("AWS_SECRET_ACCESS_KEY")),
+            Some(&OsString::from("AUTOMIC_VAULT_TOKENLESS"))
+        );
+        assert_eq!(
+            env.get(std::ffi::OsStr::new("S3CMD_GPG_PASSPHRASE")),
+            Some(&OsString::from("AUTOMIC_VAULT_TOKENLESS"))
+        );
+        assert!(!env.contains_key(std::ffi::OsStr::new("AWS_PROFILE")));
+        assert!(!env.contains_key(std::ffi::OsStr::new("AWS_SESSION_TOKEN")));
     }
 
     #[test]

@@ -17,14 +17,35 @@ import Testing
     #expect(ApprovalServiceOperation.terraformGet.rawValue == "terraform-get")
 }
 
+@Test func aliyunCredentialGetHasADedicatedWireOperation() {
+    #expect(ApprovalServiceOperation.aliyunHelperVersion.rawValue == "aliyun-helper-version")
+    #expect(ApprovalServiceOperation.aliyunGet.rawValue == "aliyun-get")
+}
+
 @Test func oxideCredentialsHaveDedicatedWireOperations() {
     #expect(ApprovalServiceOperation.oxideGet.rawValue == "oxide-get")
     #expect(ApprovalServiceOperation.oxideSave.rawValue == "oxide-save")
     #expect(ApprovalServiceOperation.oxideDelete.rawValue == "oxide-delete")
 }
 
+@Test func fastlyCredentialsHaveDedicatedWireOperations() {
+    #expect(ApprovalServiceOperation.fastlyHelperVersion.rawValue == "fastly-helper-version")
+    #expect(ApprovalServiceOperation.fastlyGet.rawValue == "fastly-get")
+    #expect(ApprovalServiceOperation.fastlySave.rawValue == "fastly-save")
+    #expect(ApprovalServiceOperation.fastlyDelete.rawValue == "fastly-delete")
+}
+
+@Test func sqlcmdCredentialsHaveDedicatedWireOperations() {
+    #expect(ApprovalServiceOperation.sqlcmdHelperVersion.rawValue == "sqlcmd-helper-version")
+    #expect(ApprovalServiceOperation.sqlcmdGet.rawValue == "sqlcmd-get")
+    #expect(ApprovalServiceOperation.sqlcmdSave.rawValue == "sqlcmd-save")
+    #expect(ApprovalServiceOperation.sqlcmdDelete.rawValue == "sqlcmd-delete")
+}
+
 @Test func goatCredentialsHaveDedicatedWireOperations() {
     #expect(ApprovalServiceOperation.goatGet.rawValue == "goat-get")
+    #expect(ApprovalServiceOperation.wakatimeHelperVersion.rawValue == "wakatime-helper-version")
+    #expect(ApprovalServiceOperation.wakatimeGet.rawValue == "wakatime-get")
     #expect(ApprovalServiceOperation.goatSave.rawValue == "goat-save")
     #expect(ApprovalServiceOperation.goatDelete.rawValue == "goat-delete")
 }
@@ -33,6 +54,16 @@ import Testing
     #expect(ApprovalServiceOperation.railwayGet.rawValue == "railway-get")
     #expect(ApprovalServiceOperation.railwaySave.rawValue == "railway-save")
     #expect(ApprovalServiceOperation.railwayDelete.rawValue == "railway-delete")
+}
+
+@Test func rclonePasswordHasDedicatedWireOperations() {
+    #expect(ApprovalServiceOperation.rcloneHelperVersion.rawValue == "rclone-helper-version")
+    #expect(ApprovalServiceOperation.rcloneGet.rawValue == "rclone-get")
+}
+
+@Test func kubectlCredentialsHaveDedicatedWireOperations() {
+    #expect(ApprovalServiceOperation.kubectlHelperVersion.rawValue == "kubectl-helper-version")
+    #expect(ApprovalServiceOperation.kubectlGet.rawValue == "kubectl-get")
 }
 
 @Test func ordercliCredentialsHaveDedicatedWireOperations() {

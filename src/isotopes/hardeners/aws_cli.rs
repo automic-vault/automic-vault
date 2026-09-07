@@ -57,7 +57,12 @@ pub(crate) fn run_aws(stdout: &mut dyn Write, yes: bool) -> Result<(), String> {
     .ok();
     writeln!(stdout, "│").ok();
     if !has_test_stub {
-        writeln!(stdout, "├─ download {url}", url = aws_release::DOWNLOAD_URL).ok();
+        writeln!(
+            stdout,
+            "├─ download AWS's latest available versioned package from {}",
+            aws_release::DOWNLOAD_ROOT
+        )
+        .ok();
         writeln!(
             stdout,
             "├─ verify Amazon's Apple-issued installer identity, notarization, timestamp, package identity, signed native payload, Hardened Runtime, and safe extraction limits"
@@ -114,18 +119,20 @@ pub(crate) fn run_aws(stdout: &mut dyn Write, yes: bool) -> Result<(), String> {
     } else {
         let temporary = TemporaryDirectory::new("aws-release")?;
         let package = temporary.path.join("AWSCLIV2.pkg");
-        let digest = aws_release::download(&package)?;
-        Some((temporary, digest))
+        let (version, digest) = aws_release::download(&package)?;
+        Some((temporary, version, digest))
     };
     if let Some(credentials) = &credentials {
         import_aws_credentials(credentials)?;
         writeln!(stdout, "├─ imported keys").ok();
     }
-    install_privileged(
-        download
-            .as_ref()
-            .map(|(directory, digest)| (directory.path.join("AWSCLIV2.pkg"), digest.as_str())),
-    )?;
+    install_privileged(download.as_ref().map(|(directory, version, digest)| {
+        (
+            directory.path.join("AWSCLIV2.pkg"),
+            version.as_str(),
+            digest.as_str(),
+        )
+    }))?;
     if credentials.is_some() {
         let credentials_path = credentials_path.as_ref().unwrap();
         delete_aws_credentials(credentials_path, AWS_HARDEN_PROFILE)?;
@@ -141,7 +148,11 @@ pub(crate) fn run_aws(stdout: &mut dyn Write, yes: bool) -> Result<(), String> {
     Ok(())
 }
 
-pub(crate) fn install_aws_release(sha256: &str, package: &Path) -> Result<(), String> {
+pub(crate) fn install_aws_release(
+    version: &str,
+    sha256: &str,
+    package: &Path,
+) -> Result<(), String> {
     if crate::test_env_var("AUTOMIC_VAULT_TEST_AWS_STUB_PATH").is_some()
         || crate::test_env_var("AUTOMIC_VAULT_TEST_AWS_INSTALL_ROOT").is_some()
     {
@@ -150,7 +161,7 @@ pub(crate) fn install_aws_release(sha256: &str, package: &Path) -> Result<(), St
     if actual_uid() != 0 {
         return Err("official AWS CLI installation requires root".into());
     }
-    aws_release::install_privileged(sha256, package)?;
+    aws_release::install_privileged(version, sha256, package)?;
     install_aws_stub(Path::new(AWS_STUB_PATH))
 }
 
@@ -338,11 +349,12 @@ fn install_aws_stub(path: &Path) -> Result<(), String> {
     result
 }
 
-fn install_privileged(package: Option<(PathBuf, &str)>) -> Result<(), String> {
+fn install_privileged(package: Option<(PathBuf, &str, &str)>) -> Result<(), String> {
     if crate::test_env_var("AUTOMIC_VAULT_TEST_AWS_STUB_PATH").is_some() {
         return install_aws_stub(&aws_stub_path());
     }
-    let (package, digest) = package.ok_or_else(|| "AWS release download is missing".to_string())?;
+    let (package, version, digest) =
+        package.ok_or_else(|| "AWS release download is missing".to_string())?;
     super::env_wrapper::validate_privileged_av(Path::new(AV_PATH))?;
     let installed_revision = Command::new(AV_PATH)
         .arg("__version")
@@ -354,7 +366,7 @@ fn install_privileged(package: Option<(PathBuf, &str)>) -> Result<(), String> {
         return Err("update the av CLI from the Automic Vault app before rehardening AWS".into());
     }
     let status = Command::new(SUDO_PATH)
-        .args([AV_PATH, "__install-aws-release", digest])
+        .args([AV_PATH, "__install-aws-release", version, digest])
         .arg(package)
         .status()
         .map_err(|err| format!("failed to run sudo: {err}"))?;

@@ -63,6 +63,7 @@ fn sensitive_field_names() -> &'static [&'static str] {
         "access_token",
         "oauth_access_token",
         "oauth_refresh_token",
+        "bearer_token",
     ]
 }
 
@@ -100,6 +101,16 @@ mod tests {
           ]
         }"#;
         assert!(!config_has_sensitive_profile_data(contents).unwrap());
+    }
+
+    #[test]
+    fn detects_bearer_tokens() {
+        assert!(
+            config_has_sensitive_profile_data(
+                r#"{"profiles":[{"name":"default","bearer_token":"secret"}]}"#
+            )
+            .unwrap()
+        );
     }
 }
 

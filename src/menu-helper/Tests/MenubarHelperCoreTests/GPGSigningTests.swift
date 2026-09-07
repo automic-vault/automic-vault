@@ -29,6 +29,23 @@ import Testing
     ) == [gpgDefaultPrivateKeySecretName])
 }
 
+@Test(.enabled(if: dataProtectionKeychainAvailable(), "requires an entitled Keychain test host"))
+func gpgSigningConfigurationIsAvailableAfterFirstUnlock() {
+    let service = "com.automicvault.tests.gpg-config.\(UUID().uuidString)"
+    let account = "configuration"
+    defer { _ = deleteStoredSecret(account: account, service: service) }
+
+    #expect(saveGPGSigningConfiguration(
+        GPGSigningConfiguration(),
+        service: service,
+        account: account
+    ) == errSecSuccess)
+    #expect(
+        keychainAccessibility(account: account, service: service)
+            == kSecAttrAccessibleAfterFirstUnlock as String
+    )
+}
+
 @Test func gitConfigurationPreservesAnAppPathContainingSpaces() throws {
     let directory = FileManager.default.temporaryDirectory
         .appendingPathComponent("Automic Vault Tests \(UUID().uuidString)", isDirectory: true)

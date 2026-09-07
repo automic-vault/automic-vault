@@ -14,6 +14,7 @@ const OFFICIAL_STUB: &str = "#!/usr/local/bin/av aws-official\n";
 const AWS_ACCESS_KEY_ID: &str = "AWS_ACCESS_KEY_ID";
 const AWS_SECRET_ACCESS_KEY: &str = "AWS_SECRET_ACCESS_KEY";
 const AWS_HELPER_PROTOCOL_VERSION: u32 = 2;
+const SYSTEM_PATH: &str = "/usr/bin:/bin:/usr/sbin:/sbin";
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum AwsGeneration {
@@ -127,16 +128,6 @@ fn validate_helper_version(version: &str) -> Result<(), String> {
 }
 
 fn launch(generation: AwsGeneration, args: Vec<OsString>) -> Result<i32, String> {
-    let profile = selected_profile(&args)?;
-    let config_path = std::env::var_os("AWS_CONFIG_FILE")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".aws/config")))
-        .ok_or_else(|| "HOME and AWS_CONFIG_FILE are not set".to_string())?;
-    let config = match std::fs::read(&config_path) {
-        Ok(config) => config,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
-        Err(error) => return Err(format!("failed to read {}: {error}", config_path.display())),
-    };
     let target = real_aws_path(generation);
     if !target.is_file() {
         return Err(format!("AWS CLI is not installed at {}", target.display()));
@@ -146,31 +137,53 @@ fn launch(generation: AwsGeneration, args: Vec<OsString>) -> Result<i32, String>
     {
         crate::isotopes::hardeners::aws_release::current_release_valid()?;
     }
-    let cwd = crate::path_security::current_working_directory_utf8()?;
-    let words = args
-        .iter()
-        .map(|arg| arg.to_string_lossy().into_owned())
-        .collect::<Vec<_>>();
-    let generated_config = xpc_request("inject", |message| unsafe {
-        xpc_set_string(message, "target", &target.to_string_lossy())?;
-        xpc_set_string(message, "cwd", &cwd)?;
-        xpc_set_string(message, "tool", "aws")?;
-        xpc_set_string(message, "aws_profile", &profile)?;
-        xpc_set_string(message, "aws_generation", generation.name())?;
-        xpc_set_data(message, "aws_config", &config);
-        xpc_set_bool(message, "replace_existing_env", false);
-        xpc_set_bool(message, "allow_missing_keys", false);
-        xpc_set_array(
-            message,
-            "keys",
-            &[AWS_ACCESS_KEY_ID.into(), AWS_SECRET_ACCESS_KEY.into()],
-        )?;
-        xpc_set_array(message, "args", &words)?;
-        xpc_set_array(message, "env_conflicts", &[])?;
-        Ok(())
-    })?;
-    let config_file = inherited_file(generated_config.as_bytes())?;
-    let config_fd = format!("/dev/fd/{}", config_file.as_raw_fd());
+    let metadata = aws_invocation_is_metadata(&args);
+    let (profile, config_file) = if metadata {
+        ("default".into(), None)
+    } else {
+        let profile = selected_profile(&args)?;
+        let config_path = std::env::var_os("AWS_CONFIG_FILE")
+            .map(PathBuf::from)
+            .or_else(|| {
+                std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".aws/config"))
+            })
+            .ok_or_else(|| "HOME and AWS_CONFIG_FILE are not set".to_string())?;
+        let config = match std::fs::read(&config_path) {
+            Ok(config) => config,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+            Err(error) => {
+                return Err(format!("failed to read {}: {error}", config_path.display()));
+            }
+        };
+        let cwd = crate::path_security::current_working_directory_utf8()?;
+        let words = args
+            .iter()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        let generated_config = xpc_request("inject", |message| unsafe {
+            xpc_set_string(message, "target", &target.to_string_lossy())?;
+            xpc_set_string(message, "cwd", &cwd)?;
+            xpc_set_string(message, "tool", "aws")?;
+            xpc_set_string(message, "aws_profile", &profile)?;
+            xpc_set_string(message, "aws_generation", generation.name())?;
+            xpc_set_data(message, "aws_config", &config);
+            xpc_set_bool(message, "replace_existing_env", false);
+            xpc_set_bool(message, "allow_missing_keys", false);
+            xpc_set_array(
+                message,
+                "keys",
+                &[AWS_ACCESS_KEY_ID.into(), AWS_SECRET_ACCESS_KEY.into()],
+            )?;
+            xpc_set_array(message, "args", &words)?;
+            xpc_set_array(message, "env_conflicts", &[])?;
+            Ok(())
+        })?;
+        (profile, Some(inherited_file(generated_config.as_bytes())?))
+    };
+    let config_path = config_file
+        .as_ref()
+        .map(|file| format!("/dev/fd/{}", file.as_raw_fd()))
+        .unwrap_or_else(|| "/dev/null".into());
     let mut command = Command::new(&target);
     command.args(&args).env_clear();
     for (key, value) in std::env::vars_os() {
@@ -181,15 +194,45 @@ fn launch(generation: AwsGeneration, args: Vec<OsString>) -> Result<i32, String>
     command
         .env("HOME", "/var/empty")
         .env("AWS_PROFILE", &profile)
-        .env("AWS_CONFIG_FILE", config_fd)
+        .env("AWS_CONFIG_FILE", config_path)
         .env("AWS_SHARED_CREDENTIALS_FILE", "/dev/null")
         .env("AWS_EC2_METADATA_DISABLED", "true")
         .env("AWS_PAGER", "")
         .env("PAGER", "cat")
         .env("AWS_CLI_AUTO_PROMPT", "off");
+    if metadata {
+        command.env("PATH", SYSTEM_PATH);
+    }
     let error = command.exec();
     drop(config_file);
     Err(format!("failed to execute {}: {error}", target.display()))
+}
+
+fn aws_invocation_is_metadata(args: &[OsString]) -> bool {
+    let Some(words) = args
+        .iter()
+        .map(|arg| arg.to_str())
+        .collect::<Option<Vec<_>>>()
+    else {
+        return false;
+    };
+    if words == ["--version"] || words == ["help"] {
+        return true;
+    }
+    match words.as_slice() {
+        [service, "help"] => aws_command_word(service),
+        [service, operation, "help"] => aws_command_word(service) && aws_command_word(operation),
+        _ => false,
+    }
+}
+
+fn aws_command_word(word: &str) -> bool {
+    word.bytes()
+        .next()
+        .is_some_and(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
+        && word
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
 }
 
 fn selected_profile(args: &[OsString]) -> Result<String, String> {
@@ -361,12 +404,17 @@ fn xpc_request(
     }
     let result = unsafe {
         if xpc_get_type(reply) == std::ptr::addr_of!(_xpc_type_error).cast() {
-            let value = xpc_dictionary_get_string(reply, _xpc_error_key_description);
-            Err(if value.is_null() {
-                "approval XPC connection failed".into()
+            if crate::approval_service_connection_invalid(reply) {
+                Err(crate::approval_service_unavailable_message(service).into())
             } else {
-                CStr::from_ptr(value).to_string_lossy().into_owned()
-            })
+                let value = xpc_dictionary_get_string(reply, _xpc_error_key_description);
+                let error = if value.is_null() {
+                    "approval XPC connection failed".into()
+                } else {
+                    CStr::from_ptr(value).to_string_lossy().into_owned()
+                };
+                Err(error)
+            }
         } else if !xpc_dictionary_get_bool(reply, c"ok".as_ptr()) {
             let value = xpc_dictionary_get_string(reply, c"error".as_ptr());
             Err(if value.is_null() {
@@ -529,5 +577,32 @@ mod tests {
         )));
         assert!(!safe_environment_key(std::ffi::OsStr::new("AWS_DATA_PATH")));
         assert!(safe_environment_key(std::ffi::OsStr::new("HTTPS_PROXY")));
+    }
+
+    #[test]
+    fn metadata_invocations_do_not_request_credentials() {
+        for args in [
+            vec!["--version"],
+            vec!["help"],
+            vec!["s3", "help"],
+            vec!["ec2", "describe-instances", "help"],
+            vec!["ec2", "run-instances", "help"],
+        ] {
+            assert!(aws_invocation_is_metadata(
+                &args.into_iter().map(OsString::from).collect::<Vec<_>>()
+            ));
+        }
+
+        for args in [
+            vec![],
+            vec!["--help"],
+            vec!["--version", "s3"],
+            vec!["--profile", "dev", "help"],
+            vec!["s3", "ls"],
+            vec!["s3", "rm", "help", "--recursive"],
+        ] {
+            let os_args = args.iter().map(OsString::from).collect::<Vec<_>>();
+            assert!(!aws_invocation_is_metadata(&os_args), "{args:?}");
+        }
     }
 }

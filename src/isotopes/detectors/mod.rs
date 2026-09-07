@@ -9,6 +9,7 @@ mod akamai;
 mod algolia;
 mod aliyun_cli;
 mod ansible;
+mod antigravity_cockpit;
 mod argocd;
 mod ast_cli;
 mod astra;
@@ -48,6 +49,7 @@ mod firebase_cli;
 mod flyctl;
 mod gallery_dl;
 mod gcli;
+mod gemini_cli;
 pub(crate) mod gh_cli;
 mod git;
 mod glab;
@@ -106,6 +108,7 @@ mod pianobar;
 mod plumber;
 mod pnpm;
 mod podman;
+pub(crate) use podman::candidate_auth_paths as podman_auth_paths;
 mod poetry;
 mod pulumi;
 mod qwen_code;
@@ -224,6 +227,7 @@ const DETECTORS: &[Detector] = &[
     detector!(algolia),
     detector!(aliyun_cli),
     detector!(ansible),
+    detector!(antigravity_cockpit),
     detector!(argocd),
     detector!(ast_cli),
     detector!(astra),
@@ -267,6 +271,7 @@ const DETECTORS: &[Detector] = &[
     detector!(flyctl),
     detector!(gallery_dl),
     detector!(gcli),
+    detector!(gemini_cli),
     detector!(gh_cli::hosts_token, "gh-cli-hosts-token"),
     detector!(gh_cli::keychain_access, "gh-cli-keychain-access"),
     detector!(git::credential_fill, "git-credential-fill"),
@@ -405,8 +410,8 @@ pub(crate) fn findings_for(
 
     let mut findings = Vec::new();
     for detector in DETECTORS {
-        let name = detector_name(detector.module);
-        if !selected.is_empty() && !selected.contains(name.as_str()) {
+        let candidate = detector_name(detector.module);
+        if !selected.is_empty() && !selected.contains(candidate.as_str()) {
             continue;
         }
         let mut detected = (detector.findings)(home);
@@ -418,7 +423,7 @@ pub(crate) fn findings_for(
             }
         }
         findings.extend(detected.into_iter().map(|finding| DetectorResult {
-            detectors: vec![name.clone()],
+            detectors: vec![candidate.clone()],
             finding,
         }));
     }
@@ -427,7 +432,12 @@ pub(crate) fn findings_for(
 
 fn merge_duplicate_owned_shell_path_findings(findings: Vec<DetectorResult>) -> Vec<DetectorResult> {
     let mut merged: Vec<DetectorResult> = Vec::with_capacity(findings.len());
-    for finding in findings {
+    for mut finding in findings {
+        // Shell docs cover credential assignments and PATH hazards, but each
+        // finding needs only the mitigation for the condition it reports.
+        if shell_path_entry(&finding.finding).is_some() {
+            finding.finding.solution = shell_path_solution(finding.finding.source);
+        }
         let existing = shell_path_entry(&finding.finding).and_then(|entry| {
             merged.iter_mut().find(|candidate| {
                 candidate.finding.source != finding.finding.source
@@ -447,7 +457,6 @@ fn merge_duplicate_owned_shell_path_findings(findings: Vec<DetectorResult>) -> V
 
 const SHELL_PATH_FINDING_SOURCES: &[&str] = &["bash", "zsh"];
 const MERGED_SHELL_PATH_SOURCE: &str = "bash+zsh";
-const MERGED_SHELL_PATH_SOLUTION: &str = "Shell startup files contain arbitrary user programs and shared environment configuration. Automic Vault cannot rewrite them without changing shell behavior or guessing which commands need each secret. Move the reported value with `av save KEY`, then inject it only into the command that needs it. For an unsafe `PATH`, move every protected system directory before the reported user-writable directories and remove empty or relative entries.";
 
 /// `bash` and `zsh` each detect the same process-wide `$PATH` independently,
 /// so an insecure directory is reported once per shell. Collapse those
@@ -455,19 +464,18 @@ const MERGED_SHELL_PATH_SOLUTION: &str = "Shell startup files contain arbitrary 
 /// of doubling the audit for anyone with both shells configured.
 #[cfg(test)]
 fn merge_duplicate_shell_path_findings(findings: Vec<Finding>) -> Vec<Finding> {
-    let mut merged: Vec<Finding> = Vec::with_capacity(findings.len());
-    for finding in findings {
-        let existing = shell_path_entry(&finding).and_then(|entry| {
-            merged.iter_mut().find(|candidate| {
-                candidate.source != finding.source && shell_path_entry(candidate) == Some(entry)
+    merge_duplicate_owned_shell_path_findings(
+        findings
+            .into_iter()
+            .map(|finding| DetectorResult {
+                detectors: vec![finding.source.to_string()],
+                finding,
             })
-        });
-        match existing {
-            Some(existing) => merge_shell_path_finding(existing),
-            None => merged.push(finding),
-        }
-    }
-    merged
+            .collect(),
+    )
+    .into_iter()
+    .map(|result| result.finding)
+    .collect()
 }
 
 /// The PATH entry a shell PATH finding reports, taken from the explanation
@@ -485,6 +493,18 @@ fn shell_path_entry(finding: &Finding) -> Option<&str> {
         .strip_prefix(": ")
 }
 
+fn shell_path_solution(source: &str) -> String {
+    let documentation = DETECTORS
+        .iter()
+        .find(|detector| detector.module == source)
+        .expect("shell PATH findings have a registered detector")
+        .documentation;
+    documented_section(documentation, "## PATH Mitigation")
+        .map(first_paragraph)
+        .filter(|solution| !solution.is_empty())
+        .expect("shell detector documentation has a PATH mitigation")
+}
+
 fn merge_shell_path_finding(existing: &mut Finding) {
     if let Some(entry) = shell_path_entry(existing) {
         existing.explanation = format!(
@@ -492,15 +512,10 @@ fn merge_shell_path_finding(existing: &mut Finding) {
         );
     }
     existing.source = MERGED_SHELL_PATH_SOURCE;
-    existing.solution = MERGED_SHELL_PATH_SOLUTION.to_string();
 }
 
 pub(crate) fn documented_solution(documentation: &str) -> Option<String> {
-    if let Some(mitigation) = documentation
-        .split_once("## Mitigation")
-        .map(|(_, section)| section)
-        .and_then(|section| section.split("\n## ").next())
-    {
+    if let Some(mitigation) = documented_section(documentation, "## Mitigation") {
         if let Some(command) = mitigation.lines().find(|line| line.contains("av harden ")) {
             return Some(format!("Run `{}`.", command.trim()));
         }
@@ -515,6 +530,13 @@ pub(crate) fn documented_solution(documentation: &str) -> Option<String> {
         .and_then(|section| section.split("\n## ").next())
         .map(first_paragraph)
         .filter(|solution| !solution.is_empty())
+}
+
+fn documented_section<'a>(documentation: &'a str, heading: &str) -> Option<&'a str> {
+    documentation
+        .split_once(heading)
+        .map(|(_, section)| section)
+        .and_then(|section| section.split("\n## ").next())
 }
 
 fn first_paragraph(section: &str) -> String {
@@ -627,7 +649,7 @@ mod tests {
 
     #[test]
     fn scan_runs_every_registered_isotope() {
-        assert_eq!(DETECTORS.len(), 157);
+        assert_eq!(DETECTORS.len(), 159);
     }
 
     #[test]
@@ -638,6 +660,7 @@ mod tests {
             .map(|detector| detector.name.clone())
             .collect::<Vec<_>>();
 
+        assert!(names.contains(&"gemini-cli".to_string()));
         assert!(!names.contains(&"aws".to_string()));
         assert!(!names.contains(&"aws-cli".to_string()));
         assert!(names.contains(&"aws-cli-credentials-file".to_string()));
@@ -733,6 +756,11 @@ mod tests {
             "{} PATH has a user-writable directory before protected system directories: {path}",
             if shell == "bash" { "Bash" } else { "Zsh" },
         );
+        let documentation = if shell == "bash" {
+            include_str!("bash/detector.md")
+        } else {
+            include_str!("zsh/detector.md")
+        };
         Finding {
             source: shell,
             homepage: "https://example.test/",
@@ -741,9 +769,23 @@ mod tests {
             // empty entries have no affected path here either.
             affected: super::radioisotope::affected(&explanation),
             explanation,
-            solution: format!("{shell} startup files contain arbitrary user programs."),
+            solution: documented_solution(documentation).unwrap(),
             docs_url: "https://example.test/docs.md",
         }
+    }
+
+    #[test]
+    fn gives_a_lone_shell_path_finding_path_specific_mitigation() {
+        let findings = vec![shell_path_finding("bash", "/Users/tester/.local/bin")];
+
+        let merged = merge_duplicate_shell_path_findings(findings);
+
+        assert_eq!(merged[0].solution, shell_path_solution("bash"));
+    }
+
+    #[test]
+    fn bash_and_zsh_share_the_same_path_mitigation() {
+        assert_eq!(shell_path_solution("bash"), shell_path_solution("zsh"));
     }
 
     #[test]
@@ -757,6 +799,7 @@ mod tests {
 
         assert_eq!(merged.len(), 1);
         assert_eq!(merged[0].source, "bash+zsh");
+        assert_eq!(merged[0].solution, shell_path_solution("bash"));
         assert_eq!(
             merged[0].explanation,
             "Bash and zsh PATH have a user-writable directory before protected system directories: /opt/homebrew/bin"
@@ -906,5 +949,13 @@ mod tests {
         assert_eq!(merged.len(), 2);
         assert_eq!(merged[0].source, "bash+zsh");
         assert_eq!(merged[1].source, "macOS");
+    }
+
+    #[test]
+    fn findings_for_accepts_registered_detectors() {
+        let home = Path::new("/Users/tester");
+        assert!(findings_for(home, &["gemini-cli".to_string()]).is_ok());
+        assert!(findings_for(home, &["antigravity-cockpit".to_string()]).is_ok());
+        assert!(findings_for(home, &["unknown-detector".to_string()]).is_err());
     }
 }

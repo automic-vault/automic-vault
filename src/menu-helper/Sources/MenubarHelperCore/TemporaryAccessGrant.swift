@@ -83,6 +83,50 @@ public struct TemporaryAccessGrantScope: Hashable, Sendable {
     }
 }
 
+public func operationClassificationTitle(
+    _ classification: SecretGateRequestClassification
+) -> String {
+    switch classification {
+    case .readOnly: "Read Only"
+    case .localWrite: "Local Write"
+    case .update: "Homebrew Update"
+    case .mutating: "Local Write, System Write, Remote Write, or a combination"
+    case .secretDump: "Elevated Secret Application or Secret Disclosure"
+    case .unknown: "Unknown"
+    }
+}
+
+public func temporaryAccessGrantUnavailableReason(
+    hasToolSpecificGate: Bool,
+    classification: SecretGateRequestClassification?,
+    launcherRuntimeProtection: LauncherRuntimeProtection?,
+    agentTaskContext: AgentTaskContext?
+) -> String? {
+    guard hasToolSpecificGate else {
+        return "10-minute Write Access is unavailable at the Direct Secret Gate."
+    }
+    guard let classification else {
+        return "10-minute Write Access is unavailable because this operation could not be classified."
+    }
+    switch classification {
+    case .readOnly:
+        return "10-minute Write Access is available only for recognized write operations."
+    case .secretDump:
+        return "10-minute Write Access excludes Elevated Secret Application and Secret Disclosure."
+    case .unknown:
+        return "10-minute Write Access excludes Unknown operations."
+    case .localWrite, .update, .mutating:
+        break
+    }
+    guard launcherRuntimeProtection?.secretGateAdmissionRequirement != nil else {
+        return "10-minute Write Access requires an eligible Verified Launcher and runtime posture."
+    }
+    guard agentTaskContext != nil else {
+        return "10-minute Write Access requires a recognized Codex task or Claude Code session."
+    }
+    return nil
+}
+
 public struct TemporaryAccessGrantSnapshot: Identifiable, Equatable, Sendable {
     public let id: UUID
     public let generation: UUID

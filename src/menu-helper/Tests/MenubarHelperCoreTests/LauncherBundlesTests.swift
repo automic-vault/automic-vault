@@ -271,8 +271,8 @@ import Testing
     }
 }
 
-@Test func launcherBundleEnrollmentReplacementIsOneKeychainRecordChange() throws {
-    guard launcherBundleKeychainTestsAvailable() else { return }
+@Test(.enabled(if: launcherBundleKeychainTestsAvailable(), "requires an entitled Keychain test host"))
+func launcherBundleEnrollmentReplacementIsOneKeychainRecordChange() throws {
     let service = "com.automicvault.tests.launcher-bundles.\(UUID().uuidString)"
     let account = "LauncherBundles"
     defer { _ = deleteStoredSecret(account: account, service: service) }
@@ -289,8 +289,8 @@ import Testing
     #expect(loadLauncherBundleEnrollments(service: service, account: account) == [replacement])
 }
 
-@Test func launcherBundleEnrollmentCanStageAReplacementAlongsideTheOldGeneration() throws {
-    guard launcherBundleKeychainTestsAvailable() else { return }
+@Test(.enabled(if: launcherBundleKeychainTestsAvailable(), "requires an entitled Keychain test host"))
+func launcherBundleEnrollmentCanStageAReplacementAlongsideTheOldGeneration() throws {
     let service = "com.automicvault.tests.launcher-bundles.\(UUID().uuidString)"
     let account = "LauncherBundles"
     defer { _ = deleteStoredSecret(account: account, service: service) }
@@ -303,8 +303,8 @@ import Testing
     #expect(Set(stored.map(\.generation)) == [old.generation, replacement.generation])
 }
 
-@Test func corruptLauncherBundleEnrollmentFailsClosed() {
-    guard launcherBundleKeychainTestsAvailable() else { return }
+@Test(.enabled(if: launcherBundleKeychainTestsAvailable(), "requires an entitled Keychain test host"))
+func corruptLauncherBundleEnrollmentFailsClosed() {
     let service = "com.automicvault.tests.launcher-bundles.\(UUID().uuidString)"
     let account = "LauncherBundles"
     defer { _ = deleteStoredSecret(account: account, service: service) }

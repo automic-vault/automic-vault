@@ -20,6 +20,7 @@ private let varlockProtocolVersion: UInt64 = 1
 let secCodeSignatureAdHoc: UInt32 = 0x2
 private let scanMaximumDelay: TimeInterval = 5
 private let scanQueue = DispatchQueue(label: "com.automicvault.av2.scan")
+private let temporaryAccessGrantCollapseDelay: TimeInterval = 5
 private let updateCheckInterval: Duration = .seconds(24 * 60 * 60)
 private var toastWindows: [NSWindow] = []
 private var temporaryAccessGrantStripFrame: NSRect?
@@ -101,6 +102,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var readyUpdate: Update?
     private var isCheckingForUpdates = false
     private var isUpdating = false
+    private var isStatusMenuOpen = false
     private var menuBeforeUpdate: NSMenu?
     private var automaticApprovalFlashWorkItem: DispatchWorkItem?
     private var preFlashStatusImage: NSImage?
@@ -113,6 +115,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var temporaryAccessGrantSeparator: NSMenuItem?
     private var temporaryAccessGrantPanel: TemporaryAccessGrantPanel?
     private var temporaryAccessGrantTimer: Timer?
+    private var temporaryAccessGrantCollapseWorkItem: DispatchWorkItem?
+    private var isTemporaryAccessGrantStripCollapsed = false
     private let liveSecretUses = LiveSecretUseController<LiveSecretUseProcess>()
     private var liveSecretUseSnapshots: [LiveSecretUseSnapshot] = []
     private var liveSecretUseMenuItems: [NSMenuItem] = []
@@ -122,6 +126,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var baseStatusImage: NSImage?
     #if !DEBUG
     private let postHogTelemetry = PostHogTelemetry.shared
+    private var dailyHeartbeatTask: Task<Void, Never>?
     private var lastTelemetryFindingCount: Int?
     #endif
 
@@ -142,6 +147,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         startServicesAndOpenMainWindowIfRequested()
         startAutomaticUpdateChecks()
+        #if !DEBUG
+        startDailyHeartbeat()
+        #endif
     }
 
     func applicationWillFinishLaunching(_ notification: Notification) {
@@ -170,6 +178,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             name: NSWorkspace.screensDidWakeNotification,
             object: nil
         )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(temporaryAccessGrantStripPresentationChanged(_:)),
+            name: temporaryAccessGrantStripPresentationDidChange,
+            object: nil
+        )
+    }
+
+    @objc private func temporaryAccessGrantStripPresentationChanged(_ notification: Notification) {
+        refreshTemporaryAccessGrantPanel()
+        refreshTemporaryAccessGrantMenuItems()
     }
 
     @objc private func userSessionDidResignActive(_ notification: Notification) {
@@ -356,7 +375,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         automaticUpdateCheckTask?.cancel()
+        #if !DEBUG
+        dailyHeartbeatTask?.cancel()
+        #endif
         NSWorkspace.shared.notificationCenter.removeObserver(self)
+        NotificationCenter.default.removeObserver(self)
         stopServices()
     }
 
@@ -365,6 +388,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         refreshTemporaryAccessGrants()
         temporaryAccessGrantTimer?.invalidate()
         temporaryAccessGrantTimer = nil
+        temporaryAccessGrantCollapseWorkItem?.cancel()
+        temporaryAccessGrantCollapseWorkItem = nil
         liveSecretUses.cancelAll()
         refreshLiveSecretUses()
         liveSecretUseTimer?.invalidate()
@@ -458,7 +483,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             alert.informativeText = "Install \(update.assetName) and relaunch Automic Vault?"
             alert.addButton(withTitle: "Install and Relaunch")
             alert.addButton(withTitle: "Later")
-            guard alert.runModal() == .alertFirstButtonReturn else { return }
+            alert.addButton(withTitle: "View Release Notes")
+            let response = alert.runModal()
+            if response == .alertThirdButtonReturn {
+                NSWorkspace.shared.open(URL(
+                    string: "https://github.com/automic-vault/automic-vault/releases/tag/\(update.version)"
+                )!)
+                return
+            }
+            guard response == .alertFirstButtonReturn else { return }
 
             readyUpdate = nil
             restoreMainWindow = beginUpdating(with: alert)
@@ -541,6 +574,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
     }
+
+    #if !DEBUG
+    private func startDailyHeartbeat() {
+        dailyHeartbeatTask = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let delay = self?.postHogTelemetry.captureDailyHeartbeat() else { return }
+                do {
+                    try await Task.sleep(for: .seconds(delay))
+                } catch {
+                    return
+                }
+            }
+        }
+    }
+    #endif
 
     private func refreshAvailableUpdate() async {
         guard !isCheckingForUpdates else { return }
@@ -881,6 +929,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func setDoctorStatus(count: Int) {
+        guard !isStatusMenuOpen else { return }
         guard let title = doctorStatusTitle(count: count) else {
             doctorStatusItem.isHidden = true
             return
@@ -906,6 +955,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         scanQueue.async { [weak self] in
             let isCurrent = currentCLIInstallState() == .current
             Task { @MainActor in
+                guard self?.isStatusMenuOpen == false else { return }
                 self?.installCLIItem.isHidden = isCurrent
             }
         }
@@ -1015,7 +1065,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func refreshAutoApprovalMenuItems() {
-        guard !isUpdating else { return }
+        guard !isUpdating, !isStatusMenuOpen else { return }
         guard let menu = statusItem.menu else { return }
         for item in autoApprovalItems {
             menu.removeItem(item)
@@ -1065,7 +1115,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func refreshTemporaryAccessGrants() {
+        let previousGenerations = Set(temporaryAccessGrantSnapshots.map(\.generation))
         temporaryAccessGrantSnapshots = temporaryAccessGrants.snapshots()
+        if temporaryAccessGrantSnapshots.contains(where: {
+            !previousGenerations.contains($0.generation)
+        }) {
+            isTemporaryAccessGrantStripCollapsed = false
+            temporaryAccessGrantCollapseWorkItem?.cancel()
+            temporaryAccessGrantCollapseWorkItem = nil
+        } else if temporaryAccessGrantSnapshots.isEmpty {
+            isTemporaryAccessGrantStripCollapsed = false
+            temporaryAccessGrantCollapseWorkItem?.cancel()
+            temporaryAccessGrantCollapseWorkItem = nil
+        }
         if temporaryAccessGrantSnapshots.allSatisfy(\.isCountdownSuspended) {
             temporaryAccessGrantTimer?.invalidate()
             temporaryAccessGrantTimer = nil
@@ -1084,7 +1146,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func refreshTemporaryAccessGrantMenuItems() {
-        guard !isUpdating, let menu = statusItem.menu else { return }
+        guard !isUpdating, !isStatusMenuOpen, let menu = statusItem.menu else { return }
         temporaryAccessGrantMenuItems.forEach(menu.removeItem)
         temporaryAccessGrantMenuItems.removeAll()
         if let temporaryAccessGrantHeadingItem {
@@ -1124,6 +1186,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             addTenMinutes.representedObject = grant.id.uuidString
             submenu.addItem(addTenMinutes)
             submenu.addItem(.separator())
+            if isTemporaryAccessGrantStripCollapsed {
+                let showStrip = NSMenuItem(
+                    title: "Show Temporary Access Grant Strip",
+                    action: #selector(showTemporaryAccessGrantStrip(_:)),
+                    keyEquivalent: ""
+                )
+                showStrip.target = self
+                submenu.addItem(showStrip)
+                submenu.addItem(.separator())
+            }
             let toggle = NSMenuItem(
                 title: grant.isCountdownSuspended
                     ? "Resume Write Access"
@@ -1164,6 +1236,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         refreshTemporaryAccessGrants()
     }
 
+    @objc private func showTemporaryAccessGrantStrip(_ sender: NSMenuItem) {
+        revealTemporaryAccessGrantStrip()
+    }
+
     @objc private func addTenMinutesToTemporaryAccessGrant(_ sender: NSMenuItem) {
         guard let rawID = sender.representedObject as? String,
               let id = UUID(uuidString: rawID)
@@ -1200,7 +1276,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func refreshLiveSecretUseMenuItems() {
-        guard !isUpdating, let menu = statusItem.menu else { return }
+        guard !isUpdating, !isStatusMenuOpen, let menu = statusItem.menu else { return }
         liveSecretUseMenuItems.forEach(menu.removeItem)
         liveSecretUseMenuItems.removeAll()
         if let liveSecretUseHeadingItem {
@@ -1274,49 +1350,110 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
               let button = statusItem.button,
               let statusWindow = button.window
         else {
+            temporaryAccessGrantCollapseWorkItem?.cancel()
+            temporaryAccessGrantCollapseWorkItem = nil
+            isTemporaryAccessGrantStripCollapsed = false
             temporaryAccessGrantPanel?.orderOut(nil)
             temporaryAccessGrantPanel = nil
             temporaryAccessGrantStripFrame = nil
             return
         }
+        let autoCollapse = UserDefaults.standard.bool(
+            forKey: autoCollapseTemporaryAccessGrantStripDefaultsKey
+        )
+        if !autoCollapse {
+            temporaryAccessGrantCollapseWorkItem?.cancel()
+            temporaryAccessGrantCollapseWorkItem = nil
+            isTemporaryAccessGrantStripCollapsed = false
+        }
         let panel = temporaryAccessGrantPanel ?? makeTemporaryAccessGrantPanel()
         temporaryAccessGrantPanel = panel
         let wallNow = Date()
         let monotonicNow = ProcessInfo.processInfo.systemUptime
-        let hostingView = NSHostingView(rootView: TemporaryAccessGrantStripView(
-            grants: temporaryAccessGrantSnapshots,
-            wallNow: wallNow,
-            monotonicNow: monotonicNow,
-            addTenMinutes: { [weak self] id in
-                guard let self else { return }
-                _ = self.temporaryAccessGrants.addTenMinutes(id: id)
-                self.refreshTemporaryAccessGrants()
-            },
-            end: { [weak self] id in
-                guard let self else { return }
-                _ = self.temporaryAccessGrants.cancel(id: id)
-                self.refreshTemporaryAccessGrants()
-            },
-            setCountdownSuspended: { [weak self] id, suspended in
-                guard let self else { return }
-                _ = self.temporaryAccessGrants.setCountdownSuspended(
-                    id: id,
-                    suspended: suspended
-                )
-                self.refreshTemporaryAccessGrants()
-            }
-        ))
+        let hostingView: NSView
+        if isTemporaryAccessGrantStripCollapsed {
+            hostingView = NSHostingView(rootView: CollapsedTemporaryAccessGrantStripView(
+                grantCount: temporaryAccessGrantSnapshots.count,
+                show: { [weak self] in self?.revealTemporaryAccessGrantStrip() }
+            ))
+        } else {
+            hostingView = NSHostingView(rootView: TemporaryAccessGrantStripView(
+                grants: temporaryAccessGrantSnapshots,
+                wallNow: wallNow,
+                monotonicNow: monotonicNow,
+                addTenMinutes: { [weak self] id in
+                    guard let self else { return }
+                    _ = self.temporaryAccessGrants.addTenMinutes(id: id)
+                    self.refreshTemporaryAccessGrants()
+                },
+                end: { [weak self] id in
+                    guard let self else { return }
+                    _ = self.temporaryAccessGrants.cancel(id: id)
+                    self.refreshTemporaryAccessGrants()
+                },
+                setCountdownSuspended: { [weak self] id, suspended in
+                    guard let self else { return }
+                    _ = self.temporaryAccessGrants.setCountdownSuspended(
+                        id: id,
+                        suspended: suspended
+                    )
+                    self.refreshTemporaryAccessGrants()
+                }
+            ))
+        }
         let size = hostingView.fittingSize
         hostingView.frame.size = size
         panel.contentView = hostingView
         let anchor = statusWindow.convertToScreen(button.convert(button.bounds, to: nil))
         let visibleFrame = statusWindow.screen?.visibleFrame ?? NSScreen.main?.visibleFrame
             ?? NSRect(x: 0, y: 0, width: 800, height: 600)
-        let frame = autoApprovalToastFrame(anchor: anchor, visibleFrame: visibleFrame, size: size)
-        panel.setFrame(frame, display: true)
+        let frame = isTemporaryAccessGrantStripCollapsed
+            ? temporaryAccessGrantTabFrame(anchor: anchor, visibleFrame: visibleFrame, size: size)
+            : autoApprovalToastFrame(anchor: anchor, visibleFrame: visibleFrame, size: size)
+        if shouldAnimateTemporaryAccessGrantPanelTransition(
+            isVisible: panel.isVisible,
+            reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion,
+            from: panel.frame,
+            to: frame
+        ) {
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.25
+                panel.animator().setFrame(frame, display: true)
+            }
+        } else {
+            panel.setFrame(frame, display: true)
+        }
         temporaryAccessGrantStripFrame = frame
         panel.orderFrontRegardless()
         reanchorToastWindows(below: frame, visibleFrame: visibleFrame)
+        if autoCollapse, !isTemporaryAccessGrantStripCollapsed,
+           temporaryAccessGrantCollapseWorkItem == nil
+        {
+            let workItem = DispatchWorkItem { [weak self] in
+                guard let self else { return }
+                self.temporaryAccessGrantCollapseWorkItem = nil
+                guard UserDefaults.standard.bool(
+                    forKey: autoCollapseTemporaryAccessGrantStripDefaultsKey
+                ), !self.temporaryAccessGrantSnapshots.isEmpty
+                else { return }
+                self.isTemporaryAccessGrantStripCollapsed = true
+                self.refreshTemporaryAccessGrantPanel()
+                self.refreshTemporaryAccessGrantMenuItems()
+            }
+            temporaryAccessGrantCollapseWorkItem = workItem
+            DispatchQueue.main.asyncAfter(
+                deadline: .now() + temporaryAccessGrantCollapseDelay,
+                execute: workItem
+            )
+        }
+    }
+
+    private func revealTemporaryAccessGrantStrip() {
+        temporaryAccessGrantCollapseWorkItem?.cancel()
+        temporaryAccessGrantCollapseWorkItem = nil
+        isTemporaryAccessGrantStripCollapsed = false
+        refreshTemporaryAccessGrantPanel()
+        refreshTemporaryAccessGrantMenuItems()
     }
 
     private func setBaseStatusImage(_ image: NSImage?) {
@@ -1367,6 +1504,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         item.representedObject = record.accessRequestID.uuidString
         return item
     }
+
+    fileprivate func statusMenuTrackingSelfCheck() -> Bool {
+        installStatusMenu()
+        defer { NSStatusBar.system.removeStatusItem(statusItem) }
+        guard let menu = statusItem.menu else { return false }
+
+        menuWillOpen(menu)
+        let presentedItems = menu.items
+        let process = LiveSecretUseProcess(
+            pid: 42,
+            startUsec: 1,
+            effectiveUserID: geteuid(),
+            auditSessionID: 1
+        )
+        liveSecretUses.record(
+            process: process,
+            launcherDesignatedRequirement: nil,
+            launcherName: "Self Check",
+            targetPath: "/usr/bin/true",
+            processID: process.pid,
+            secretNames: ["TEST_SECRET"]
+        )
+        liveSecretUseSnapshots = liveSecretUses.snapshots(isLive: { _ in true })
+        refreshLiveSecretUseMenuItems()
+        let stayedStable = menu.items.count == presentedItems.count
+            && zip(menu.items, presentedItems).allSatisfy { $0 === $1 }
+
+        menuDidClose(menu)
+        return stayedStable
+            && !isStatusMenuOpen
+            && liveSecretUseMenuItems.count == 1
+            && liveSecretUseHeadingItem != nil
+    }
 }
 
 private func scanDetectorGroup(_ detectors: Set<String>) -> Set<String> {
@@ -1376,11 +1546,23 @@ private func scanDetectorGroup(_ detectors: Set<String>) -> Set<String> {
 
 extension AppDelegate: NSMenuDelegate {
     func menuWillOpen(_ menu: NSMenu) {
+        if !isStartingUp, !isUpdating {
+            refreshAutoApprovalMenuItems()
+            refreshTemporaryAccessGrantMenuItems()
+            refreshLiveSecretUses()
+            refreshDoctorStatus()
+        }
+        isStatusMenuOpen = true
+    }
+
+    func menuDidClose(_ menu: NSMenu) {
+        isStatusMenuOpen = false
         guard !isStartingUp, !isUpdating else { return }
         refreshAutoApprovalMenuItems()
         refreshTemporaryAccessGrantMenuItems()
-        refreshLiveSecretUses()
+        refreshLiveSecretUseMenuItems()
         refreshDoctorStatus()
+        refreshCLIInstallState()
     }
 }
 
@@ -1541,7 +1723,7 @@ private func automaticAccessRecord(_ record: AccessRequestRecord) -> AutoApprova
     return AutoApprovalRecord(
         accessRequestID: record.id,
         date: record.date,
-        launcher: record.launcher ?? "Unknown app",
+        launcher: record.launcher ?? "Launcher unavailable",
         launcherIconPath: "",
         tool: record.tool,
         displayCommand: record.commandForDisplay,
@@ -1952,6 +2134,8 @@ enum SecretMutation {
     case delete(account: String)
     case dockerSave(account: String, value: String, serverURL: String, username: String)
     case dockerDelete(account: String, serverURL: String)
+    case podmanSave(account: String, value: String, serverURL: String, username: String)
+    case podmanDelete(account: String, serverURL: String)
     case goatSave(account: String, value: String, scope: String)
     case goatDelete(account: String, scope: String)
     case ordercliSave(account: String, value: String, scope: String)
@@ -1964,6 +2148,10 @@ enum SecretMutation {
     case railwayDelete(account: String, scope: String)
     case oxideSave(account: String, value: String, scope: String)
     case oxideDelete(account: String, scope: String)
+    case fastlySave(account: String, value: String, scope: String)
+    case fastlyDelete(account: String, scope: String)
+    case sqlcmdSave(account: String, value: String, scope: String)
+    case sqlcmdDelete(account: String, scope: String)
     case terraformSave(account: String, value: String, hostname: String)
     case terraformDelete(account: String, hostname: String)
     case deleteValue(account: String, source: StoredSecretValueSource)
@@ -2013,6 +2201,18 @@ enum SecretMutation {
                 "docker-delete", [account], ["credential", "erase", serverURL],
                 "Delete Docker credential for \(serverURL)?",
                 "Docker will no longer be able to authenticate to this registry with the stored credential."
+            )
+        case .podmanSave(let account, _, let serverURL, let username):
+            properties = (
+                "docker-save", [account], ["credential", "store", serverURL],
+                "Store Podman credential for \(serverURL)?",
+                "Podman will use the \(username) credential for this registry through its Automic Vault Secret Gate."
+            )
+        case .podmanDelete(let account, let serverURL):
+            properties = (
+                "docker-delete", [account], ["credential", "erase", serverURL],
+                "Delete Podman credential for \(serverURL)?",
+                "Podman will no longer be able to authenticate to this registry with the stored credential."
             )
         case .goatSave(let account, _, let scope):
             properties = (
@@ -2086,6 +2286,30 @@ enum SecretMutation {
                 "Delete Oxide credential?",
                 "Oxide CLI will no longer be able to authenticate with this profile."
             )
+        case .fastlySave(let account, _, let scope):
+            properties = (
+                "fastly-save", [account], ["credential", "store", scope],
+                "Store Fastly API token?",
+                "Fastly CLI will use this named token through its Automic Vault Secret Gate."
+            )
+        case .fastlyDelete(let account, let scope):
+            properties = (
+                "fastly-delete", [account], ["credential", "forget", scope],
+                "Delete Fastly API token?",
+                "Fastly CLI will no longer be able to authenticate with this named token."
+            )
+        case .sqlcmdSave(let account, _, let scope):
+            properties = (
+                "sqlcmd-save", [account], ["credential", "store", scope],
+                "Store sqlcmd password?",
+                "sqlcmd will use this user profile through its Automic Vault Secret Gate."
+            )
+        case .sqlcmdDelete(let account, let scope):
+            properties = (
+                "sqlcmd-delete", [account], ["credential", "forget", scope],
+                "Delete sqlcmd password?",
+                "sqlcmd will no longer be able to authenticate with this user profile."
+            )
         case .terraformSave(let account, _, let hostname):
             properties = (
                 "terraform-save", [account], ["credential", "store", hostname],
@@ -2120,6 +2344,7 @@ enum SecretMutation {
         }
         let tool = switch self {
         case .dockerSave, .dockerDelete: "docker"
+        case .podmanSave, .podmanDelete: "podman"
         case .goatSave, .goatDelete: "goat"
         case .ordercliSave, .ordercliDelete: "ordercli"
         case .openhueSave: "openhue-cli"
@@ -2127,6 +2352,8 @@ enum SecretMutation {
         case .uaaSave, .uaaDelete: "uaa-cli"
         case .railwaySave, .railwayDelete: "railway"
         case .oxideSave, .oxideDelete: "oxide-cli"
+        case .fastlySave, .fastlyDelete: "fastly-cli"
+        case .sqlcmdSave, .sqlcmdDelete: "sqlcmd"
         case .terraformSave, .terraformDelete: "terraform"
         default: URL(fileURLWithPath: callerPath).lastPathComponent
         }
@@ -2146,7 +2373,8 @@ enum SecretMutation {
                 keychainProperties: []
             )])
             credentialScope = nil
-        case .dockerSave(_, _, let serverURL, _), .dockerDelete(_, let serverURL):
+        case .dockerSave(_, _, let serverURL, _), .dockerDelete(_, let serverURL),
+             .podmanSave(_, _, let serverURL, _), .podmanDelete(_, let serverURL):
             cwd = requestCWD
             selectedSecretValues = SelectedSecretValues(values: [:])
             credentialScope = serverURL
@@ -2175,6 +2403,14 @@ enum SecretMutation {
             selectedSecretValues = SelectedSecretValues(values: [:])
             credentialScope = scope
         case .oxideSave(_, _, let scope), .oxideDelete(_, let scope):
+            cwd = ""
+            selectedSecretValues = SelectedSecretValues(values: [:])
+            credentialScope = scope
+        case .fastlySave(_, _, let scope), .fastlyDelete(_, let scope):
+            cwd = ""
+            selectedSecretValues = SelectedSecretValues(values: [:])
+            credentialScope = scope
+        case .sqlcmdSave(_, _, let scope), .sqlcmdDelete(_, let scope):
             cwd = ""
             selectedSecretValues = SelectedSecretValues(values: [:])
             credentialScope = scope
@@ -2249,6 +2485,10 @@ enum SecretMutation {
             return saveStoredSecret(account: account, value: value, accessibility: .whenUnlocked)
         case .dockerDelete(let account, _):
             return deleteStoredSecretRevokingDirectAccess(account: account)
+        case .podmanSave(let account, let value, _, _):
+            return saveStoredSecret(account: account, value: value, accessibility: .whenUnlocked)
+        case .podmanDelete(let account, _):
+            return deleteStoredSecretRevokingDirectAccess(account: account)
         case .goatSave(let account, let value, _):
             return saveStoredSecret(account: account, value: value, accessibility: .whenUnlocked)
         case .goatDelete(let account, _):
@@ -2272,6 +2512,14 @@ enum SecretMutation {
         case .oxideSave(let account, let value, _):
             return saveStoredSecret(account: account, value: value, accessibility: .whenUnlocked)
         case .oxideDelete(let account, _):
+            return deleteStoredSecretRevokingDirectAccess(account: account)
+        case .fastlySave(let account, let value, _):
+            return saveStoredSecret(account: account, value: value, accessibility: .whenUnlocked)
+        case .fastlyDelete(let account, _):
+            return deleteStoredSecretRevokingDirectAccess(account: account)
+        case .sqlcmdSave(let account, let value, _):
+            return saveStoredSecret(account: account, value: value, accessibility: .whenUnlocked)
+        case .sqlcmdDelete(let account, _):
             return deleteStoredSecretRevokingDirectAccess(account: account)
         case .terraformSave(let account, let value, _):
             return saveStoredSecret(account: account, value: value, accessibility: .whenUnlocked)
@@ -2434,7 +2682,7 @@ private func performApprovedSecretMutation(
         reason: "Approved in prompt",
         launcher: launcher
     )) else {
-        return (nil, "approval audit log is unavailable")
+        return (nil, "Authorization History is unavailable")
     }
     return (perform?(mutation) ?? mutation.perform(), nil)
 }
@@ -2542,6 +2790,15 @@ private struct RetainedProcessExecution: Hashable, Sendable {
     let startUsec: UInt64
     let effectiveUserID: UInt32
     let auditSessionID: UInt32
+    let codeIdentity: Data
+}
+
+private struct ApprovalProcessExecution: Sendable {
+    let pid: Int32
+    let pidVersion: Int32?
+    let startUsec: UInt64
+    let effectiveUserID: UInt32
+    let auditSessionID: UInt32?
     let codeIdentity: Data
 }
 
@@ -2735,14 +2992,15 @@ private func temporaryAccessGrantCandidate(
     launcher: LauncherIdentity?,
     agentTaskContext: AgentTaskContext?
 ) -> TemporaryAccessGrantCandidate? {
-    guard let gate, let classification, let launcher, let agentTaskContext else { return nil }
-    switch classification {
-    case .localWrite, .update, .mutating:
-        break
-    case .readOnly, .secretDump, .unknown:
-        return nil
-    }
-    guard let runtimeRequirement = launcher.runtimeProtection.secretGateAdmissionRequirement else {
+    guard temporaryAccessGrantUnavailableReason(
+        hasToolSpecificGate: gate != nil,
+        classification: classification,
+        launcherRuntimeProtection: launcher?.runtimeProtection,
+        agentTaskContext: agentTaskContext
+    ) == nil,
+    let gate, let launcher, let agentTaskContext,
+    let runtimeRequirement = launcher.runtimeProtection.secretGateAdmissionRequirement
+    else {
         return nil
     }
     let launcherName = temporaryAccessGrantLauncherName(launcher)
@@ -2871,6 +3129,8 @@ private struct ApprovedFulfillmentMaterial: Sendable {
     let awsRegistration: AWSRegistration?
 }
 
+private let registryHelperProtocolVersion: UInt64 = 3
+
 private final class ApprovalServer: @unchecked Sendable {
     private let serviceName: String
     private let teamIdentifier: String
@@ -2952,6 +3212,7 @@ private final class ApprovalServer: @unchecked Sendable {
         (identifier "com.automicvault" or identifier "com.automicvault.av" or \
         identifier "com.automicvault.av-brew-stub" or \
         identifier "com.automicvault.varlock-plugin-helper" or \
+        identifier "com.automicvault.wrangler" or \
         identifier "gh" or identifier "com.github.cli" or identifier "stripe" or \
         identifier "supabase" or identifier "supabase-go" or identifier "com.supabase.cli")
         """
@@ -3068,11 +3329,11 @@ private final class ApprovalServer: @unchecked Sendable {
             reply(peer, to: message, ok: true, error: nil, value: String(negotiated))
         case .dockerHelperVersion where isTrustedAvCaller(path: callerPath, signing: signing):
             let requested = xpc_dictionary_get_uint64(message, "requested_version")
-            guard requested == 1 else {
-                reply(peer, to: message, ok: false, error: "Docker helper protocol upgrade is required")
+            guard requested == registryHelperProtocolVersion else {
+                reply(peer, to: message, ok: false, error: "Registry helper protocol upgrade is required")
                 return
             }
-            reply(peer, to: message, ok: true, error: nil, value: "1")
+            reply(peer, to: message, ok: true, error: nil, value: String(registryHelperProtocolVersion))
         case .goatHelperVersion where isTrustedAvCaller(path: callerPath, signing: signing):
             let requested = xpc_dictionary_get_uint64(message, "requested_version")
             guard requested == 1 else {
@@ -3122,10 +3383,52 @@ private final class ApprovalServer: @unchecked Sendable {
                 return
             }
             reply(peer, to: message, ok: true, error: nil, value: "1")
+        case .fastlyHelperVersion where isTrustedAvCaller(path: callerPath, signing: signing):
+            let requested = xpc_dictionary_get_uint64(message, "requested_version")
+            guard requested == 1 else {
+                reply(peer, to: message, ok: false, error: "Fastly helper protocol upgrade is required")
+                return
+            }
+            reply(peer, to: message, ok: true, error: nil, value: "1")
+        case .sqlcmdHelperVersion where isTrustedAvCaller(path: callerPath, signing: signing):
+            let requested = xpc_dictionary_get_uint64(message, "requested_version")
+            guard requested == 1 else {
+                reply(peer, to: message, ok: false, error: "sqlcmd helper protocol upgrade is required")
+                return
+            }
+            reply(peer, to: message, ok: true, error: nil, value: "1")
         case .terraformHelperVersion where isTrustedAvCaller(path: callerPath, signing: signing):
             let requested = xpc_dictionary_get_uint64(message, "requested_version")
             guard requested == 1 else {
                 reply(peer, to: message, ok: false, error: "Terraform helper protocol upgrade is required")
+                return
+            }
+            reply(peer, to: message, ok: true, error: nil, value: "1")
+        case .aliyunHelperVersion where isTrustedAvCaller(path: callerPath, signing: signing):
+            let requested = xpc_dictionary_get_uint64(message, "requested_version")
+            guard requested == 1 else {
+                reply(peer, to: message, ok: false, error: "Alibaba Cloud helper protocol upgrade is required")
+                return
+            }
+            reply(peer, to: message, ok: true, error: nil, value: "1")
+        case .wakatimeHelperVersion where isTrustedAvCaller(path: callerPath, signing: signing):
+            let requested = xpc_dictionary_get_uint64(message, "requested_version")
+            guard requested == 1 else {
+                reply(peer, to: message, ok: false, error: "WakaTime helper protocol upgrade is required")
+                return
+            }
+            reply(peer, to: message, ok: true, error: nil, value: "1")
+        case .rcloneHelperVersion where isTrustedAvCaller(path: callerPath, signing: signing):
+            let requested = xpc_dictionary_get_uint64(message, "requested_version")
+            guard requested == 1 else {
+                reply(peer, to: message, ok: false, error: "rclone helper protocol upgrade is required")
+                return
+            }
+            reply(peer, to: message, ok: true, error: nil, value: "1")
+        case .kubectlHelperVersion where isTrustedAvCaller(path: callerPath, signing: signing):
+            let requested = xpc_dictionary_get_uint64(message, "requested_version")
+            guard requested == 1 else {
+                reply(peer, to: message, ok: false, error: "kubectl helper protocol upgrade is required")
                 return
             }
             reply(peer, to: message, ok: true, error: nil, value: "1")
@@ -3140,7 +3443,7 @@ private final class ApprovalServer: @unchecked Sendable {
                 signing: signing
             )
         case .inject, .keys, .authorize, .dockerGet, .goatGet, .ordercliGet, .openhueGet, .plumberGet, .uaaGet, .railwayGet,
-             .oxideGet, .terraformGet:
+             .oxideGet, .fastlyGet, .sqlcmdGet, .terraformGet, .aliyunGet, .wakatimeGet, .rcloneGet, .kubectlGet:
             handleInject(
                 message,
                 on: peer,
@@ -3200,6 +3503,14 @@ private final class ApprovalServer: @unchecked Sendable {
             handleOxideSave(message, on: peer, cancellation: cancellation, caller: mutationCaller)
         case .oxideDelete where isTrustedAvCaller(path: callerPath, signing: signing):
             handleOxideDelete(message, on: peer, cancellation: cancellation, caller: mutationCaller)
+        case .fastlySave where isTrustedAvCaller(path: callerPath, signing: signing):
+            handleFastlySave(message, on: peer, cancellation: cancellation, caller: mutationCaller)
+        case .fastlyDelete where isTrustedAvCaller(path: callerPath, signing: signing):
+            handleFastlyDelete(message, on: peer, cancellation: cancellation, caller: mutationCaller)
+        case .sqlcmdSave where isTrustedAvCaller(path: callerPath, signing: signing):
+            handleSqlcmdSave(message, on: peer, cancellation: cancellation, caller: mutationCaller)
+        case .sqlcmdDelete where isTrustedAvCaller(path: callerPath, signing: signing):
+            handleSqlcmdDelete(message, on: peer, cancellation: cancellation, caller: mutationCaller)
         case .terraformSave where isTrustedAvCaller(path: callerPath, signing: signing):
             handleTerraformSave(message, on: peer, cancellation: cancellation, caller: mutationCaller)
         case .terraformDelete where isTrustedAvCaller(path: callerPath, signing: signing):
@@ -3230,6 +3541,18 @@ private final class ApprovalServer: @unchecked Sendable {
             handleDelete(message, on: peer, cancellation: cancellation, caller: mutationCaller)
         case .save where isTrustedGhCaller(path: callerPath, signing: signing):
             handleGhSave(message, on: peer, cancellation: cancellation, caller: mutationCaller)
+        case .wranglerSave where isTrustedWranglerCaller(path: callerPath, signing: signing):
+            guard let key = xpc_dictionary_get_string(message, "key"), wranglerCredentialMutationIsSupported(key: String(cString: key), hasProjectDirectory: xpc_dictionary_get_value(message, "project_directory") != nil) else {
+                reply(peer, to: message, ok: false, error: "Wrangler mutations require a Global Value in the Wrangler namespace")
+                return
+            }
+            handleSave(message, on: peer, cancellation: cancellation, caller: mutationCaller)
+        case .wranglerDelete where isTrustedWranglerCaller(path: callerPath, signing: signing):
+            guard let key = xpc_dictionary_get_string(message, "key"), wranglerCredentialMutationIsSupported(key: String(cString: key), hasProjectDirectory: xpc_dictionary_get_value(message, "project_directory") != nil) else {
+                reply(peer, to: message, ok: false, error: "Wrangler mutations require a Global Value in the Wrangler namespace")
+                return
+            }
+            handleDelete(message, on: peer, cancellation: cancellation, caller: mutationCaller)
         case .ghSave where isTrustedGhCaller(path: callerPath, signing: signing):
             handleGhSave(message, on: peer, cancellation: cancellation, caller: mutationCaller)
         case .delete where isTrustedGhCaller(path: callerPath, signing: signing):
@@ -3285,8 +3608,8 @@ private final class ApprovalServer: @unchecked Sendable {
             tool: "av",
             title: "List saved secret names?",
             detail: globalOnly
-                ? "Secret values will remain hidden. The requesting app will receive every saved Global Value name."
-                : "Secret values will remain hidden. The requesting app will receive every saved secret name."
+                ? "Secret values will remain hidden. av will receive every saved Global Value name."
+                : "Secret values will remain hidden. av will receive every saved Secret Name."
         )
         if allowedLauncher != nil
         {
@@ -3407,7 +3730,7 @@ private final class ApprovalServer: @unchecked Sendable {
             reason: reason,
             launcher: launcher
         )) else {
-            reply(peer, to: message, ok: false, error: "approval audit log is unavailable")
+            reply(peer, to: message, ok: false, error: "Authorization History is unavailable")
             return
         }
         reply(peer, to: message, ok: true, error: nil, names: names)
@@ -3442,7 +3765,7 @@ private final class ApprovalServer: @unchecked Sendable {
                 return
             }
             let storedSecretNames: Set<String>
-            switch loadStoredSecretsResult() {
+            switch loadStoredSecretsForUseResult() {
             case .success(let secrets):
                 storedSecretNames = Set(secrets.map(\.account))
             case .failure(let status):
@@ -3524,22 +3847,68 @@ private final class ApprovalServer: @unchecked Sendable {
                 helperPath: callerPath,
                 helperSigning: signing
             )
-            let oxideRequest = try oxideCredentialRequest(
+            let aliyunRequest = try aliyunCredentialRequest(
                 from: message,
                 request: helperRequest,
                 helperIdentity: identity,
                 helperPath: callerPath,
                 helperSigning: signing
             )
-            let conflicts = Set(oxideRequest.envConflicts)
-            let selectionNames = oxideRequest.keys.filter {
-                oxideRequest.replaceExistingEnv || !conflicts.contains($0)
+            let oxideRequest = try oxideCredentialRequest(
+                from: message,
+                request: aliyunRequest,
+                helperIdentity: identity,
+                helperPath: callerPath,
+                helperSigning: signing
+            )
+            let fastlyRequest = try fastlyCredentialRequest(
+                from: message,
+                request: oxideRequest,
+                helperIdentity: identity,
+                helperPath: callerPath,
+                helperSigning: signing
+            )
+            let sqlcmdRequest = try sqlcmdCredentialRequest(
+                from: message,
+                request: fastlyRequest,
+                helperIdentity: identity,
+                helperPath: callerPath,
+                helperSigning: signing
+            )
+            let wakatimeRequest = try wakatimeCredentialRequest(
+                from: message,
+                request: sqlcmdRequest,
+                helperIdentity: identity,
+                helperPath: callerPath,
+                helperSigning: signing
+            )
+            let rcloneRequest = try rclonePasswordRequest(
+                request: wakatimeRequest,
+                helperIdentity: identity,
+                helperPath: callerPath,
+                helperSigning: signing
+            )
+            let kubectlRequest = try kubectlCredentialRequest(
+                from: message,
+                request: rcloneRequest,
+                helperIdentity: identity,
+                helperPath: callerPath,
+                helperSigning: signing
+            )
+            let conflicts = Set(kubectlRequest.envConflicts)
+            let selectionNames = kubectlRequest.keys.filter {
+                kubectlRequest.replaceExistingEnv || !conflicts.contains($0)
             }
             let selected = try secretValueCustody.bind(
                 names: selectionNames,
-                cwd: oxideRequest.cwd
+                cwd: kubectlRequest.cwd
             )
-            request = approvalRequestWithCredentialContext(oxideRequest.selecting(selected))
+            // ponytail: Global Values only until OAuth refresh mutations bind the selected source.
+            if isTrustedWranglerCaller(path: callerPath, signing: signing),
+               !wranglerCredentialSelectionIsSupported(selected) {
+                throw AppError("Wrangler OAuth requires Global Values in the Wrangler namespace")
+            }
+            request = approvalRequestWithCredentialContext(kubectlRequest.selecting(selected))
         } catch {
             reply(peer, to: message, ok: false, error: error.localizedDescription)
             return
@@ -3653,7 +4022,7 @@ private final class ApprovalServer: @unchecked Sendable {
                         )
                     }
                 ) else {
-                    reply(peer, to: message, ok: false, error: "approval audit log is unavailable")
+                    reply(peer, to: message, ok: false, error: "Authorization History is unavailable")
                     return
                 }
             } catch {
@@ -3840,7 +4209,7 @@ private final class ApprovalServer: @unchecked Sendable {
                         )
                     }
                 ) else {
-                    reply(peer, to: message, ok: false, error: "approval audit log is unavailable")
+                    reply(peer, to: message, ok: false, error: "Authorization History is unavailable")
                     return
                 }
             } catch {
@@ -3917,7 +4286,7 @@ private final class ApprovalServer: @unchecked Sendable {
                         )
                     }
                 ) else {
-                    reply(peer, to: message, ok: false, error: "approval audit log is unavailable")
+                    reply(peer, to: message, ok: false, error: "Authorization History is unavailable")
                     return
                 }
             } catch {
@@ -3940,6 +4309,17 @@ private final class ApprovalServer: @unchecked Sendable {
             launcher: launcher,
             agentTaskContext: currentAgentTaskContext
         )
+        let temporaryGrantUnavailableReason = temporaryAccessGrantUnavailableReason(
+            hasToolSpecificGate: configuredGate != nil,
+            classification: classification,
+            launcherRuntimeProtection: launcher?.runtimeProtection,
+            agentTaskContext: currentAgentTaskContext
+        )
+        let promptAccessLevel = if let configuredGate, let resolvedPolicy {
+            configuredGate.protectionTitle(resolvedPolicy.protection)
+        } else {
+            SecretGateProtection.noAccess.title
+        }
         let transientApproval = request.decisionReuseRequest(
             clientIdentity: identity,
             callerPath: callerPath,
@@ -3947,9 +4327,20 @@ private final class ApprovalServer: @unchecked Sendable {
         )
         let promptBlessing: BlessedScriptPromptContext?
         if let activeBlessing {
+            let launcherAllowsOperation = if configuredGate != nil,
+                                             let resolvedPolicy,
+                                             let classification {
+                secretGateProtectionAllows(resolvedPolicy.protection, classification: classification)
+            } else {
+                false
+            }
             promptBlessing = BlessedScriptPromptContext(
                 script: activeBlessing,
-                explanation: "This request exceeds the stored authority. Approval applies only to this request."
+                explanation: activeBlessedScriptPromptExplanation(
+                    script: activeBlessing,
+                    gateID: configuredGate?.id,
+                    launcherAllowsOperation: launcherAllowsOperation
+                )
             )
         } else if let scriptApproval,
                   let script = matchingBlessedScriptExecution(
@@ -4068,7 +4459,7 @@ private final class ApprovalServer: @unchecked Sendable {
                             )
                         }
                     ) else {
-                        self.reply(peer, to: message, ok: false, error: "approval audit log is unavailable")
+                        self.reply(peer, to: message, ok: false, error: "Authorization History is unavailable")
                         return
                     }
                 } catch {
@@ -4115,7 +4506,9 @@ private final class ApprovalServer: @unchecked Sendable {
                 automaticApprovalExplanation: lostBlessingExplanation(for: scriptApproval)
                     ?? retainedProcessExplanation
                     ?? automaticApprovalExplanation,
+                accessLevel: promptAccessLevel,
                 temporaryGrantCandidate: temporaryGrantCandidate,
+                temporaryGrantUnavailableReason: temporaryGrantUnavailableReason,
                 classification: classification,
                 cancellation: cancellation
             )
@@ -4223,7 +4616,7 @@ private final class ApprovalServer: @unchecked Sendable {
                             peer,
                             to: message,
                             ok: false,
-                            error: "approval audit log is unavailable",
+                            error: "Authorization History is unavailable",
                             humanApprovalDecision: "approved"
                         )
                         return
@@ -4293,7 +4686,7 @@ private final class ApprovalServer: @unchecked Sendable {
                         peer,
                         to: message,
                         ok: false,
-                        error: "approval audit log is unavailable",
+                        error: "Authorization History is unavailable",
                         humanApprovalDecision: "approved"
                     )
                     return
@@ -4388,7 +4781,7 @@ private final class ApprovalServer: @unchecked Sendable {
                         }
                     )
                     if !committed {
-                        reply(peer, to: message, ok: false, error: "approval audit log is unavailable")
+                        reply(peer, to: message, ok: false, error: "Authorization History is unavailable")
                         return true
                     }
                     return true
@@ -4629,7 +5022,7 @@ private final class ApprovalServer: @unchecked Sendable {
                             )
                         }
                     ) else {
-                        throw AppError("approval audit log is unavailable")
+                        throw AppError("Authorization History is unavailable")
                     }
                 } catch {
                     _ = self.onAccessRequest(accessRequestRecord(
@@ -4780,7 +5173,7 @@ private final class ApprovalServer: @unchecked Sendable {
                 reason: "Proxy Session approved once",
                 launcher: launcher
             )) else {
-                self.reply(peer, to: message, ok: false, error: "approval audit log is unavailable")
+                self.reply(peer, to: message, ok: false, error: "Authorization History is unavailable")
                 return
             }
             let launch = ProxySessionLaunch(
@@ -4995,7 +5388,7 @@ private final class ApprovalServer: @unchecked Sendable {
                     )
                 }
             ) else {
-                reply(peer, to: message, ok: false, error: "approval audit log is unavailable")
+                reply(peer, to: message, ok: false, error: "Authorization History is unavailable")
                 return true
             }
         } catch {
@@ -5282,7 +5675,7 @@ private final class ApprovalServer: @unchecked Sendable {
         guard let keyPointer = xpc_dictionary_get_string(message, "key"),
               let valuePointer = xpc_dictionary_get_string(message, "value")
         else {
-            reply(peer, to: message, ok: false, error: "invalid Docker credential store request")
+            reply(peer, to: message, ok: false, error: "invalid registry credential store request")
             return
         }
         let key = String(cString: keyPointer)
@@ -5290,13 +5683,16 @@ private final class ApprovalServer: @unchecked Sendable {
         guard let credential = parseDockerCredential(value),
               key == dockerCredentialSecretName(credential.serverURL)
         else {
-            reply(peer, to: message, ok: false, error: "invalid Docker credential")
+            reply(peer, to: message, ok: false, error: "invalid registry credential")
             return
         }
         do {
             let parent = try dockerCredentialParent(for: caller.identity)
+            let mutation: SecretMutation = credentialHelperTool(parent) == "podman"
+                ? .podmanSave(account: key, value: value, serverURL: credential.serverURL, username: credential.username)
+                : .dockerSave(account: key, value: value, serverURL: credential.serverURL, username: credential.username)
             handleMutation(
-                .dockerSave(account: key, value: value, serverURL: credential.serverURL, username: credential.username),
+                mutation,
                 on: peer,
                 message: message,
                 cancellation: cancellation,
@@ -5317,19 +5713,22 @@ private final class ApprovalServer: @unchecked Sendable {
         guard let keyPointer = xpc_dictionary_get_string(message, "key"),
               let serverPointer = xpc_dictionary_get_string(message, "docker_server_url")
         else {
-            reply(peer, to: message, ok: false, error: "invalid Docker credential erase request")
+            reply(peer, to: message, ok: false, error: "invalid registry credential erase request")
             return
         }
         let key = String(cString: keyPointer)
         let serverURL = String(cString: serverPointer)
         guard validDockerServerURL(serverURL), key == dockerCredentialSecretName(serverURL) else {
-            reply(peer, to: message, ok: false, error: "invalid Docker credential")
+            reply(peer, to: message, ok: false, error: "invalid registry credential")
             return
         }
         do {
             let parent = try dockerCredentialParent(for: caller.identity)
+            let mutation: SecretMutation = credentialHelperTool(parent) == "podman"
+                ? .podmanDelete(account: key, serverURL: serverURL)
+                : .dockerDelete(account: key, serverURL: serverURL)
             handleMutation(
-                .dockerDelete(account: key, serverURL: serverURL),
+                mutation,
                 on: peer,
                 message: message,
                 cancellation: cancellation,
@@ -5672,6 +6071,108 @@ private final class ApprovalServer: @unchecked Sendable {
         }
     }
 
+    private func handleFastlySave(
+        _ message: xpc_object_t,
+        on peer: xpc_connection_t,
+        cancellation: ApprovalCancellation,
+        caller: MutationCaller
+    ) {
+        guard let scopePointer = xpc_dictionary_get_string(message, "fastly_scope"),
+              let valuePointer = xpc_dictionary_get_string(message, "value"),
+              let scope = parseFastlyCredentialScope(String(cString: scopePointer)),
+              let value = parseFastlyCredential(String(cString: valuePointer))
+        else {
+            reply(peer, to: message, ok: false, error: "invalid Fastly credential store request")
+            return
+        }
+        do {
+            let parent = try fastlyCredentialParent(for: caller.identity)
+            handleMutation(
+                .fastlySave(account: scope.secretName, value: value, scope: scope.canonical),
+                on: peer, message: message, cancellation: cancellation, caller: caller,
+                requiredCredentialParent: parent
+            )
+        } catch {
+            reply(peer, to: message, ok: false, error: error.localizedDescription)
+        }
+    }
+
+    private func handleFastlyDelete(
+        _ message: xpc_object_t,
+        on peer: xpc_connection_t,
+        cancellation: ApprovalCancellation,
+        caller: MutationCaller
+    ) {
+        guard let scopePointer = xpc_dictionary_get_string(message, "fastly_scope"),
+              let scope = parseFastlyCredentialScope(String(cString: scopePointer))
+        else {
+            reply(peer, to: message, ok: false, error: "invalid Fastly credential forget request")
+            return
+        }
+        do {
+            let parent = try fastlyCredentialParent(for: caller.identity)
+            handleMutation(
+                .fastlyDelete(account: scope.secretName, scope: scope.canonical),
+                on: peer, message: message, cancellation: cancellation, caller: caller,
+                requiredCredentialParent: parent
+            )
+        } catch {
+            reply(peer, to: message, ok: false, error: error.localizedDescription)
+        }
+    }
+
+    private func handleSqlcmdSave(
+        _ message: xpc_object_t,
+        on peer: xpc_connection_t,
+        cancellation: ApprovalCancellation,
+        caller: MutationCaller
+    ) {
+        guard let scopePointer = xpc_dictionary_get_string(message, "sqlcmd_scope"),
+              let valuePointer = xpc_dictionary_get_string(message, "value"),
+              let scope = parseSqlcmdCredentialScope(String(cString: scopePointer)),
+              scope.address.isEmpty, scope.port == 0,
+              let value = parseSqlcmdPassword(String(cString: valuePointer))
+        else {
+            reply(peer, to: message, ok: false, error: "invalid sqlcmd credential store request")
+            return
+        }
+        do {
+            let parent = try sqlcmdCredentialParent(for: caller.identity)
+            handleMutation(
+                .sqlcmdSave(account: scope.secretName, value: value, scope: scope.canonical),
+                on: peer, message: message, cancellation: cancellation, caller: caller,
+                requiredCredentialParent: parent
+            )
+        } catch {
+            reply(peer, to: message, ok: false, error: error.localizedDescription)
+        }
+    }
+
+    private func handleSqlcmdDelete(
+        _ message: xpc_object_t,
+        on peer: xpc_connection_t,
+        cancellation: ApprovalCancellation,
+        caller: MutationCaller
+    ) {
+        guard let scopePointer = xpc_dictionary_get_string(message, "sqlcmd_scope"),
+              let scope = parseSqlcmdCredentialScope(String(cString: scopePointer)),
+              scope.address.isEmpty, scope.port == 0
+        else {
+            reply(peer, to: message, ok: false, error: "invalid sqlcmd credential forget request")
+            return
+        }
+        do {
+            let parent = try sqlcmdCredentialParent(for: caller.identity)
+            handleMutation(
+                .sqlcmdDelete(account: scope.secretName, scope: scope.canonical),
+                on: peer, message: message, cancellation: cancellation, caller: caller,
+                requiredCredentialParent: parent
+            )
+        } catch {
+            reply(peer, to: message, ok: false, error: error.localizedDescription)
+        }
+    }
+
     private func handleTerraformSave(
         _ message: xpc_object_t,
         on peer: xpc_connection_t,
@@ -5816,6 +6317,7 @@ private final class ApprovalServer: @unchecked Sendable {
                  .saveProject(let account, _, _, _, _),
                  .saveIfAbsentOrEqual(let account, _, _),
                  .dockerSave(let account, _, _, _),
+                 .podmanSave(let account, _, _, _),
                  .goatSave(let account, _, _),
                  .ordercliSave(let account, _, _),
                  .openhueSave(let account, _, _),
@@ -5823,6 +6325,8 @@ private final class ApprovalServer: @unchecked Sendable {
                  .uaaSave(let account, _, _),
                  .railwaySave(let account, _, _),
                  .oxideSave(let account, _, _),
+                 .fastlySave(let account, _, _),
+                 .sqlcmdSave(let account, _, _),
                  .terraformSave(let account, _, _):
                 if status == errSecSuccess {
                     self.reply(peer, to: message, ok: true, error: nil)
@@ -5835,11 +6339,14 @@ private final class ApprovalServer: @unchecked Sendable {
                     )
                 }
             case .delete(let account), .dockerDelete(let account, _),
+                 .podmanDelete(let account, _),
                  .goatDelete(let account, _),
                  .ordercliDelete(let account, _),
                  .uaaDelete(let account, _),
                  .railwayDelete(let account, _),
-                 .oxideDelete(let account, _), .terraformDelete(let account, _):
+                 .oxideDelete(let account, _), .fastlyDelete(let account, _),
+                 .sqlcmdDelete(let account, _),
+                 .terraformDelete(let account, _):
                 if status == errSecSuccess || status == errSecItemNotFound {
                     self.reply(peer, to: message, ok: true, error: nil)
                 } else {
@@ -5930,12 +6437,12 @@ private final class ApprovalServer: @unchecked Sendable {
         helperSigning: SigningInfo
     ) throws -> ApprovalRequest {
         guard request.op == "docker-get" else {
-            guard request.tool != "docker" else {
-                throw AppError("Docker credentials require the Docker helper protocol")
+            guard request.tool != "docker" && request.tool != "podman" else {
+                throw AppError("registry credentials require the credential-helper protocol")
             }
             return request
         }
-        guard request.tool == "docker",
+        guard request.tool == "docker" || request.tool == "podman",
               isTrustedAvCaller(path: helperPath, signing: helperSigning),
               request.target.isEmpty,
               request.args.isEmpty,
@@ -5946,13 +6453,18 @@ private final class ApprovalServer: @unchecked Sendable {
               request.shebangScript == nil,
               request.scriptData == nil,
               let serverPointer = xpc_dictionary_get_string(message, "docker_server_url")
-        else { throw AppError("invalid Docker credential request") }
+        else { throw AppError("invalid registry credential request") }
         let serverURL = String(cString: serverPointer)
         let secretName = dockerCredentialSecretName(serverURL)
         guard validDockerServerURL(serverURL), request.keys == [secretName] else {
-            throw AppError("Docker registry Secret Name does not match its address")
+            throw AppError("registry Secret Name does not match its address")
         }
         let parent = try dockerCredentialParent(for: helperIdentity)
+        let tool = credentialHelperTool(parent)
+        guard (tool == "docker" || tool == "podman"), request.tool == tool else {
+            throw AppError("registry credential helper parent is not a supported Target")
+        }
+        let displayName = tool == "podman" ? "Podman" : "Docker"
         return ApprovalRequest(
             op: request.op,
             keys: [secretName],
@@ -5964,9 +6476,9 @@ private final class ApprovalServer: @unchecked Sendable {
             envConflicts: [],
             shebangScript: nil,
             scriptData: nil,
-            tool: "docker",
-            title: "Use Docker credential for \(serverURL)?",
-            detail: "The verified Docker Target will receive the usable registry credential in plaintext, as required by Docker's credential-helper protocol.",
+            tool: tool,
+            title: "Use \(displayName) credential for \(serverURL)?",
+            detail: "The verified \(displayName) Target will receive the usable registry credential in plaintext, as required by the credential-helper protocol.",
             credentialScope: serverURL,
             credentialParent: parent
         )
@@ -5982,10 +6494,12 @@ private final class ApprovalServer: @unchecked Sendable {
               parentIdentity.euid == helperIdentity.euid,
               let arguments = processArguments(parentPID),
               !arguments.isEmpty
-        else { throw AppError("Docker credential helper has no live parent") }
+        else { throw AppError("registry credential helper has no live parent") }
         let target = pathString(parentIdentity)
-        guard dockerTargetIdentityValid(pid: parentPID, path: target) else {
-            throw AppError("Docker credential helper parent is not an eligible Docker Target")
+        guard dockerTargetIdentityValid(pid: parentPID, path: target)
+                || podmanTargetIdentityValid(pid: parentPID, path: target)
+        else {
+            throw AppError("registry credential helper parent is not an eligible Docker or Podman Target")
         }
         return CredentialHelperParent(
             pid: parentPID,
@@ -6020,6 +6534,18 @@ private final class ApprovalServer: @unchecked Sendable {
             && signing.teamIdentifier == "9BNSXJN65R"
             && signing.isDeveloperID
             && signing.runtimeProtection.allowsSecretGateAccess
+    }
+
+    private func podmanTargetIdentityValid(pid: pid_t, path: String) -> Bool {
+        guard configuredSecretGateTarget("podman", matches: path),
+              let signing = liveSigningInfo(pid: pid),
+              signing.mainExecutable == path
+        else { return false }
+        return signing.identifier == "podman"
+            && signing.teamIdentifier == "HYSCB8KRL2"
+            && signing.isDeveloperID
+            && signing.runtimeProtection == .hardened
+            && liveProcessHasNoEntitlements(pid: pid)
     }
 
     private func goatCredentialRequest(
@@ -6362,6 +6888,142 @@ private final class ApprovalServer: @unchecked Sendable {
         )
     }
 
+    private func fastlyCredentialRequest(
+        from message: xpc_object_t,
+        request: ApprovalRequest,
+        helperIdentity: AVProcessIdentity,
+        helperPath: String,
+        helperSigning: SigningInfo
+    ) throws -> ApprovalRequest {
+        guard request.op == "fastly-get" else { return request }
+        guard request.tool == "fastly-cli",
+              isTrustedAvCaller(path: helperPath, signing: helperSigning),
+              request.target.isEmpty,
+              request.args.isEmpty,
+              request.keys.count == 1,
+              !request.replaceExistingEnv,
+              !request.allowMissingKeys,
+              request.envConflicts.isEmpty,
+              request.shebangScript == nil,
+              request.scriptData == nil,
+              let scopePointer = xpc_dictionary_get_string(message, "fastly_scope"),
+              let scope = parseFastlyCredentialScope(String(cString: scopePointer)),
+              request.keys == [scope.secretName]
+        else { throw AppError("invalid Fastly credential request") }
+        let parent = try fastlyCredentialParent(for: helperIdentity)
+        return ApprovalRequest(
+            op: request.op,
+            keys: request.keys,
+            target: parent.target,
+            args: Array(parent.arguments.dropFirst()),
+            cwd: request.cwd,
+            replaceExistingEnv: false,
+            allowMissingKeys: false,
+            envConflicts: [],
+            shebangScript: nil,
+            scriptData: nil,
+            tool: "fastly-cli",
+            title: "Use Fastly API token \(scope.name)?",
+            detail: "The verified Fastly Target will receive this named token in plaintext for \(scope.endpoint).",
+            credentialScope: scope.canonical,
+            credentialParent: parent
+        )
+    }
+
+    private func fastlyCredentialParent(
+        for helperIdentity: AVProcessIdentity
+    ) throws -> CredentialHelperParent {
+        let parentPID = helperIdentity.ppid
+        var parentIdentity = AVProcessIdentity()
+        guard parentPID > 1,
+              av_process_identity(parentPID, &parentIdentity),
+              parentIdentity.euid == helperIdentity.euid,
+              let arguments = processArguments(parentPID),
+              !arguments.isEmpty
+        else { throw AppError("Fastly credential helper has no live parent") }
+        let target = pathString(parentIdentity)
+        guard fastlyTargetIdentityValid(pid: parentPID, path: target) else {
+            throw AppError("credential helper parent is not an eligible Fastly Target")
+        }
+        return CredentialHelperParent(
+            pid: parentPID,
+            startUsec: parentIdentity.start_usec,
+            euid: parentIdentity.euid,
+            target: target,
+            arguments: arguments
+        )
+    }
+
+    private func sqlcmdCredentialRequest(
+        from message: xpc_object_t,
+        request: ApprovalRequest,
+        helperIdentity: AVProcessIdentity,
+        helperPath: String,
+        helperSigning: SigningInfo
+    ) throws -> ApprovalRequest {
+        guard request.op == "sqlcmd-get" else { return request }
+        guard request.tool == "sqlcmd",
+              isTrustedAvCaller(path: helperPath, signing: helperSigning),
+              request.target.isEmpty,
+              request.args.isEmpty,
+              request.keys.count == 1,
+              !request.replaceExistingEnv,
+              !request.allowMissingKeys,
+              request.envConflicts.isEmpty,
+              request.shebangScript == nil,
+              request.scriptData == nil,
+              let scopePointer = xpc_dictionary_get_string(message, "sqlcmd_scope"),
+              let scope = parseSqlcmdCredentialScope(String(cString: scopePointer)),
+              request.keys == [scope.secretName]
+        else { throw AppError("invalid sqlcmd credential request") }
+        let parent = try sqlcmdCredentialParent(for: helperIdentity)
+        if scope.address.isEmpty && sqlcmdRequestClassification(Array(parent.arguments.dropFirst())) != .secretDump {
+            throw AppError("sqlcmd endpoint-free credential requests require an explicit Secret Disclosure command")
+        }
+        let destination = scope.address.isEmpty ? "raw configuration output" : "\(scope.address):\(scope.port)"
+        return ApprovalRequest(
+            op: request.op,
+            keys: request.keys,
+            target: parent.target,
+            args: Array(parent.arguments.dropFirst()),
+            cwd: request.cwd,
+            replaceExistingEnv: false,
+            allowMissingKeys: false,
+            envConflicts: [],
+            shebangScript: nil,
+            scriptData: nil,
+            tool: "sqlcmd",
+            title: "Use sqlcmd password for \(scope.profile)?",
+            detail: "The verified sqlcmd Target will receive this password in plaintext for \(destination).",
+            credentialScope: scope.canonical,
+            credentialParent: parent
+        )
+    }
+
+    private func sqlcmdCredentialParent(
+        for helperIdentity: AVProcessIdentity
+    ) throws -> CredentialHelperParent {
+        let parentPID = helperIdentity.ppid
+        var parentIdentity = AVProcessIdentity()
+        guard parentPID > 1,
+              av_process_identity(parentPID, &parentIdentity),
+              parentIdentity.euid == helperIdentity.euid,
+              let arguments = processArguments(parentPID),
+              !arguments.isEmpty
+        else { throw AppError("sqlcmd credential helper has no live parent") }
+        let target = pathString(parentIdentity)
+        guard sqlcmdTargetIdentityValid(pid: parentPID, path: target) else {
+            throw AppError("credential helper parent is not an eligible sqlcmd Target")
+        }
+        return CredentialHelperParent(
+            pid: parentPID,
+            startUsec: parentIdentity.start_usec,
+            euid: parentIdentity.euid,
+            target: target,
+            arguments: arguments
+        )
+    }
+
     private func terraformCredentialRequest(
         from message: xpc_object_t,
         request: ApprovalRequest,
@@ -6407,6 +7069,199 @@ private final class ApprovalServer: @unchecked Sendable {
         )
     }
 
+    private func wakatimeCredentialRequest(
+        from message: xpc_object_t,
+        request: ApprovalRequest,
+        helperIdentity: AVProcessIdentity,
+        helperPath: String,
+        helperSigning: SigningInfo
+    ) throws -> ApprovalRequest {
+        guard request.op == "wakatime-get" else { return request }
+        guard request.tool == "wakatime-cli",
+              isTrustedAvCaller(path: helperPath, signing: helperSigning),
+              request.target.isEmpty,
+              request.args.isEmpty,
+              request.keys == [wakatimeCredentialSecretName],
+              !request.replaceExistingEnv,
+              !request.allowMissingKeys,
+              request.envConflicts.isEmpty,
+              request.shebangScript == nil,
+              request.scriptData == nil,
+              let urlPointer = xpc_dictionary_get_string(message, "wakatime_api_url"),
+              String(cString: urlPointer) == wakatimeOfficialAPIURL
+        else { throw AppError("invalid WakaTime credential request") }
+        let parent = try wakatimeCredentialParent(for: helperIdentity)
+        return ApprovalRequest(
+            op: request.op,
+            keys: request.keys,
+            target: parent.target,
+            args: Array(parent.arguments.dropFirst()),
+            cwd: request.cwd,
+            replaceExistingEnv: false,
+            allowMissingKeys: false,
+            envConflicts: [],
+            shebangScript: nil,
+            scriptData: nil,
+            tool: "wakatime-cli",
+            title: "Use the WakaTime API key?",
+            detail: "The verified WakaTime Target will receive the global API key for WakaTime's official API endpoint.",
+            credentialScope: wakatimeOfficialAPIURL,
+            credentialParent: parent
+        )
+    }
+
+    private func wakatimeCredentialParent(
+        for helperIdentity: AVProcessIdentity
+    ) throws -> CredentialHelperParent {
+        let parentPID = helperIdentity.ppid
+        var parentIdentity = AVProcessIdentity()
+        guard parentPID > 1,
+              av_process_identity(parentPID, &parentIdentity),
+              parentIdentity.euid == helperIdentity.euid,
+              let arguments = processArguments(parentPID),
+              !arguments.isEmpty
+        else { throw AppError("WakaTime credential helper has no live parent") }
+        let target = pathString(parentIdentity)
+        guard wakatimeTargetIdentityValid(pid: parentPID, path: target) else {
+            throw AppError("credential helper parent is not an eligible WakaTime Target")
+        }
+        return CredentialHelperParent(
+            pid: parentPID,
+            startUsec: parentIdentity.start_usec,
+            euid: parentIdentity.euid,
+            target: target,
+            arguments: arguments
+        )
+    }
+
+    private func rclonePasswordRequest(
+        request: ApprovalRequest,
+        helperIdentity: AVProcessIdentity,
+        helperPath: String,
+        helperSigning: SigningInfo
+    ) throws -> ApprovalRequest {
+        guard request.op == "rclone-get" else { return request }
+        guard request.tool == "rclone",
+              isTrustedAvCaller(path: helperPath, signing: helperSigning),
+              request.target.isEmpty,
+              request.args.isEmpty,
+              request.keys == [rcloneConfigPasswordSecretName],
+              !request.replaceExistingEnv,
+              !request.allowMissingKeys,
+              request.envConflicts.isEmpty,
+              request.shebangScript == nil,
+              request.scriptData == nil
+        else { throw AppError("invalid rclone password request") }
+        let parent = try rcloneCredentialParent(for: helperIdentity)
+        return ApprovalRequest(
+            op: request.op,
+            keys: request.keys,
+            target: parent.target,
+            args: Array(parent.arguments.dropFirst()),
+            cwd: "/",
+            replaceExistingEnv: false,
+            allowMissingKeys: false,
+            envConflicts: [],
+            shebangScript: nil,
+            scriptData: nil,
+            tool: "rclone",
+            title: "Unlock the rclone configuration?",
+            detail: "The verified rclone Target will receive one wrapping password that unlocks every configured remote for this process.",
+            credentialScope: rcloneAllRemotesScope,
+            credentialParent: parent
+        )
+    }
+
+    private func rcloneCredentialParent(
+        for helperIdentity: AVProcessIdentity
+    ) throws -> CredentialHelperParent {
+        let parentPID = helperIdentity.ppid
+        var parentIdentity = AVProcessIdentity()
+        guard parentPID > 1,
+              av_process_identity(parentPID, &parentIdentity),
+              parentIdentity.euid == helperIdentity.euid,
+              let arguments = processArguments(parentPID),
+              !arguments.isEmpty
+        else { throw AppError("rclone password helper has no live parent") }
+        let target = pathString(parentIdentity)
+        guard rcloneTargetIdentityValid(pid: parentPID, path: target) else {
+            throw AppError("credential helper parent is not an eligible rclone Target")
+        }
+        return CredentialHelperParent(
+            pid: parentPID,
+            startUsec: parentIdentity.start_usec,
+            euid: parentIdentity.euid,
+            target: target,
+            arguments: arguments
+        )
+    }
+
+    private func kubectlCredentialRequest(
+        from message: xpc_object_t,
+        request: ApprovalRequest,
+        helperIdentity: AVProcessIdentity,
+        helperPath: String,
+        helperSigning: SigningInfo
+    ) throws -> ApprovalRequest {
+        guard request.op == "kubectl-get" else { return request }
+        guard request.tool == "kubectl",
+              isTrustedAvCaller(path: helperPath, signing: helperSigning),
+              request.target.isEmpty,
+              request.args.isEmpty,
+              request.keys.count == 1,
+              !request.replaceExistingEnv,
+              !request.allowMissingKeys,
+              request.envConflicts.isEmpty,
+              request.shebangScript == nil,
+              request.scriptData == nil,
+              let scopePointer = xpc_dictionary_get_string(message, "kubectl_scope"),
+              let scope = parseKubectlCredentialScope(String(cString: scopePointer)),
+              request.keys == [scope.secretName]
+        else { throw AppError("invalid kubectl credential request") }
+        let parent = try kubectlCredentialParent(for: helperIdentity)
+        return ApprovalRequest(
+            op: request.op,
+            keys: request.keys,
+            target: parent.target,
+            args: Array(parent.arguments.dropFirst()),
+            cwd: "/",
+            replaceExistingEnv: false,
+            allowMissingKeys: false,
+            envConflicts: [],
+            shebangScript: nil,
+            scriptData: nil,
+            tool: "kubectl",
+            title: "Use Kubernetes credential for \(scope.user)?",
+            detail: "The verified kubectl Target will receive this credential for \(scope.server).",
+            credentialScope: scope.canonical,
+            credentialParent: parent
+        )
+    }
+
+    private func kubectlCredentialParent(
+        for helperIdentity: AVProcessIdentity
+    ) throws -> CredentialHelperParent {
+        let parentPID = helperIdentity.ppid
+        var parentIdentity = AVProcessIdentity()
+        guard parentPID > 1,
+              av_process_identity(parentPID, &parentIdentity),
+              parentIdentity.euid == helperIdentity.euid,
+              let arguments = processArguments(parentPID),
+              !arguments.isEmpty
+        else { throw AppError("kubectl credential helper has no live parent") }
+        let target = pathString(parentIdentity)
+        guard kubectlTargetIdentityValid(pid: parentPID, path: target) else {
+            throw AppError("credential helper parent is not an eligible kubectl Target")
+        }
+        return CredentialHelperParent(
+            pid: parentPID,
+            startUsec: parentIdentity.start_usec,
+            euid: parentIdentity.euid,
+            target: target,
+            arguments: arguments
+        )
+    }
+
     private func terraformCredentialParent(
         for helperIdentity: AVProcessIdentity
     ) throws -> CredentialHelperParent {
@@ -6431,18 +7286,93 @@ private final class ApprovalServer: @unchecked Sendable {
         )
     }
 
+    private func aliyunCredentialRequest(
+        from message: xpc_object_t,
+        request: ApprovalRequest,
+        helperIdentity: AVProcessIdentity,
+        helperPath: String,
+        helperSigning: SigningInfo
+    ) throws -> ApprovalRequest {
+        guard request.op == "aliyun-get" else { return request }
+        guard request.tool == "aliyun-cli",
+              isTrustedAvCaller(path: helperPath, signing: helperSigning),
+              request.target.isEmpty,
+              request.args.isEmpty,
+              request.keys.count == 1,
+              !request.replaceExistingEnv,
+              !request.allowMissingKeys,
+              request.envConflicts.isEmpty,
+              request.shebangScript == nil,
+              request.scriptData == nil,
+              let profilePointer = xpc_dictionary_get_string(message, "aliyun_profile")
+        else { throw AppError("invalid Alibaba Cloud credential request") }
+        let profile = String(cString: profilePointer)
+        guard normalizeAliyunProfile(profile) == profile,
+              request.keys == [aliyunCredentialSecretName(profile)]
+        else { throw AppError("Alibaba Cloud Secret Name does not match its profile") }
+        let parent = try aliyunCredentialParent(for: helperIdentity)
+        return ApprovalRequest(
+            op: request.op,
+            keys: request.keys,
+            target: parent.target,
+            args: Array(parent.arguments.dropFirst()),
+            cwd: request.cwd,
+            replaceExistingEnv: false,
+            allowMissingKeys: false,
+            envConflicts: [],
+            shebangScript: nil,
+            scriptData: nil,
+            tool: "aliyun-cli",
+            title: "Use Alibaba Cloud credential for profile \(profile)?",
+            detail: "The verified Alibaba Cloud CLI Target will receive the credential in plaintext, as required by the External credential-provider protocol.",
+            credentialScope: profile,
+            credentialParent: parent
+        )
+    }
+
+    private func aliyunCredentialParent(
+        for helperIdentity: AVProcessIdentity
+    ) throws -> CredentialHelperParent {
+        let parentPID = helperIdentity.ppid
+        var parentIdentity = AVProcessIdentity()
+        guard parentPID > 1,
+              av_process_identity(parentPID, &parentIdentity),
+              parentIdentity.euid == helperIdentity.euid,
+              let arguments = processArguments(parentPID),
+              !arguments.isEmpty
+        else { throw AppError("Alibaba Cloud credential helper has no live parent") }
+        let target = pathString(parentIdentity)
+        guard aliyunTargetIdentityValid(pid: parentPID, path: target) else {
+            throw AppError("credential helper parent is not an eligible Alibaba Cloud CLI Target")
+        }
+        return CredentialHelperParent(
+            pid: parentPID,
+            startUsec: parentIdentity.start_usec,
+            euid: parentIdentity.euid,
+            target: target,
+            arguments: arguments
+        )
+    }
+
     private func credentialHelperTool(_ parent: CredentialHelperParent) -> String {
         switch URL(fileURLWithPath: parent.target).lastPathComponent {
+        case "aliyun": "aliyun-cli"
         case "docker": "docker"
         case "goat": "goat"
         case "openhue": "openhue-cli"
         case "ordercli": "ordercli"
         case "oxide": "oxide-cli"
+        case "fastly": "fastly-cli"
+        case "sqlcmd": "sqlcmd"
         case "plumber": "plumber"
+        case "podman": "podman"
         case "railway": "railway"
+        case "rclone": "rclone"
+        case "kubectl": "kubectl"
         case "tofu": "opentofu"
         case "terraform": "terraform"
         case "uaa": "uaa-cli"
+        case "wakatime-cli": "wakatime-cli"
         default: ""
         }
     }
@@ -6459,7 +7389,11 @@ private final class ApprovalServer: @unchecked Sendable {
               processArguments(parent.pid) == parent.arguments
         else { return false }
         switch tool {
+        case "aliyun-cli":
+            return credentialHelperTool(parent) == tool
+                && aliyunTargetIdentityValid(pid: parent.pid, path: parent.target)
         case "docker": return dockerTargetIdentityValid(pid: parent.pid, path: parent.target)
+        case "podman": return podmanTargetIdentityValid(pid: parent.pid, path: parent.target)
         case "goat":
             return credentialHelperTool(parent) == tool
                 && goatTargetIdentityValid(pid: parent.pid, path: parent.target)
@@ -6481,9 +7415,24 @@ private final class ApprovalServer: @unchecked Sendable {
         case "oxide-cli":
             return credentialHelperTool(parent) == tool
                 && oxideTargetIdentityValid(pid: parent.pid, path: parent.target)
+        case "fastly-cli":
+            return credentialHelperTool(parent) == tool
+                && fastlyTargetIdentityValid(pid: parent.pid, path: parent.target)
+        case "sqlcmd":
+            return credentialHelperTool(parent) == tool
+                && sqlcmdTargetIdentityValid(pid: parent.pid, path: parent.target)
         case "terraform", "opentofu":
             return credentialHelperTool(parent) == tool
                 && terraformTargetIdentityValid(pid: parent.pid, path: parent.target)
+        case "wakatime-cli":
+            return credentialHelperTool(parent) == tool
+                && wakatimeTargetIdentityValid(pid: parent.pid, path: parent.target)
+        case "rclone":
+            return credentialHelperTool(parent) == tool
+                && rcloneTargetIdentityValid(pid: parent.pid, path: parent.target)
+        case "kubectl":
+            return credentialHelperTool(parent) == tool
+                && kubectlTargetIdentityValid(pid: parent.pid, path: parent.target)
         default: return false
         }
     }
@@ -6493,6 +7442,16 @@ private final class ApprovalServer: @unchecked Sendable {
               let signing = liveSigningInfo(pid: pid), signing.mainExecutable == path
         else { return false }
         return signing.identifier == "goat"
+            && signing.teamIdentifier == "ZU76A67LGU"
+            && signing.isDeveloperID
+            && signing.runtimeProtection.allowsSecretGateAccess
+    }
+
+    private func aliyunTargetIdentityValid(pid: pid_t, path: String) -> Bool {
+        guard configuredSecretGateTarget("aliyun-cli", matches: path),
+              let signing = liveSigningInfo(pid: pid), signing.mainExecutable == path
+        else { return false }
+        return signing.identifier == "aliyun"
             && signing.teamIdentifier == "ZU76A67LGU"
             && signing.isDeveloperID
             && signing.runtimeProtection.allowsSecretGateAccess
@@ -6560,6 +7519,30 @@ private final class ApprovalServer: @unchecked Sendable {
             && liveProcessHasNoEntitlements(pid: pid)
     }
 
+    private func fastlyTargetIdentityValid(pid: pid_t, path: String) -> Bool {
+        guard configuredSecretGateTarget("fastly-cli", matches: path),
+              let signing = liveSigningInfo(pid: pid),
+              signing.mainExecutable == path
+        else { return false }
+        return signing.identifier == "fastly"
+            && signing.teamIdentifier == "ZU76A67LGU"
+            && signing.isDeveloperID
+            && signing.runtimeProtection == .hardened
+            && liveProcessHasNoEntitlements(pid: pid)
+    }
+
+    private func sqlcmdTargetIdentityValid(pid: pid_t, path: String) -> Bool {
+        guard configuredSecretGateTarget("sqlcmd", matches: path),
+              let signing = liveSigningInfo(pid: pid),
+              signing.mainExecutable == path
+        else { return false }
+        return signing.identifier == "sqlcmd"
+            && signing.teamIdentifier == "ZU76A67LGU"
+            && signing.isDeveloperID
+            && signing.runtimeProtection == .hardened
+            && liveProcessHasNoEntitlements(pid: pid)
+    }
+
     private func terraformTargetIdentityValid(pid: pid_t, path: String) -> Bool {
         let expected: (identifier: String, team: String)? = if configuredSecretGateTarget(
             "terraform", matches: path
@@ -6580,6 +7563,42 @@ private final class ApprovalServer: @unchecked Sendable {
             && signing.runtimeProtection.allowsSecretGateAccess
     }
 
+    private func wakatimeTargetIdentityValid(pid: pid_t, path: String) -> Bool {
+        guard configuredSecretGateTarget("wakatime-cli", matches: path),
+              let signing = liveSigningInfo(pid: pid),
+              signing.mainExecutable == path
+        else { return false }
+        return signing.identifier == "wakatime-cli"
+            && signing.teamIdentifier == "ZU76A67LGU"
+            && signing.isDeveloperID
+            && signing.runtimeProtection == .hardened
+            && liveProcessHasNoEntitlements(pid: pid)
+    }
+
+    private func rcloneTargetIdentityValid(pid: pid_t, path: String) -> Bool {
+        guard configuredSecretGateTarget("rclone", matches: path),
+              let signing = liveSigningInfo(pid: pid),
+              signing.mainExecutable == path
+        else { return false }
+        return signing.identifier == "rclone"
+            && signing.teamIdentifier == "ZU76A67LGU"
+            && signing.isDeveloperID
+            && signing.runtimeProtection == .hardened
+            && liveProcessHasNoEntitlements(pid: pid)
+    }
+
+    private func kubectlTargetIdentityValid(pid: pid_t, path: String) -> Bool {
+        guard configuredSecretGateTarget("kubectl", matches: path),
+              let signing = liveSigningInfo(pid: pid),
+              signing.mainExecutable == path
+        else { return false }
+        return signing.identifier == "kubectl"
+            && signing.teamIdentifier == "ZU76A67LGU"
+            && signing.isDeveloperID
+            && signing.runtimeProtection == .hardened
+            && liveProcessHasNoEntitlements(pid: pid)
+    }
+
     private func configuredSecretGateTarget(_ gateID: String, matches path: String) -> Bool {
         secretGateDescriptors.first(where: { $0.id == gateID })?.routes.contains {
             normalizedExecutablePath($0.targetPath) == normalizedExecutablePath(path)
@@ -6591,7 +7610,7 @@ private final class ApprovalServer: @unchecked Sendable {
         awsRegistration: AWSRegistrationCandidate?
     ) throws -> AuthorizationFulfillmentTransaction<ApprovedFulfillmentMaterial> {
         let credentialParent: CredentialHelperParent?
-        if ["docker-get", "goat-get", "ordercli-get", "openhue-get", "plumber-get", "uaa-get", "railway-get", "oxide-get", "terraform-get"]
+        if ["docker-get", "goat-get", "ordercli-get", "openhue-get", "plumber-get", "uaa-get", "railway-get", "oxide-get", "fastly-get", "sqlcmd-get", "terraform-get", "aliyun-get", "wakatime-get", "rclone-get", "kubectl-get"]
             .contains(request.op)
         {
             guard let scope = request.credentialScope,
@@ -6603,6 +7622,7 @@ private final class ApprovalServer: @unchecked Sendable {
             else { throw AppError("invalid credential-helper request") }
             let expected: String
             switch request.op {
+            case "aliyun-get": expected = aliyunCredentialSecretName(scope)
             case "docker-get": expected = dockerCredentialSecretName(scope)
             case "goat-get":
                 guard let goat = parseGoatCredentialScope(scope) else {
@@ -6623,6 +7643,31 @@ private final class ApprovalServer: @unchecked Sendable {
                     throw AppError("Oxide credential scope changed before Secret Application")
                 }
                 expected = oxide.secretName
+            case "fastly-get":
+                guard let fastly = parseFastlyCredentialScope(scope) else {
+                    throw AppError("Fastly credential scope changed before Secret Application")
+                }
+                expected = fastly.secretName
+            case "sqlcmd-get":
+                guard let sqlcmd = parseSqlcmdCredentialScope(scope) else {
+                    throw AppError("sqlcmd credential scope changed before Secret Application")
+                }
+                expected = sqlcmd.secretName
+            case "wakatime-get":
+                guard scope == wakatimeOfficialAPIURL else {
+                    throw AppError("WakaTime API endpoint changed before Secret Application")
+                }
+                expected = wakatimeCredentialSecretName
+            case "rclone-get":
+                guard scope == rcloneAllRemotesScope else {
+                    throw AppError("rclone credential scope changed before Secret Application")
+                }
+                expected = rcloneConfigPasswordSecretName
+            case "kubectl-get":
+                guard let kubectl = parseKubectlCredentialScope(scope) else {
+                    throw AppError("kubectl credential scope changed before Secret Application")
+                }
+                expected = kubectl.secretName
             default: expected = terraformCredentialSecretName(scope)
             }
             guard request.keys == [expected] else {
@@ -6678,6 +7723,35 @@ private final class ApprovalServer: @unchecked Sendable {
                       let value = secrets[scope.secretName],
                       parseOxideCredential(value) != nil
                 else { throw AppError("Oxide credential changed before Secret Application") }
+            } else if request.op == "fastly-get" {
+                guard let scope = parseFastlyCredentialScope(scope),
+                      let value = secrets[scope.secretName],
+                      parseFastlyCredential(value) != nil
+                else { throw AppError("Fastly credential changed before Secret Application") }
+            } else if request.op == "sqlcmd-get" {
+                guard let scope = parseSqlcmdCredentialScope(scope),
+                      let value = secrets[scope.secretName],
+                      parseSqlcmdPassword(value) != nil
+                else { throw AppError("sqlcmd credential changed before Secret Application") }
+            } else if request.op == "aliyun-get" {
+                guard let value = secrets[aliyunCredentialSecretName(scope)],
+                      parseAliyunCredential(value)
+                else { throw AppError("Alibaba Cloud credential changed before Secret Application") }
+            } else if request.op == "wakatime-get" {
+                guard scope == wakatimeOfficialAPIURL,
+                      let value = secrets[wakatimeCredentialSecretName],
+                      validWakaTimeAPIKey(value)
+                else { throw AppError("WakaTime credential changed before Secret Application") }
+            } else if request.op == "rclone-get" {
+                guard scope == rcloneAllRemotesScope,
+                      let value = secrets[rcloneConfigPasswordSecretName],
+                      validRcloneConfigPassword(value)
+                else { throw AppError("rclone config password changed before Secret Application") }
+            } else if request.op == "kubectl-get" {
+                guard let scope = parseKubectlCredentialScope(scope),
+                      let value = secrets[scope.secretName],
+                      validKubectlCredential(value, kind: scope.kind)
+                else { throw AppError("kubectl credential changed before Secret Application") }
             } else {
                 guard let value = secrets[terraformCredentialSecretName(scope)],
                       parseTerraformCredential(value) != nil
@@ -7055,7 +8129,8 @@ private final class ApprovalServer: @unchecked Sendable {
         let op = String(cString: opPointer)
         guard op == "inject" || op == "keys" || op == "authorize" || op == "gpg-sign"
             || op == "docker-get" || op == "goat-get" || op == "ordercli-get" || op == "openhue-get" || op == "plumber-get" || op == "uaa-get" || op == "railway-get"
-            || op == "oxide-get" || op == "terraform-get"
+            || op == "oxide-get" || op == "fastly-get" || op == "sqlcmd-get" || op == "terraform-get" || op == "aliyun-get" || op == "wakatime-get"
+            || op == "rclone-get" || op == "kubectl-get"
             || op == "proxy-start"
         else { return nil }
         let scriptData: Data?
@@ -7253,6 +8328,9 @@ private func isAllowedCaller(path: String, signing: SigningInfo) -> Bool {
     if isTrustedAvCaller(path: path, signing: signing) {
         return true
     }
+    if isTrustedWranglerCaller(path: path, signing: signing) {
+        return true
+    }
     if isTrustedGhCaller(path: path, signing: signing) {
         return true
     }
@@ -7280,6 +8358,12 @@ private func isTrustedMenuHelperCaller(path: String, signing: SigningInfo) -> Bo
 private func isTrustedAvCaller(path: String, signing: SigningInfo) -> Bool {
     URL(fileURLWithPath: path).lastPathComponent == "av"
         && signing.identifier == "com.automicvault.av"
+}
+
+private func isTrustedWranglerCaller(path: String, signing: SigningInfo) -> Bool {
+    path == "/opt/av/wrangler/Wrangler.app/Contents/MacOS/wrangler"
+        && signing.identifier == "com.automicvault.wrangler"
+        && signing.teamIdentifier == "ZU76A67LGU"
 }
 
 private func isTrustedGhCaller(path: String, signing: SigningInfo) -> Bool {
@@ -7447,10 +8531,14 @@ private func classifySecretGateRequest(
     switch gateID {
     case "gpg-signing":
         return .localWrite
+    case "wrangler":
+        return .unknown
     case "gh":
         return ghRequestClassification(request.args)
     case "docker":
         return dockerRequestClassification(request.args)
+    case "podman":
+        return .secretDump
     case "goat":
         return goatRequestClassification(request.args)
     case "ordercli":
@@ -7465,8 +8553,20 @@ private func classifySecretGateRequest(
         return railwayRequestClassification(request.args)
     case "oxide-cli":
         return oxideRequestClassification(request.args)
+    case "fastly-cli":
+        return fastlyRequestClassification(request.args)
+    case "sqlcmd":
+        return sqlcmdRequestClassification(request.args)
     case "terraform", "opentofu":
         return terraformRequestClassification(request.args)
+    case "aliyun-cli":
+        return aliyunRequestClassification(request.args)
+    case "wakatime-cli":
+        return wakatimeRequestClassification(request.args)
+    case "rclone":
+        return .unknown
+    case "kubectl":
+        return .unknown
     case "aws":
         if awsRequestMayUseLongLivedCredentials(request) { return .secretDump }
         return awsRequestIsReadOnly(awsCommandWords(request)) ? .readOnly : .mutating
@@ -7478,6 +8578,24 @@ private func classifySecretGateRequest(
             arguments: secretGateCommandWords(request)
         )
     }
+}
+
+private func wakatimeRequestClassification(_ args: [String]) -> SecretGateRequestClassification {
+    let words = args.map { $0.lowercased() }
+    if words.contains(where: {
+        $0 == "--entity" || $0.hasPrefix("--entity=") || $0 == "--extra-heartbeats"
+            || $0 == "--sync-offline-activity" || $0.hasPrefix("--sync-offline-activity=")
+            || $0 == "--sync-ai-activity" || $0 == "--sync-ai-heartbeats"
+    }) {
+        return .mutating
+    }
+    if words.contains(where: {
+        $0 == "--today" || $0 == "--file-experts" || $0 == "--today-goal"
+            || $0.hasPrefix("--today-goal=")
+    }) {
+        return .readOnly
+    }
+    return .unknown
 }
 
 private func goatRequestClassification(_ args: [String]) -> SecretGateRequestClassification {
@@ -7627,6 +8745,31 @@ private func oxideRequestClassification(_ args: [String]) -> SecretGateRequestCl
     return .unknown
 }
 
+private func fastlyRequestClassification(_ args: [String]) -> SecretGateRequestClassification {
+    let words = args.map { $0.lowercased() }
+    guard let authIndex = words.firstIndex(of: "auth"), authIndex + 1 < words.count else {
+        return .unknown
+    }
+    let action = words[authIndex + 1]
+    if action == "token" || (action == "show" && words.contains("--reveal")) {
+        return .secretDump
+    }
+    return .unknown
+}
+
+private func sqlcmdRequestClassification(_ args: [String]) -> SecretGateRequestClassification {
+    let words = args.map { $0.lowercased() }
+    guard words.count >= 2, words[0] == "config" else { return .unknown }
+    let action = words[1]
+    if action == "connection-strings" || action == "cs" {
+        return .secretDump
+    }
+    if (action == "view" || action == "show") && words.dropFirst(2).contains("--raw") {
+        return .secretDump
+    }
+    return .unknown
+}
+
 private func terraformRequestClassification(_ args: [String]) -> SecretGateRequestClassification {
     if args == ["-version"] || args == ["--version"] { return .readOnly }
     let words = args.drop(while: {
@@ -7654,6 +8797,17 @@ private func terraformRequestClassification(_ args: [String]) -> SecretGateReque
     default:
         return .unknown
     }
+}
+
+private func aliyunRequestClassification(_ args: [String]) -> SecretGateRequestClassification {
+    let words = args.map { $0.lowercased() }
+    if words == ["--version"] || words == ["version"] || words == ["help"] {
+        return .readOnly
+    }
+    if words.starts(with: ["sts", "getcalleridentity"]) {
+        return .readOnly
+    }
+    return .unknown
 }
 
 private func dockerRequestClassification(_ args: [String]) -> SecretGateRequestClassification {
@@ -8455,6 +9609,95 @@ private func parseOxideCredential(_ value: String) -> String? {
     return value
 }
 
+private let fastlyOfficialAPIEndpoint = "https://api.fastly.com"
+
+private struct StoredFastlyCredentialScope {
+    let name: String
+    let endpoint: String
+    let canonical: String
+
+    var secretName: String {
+        let data = Data((name + "\0" + endpoint).utf8)
+        let hash = SHA256.hash(data: data).map { String(format: "%02X", $0) }.joined()
+        return "FASTLY_API_TOKEN_\(hash)"
+    }
+}
+
+private func parseFastlyCredentialScope(_ value: String) -> StoredFastlyCredentialScope? {
+    guard value.utf8.count <= 4 * 1024,
+          let data = value.data(using: .utf8),
+          let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          Set(object.keys) == Set(["endpoint", "name"]),
+          let name = object["name"] as? String,
+          let endpoint = object["endpoint"] as? String,
+          validFastlyTokenName(name),
+          endpoint == fastlyOfficialAPIEndpoint,
+          let canonicalData = try? JSONSerialization.data(
+              withJSONObject: ["endpoint": endpoint, "name": name],
+              options: [.sortedKeys, .withoutEscapingSlashes]
+          ),
+          let canonical = String(data: canonicalData, encoding: .utf8),
+          canonical == value
+    else { return nil }
+    return StoredFastlyCredentialScope(name: name, endpoint: endpoint, canonical: canonical)
+}
+
+private func validFastlyTokenName(_ name: String) -> Bool {
+    validOxideProfile(name)
+}
+
+private func parseFastlyCredential(_ value: String) -> String? {
+    parseOxideCredential(value)
+}
+
+private struct StoredSqlcmdCredentialScope {
+    let profile: String
+    let address: String
+    let port: Int
+    let canonical: String
+
+    var secretName: String {
+        let hash = SHA256.hash(data: Data(profile.utf8)).map { String(format: "%02X", $0) }.joined()
+        return "SQLCMD_PASSWORD_\(hash)"
+    }
+}
+
+private func parseSqlcmdCredentialScope(_ value: String) -> StoredSqlcmdCredentialScope? {
+    guard value.utf8.count <= 4 * 1024,
+          let data = value.data(using: .utf8),
+          let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          Set(object.keys) == Set(["address", "port", "profile"]),
+          let profile = object["profile"] as? String,
+          validSqlcmdProfile(profile),
+          let address = object["address"] as? String,
+          validSqlcmdAddress(address),
+          let port = object["port"] as? Int,
+          (0 ... 65_535).contains(port),
+          (address.isEmpty && port == 0) || (!address.isEmpty && port > 0),
+          let canonicalData = try? JSONSerialization.data(
+              withJSONObject: ["address": address, "port": port, "profile": profile],
+              options: [.sortedKeys, .withoutEscapingSlashes]
+          ),
+          let canonical = String(data: canonicalData, encoding: .utf8),
+          canonical == value
+    else { return nil }
+    return StoredSqlcmdCredentialScope(profile: profile, address: address, port: port, canonical: canonical)
+}
+
+private func validSqlcmdProfile(_ value: String) -> Bool {
+    !value.isEmpty && value.utf8.count <= 128 && value == value.trimmingCharacters(in: .whitespacesAndNewlines)
+        && value.unicodeScalars.allSatisfy { $0.isASCII && $0.value >= 0x20 && $0.value <= 0x7e }
+}
+
+private func validSqlcmdAddress(_ value: String) -> Bool {
+    value.utf8.count <= 253 && value == value.trimmingCharacters(in: .whitespacesAndNewlines)
+        && value.unicodeScalars.allSatisfy { $0.isASCII && $0.value >= 0x20 && $0.value <= 0x7e }
+}
+
+private func parseSqlcmdPassword(_ value: String) -> String? {
+    parseOxideCredential(value)
+}
+
 private func normalizeTerraformHostname(_ hostname: String) -> String? {
     guard !hostname.isEmpty,
           hostname.utf8.count <= 253,
@@ -8478,6 +9721,45 @@ private func terraformCredentialSecretName(_ hostname: String) -> String {
     return "TERRAFORM_HOST_CREDENTIAL_\(hash)"
 }
 
+private func normalizeAliyunProfile(_ profile: String) -> String? {
+    guard !profile.isEmpty,
+          profile.utf8.count <= 128,
+          profile.unicodeScalars.allSatisfy({
+              $0.isASCII && !((0...31).contains($0.value) || $0.value == 127)
+          })
+    else { return nil }
+    return profile.trimmingCharacters(in: .whitespacesAndNewlines) == profile ? profile : nil
+}
+
+private func aliyunCredentialSecretName(_ profile: String) -> String {
+    let hash = SHA256.hash(data: Data(profile.utf8)).map { String(format: "%02X", $0) }.joined()
+    return "ALIYUN_PROFILE_CREDENTIAL_\(hash)"
+}
+
+private func parseAliyunCredential(_ value: String) -> Bool {
+    guard value.utf8.count <= 64 * 1024,
+          let data = value.data(using: .utf8),
+          let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          let mode = object["mode"] as? String,
+          let accessKeyID = object["access_key_id"] as? String,
+          let accessKeySecret = object["access_key_secret"] as? String,
+          validAliyunCredentialValue(accessKeyID),
+          validAliyunCredentialValue(accessKeySecret)
+    else { return false }
+    if mode == "AK" {
+        return Set(object.keys) == Set(["mode", "access_key_id", "access_key_secret"])
+    }
+    guard mode == "StsToken", let token = object["sts_token"] as? String,
+          validAliyunCredentialValue(token)
+    else { return false }
+    return Set(object.keys) == Set(["mode", "access_key_id", "access_key_secret", "sts_token"])
+}
+
+private func validAliyunCredentialValue(_ value: String) -> Bool {
+    !value.isEmpty && value.utf8.count <= 64 * 1024
+        && !value.unicodeScalars.contains(where: { [0, 10, 13].contains($0.value) })
+}
+
 private func parseTerraformCredential(_ value: String) -> String? {
     guard value.utf8.count <= 64 * 1024,
           let data = value.data(using: .utf8),
@@ -8488,6 +9770,104 @@ private func parseTerraformCredential(_ value: String) -> String? {
           !token.unicodeScalars.contains(where: { $0.value == 0 })
     else { return nil }
     return token
+}
+
+private let wakatimeCredentialSecretName = "WAKATIME_API_KEY"
+private let wakatimeOfficialAPIURL = "https://api.wakatime.com/api/v1"
+
+private func validWakaTimeAPIKey(_ value: String) -> Bool {
+    let key = value.hasPrefix("waka_") ? String(value.dropFirst(5)) : value
+    let bytes = Array(key.utf8)
+    let hyphens = Set([8, 13, 18, 23])
+    guard bytes.count == 36, bytes[14] == 52, [56, 57, 97, 98].contains(bytes[19]) else {
+        return false
+    }
+    return bytes.enumerated().allSatisfy { index, byte in
+        hyphens.contains(index)
+            ? byte == 45
+            : (48...57).contains(byte) || (97...102).contains(byte)
+    }
+}
+
+private let rcloneConfigPasswordSecretName = "RCLONE_CONFIG_PASSWORD"
+private let rcloneAllRemotesScope = "all-remotes"
+
+private func validRcloneConfigPassword(_ value: String) -> Bool {
+    !value.isEmpty && value.utf8.count <= 1024
+        && !value.unicodeScalars.contains(where: { [0, 10, 13].contains($0.value) })
+}
+
+private struct StoredKubectlCredentialScope {
+    let kind: String
+    let server: String
+    let user: String
+    let canonical: String
+
+    var secretName: String {
+        let hash = SHA256.hash(data: Data(user.utf8)).map { String(format: "%02X", $0) }.joined()
+        return "KUBECTL_USER_CREDENTIAL_\(hash)"
+    }
+}
+
+private func parseKubectlCredentialScope(_ value: String) -> StoredKubectlCredentialScope? {
+    guard value.utf8.count <= 8 * 1024,
+          let data = value.data(using: .utf8),
+          let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          Set(object.keys) == Set(["kind", "server", "user"]),
+          let kind = object["kind"] as? String,
+          kind == "token" || kind == "client-certificate",
+          let server = object["server"] as? String,
+          server.utf8.count <= 4096,
+          server.unicodeScalars.allSatisfy(\.isASCII),
+          let components = URLComponents(string: server),
+          components.scheme == "https",
+          components.host?.isEmpty == false,
+          components.user == nil,
+          components.password == nil,
+          components.query == nil,
+          components.fragment == nil,
+          let user = object["user"] as? String,
+          !user.isEmpty,
+          user.utf8.count <= 1024,
+          user == user.trimmingCharacters(in: .whitespacesAndNewlines),
+          !user.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains),
+          let canonicalData = try? JSONSerialization.data(
+              withJSONObject: ["kind": kind, "server": server, "user": user],
+              options: [.sortedKeys, .withoutEscapingSlashes]
+          ),
+          let canonical = String(data: canonicalData, encoding: .utf8),
+          canonical == value
+    else { return nil }
+    return StoredKubectlCredentialScope(
+        kind: kind,
+        server: server,
+        user: user,
+        canonical: canonical
+    )
+}
+
+private func validKubectlCredential(_ value: String, kind: String) -> Bool {
+    guard value.utf8.count <= 4 * 1024 * 1024,
+          let data = value.data(using: .utf8),
+          let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+    else { return false }
+    if kind == "token" {
+        guard Set(object.keys) == Set(["token"]), let token = object["token"] as? String else {
+            return false
+        }
+        return !token.isEmpty && token.utf8.count <= 1024 * 1024
+            && !token.unicodeScalars.contains(where: { $0.value == 0 })
+    }
+    guard kind == "client-certificate",
+          Set(object.keys) == Set(["clientCertificateData", "clientKeyData"]),
+          let certificate = object["clientCertificateData"] as? String,
+          let key = object["clientKeyData"] as? String
+    else { return false }
+    return certificate.contains("-----BEGIN CERTIFICATE-----")
+        && key.contains("-----BEGIN")
+        && key.contains("PRIVATE KEY-----")
+        && !certificate.unicodeScalars.contains(where: { $0.value == 0 })
+        && !key.unicodeScalars.contains(where: { $0.value == 0 })
 }
 
 private func isGhTokenKey(_ key: String) -> Bool {
@@ -8770,15 +10150,8 @@ private func retainedProcessExecution(
     pid: pid_t,
     identity: AVProcessIdentity
 ) -> RetainedProcessExecution? {
-    guard identity.euid == geteuid() else { return nil }
-    return liveProcessExecution(pid: pid, identity: identity)
-}
-
-private func liveProcessExecution(
-    pid: pid_t,
-    identity: AVProcessIdentity
-) -> RetainedProcessExecution? {
-    guard identity.pidversion > 0,
+    guard identity.euid == geteuid(),
+          identity.pidversion > 0,
           let codeIdentity = liveCodeIdentity(pid: pid)
     else { return nil }
 
@@ -8814,6 +10187,49 @@ private func retainedProcessExecutionIsLive(_ execution: RetainedProcessExecutio
     else { return false }
     var after = AVProcessIdentity()
     return av_process_identity(execution.pid, &after) && matches(after)
+}
+
+private func approvalProcessExecution(
+    pid: pid_t,
+    identity: AVProcessIdentity
+) -> ApprovalProcessExecution? {
+    guard let codeIdentity = liveCodeIdentity(pid: pid) else { return nil }
+    // Setuid Gate Clients may deny task-port access. This evidence is diagnostic only,
+    // so bind audit-token fields when available and always bind live process identity.
+    let hasAuditToken = identity.pidversion > 0
+    let execution = ApprovalProcessExecution(
+        pid: pid,
+        pidVersion: hasAuditToken ? identity.pidversion : nil,
+        startUsec: identity.start_usec,
+        effectiveUserID: identity.euid,
+        auditSessionID: hasAuditToken ? identity.audit_session_id : nil,
+        codeIdentity: codeIdentity
+    )
+    var current = AVProcessIdentity()
+    return av_process_identity(pid, &current) && approvalProcessExecutionMatches(execution, current)
+        ? execution
+        : nil
+}
+
+private func approvalProcessExecutionMatches(
+    _ execution: ApprovalProcessExecution,
+    _ identity: AVProcessIdentity
+) -> Bool {
+    execution.startUsec == identity.start_usec
+        && execution.effectiveUserID == identity.euid
+        && execution.pidVersion.map { $0 == identity.pidversion } ?? true
+        && execution.auditSessionID.map { $0 == identity.audit_session_id } ?? true
+}
+
+private func approvalProcessExecutionIsLive(_ execution: ApprovalProcessExecution) -> Bool {
+    var before = AVProcessIdentity()
+    guard av_process_identity(execution.pid, &before),
+          approvalProcessExecutionMatches(execution, before),
+          liveCodeIdentity(pid: execution.pid) == execution.codeIdentity
+    else { return false }
+    var after = AVProcessIdentity()
+    return av_process_identity(execution.pid, &after)
+        && approvalProcessExecutionMatches(execution, after)
 }
 
 private func liveSecretUseProcess(
@@ -8883,7 +10299,7 @@ private func launcherFallbackPath(for identity: AVProcessIdentity) -> String? {
 private struct ApprovalProcessIdentity {
     let pid: pid_t
     let path: String
-    let execution: RetainedProcessExecution?
+    let execution: ApprovalProcessExecution?
 }
 
 private enum ApprovalProcessPosture: Equatable {
@@ -8898,6 +10314,7 @@ private struct ApprovalProcessSecurityNode: Identifiable {
     let roles: [String]
     let posture: ApprovalProcessPosture
     let explanation: String
+    let isAutomicVaultSigned: Bool
 
     var id: String { "\(pid ?? -1):\(path)" }
     var name: String { URL(fileURLWithPath: path).lastPathComponent }
@@ -8905,6 +10322,13 @@ private struct ApprovalProcessSecurityNode: Identifiable {
 
 private struct ApprovalProcessSecurity {
     let nodes: [ApprovalProcessSecurityNode]
+}
+
+private func isAutomicVaultSigned(
+    _ signing: LiveSigningInfo?,
+    teamIdentifier: String?
+) -> Bool {
+    signing?.isDeveloperID == true && signing?.teamIdentifier == teamIdentifier
 }
 
 private func approvalProcessIdentities(
@@ -8916,7 +10340,7 @@ private func approvalProcessIdentities(
     let callerNode = ApprovalProcessIdentity(
         pid: gateClientPID,
         path: pathString(caller),
-        execution: liveProcessExecution(pid: gateClientPID, identity: caller)
+        execution: approvalProcessExecution(pid: gateClientPID, identity: caller)
     )
     var chains: [[ApprovalProcessIdentity]] = []
     for startPID in launcherAncestorStartPIDs(caller) {
@@ -8932,7 +10356,7 @@ private func approvalProcessIdentities(
                 nodes.append(ApprovalProcessIdentity(
                     pid: currentPID,
                     path: path,
-                    execution: liveProcessExecution(pid: currentPID, identity: identity)
+                    execution: approvalProcessExecution(pid: currentPID, identity: identity)
                 ))
             }
             currentPID = identity.ppid
@@ -9024,6 +10448,7 @@ private func approvalProcessSecurity(
     targetPID: pid_t? = nil,
     launcher: LauncherIdentity?
 ) -> ApprovalProcessSecurity {
+    let automicVaultTeamIdentifier = selfTeamIdentifier()
     var identities = approvalProcessIdentities(
         gateClientPID: gateClientPID,
         launcherPID: launcher?.pid
@@ -9033,7 +10458,7 @@ private func approvalProcessSecurity(
     {
         var identity = AVProcessIdentity()
         let execution = av_process_identity(launcher.pid, &identity)
-            ? liveProcessExecution(pid: launcher.pid, identity: identity)
+            ? approvalProcessExecution(pid: launcher.pid, identity: identity)
             : nil
         identities.append(ApprovalProcessIdentity(
             pid: launcher.pid,
@@ -9067,9 +10492,9 @@ private func approvalProcessSecurity(
         if roles.isEmpty { roles.append("Intermediary") }
 
         let signing = identity.execution.flatMap { execution -> LiveSigningInfo? in
-            guard retainedProcessExecutionIsLive(execution) else { return nil }
+            guard approvalProcessExecutionIsLive(execution) else { return nil }
             let signing = liveSigningInfo(pid: identity.pid)
-            return retainedProcessExecutionIsLive(execution) ? signing : nil
+            return approvalProcessExecutionIsLive(execution) ? signing : nil
         }
         let result = approvalProcessPosture(
             signing: signing,
@@ -9082,7 +10507,11 @@ private func approvalProcessSecurity(
             path: identity.path,
             roles: roles,
             posture: result.0,
-            explanation: result.1
+            explanation: result.1,
+            isAutomicVaultSigned: isAutomicVaultSigned(
+                signing,
+                teamIdentifier: automicVaultTeamIdentifier
+            )
         )
     }
 
@@ -9097,7 +10526,11 @@ private func approvalProcessSecurity(
             path: request.target,
             roles: [request.keys.isEmpty ? "Target (not started)" : "Secret recipient (not started)"],
             posture: result.0,
-            explanation: result.1
+            explanation: result.1,
+            isAutomicVaultSigned: isAutomicVaultSigned(
+                signing,
+                teamIdentifier: automicVaultTeamIdentifier
+            )
         ), at: 0)
     }
     return ApprovalProcessSecurity(nodes: nodes)
@@ -9165,9 +10598,16 @@ private func launcherIdentity(
     pid: pid_t,
     path: String,
     signing: LiveSigningInfo,
-    appSigning: (URL) -> StaticSigningInfo? = staticSigningInfo
+    appSigning: (URL) -> StaticSigningInfo? = staticSigningInfo,
+    bundleExecutableURL: (URL) -> URL? = { Bundle(url: $0)?.executableURL }
 ) -> LauncherIdentity? {
-    launcherIdentities(pid: pid, path: path, signing: signing, appSigning: appSigning).first
+    launcherIdentities(
+        pid: pid,
+        path: path,
+        signing: signing,
+        appSigning: appSigning,
+        bundleExecutableURL: bundleExecutableURL
+    ).first
 }
 
 private func launcherIdentities(
@@ -9175,8 +10615,11 @@ private func launcherIdentities(
     path: String,
     signing: LiveSigningInfo,
     appSigning: (URL) -> StaticSigningInfo? = staticSigningInfo,
+    bundleExecutableURL: (URL) -> URL? = { Bundle(url: $0)?.executableURL },
     allowsStandaloneFallback: Bool = true
 ) -> [LauncherIdentity] {
+    // Gate plumbing is never the operation's Launcher.
+    guard signing.identifier != "com.automicvault.av-gpg" else { return [] }
     var seenContainingApps = Set<String>()
     let containingAppURLs = (
         appBundleURLs(containing: path)
@@ -9187,11 +10630,17 @@ private func launcherIdentities(
         containingAppURLs.filter {
             appBundleMatchesMainExecutable(
                 $0,
-                executablePaths: [path, signing.mainExecutable]
+                executablePaths: [path, signing.mainExecutable],
+                bundleExecutableURL: bundleExecutableURL
             )
         }
         + [associatedAppBundleURL(path: path, signing: signing)].compactMap { $0 }
     ).filter { seenApps.insert($0.path).inserted }
+    let helperAssociation = verifiedLauncherHelperAssociation(
+        path: path,
+        signing: signing,
+        containingAppURLs: containingAppURLs
+    )
     let claimsLauncherBundleIdentity = signing.identifier.hasPrefix(launcherBundleIdentifierPrefix)
         || containingAppURLs.contains(where: launcherBundleClaimsReservedIdentity)
     if claimsLauncherBundleIdentity {
@@ -9217,7 +10666,7 @@ private func launcherIdentities(
         )]
     }
     guard !signing.isAdHoc else { return [] }
-    let apps: [LauncherIdentity] = appURLs.compactMap { appURL in
+    var apps: [LauncherIdentity] = appURLs.compactMap { appURL in
         guard let app = appSigning(appURL) else { return nil }
         return LauncherIdentity(
             pid: pid,
@@ -9227,6 +10676,18 @@ private func launcherIdentities(
             designatedRequirement: app.designatedRequirement,
             runtimeProtection: signing.runtimeProtection
         )
+    }
+    if let helperAssociation,
+       seenApps.insert(helperAssociation.appURL.path).inserted,
+       let app = verifiedLauncherHelperSigningInfo(helperAssociation, pid: pid) {
+        apps.append(LauncherIdentity(
+            pid: pid,
+            path: path,
+            identifier: app.identifier,
+            teamIdentifier: app.teamIdentifier,
+            designatedRequirement: app.designatedRequirement,
+            runtimeProtection: signing.runtimeProtection
+        ))
     }
     if !apps.isEmpty { return apps }
     guard allowsStandaloneFallback,
@@ -9296,8 +10757,11 @@ private extension ApprovalServiceOperation {
         switch self {
         case .openWindow, .awsHelperVersion, .dockerHelperVersion, .goatHelperVersion,
              .ordercliHelperVersion, .openhueHelperVersion, .plumberHelperVersion, .uaaHelperVersion,
-             .railwayHelperVersion, .oxideHelperVersion,
-             .terraformHelperVersion: false
+             .railwayHelperVersion, .oxideHelperVersion, .terraformHelperVersion,
+             .fastlyHelperVersion,
+             .sqlcmdHelperVersion,
+             .aliyunHelperVersion, .wakatimeHelperVersion, .rcloneHelperVersion,
+             .kubectlHelperVersion: false
         default: true
         }
     }
@@ -9317,6 +10781,12 @@ private struct StaticSigningInfo {
     let identifier: String
     let teamIdentifier: String
     let designatedRequirement: String
+}
+
+private struct VerifiedLauncherHelperAssociation {
+    let helper: VerifiedLauncherHelper
+    let appURL: URL
+    let executableURL: URL
 }
 
 private func runtimeProtection(_ dictionary: [CFString: Any]) -> LauncherRuntimeProtection {
@@ -9452,11 +10922,15 @@ private func staticSigningInfo(url: URL) -> StaticSigningInfo? {
     var staticCode: SecStaticCode?
     guard SecStaticCodeCreateWithPath(url as CFURL, [], &staticCode) == errSecSuccess,
           let staticCode,
-          SecStaticCodeCheckValidity(staticCode, [], nil) == errSecSuccess
+          validateAppBundleMainExecutable(staticCode) == errSecSuccess
     else {
         return nil
     }
 
+    return staticSigningInfo(staticCode)
+}
+
+private func staticSigningInfo(_ staticCode: SecStaticCode) -> StaticSigningInfo? {
     var info: CFDictionary?
     let flags = SecCSFlags(rawValue: kSecCSSigningInformation | kSecCSRequirementInformation)
     guard SecCodeCopySigningInformation(staticCode, flags, &info) == errSecSuccess,
@@ -9489,14 +10963,29 @@ private func launcherAppVerificationFailure(
             guard av_process_identity(pid, &ancestor) else { break }
             let path = pathString(ancestor)
             if let signing = liveSigningInfo(pid: pid) ?? executableSigningInfo(path: path) {
-                let appURLs = (
+                let containingAppURLs = (
                     appBundleURLs(containing: path)
                     + appBundleURLs(containing: signing.mainExecutable)
-                ).filter {
-                    appBundleMatchesMainExecutable(
-                        $0,
-                        executablePaths: [path, signing.mainExecutable]
+                )
+                let helperAssociation = verifiedLauncherHelperAssociation(
+                    path: path,
+                    signing: signing,
+                    containingAppURLs: containingAppURLs
+                )
+                if let helperAssociation,
+                   checkedApps.insert(helperAssociation.appURL.path).inserted,
+                   verifiedLauncherHelperSigningInfo(helperAssociation, pid: pid) == nil {
+                    return LauncherAppVerificationFailure(
+                        appName: helperAssociation.helper.appName,
+                        resourcesUnreadable: false
                     )
+                }
+                let appURLs = containingAppURLs.filter {
+                    $0.path != helperAssociation?.appURL.path
+                        && appBundleMatchesMainExecutable(
+                            $0,
+                            executablePaths: [path, signing.mainExecutable]
+                        )
                 }
                     + [associatedAppBundleURL(path: path, signing: signing)].compactMap { $0 }
                 for appURL in appURLs where checkedApps.insert(appURL.path).inserted {
@@ -9516,7 +11005,7 @@ private func appBundleVerificationFailure(_ url: URL) -> LauncherAppVerification
     else {
         return nil
     }
-    let status = SecStaticCodeCheckValidity(staticCode, [], nil)
+    let status = validateAppBundleMainExecutable(staticCode)
     guard status != errSecSuccess else { return nil }
     let name = url.deletingPathExtension().lastPathComponent
     let executableOnly = SecCSFlags(
@@ -9604,6 +11093,113 @@ private func associatedAppBundleURL(path: String, signing: LiveSigningInfo) -> U
         ?? URL(fileURLWithPath: "/Applications/Vaultty.app")
 }
 
+private func verifiedLauncherHelperAssociation(
+    path: String,
+    signing: LiveSigningInfo,
+    containingAppURLs: [URL]? = nil,
+    helpers: [VerifiedLauncherHelper]? = nil,
+    configuration: VerifiedLauncherHelperConfiguration? = nil,
+    bundleIdentifier: (URL) -> String? = { Bundle(url: $0)?.bundleIdentifier }
+) -> VerifiedLauncherHelperAssociation? {
+    let configuration = configuration ?? loadVerifiedLauncherHelperConfiguration()
+    let helpers = helpers ?? configuration.helpers
+    guard signing.isDeveloperID else { return nil }
+    let executablePath = signing.mainExecutable.isEmpty ? path : signing.mainExecutable
+    let executableURL = URL(fileURLWithPath: executablePath)
+        .standardizedFileURL
+        .resolvingSymlinksInPath()
+    let appURLs = containingAppURLs ?? appBundleURLs(containing: executableURL.path)
+    for helper in helpers where configuration.isEnabled(helper)
+        && helper.helperSigningIdentifier == signing.identifier
+        && helper.helperTeamIdentifier == signing.teamIdentifier
+    {
+        guard let appURL = appURLs.first(where: {
+            bundleIdentifier($0) == helper.appBundleIdentifier
+        }) else { continue }
+        if let relativePath = helper.relativePath {
+            let expectedURL = appURL.appendingPathComponent(relativePath)
+                .standardizedFileURL
+                .resolvingSymlinksInPath()
+            guard expectedURL == executableURL else { continue }
+        }
+        return VerifiedLauncherHelperAssociation(
+            helper: helper,
+            appURL: appURL,
+            executableURL: executableURL
+        )
+    }
+    return nil
+}
+
+private func verifiedLauncherHelperSigningInfo(
+    _ association: VerifiedLauncherHelperAssociation,
+    pid: pid_t
+) -> StaticSigningInfo? {
+    guard let liveCodeIdentifier = liveCodeIdentity(pid: pid),
+          let fileCodeIdentifier = staticCodeIdentity(association.executableURL),
+          liveCodeIdentifier == fileCodeIdentifier
+    else { return nil }
+
+    return verifiedLauncherHelperAppSigningInfo(association)
+}
+
+private func verifiedLauncherHelperAppSigningInfo(
+    _ association: VerifiedLauncherHelperAssociation
+) -> StaticSigningInfo? {
+    var staticCode: SecStaticCode?
+    guard SecStaticCodeCreateWithPath(
+        association.appURL as CFURL,
+        [],
+        &staticCode
+    ) == errSecSuccess,
+        let staticCode,
+        let requirement = verifiedLauncherHelperAppRequirement(association.helper)
+    else { return nil }
+
+    guard validateAppBundleResource(
+        staticCode,
+        resourceURL: association.executableURL,
+        requirement: requirement
+    ) == errSecSuccess,
+          let app = staticSigningInfo(staticCode),
+          app.identifier == association.helper.appBundleIdentifier,
+          app.teamIdentifier == association.helper.appTeamIdentifier
+    else { return nil }
+    return app
+}
+
+private func verifiedLauncherHelperAppRequirement(
+    _ helper: VerifiedLauncherHelper
+) -> SecRequirement? {
+    let source = """
+    identifier "\(helper.appBundleIdentifier)" and \
+    anchor apple generic and \
+    certificate 1[field.1.2.840.113635.100.6.2.6] exists and \
+    certificate leaf[field.1.2.840.113635.100.6.1.13] exists and \
+    certificate leaf[subject.OU] = "\(helper.appTeamIdentifier)"
+    """
+    var requirement: SecRequirement?
+    guard SecRequirementCreateWithString(
+        source as CFString,
+        [],
+        &requirement
+    ) == errSecSuccess else { return nil }
+    return requirement
+}
+
+private func staticCodeIdentity(_ url: URL) -> Data? {
+    var staticCode: SecStaticCode?
+    guard SecStaticCodeCreateWithPath(url as CFURL, [], &staticCode) == errSecSuccess,
+          let staticCode,
+          SecStaticCodeCheckValidity(staticCode, [], nil) == errSecSuccess
+    else { return nil }
+    var info: CFDictionary?
+    guard SecCodeCopySigningInformation(staticCode, [], &info) == errSecSuccess,
+          let dictionary = info as? [CFString: Any]
+    else { return nil }
+    return dictionary[kSecCodeInfoUnique] as? Data
+}
+
 private func scriptApproval(for request: ApprovalRequest) -> ScriptApproval? {
     guard let script = request.shebangScript else { return nil }
     let url = script.hasPrefix("/")
@@ -9689,7 +11285,9 @@ private func showApprovalAlert(
     launcher: LauncherIdentity?,
     launcherFallbackPath: String,
     automaticApprovalExplanation: String?,
+    accessLevel: String? = nil,
     temporaryGrantCandidate: TemporaryAccessGrantCandidate? = nil,
+    temporaryGrantUnavailableReason: String? = nil,
     allowsPersistentApproval: Bool = false,
     persistentApprovalLabel: String = "Always Allow",
     classification: SecretGateRequestClassification? = nil,
@@ -9714,6 +11312,9 @@ private func showApprovalAlert(
         title: request.title,
         detail: request.detail,
         automaticApprovalExplanation: automaticApprovalExplanation,
+        operation: classification.map(operationClassificationTitle),
+        accessLevel: accessLevel,
+        temporaryGrantUnavailableReason: temporaryGrantUnavailableReason,
         cwd: escapedSecurityPath(request.cwd),
         keys: approvalPromptSecretNames(
             requested: request.keys,
@@ -9952,12 +11553,12 @@ private func approvalPromptSections(
     let chainRows = chain.map { [ApprovalPromptRow("Process chain", $0)] } ?? []
     sections.append(ApprovalPromptSection("Execution Origin", "app.badge", launcher.map {
         [
-            ApprovalPromptRow("App", "\($0.identifier) (pid \($0.pid))"),
+            ApprovalPromptRow("Verified Launcher", "\($0.identifier) (pid \($0.pid))"),
             ApprovalPromptRow("Path", $0.path),
             ApprovalPromptRow("Signed", "\($0.identifier) / \($0.teamIdentifier)"),
         ] + chainRows
     } ?? [
-        ApprovalPromptRow("Status", "unavailable; persistent auto-approve disabled"),
+        ApprovalPromptRow("Status", "unavailable; automic authorization disabled"),
     ] + chainRows))
 
     if let scriptApproval {
@@ -10021,6 +11622,9 @@ private struct ApprovalPromptContent {
     let title: String?
     let detail: String?
     let automaticApprovalExplanation: String?
+    let operation: String?
+    let accessLevel: String?
+    let temporaryGrantUnavailableReason: String?
     let cwd: String
     let keys: String
     let blessing: BlessedScriptPromptContext?
@@ -10241,6 +11845,18 @@ private struct ApprovalPromptProcessNodeView: View {
                     .font(.system(.headline, design: .monospaced))
                     .lineLimit(1)
                     .truncationMode(.middle)
+                if node.isAutomicVaultSigned,
+                   let imageURL = Bundle.main.url(forResource: "NSMenuItem", withExtension: "png"),
+                   let image = NSImage(contentsOf: imageURL)
+                {
+                    Image(nsImage: image)
+                        .renderingMode(.template)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 10, height: 12)
+                        .help("Signed by Automic Vault")
+                        .accessibilityHidden(true)
+                }
                 if node.posture != .meetsRequirements {
                     Image(systemName: presentation.image)
                         .font(.body)
@@ -10262,7 +11878,9 @@ private struct ApprovalPromptProcessNodeView: View {
         }
         .frame(width: 150)
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("\(node.displayRoles), \(node.name), \(presentation.title)")
+        .accessibilityLabel(
+            "\(node.displayRoles), \(node.name), \(presentation.title)\(node.isAutomicVaultSigned ? ", signed by Automic Vault" : "")"
+        )
     }
 }
 
@@ -10443,6 +12061,14 @@ private struct ApprovalPromptView: View {
             .defaultScrollAnchor(.top)
             .layoutPriority(1)
 
+            if let reason = content.temporaryGrantUnavailableReason {
+                Text(reason)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
             if usesIPhoneApproval {
                 VStack(spacing: 10) {
                     HStack(spacing: 10) {
@@ -10613,6 +12239,20 @@ private struct ApprovalPromptCommandView: View {
                     }
                 }
                 VStack(alignment: .leading, spacing: 8) {
+                    if let operation = content.operation {
+                        ApprovalPromptInlineMeta(
+                            label: "Operation",
+                            value: operation,
+                            systemImage: "list.bullet"
+                        )
+                    }
+                    if let accessLevel = content.accessLevel {
+                        ApprovalPromptInlineMeta(
+                            label: "Access Level",
+                            value: accessLevel,
+                            systemImage: "shield.lefthalf.filled"
+                        )
+                    }
                     ApprovalPromptInlineMeta(
                         label: "Secret Names",
                         value: content.keys,
@@ -10687,20 +12327,31 @@ private func automaticAccessDecisionSymbol(wasDenied: Bool) -> String {
     wasDenied ? "xmark.shield.fill" : "checkmark.shield.fill"
 }
 
-private func automaticAccessToastAccessibilityLabel(_ record: AutoApprovalRecord) -> String {
-    "Dismiss \(record.wasDenied ? "rejection" : "approval") notification for \(record.displayCommand)"
+private func automaticAccessToastCommand(_ command: String, compact: Bool) -> String {
+    compact ? command.replacingOccurrences(of: " \\\n  ", with: " ") : command
+}
+
+private func automaticAccessToastAccessibilityLabel(
+    _ record: AutoApprovalRecord,
+    compact: Bool
+) -> String {
+    "Dismiss \(record.wasDenied ? "rejection" : "approval") notification for \(automaticAccessToastCommand(record.displayCommand, compact: compact))"
 }
 
 private struct AutomaticAccessToastView: View {
     let record: AutoApprovalRecord
     let dismiss: () -> Void
+    @AppStorage(compactAutomaticApprovalNotificationsDefaultsKey)
+    private var compact = true
+
+    private var compactCommand: Bool { compact && !record.wasDenied }
 
     var body: some View {
         Button(action: dismiss) {
             content
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(automaticAccessToastAccessibilityLabel(record))
+        .accessibilityLabel(automaticAccessToastAccessibilityLabel(record, compact: compactCommand))
     }
 
     private var content: some View {
@@ -10729,9 +12380,11 @@ private struct AutomaticAccessToastView: View {
             }
 
             VStack(alignment: .leading, spacing: 3) {
-                Text(record.displayCommand)
+                Text(automaticAccessToastCommand(record.displayCommand, compact: compactCommand))
                     .font(.system(.callout, design: .monospaced).weight(.medium))
                     .foregroundStyle(.white)
+                    .lineLimit(compactCommand ? 5 : nil)
+                    .truncationMode(.tail)
                     .fixedSize(horizontal: false, vertical: true)
                 Text(record.keys.joined(separator: ", "))
                     .font(.system(.caption, design: .monospaced))
@@ -10866,6 +12519,42 @@ private struct TemporaryAccessGrantStripView: View {
     }
 }
 
+private struct CollapsedTemporaryAccessGrantStripView: View {
+    let grantCount: Int
+    let show: () -> Void
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+
+    var body: some View {
+        Button(action: show) {
+            VStack(spacing: 1) {
+                Image(systemName: "exclamationmark.shield.fill")
+                    .font(.headline)
+                Text("\(grantCount)")
+                    .font(.caption2.monospacedDigit().weight(.semibold))
+            }
+            .foregroundStyle(.orange)
+            .frame(width: 52, height: 44)
+            .background {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(reduceTransparency
+                        ? AnyShapeStyle(Color(nsColor: .windowBackgroundColor))
+                        : AnyShapeStyle(.regularMaterial))
+            }
+            .overlay {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .stroke(.separator.opacity(0.8), lineWidth: 1)
+            }
+            .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .help("Show Temporary Access Grant Strip")
+        .accessibilityLabel(
+            "Show \(grantCount) active Temporary Access \(grantCount == 1 ? "Grant" : "Grants")"
+        )
+        .accessibilityHint("Opens the complete Temporary Access Grant Strip")
+    }
+}
+
 private struct TemporaryAccessGrantRow: View {
     let grant: TemporaryAccessGrantSnapshot
     let remaining: TimeInterval
@@ -10937,6 +12626,29 @@ private func autoApprovalToastFrame(anchor: NSRect, visibleFrame: NSRect, size: 
     let x = min(max(anchor.midX - size.width / 2, visibleFrame.minX + margin), visibleFrame.maxX - size.width - margin)
     let y = max(visibleFrame.minY + margin, min(anchor.minY - 4, visibleFrame.maxY) - size.height)
     return NSRect(origin: NSPoint(x: x, y: y), size: size)
+}
+
+private func temporaryAccessGrantTabFrame(
+    anchor: NSRect,
+    visibleFrame: NSRect,
+    size: NSSize
+) -> NSRect {
+    let margin: CGFloat = 8
+    let peek: CGFloat = 8
+    let x = anchor.midX < visibleFrame.midX
+        ? visibleFrame.minX - peek
+        : visibleFrame.maxX - size.width + peek
+    let y = max(visibleFrame.minY + margin, visibleFrame.maxY - size.height - margin)
+    return NSRect(origin: NSPoint(x: x, y: y), size: size)
+}
+
+private func shouldAnimateTemporaryAccessGrantPanelTransition(
+    isVisible: Bool,
+    reduceMotion: Bool,
+    from: NSRect,
+    to: NSRect
+) -> Bool {
+    isVisible && !reduceMotion && from != to
 }
 
 @MainActor
@@ -11144,6 +12856,43 @@ private func runSecretMutationSelfCheck() -> Int32 {
           changedDocker.status == nil,
           changedDocker.error == "Docker Target changed before mutation",
           !performedAfterFailedPreflight
+    else { return 1 }
+    return 0
+}
+
+private func runKeychainPersistenceSelfCheck() -> Int32 {
+    let service = "com.automicvault.self-check.\(UUID().uuidString)"
+    let account = "KEYCHAIN_SELF_CHECK"
+    let value = UUID().uuidString
+    let query: [String: Any] = [
+        kSecClass as String: kSecClassGenericPassword,
+        kSecAttrService as String: service,
+        kSecAttrAccount as String: account,
+        kSecAttrAccessGroup as String: "ZU76A67LGU.com.automicvault",
+        kSecUseDataProtectionKeychain as String: true,
+    ]
+    defer { SecItemDelete(query as CFDictionary) }
+
+    guard saveStoredSecret(
+        account: account,
+        value: value,
+        accessibility: .afterFirstUnlock,
+        service: service
+    ) == errSecSuccess,
+        loadStoredSecret(account: account, service: service) == value,
+        storedSecretExists(account: account, service: service)
+    else { return 1 }
+
+    var attributesQuery = query
+    attributesQuery[kSecReturnAttributes as String] = true
+    attributesQuery[kSecMatchLimit as String] = kSecMatchLimitOne
+    var attributesResult: CFTypeRef?
+    guard SecItemCopyMatching(attributesQuery as CFDictionary, &attributesResult) == errSecSuccess,
+          let attributes = attributesResult as? [String: Any],
+          attributes[kSecAttrAccessible as String] as? String
+              == kSecAttrAccessibleAfterFirstUnlock as String,
+          deleteStoredSecret(account: account, service: service) == errSecSuccess,
+          !storedSecretExists(account: account, service: service)
     else { return 1 }
     return 0
 }
@@ -11369,14 +13118,16 @@ private func runApprovalSelfCheck() -> Int32 {
             path: "/Applications/Example.app/Contents/MacOS/Example",
             roles: ["Verified Launcher"],
             posture: .meetsRequirements,
-            explanation: "Valid code signature; Hardened Runtime"
+            explanation: "Valid code signature; Hardened Runtime",
+            isAutomicVaultSigned: false
         ),
         ApprovalProcessSecurityNode(
             pid: 41,
             path: "/opt/homebrew/bin/gh",
             roles: ["Secret recipient", "Verified Gate Client"],
             posture: .meetsRequirements,
-            explanation: "Valid code signature; Hardened Runtime"
+            explanation: "Valid code signature; Hardened Runtime",
+            isAutomicVaultSigned: true
         ),
     ])
     let promptContent = ApprovalPromptContent(
@@ -11387,6 +13138,9 @@ private func runApprovalSelfCheck() -> Int32 {
         title: "GitHub token requested",
         detail: "gh needs the GitHub token",
         automaticApprovalExplanation: automaticApprovalExplanation,
+        operation: operationClassificationTitle(.unknown),
+        accessLevel: SecretGateProtection.noAccess.title,
+        temporaryGrantUnavailableReason: "10-minute Write Access excludes Unknown operations.",
         cwd: "/tmp",
         keys: "GH_TOKEN_GITHUB_COM",
         blessing: promptBlessing,
@@ -11402,6 +13156,38 @@ private func runApprovalSelfCheck() -> Int32 {
     )
     collapsedPrompt.layoutSubtreeIfNeeded()
     let collapsedHeight = collapsedPrompt.fittingSize.height
+    let narrowedPrompt = NSHostingView(
+        rootView: ApprovalPromptView(
+            content: ApprovalPromptContent(
+                requesterName: requester.name,
+                requesterIconPath: requester.iconPath,
+                command: "git commit -S",
+                commandPath: "/usr/local/bin/git",
+                title: "Sign this Git operation?",
+                detail: "Automic Vault will use your default GPG signing credential.",
+                automaticApprovalExplanation: nil,
+                operation: operationClassificationTitle(.localWrite),
+                accessLevel: "Allow Signing",
+                temporaryGrantUnavailableReason: nil,
+                cwd: "/tmp",
+                keys: "AV_GPG_PRIVATE_KEY",
+                blessing: BlessedScriptPromptContext(
+                    script: promptBlessing.script,
+                    explanation: activeBlessedScriptPromptExplanation(
+                        script: promptBlessing.script,
+                        gateID: "gpg-signing",
+                        launcherAllowsOperation: true
+                    )
+                ),
+                processSecurity: promptProcessSecurity,
+                sections: []
+            ),
+            temporaryGrantCandidate: nil,
+            decide: { _ in }
+        )
+    )
+    narrowedPrompt.layoutSubtreeIfNeeded()
+    let narrowedHeight = narrowedPrompt.fittingSize.height
     let compactSize = NSHostingView(
         rootView: ApprovalPromptView(
             content: promptContent,
@@ -11423,6 +13209,9 @@ private func runApprovalSelfCheck() -> Int32 {
                 title: nil,
                 detail: nil,
                 automaticApprovalExplanation: nil,
+                operation: nil,
+                accessLevel: nil,
+                temporaryGrantUnavailableReason: nil,
                 cwd: "/tmp",
                 keys: "GH_TOKEN_GITHUB_COM",
                 blessing: nil,
@@ -11446,6 +13235,21 @@ private func runApprovalSelfCheck() -> Int32 {
           promptBlessing.script.capabilities["gh"] == .readOnly,
           approvalPromptCapabilitySummary(promptBlessing.script)
             == "gh: Read Only • stripe: Write Access",
+          activeBlessedScriptPromptExplanation(
+              script: promptBlessing.script,
+              gateID: "gpg-signing",
+              launcherAllowsOperation: true
+          ) == "The Blessed Script’s declared Capabilities narrow gate policy for this execution and lack a gpg-signing Capability. Approval applies only to this request.",
+          activeBlessedScriptPromptExplanation(
+              script: promptBlessing.script,
+              gateID: "gh",
+              launcherAllowsOperation: true
+          ) == "The Blessed Script’s declared Capabilities narrow gate policy for this execution and exceed the declared gh Capability. Approval applies only to this request.",
+          activeBlessedScriptPromptExplanation(
+              script: promptBlessing.script,
+              gateID: "gpg-signing",
+              launcherAllowsOperation: false
+          ) == "This request exceeds the stored authority. Approval applies only to this request.",
           approvalPromptSecretNames(
               requested: ["PUBLISH_TOKEN", "AWS_ACCESS_KEY_ID"],
               blessed: ["PUBLISH_TOKEN", "AWS_SECRET_ACCESS_KEY"]
@@ -11460,6 +13264,7 @@ private func runApprovalSelfCheck() -> Int32 {
           automaticApprovalExplanation.contains("Approval is required to fail closed"),
           containsDragRegion(collapsedPrompt),
           collapsedHeight > 0,
+          narrowedHeight > 0,
           compactSize.width == 420,
           compactSize.height < collapsedHeight,
           SecretMutation.save(
@@ -11549,7 +13354,8 @@ private func runApprovalSelfCheck() -> Int32 {
         pid: 43,
         path: "/Applications/Vaultty.app/Contents/Helpers/vaultty-sessiond",
         signing: vaulttySigning,
-        appSigning: { _ in vaulttyAppSigning }
+        appSigning: { _ in vaulttyAppSigning },
+        bundleExecutableURL: { _ in URL(fileURLWithPath: vaulttySigning.mainExecutable) }
     )
     let vaulttyBridgeLauncher = launcherIdentity(
         pid: 44,
@@ -11570,13 +13376,17 @@ private func runApprovalSelfCheck() -> Int32 {
                 teamIdentifier: "TEAM",
                 designatedRequirement: "identifier \"\(identifier)\" and anchor apple generic"
             )
-        }
+        },
+        bundleExecutableURL: { _ in URL(fileURLWithPath: nestedMenuSigning.mainExecutable) }
     )
     guard parentlessVaulttyLauncher?.designatedRequirement == vaulttyAppSigning.designatedRequirement,
           vaulttyBridgeLauncher?.designatedRequirement == vaulttyAppSigning.designatedRequirement,
           nestedLaunchers.map(\.identifier) == ["dev.mxcl.pmm.menu", "dev.mxcl.pmm"],
           launcherAncestorStartPIDs(detachedCaller) == [43],
           hardenedPosture.0 == .meetsRequirements,
+          isAutomicVaultSigned(unbundledSigning, teamIdentifier: "TEAM"),
+          !isAutomicVaultSigned(unbundledSigning, teamIdentifier: "OTHER"),
+          !isAutomicVaultSigned(pythonSigning, teamIdentifier: "unknown"),
           nodePosture.0 == .needsAttention,
           nodePosture.1.contains("mutable JavaScript"),
           unsafePosture.0 == .doesNotMeetRequirements,
@@ -12053,6 +13863,23 @@ private func runApprovalSelfCheck() -> Int32 {
     return 0
 }
 
+private func runApprovalProcessExecutionSelfCheck() -> Int32 {
+    var identity = AVProcessIdentity()
+    guard av_process_identity(getpid(), &identity) else { return 1 }
+    identity.pidversion = 0
+    identity.audit_session_id = 0
+    var reusedIdentity = identity
+    reusedIdentity.start_usec &+= 1
+    guard let execution = approvalProcessExecution(pid: getpid(), identity: identity),
+          execution.pidVersion == nil,
+          execution.auditSessionID == nil,
+          approvalProcessExecutionIsLive(execution),
+          approvalProcessExecution(pid: getpid(), identity: reusedIdentity) == nil,
+          retainedProcessExecution(pid: getpid(), identity: identity) == nil
+    else { return 1 }
+    return 0
+}
+
 private func runStandaloneLauncherSelfCheck() -> Int32 {
     let requirement = #"identifier "com.example.cli" and anchor apple generic"#
     let developerID = LiveSigningInfo(
@@ -12091,6 +13918,137 @@ private func runStandaloneLauncherSelfCheck() -> Int32 {
         runtimeProtection: .hardened,
         isDeveloperID: true
     )
+    let bundledCodex = LiveSigningInfo(
+        identifier: codexVerifiedLauncherHelper.helperSigningIdentifier,
+        teamIdentifier: codexVerifiedLauncherHelper.helperTeamIdentifier,
+        designatedRequirement: #"identifier "codex" and anchor apple generic"#,
+        mainExecutable: "/Applications/ChatGPT.app/Contents/Resources/codex",
+        isAdHoc: false,
+        runtimeProtection: .hardened,
+        isDeveloperID: true
+    )
+    let chatGPTURL = URL(fileURLWithPath: "/Applications/ChatGPT.app")
+    let codexAssociation = verifiedLauncherHelperAssociation(
+        path: bundledCodex.mainExecutable,
+        signing: bundledCodex,
+        containingAppURLs: [chatGPTURL],
+        configuration: VerifiedLauncherHelperConfiguration(),
+        bundleIdentifier: { _ in codexVerifiedLauncherHelper.appBundleIdentifier }
+    )
+    let disabledCodexAssociation = verifiedLauncherHelperAssociation(
+        path: bundledCodex.mainExecutable,
+        signing: bundledCodex,
+        containingAppURLs: [chatGPTURL],
+        configuration: VerifiedLauncherHelperConfiguration(
+            disabledHelperIDs: [codexVerifiedLauncherHelper.id]
+        ),
+        bundleIdentifier: { _ in codexVerifiedLauncherHelper.appBundleIdentifier }
+    )
+    let wrongPathCodexHelper = VerifiedLauncherHelper(
+        id: "wrong-path-codex",
+        name: "Wrong Codex",
+        appName: "ChatGPT",
+        appBundleIdentifier: codexVerifiedLauncherHelper.appBundleIdentifier,
+        appTeamIdentifier: codexVerifiedLauncherHelper.appTeamIdentifier,
+        helperSigningIdentifier: codexVerifiedLauncherHelper.helperSigningIdentifier,
+        helperTeamIdentifier: codexVerifiedLauncherHelper.helperTeamIdentifier,
+        relativePath: "Contents/Resources/not-codex"
+    )
+    let pathBoundCodexHelper = VerifiedLauncherHelper(
+        id: "path-bound-codex",
+        name: "Codex CLI",
+        appName: "ChatGPT",
+        appBundleIdentifier: codexVerifiedLauncherHelper.appBundleIdentifier,
+        appTeamIdentifier: codexVerifiedLauncherHelper.appTeamIdentifier,
+        helperSigningIdentifier: codexVerifiedLauncherHelper.helperSigningIdentifier,
+        helperTeamIdentifier: codexVerifiedLauncherHelper.helperTeamIdentifier,
+        relativePath: "Contents/Resources/codex"
+    )
+    let pathBoundCodexAssociation = verifiedLauncherHelperAssociation(
+        path: bundledCodex.mainExecutable,
+        signing: bundledCodex,
+        containingAppURLs: [chatGPTURL],
+        helpers: [wrongPathCodexHelper, pathBoundCodexHelper],
+        configuration: VerifiedLauncherHelperConfiguration(),
+        bundleIdentifier: { _ in codexVerifiedLauncherHelper.appBundleIdentifier }
+    )
+    let xcodeGit = LiveSigningInfo(
+        identifier: "com.apple.git",
+        teamIdentifier: "Software Signing",
+        designatedRequirement: #"identifier "com.apple.git" and anchor apple"#,
+        mainExecutable: "/Applications/Xcode.app/Contents/Developer/usr/bin/git",
+        isAdHoc: false,
+        runtimeProtection: .hardened,
+        isDeveloperID: false
+    )
+    let xcodeHelperAssociation = verifiedLauncherHelperAssociation(
+        path: xcodeGit.mainExecutable,
+        signing: xcodeGit,
+        containingAppURLs: [URL(fileURLWithPath: "/Applications/Xcode.app")],
+        configuration: VerifiedLauncherHelperConfiguration(),
+        bundleIdentifier: { _ in "com.apple.dt.Xcode" }
+    )
+    let installedCodexValidation: Bool = {
+        let executableURL = URL(
+            fileURLWithPath: "/Applications/ChatGPT.app/Contents/Resources/codex"
+        )
+        guard FileManager.default.fileExists(atPath: executableURL.path) else { return true }
+        guard let signing = executableSigningInfo(path: executableURL.path),
+              let association = verifiedLauncherHelperAssociation(
+                  path: executableURL.path,
+                  signing: signing,
+                  helpers: [codexVerifiedLauncherHelper],
+                  configuration: VerifiedLauncherHelperConfiguration()
+              ),
+              verifiedLauncherHelperAppSigningInfo(association) != nil
+        else { return false }
+        let outsideResource = VerifiedLauncherHelperAssociation(
+            helper: codexVerifiedLauncherHelper,
+            appURL: association.appURL,
+            executableURL: URL(fileURLWithPath: "/bin/ls")
+        )
+        return verifiedLauncherHelperAppSigningInfo(outsideResource) == nil
+    }()
+    let installedMainAppValidation = [
+        URL(fileURLWithPath: "/Applications/ChatGPT.app"),
+        URL(fileURLWithPath: "/Applications/Xcode.app"),
+    ].allSatisfy {
+        !FileManager.default.fileExists(atPath: $0.path) || staticSigningInfo(url: $0) != nil
+    }
+    let avGPG = LiveSigningInfo(
+        identifier: "com.automicvault.av-gpg",
+        teamIdentifier: "TEAM",
+        designatedRequirement: #"identifier "com.automicvault.av-gpg" and anchor apple generic"#,
+        mainExecutable: "/Applications/Automic Vault.app/Contents/MacOS/av-gpg",
+        isAdHoc: false,
+        runtimeProtection: .hardened,
+        isDeveloperID: true
+    )
+    let portalHelper = LiveSigningInfo(
+        identifier: "dev.mxcl.portal.sessiond",
+        teamIdentifier: "TEAM",
+        designatedRequirement: #"identifier "dev.mxcl.portal.sessiond" and anchor apple generic"#,
+        mainExecutable: "/Applications/Portal Session Helper.app/Contents/MacOS/portal-sessiond",
+        isAdHoc: false,
+        runtimeProtection: .hardened,
+        isDeveloperID: true
+    )
+    let portalHelperSigning = StaticSigningInfo(
+        identifier: portalHelper.identifier,
+        teamIdentifier: portalHelper.teamIdentifier,
+        designatedRequirement: portalHelper.designatedRequirement
+    )
+    let portalGPGLaunchers = launcherIdentities(
+        pid: 45,
+        path: avGPG.mainExecutable,
+        signing: avGPG,
+        appSigning: { _ in nil }
+    ) + launcherIdentities(
+        pid: 44,
+        path: portalHelper.mainExecutable,
+        signing: portalHelper,
+        appSigning: { _ in portalHelperSigning }
+    )
     let liveBundleFallback = launcherIdentities(
         pid: 44,
         path: bundledDeveloperID.mainExecutable,
@@ -12113,6 +14071,14 @@ private func runStandaloneLauncherSelfCheck() -> Int32 {
           ),
           launcher.isStandalone,
           launcher.designatedRequirement == requirement,
+          targetedAppResourceValidationAvailable,
+          codexAssociation?.helper == codexVerifiedLauncherHelper,
+          codexAssociation?.appURL == chatGPTURL,
+          pathBoundCodexAssociation?.helper == pathBoundCodexHelper,
+          disabledCodexAssociation == nil,
+          xcodeHelperAssociation == nil,
+          installedCodexValidation,
+          installedMainAppValidation,
           let liveBundleFallback,
           liveBundleFallback.isStandalone,
           liveBundleFallback.identifier == bundledDeveloperID.identifier,
@@ -12144,6 +14110,11 @@ private func runStandaloneLauncherSelfCheck() -> Int32 {
               "/bin/zsh",
               "/opt/homebrew/bin/gh",
           ]) == "example → zsh → gh",
+          executionOrigin(
+              among: portalGPGLaunchers,
+              callerPID: 46,
+              ancestorFallbackPath: portalHelper.mainExecutable
+          )?.identifier == portalHelper.identifier,
           !appBundleMatchesMainExecutable(
               URL(fileURLWithPath: "/Applications/Xcode.app"),
               executablePaths: ["/Applications/Xcode.app/Contents/Developer/usr/bin/git"],
@@ -12541,6 +14512,63 @@ private func runTerraformCredentialSelfCheck() -> Int32 {
     return 0
 }
 
+private func runAliyunCredentialSelfCheck() -> Int32 {
+    guard aliyunRequestClassification(["sts", "GetCallerIdentity"]) == .readOnly,
+          aliyunRequestClassification(["ecs", "DescribeInstances"]) == .unknown,
+          normalizeAliyunProfile("prod") == "prod",
+          normalizeAliyunProfile(" prod") == nil,
+          normalizeAliyunProfile("prod\n") == nil,
+          aliyunCredentialSecretName("prod")
+              == "ALIYUN_PROFILE_CREDENTIAL_6754AF9632A2745E85C293E5AAC0863370D9BD3330B9938C00CADFD215227D77",
+          parseAliyunCredential(
+              #"{"mode":"AK","access_key_id":"id","access_key_secret":"secret"}"#
+          ),
+          parseAliyunCredential(
+              #"{"mode":"StsToken","access_key_id":"id","access_key_secret":"secret","sts_token":"token"}"#
+          ),
+          !parseAliyunCredential(
+              #"{"mode":"AK","access_key_id":"id","access_key_secret":"secret","future":true}"#
+          )
+    else { return 1 }
+    return 0
+}
+
+private func runWakaTimeCredentialSelfCheck() -> Int32 {
+    let valid = ["waka_01234567", "89ab", "4cde", "8fab", "0123456789ab"].joined(separator: "-")
+    let bare = ["01234567", "89ab", "4cde", "bfab", "0123456789ab"].joined(separator: "-")
+    let wrongVersion = ["01234567", "89ab", "3cde", "8fab", "0123456789ab"].joined(separator: "-")
+    guard wakatimeRequestClassification(["--today"]) == .readOnly,
+          wakatimeRequestClassification(["--today-goal=123"]) == .readOnly,
+          wakatimeRequestClassification(["--entity", "/tmp/main.rs"]) == .mutating,
+          wakatimeRequestClassification(["--sync-offline-activity=100"]) == .mutating,
+          wakatimeRequestClassification(["--future-operation"]) == .unknown,
+          validWakaTimeAPIKey(valid),
+          validWakaTimeAPIKey(bare),
+          !validWakaTimeAPIKey(wrongVersion)
+    else { return 1 }
+    return 0
+}
+
+private func runKubectlCredentialSelfCheck() -> Int32 {
+    let canonical = #"{"kind":"token","server":"https://example.com/","user":"prod"}"#
+    guard let scope = parseKubectlCredentialScope(canonical),
+          scope.kind == "token",
+          scope.server == "https://example.com/",
+          scope.user == "prod",
+          scope.secretName
+              == "KUBECTL_USER_CREDENTIAL_6754AF9632A2745E85C293E5AAC0863370D9BD3330B9938C00CADFD215227D77",
+          validKubectlCredential(#"{"token":"secret"}"#, kind: "token"),
+          !validKubectlCredential(#"{"token":"secret","future":true}"#, kind: "token"),
+          parseKubectlCredentialScope(
+              #"{"kind":"token","server":"https://user@example.com/","user":"prod"}"#
+          ) == nil,
+          parseKubectlCredentialScope(
+              #"{"kind":"token","server":"http://example.com/","user":"prod"}"#
+          ) == nil
+    else { return 1 }
+    return 0
+}
+
 private func runOxideCredentialSelfCheck() -> Int32 {
     let canonical = #"{"host":"https://oxide.example","profile":"prod"}"#
     guard oxideRequestClassification(["auth", "status"]) == .readOnly,
@@ -12562,6 +14590,47 @@ private func runOxideCredentialSelfCheck() -> Int32 {
           parseOxideCredential("secret") == "secret",
           parseOxideCredential("secret\n") == nil,
           parseOxideCredentialScope(#"{"profile":"prod","host":"https://oxide.example"}"#) == nil
+    else { return 1 }
+    return 0
+}
+
+private func runFastlyCredentialSelfCheck() -> Int32 {
+    let canonical = #"{"endpoint":"https://api.fastly.com","name":"prod"}"#
+    guard fastlyRequestClassification(["service", "list"]) == .unknown,
+          fastlyRequestClassification(["auth", "token"]) == .secretDump,
+          fastlyRequestClassification(["auth", "show", "prod", "--reveal"]) == .secretDump,
+          let scope = parseFastlyCredentialScope(canonical),
+          scope.name == "prod",
+          scope.endpoint == fastlyOfficialAPIEndpoint,
+          scope.secretName
+              == "FASTLY_API_TOKEN_E3A631294416CFFB0B45AFDD0D6160294006526867EF6E5941BB3D4AF97E9CAF",
+          parseFastlyCredential("secret") == "secret",
+          parseFastlyCredential("secret\n") == nil,
+          parseFastlyCredentialScope(
+              #"{"endpoint":"https://example.invalid","name":"prod"}"#
+          ) == nil
+    else { return 1 }
+    return 0
+}
+
+private func runSqlcmdCredentialSelfCheck() -> Int32 {
+    let canonical = #"{"address":"db.example.com","port":1433,"profile":"prod"}"#
+    guard sqlcmdRequestClassification(["query", "SELECT 1"]) == .unknown,
+          sqlcmdRequestClassification(["query", "cs"]) == .unknown,
+          sqlcmdRequestClassification(["--verbosity", "config", "cs"]) == .unknown,
+          sqlcmdRequestClassification(["config", "connection-strings"]) == .secretDump,
+          sqlcmdRequestClassification(["config", "cs"]) == .secretDump,
+          sqlcmdRequestClassification(["config", "view", "--raw"]) == .secretDump,
+          sqlcmdRequestClassification(["config", "show", "--raw"]) == .secretDump,
+          let scope = parseSqlcmdCredentialScope(canonical),
+          scope.profile == "prod",
+          scope.address == "db.example.com",
+          scope.port == 1433,
+          scope.secretName
+              == "SQLCMD_PASSWORD_6754AF9632A2745E85C293E5AAC0863370D9BD3330B9938C00CADFD215227D77",
+          parseSqlcmdPassword("secret") == "secret",
+          parseSqlcmdPassword("secret\n") == nil,
+          parseSqlcmdCredentialScope(#"{"address":"","port":1433,"profile":"prod"}"#) == nil
     else { return 1 }
     return 0
 }
@@ -13059,6 +15128,7 @@ private func runLaunchAgentHandoffSelfCheck() -> Int32 {
 
 @MainActor
 private func runMenuStatusSelfCheck() -> Int32 {
+    guard AppDelegate().statusMenuTrackingSelfCheck() else { return 1 }
     let statusItem = makeStatusMenuItem(title: "Starting Automic Vault")
     let actionItem = NSMenuItem(title: "Open Automic Vault", action: nil, keyEquivalent: "")
     setVersionBadge("1.2.3", on: actionItem)
@@ -13288,6 +15358,10 @@ private func runMenuStatusSelfCheck() -> Int32 {
         end: { _ in },
         setCountdownSuspended: { _, _ in }
     ))
+    let collapsedStripView = NSHostingView(rootView: CollapsedTemporaryAccessGrantStripView(
+        grantCount: grantSnapshots.count,
+        show: {}
+    ))
     let grantPanel = makeTemporaryAccessGrantPanel()
     let sampleStripFrame = NSRect(x: 200, y: 400, width: 430, height: 120)
     let stackedToastFrame = autoApprovalToastFrame(
@@ -13302,7 +15376,30 @@ private func runMenuStatusSelfCheck() -> Int32 {
               monotonicNow: grantMonotonicNow
           ).contains("Codex → AWS Authorization Gate · Codex task 11111111 · 10:00 · Write Access: 1 use · Last used "),
           stripView.fittingSize.width == 430,
+          collapsedStripView.fittingSize == NSSize(width: 52, height: 44),
           stackedToastFrame.maxY == sampleStripFrame.minY - 4,
+          temporaryAccessGrantTabFrame(
+              anchor: NSRect(x: 100, y: 576, width: 24, height: 24),
+              visibleFrame: NSRect(x: 0, y: 0, width: 800, height: 600),
+              size: collapsedStripView.fittingSize
+          ) == NSRect(x: -8, y: 548, width: 52, height: 44),
+          temporaryAccessGrantTabFrame(
+              anchor: NSRect(x: 700, y: 576, width: 24, height: 24),
+              visibleFrame: NSRect(x: 0, y: 0, width: 800, height: 600),
+              size: collapsedStripView.fittingSize
+          ) == NSRect(x: 756, y: 548, width: 52, height: 44),
+          shouldAnimateTemporaryAccessGrantPanelTransition(
+              isVisible: true,
+              reduceMotion: false,
+              from: .zero,
+              to: sampleStripFrame
+          ),
+          !shouldAnimateTemporaryAccessGrantPanelTransition(
+              isVisible: true,
+              reduceMotion: true,
+              from: .zero,
+              to: sampleStripFrame
+          ),
           grantPanel.styleMask.contains(.borderless),
           grantPanel.styleMask.contains(.nonactivatingPanel),
           grantPanel.level == .statusBar,
@@ -13321,6 +15418,7 @@ private func runMenuStatusSelfCheck() -> Int32 {
                 monotonicNow: grantMonotonicNow
             ),
             stripView.fittingSize,
+            collapsedStripView.fittingSize,
             stackedToastFrame,
             grantPanel.styleMask.rawValue,
             grantPanel.level.rawValue,
@@ -13351,6 +15449,10 @@ private func runMenuStatusSelfCheck() -> Int32 {
           automaticApprovalFeedback(rawValue: "menuBarFlash") == .menuBarFlash,
           automaticApprovalFeedback(rawValue: "none") == .none,
           automaticApprovalFeedback(rawValue: "tampered") == .notification,
+          automaticAccessToastCommand(groupedMenuRecords[0].record.displayCommand, compact: true)
+            == "gh repo view",
+          automaticAccessToastCommand(groupedMenuRecords[0].record.displayCommand, compact: false)
+            == groupedMenuRecords[0].record.displayCommand,
           AutomaticApprovalFlashSide.left.next == .right,
           AutomaticApprovalFlashSide.right.next == .left,
           autoApprovalToolName(request) == "aws",
@@ -13370,8 +15472,14 @@ private func runMenuStatusSelfCheck() -> Int32 {
           sensitiveRetrospectiveRecord.displayCommand.contains("<redacted>"),
           !sensitiveMenuTitle.contains(rawCredential),
           sensitiveMenuTitle.contains("<redacted>"),
-          !automaticAccessToastAccessibilityLabel(sensitiveRetrospectiveRecord).contains(rawCredential),
-          automaticAccessToastAccessibilityLabel(sensitiveRetrospectiveRecord).contains("<redacted>"),
+          !automaticAccessToastAccessibilityLabel(
+              sensitiveRetrospectiveRecord,
+              compact: true
+          ).contains(rawCredential),
+          automaticAccessToastAccessibilityLabel(
+              sensitiveRetrospectiveRecord,
+              compact: true
+          ).contains("<redacted>"),
           scanAlertLevel(["medium"]) == .medium,
           scanAlertLevel(["medium", "high"]) == .high,
           doctorStatusTitle(count: 0) == nil,
@@ -13641,12 +15749,20 @@ if CommandLine.arguments.contains("--self-check-approvals") {
     exit(MainActor.assumeIsolated { runApprovalSelfCheck() })
 }
 
+if CommandLine.arguments.contains("--self-check-approval-process-execution") {
+    exit(runApprovalProcessExecutionSelfCheck())
+}
+
 if CommandLine.arguments.contains("--self-check-standalone-launchers") {
     exit(runStandaloneLauncherSelfCheck())
 }
 
 if CommandLine.arguments.contains("--self-check-secret-mutations") {
     exit(MainActor.assumeIsolated { runSecretMutationSelfCheck() })
+}
+
+if CommandLine.arguments.contains("--self-check-keychain-persistence") {
+    exit(runKeychainPersistenceSelfCheck())
 }
 
 if CommandLine.arguments.contains("--self-check-gh-read-only") {
@@ -13661,8 +15777,28 @@ if CommandLine.arguments.contains("--self-check-terraform-credentials") {
     exit(runTerraformCredentialSelfCheck())
 }
 
+if CommandLine.arguments.contains("--self-check-aliyun-credentials") {
+    exit(runAliyunCredentialSelfCheck())
+}
+
+if CommandLine.arguments.contains("--self-check-wakatime-credentials") {
+    exit(runWakaTimeCredentialSelfCheck())
+}
+
+if CommandLine.arguments.contains("--self-check-kubectl-credentials") {
+    exit(runKubectlCredentialSelfCheck())
+}
+
 if CommandLine.arguments.contains("--self-check-oxide-credentials") {
     exit(runOxideCredentialSelfCheck())
+}
+
+if CommandLine.arguments.contains("--self-check-fastly-credentials") {
+    exit(runFastlyCredentialSelfCheck())
+}
+
+if CommandLine.arguments.contains("--self-check-sqlcmd-credentials") {
+    exit(runSqlcmdCredentialSelfCheck())
 }
 
 if CommandLine.arguments.contains("--self-check-goat-credentials") {

@@ -11,14 +11,9 @@
 - `$XDG_CONFIG_HOME/containers/auth.json`
 - `~/.config/containers/auth.json`
 
-## Why This is not Yet Hardened
+## Hardened State
 
-The retired `podman` hardener moved the detected secret to the macOS Keychain,
-then recreated `$REGISTRY_AUTH_FILE` inside a temporary directory for each run.
-We no longer consider a temporary plaintext file a sufficient security boundary,
-so this detector remains report-only.
-
-If a narrow environment-variable or credential-helper interface can cover this
-state without writing the secret back to disk, we can reconsider the hardener.
-
-[Open an issue to discuss a safer integration](https://github.com/automic-vault/automic-vault/issues).
+`av harden podman` migrates supported registry-level credentials into Secret
+Custody and selects Automic Vault through containers/image's native global
+credential-helper setting. The official Red Hat-signed macOS Podman client is
+the verified Target; no plaintext auth file is recreated.

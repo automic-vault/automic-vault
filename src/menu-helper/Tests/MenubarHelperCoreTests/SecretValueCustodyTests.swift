@@ -132,6 +132,35 @@ private struct InMemorySecretValueCustodyAdapter: SecretValueCustodyAdapter {
     }
 }
 
+@Test func lockedSecretUseRetriesWithAvailableWhileLockedInventory() {
+    var requestedAccessibility: [StoredSecretAccessibility?] = []
+
+    let result = retryLockedSecretInventory { accessibility in
+        requestedAccessibility.append(accessibility)
+        return accessibility == nil
+            ? .failure(errSecInteractionNotAllowed)
+            : .success([StoredSecret(account: "AVAILABLE")])
+    }
+
+    #expect(requestedAccessibility == [nil, .afterFirstUnlock])
+    guard case .success(let secrets) = result else {
+        Issue.record("available locked inventory was not returned")
+        return
+    }
+    #expect(secrets.map(\.account) == ["AVAILABLE"])
+
+    requestedAccessibility.removeAll()
+    let unrelatedFailure = retryLockedSecretInventory { accessibility in
+        requestedAccessibility.append(accessibility)
+        return .failure(errSecAuthFailed)
+    }
+    #expect(requestedAccessibility == [nil])
+    guard case .failure(errSecAuthFailed) = unrelatedFailure else {
+        Issue.record("an unrelated inventory failure was retried")
+        return
+    }
+}
+
 private func storedValue(source: StoredSecretValueSource, account: String) -> StoredSecretValue {
     StoredSecretValue(
         source: source,

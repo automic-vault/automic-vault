@@ -38,6 +38,17 @@ final class ApprovalAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
         Task { ApprovalModel.shared.registrationFailed(error) }
     }
 
+    func application(
+        _ application: UIApplication,
+        didReceiveRemoteNotification userInfo: [AnyHashable: Any]
+    ) async -> UIBackgroundFetchResult {
+        await ApprovalModel.shared.handleBackgroundNotification(userInfo)
+    }
+
+    func applicationDidBecomeActive(_ application: UIApplication) {
+        UNUserNotificationCenter.current().removeAllDeliveredNotifications()
+    }
+
     func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         willPresent notification: UNNotification
@@ -109,6 +120,8 @@ final class ApprovalModel {
     private(set) var activity: [PhoneApprovalActivity] = []
     private(set) var state: ConnectionState = .setup
     private(set) var notificationPreferences = ApprovalNotificationPreferences()
+    private(set) var notificationReviewRequestID: UUID?
+    private(set) var notificationReviewSequence: UInt64 = 0
     var errorMessage: String?
     var biometricProtectionEnabled = UserDefaults.standard.bool(forKey: biometricDefaultsKey) {
         didSet {
@@ -137,7 +150,7 @@ final class ApprovalModel {
         do {
             activity = try PhoneApprovalActivityStore.load()
         } catch {
-            errorMessage = "iPhone Activity could not be loaded."
+            errorMessage = "Request History could not be loaded."
         }
         notificationPreferences = (try? ApprovalNotificationPreferences.load()) ?? .init()
     }
@@ -233,6 +246,12 @@ final class ApprovalModel {
 
     func handleNotificationResponse(_ response: UNNotificationResponse) async {
         guard let ticket = await ticket(from: response.notification.request.content.userInfo) else { return }
+        if let activity = PhoneApprovalActivity(canceled: ticket) {
+            recordActivity(activity)
+            pending.removeAll { $0.id == ticket.requestID }
+            await removeDeliveredNotifications(for: ticket.requestID)
+            return
+        }
         switch response.actionIdentifier {
         case "AV_DENY": await respond(to: ticket, outcome: .denied)
         case "AV_APPROVE" where !ticket.requiresFullReview:
@@ -240,8 +259,24 @@ final class ApprovalModel {
                 guard await authenticateBiometrically() else { return }
             }
             await respond(to: ticket, outcome: .approved)
+        case "AV_REVIEW", UNNotificationDefaultActionIdentifier:
+            notificationReviewRequestID = ticket.requestID
+            notificationReviewSequence &+= 1
+            if !pending.contains(where: { $0.id == ticket.requestID }) {
+                if relay == nil { await connect() }
+                if let relay { try? await relay.send(.sync) }
+            }
         default: break
         }
+    }
+
+    func handleBackgroundNotification(_ userInfo: [AnyHashable: Any]) async -> UIBackgroundFetchResult {
+        guard let ticket = await ticket(from: userInfo),
+              let activity = PhoneApprovalActivity(canceled: ticket) else { return .noData }
+        recordActivity(activity)
+        pending.removeAll { $0.id == ticket.requestID }
+        await removeDeliveredNotifications(for: ticket.requestID)
+        return .newData
     }
 
     private func connect() async {
@@ -294,6 +329,9 @@ final class ApprovalModel {
                     pending.removeAll { $0.id == response.requestID }
                     await removeDeliveredNotifications(for: response.requestID)
                 case .cancel(let requestID):
+                    if let request = pending.first(where: { $0.id == requestID }) {
+                        recordActivity(.init(canceled: request))
+                    }
                     pending.removeAll { $0.id == requestID }
                     await removeDeliveredNotifications(for: requestID)
                 case .presence:
@@ -438,9 +476,10 @@ final class ApprovalModel {
         do {
             try PhoneApprovalActivityStore.save(activity)
         } catch {
-            errorMessage = "The response was delivered, but iPhone Activity could not be saved."
+            errorMessage = "Request History could not be saved."
         }
     }
+
 }
 
 private enum PhoneApprovalActivityStore {

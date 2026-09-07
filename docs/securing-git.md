@@ -9,23 +9,23 @@ Use SSH transport with a passphrase-protected key stored in the macOS Keychain.
 > signed Automic Vault `gh` Isotope and the `gh` Secret Gate authorizes each
 > request.
 
-`av scan` reports Git configurations that expose credentials to ordinary
+`av scan` reports Git configurations that can expose credentials to ordinary
 same-user processes, including agent subprocesses.
 
 Detected hazards:
 
 - `~/.git-credentials`
 - global `credential.helper = store --file ...` paths
-- `printf 'protocol=https\nhost=github.com\n\n' | git credential fill`
-  returning a non-empty `password=` for `github.com`
+- an effective ambient GitHub credential helper, including `osxkeychain` when
+  Keychain metadata confirms a matching Internet password
 - Git config that delegates GitHub credentials to an untrusted `gh auth
   git-credential` helper
 - Git config that enables `git-credential-oauth`
 - plaintext `oauthClientSecret` values in Git config
 
-The live `git credential fill` finding may not have a file and line. Git does
-not always say which helper returned the token. File-backed findings do include
-the affected path and line.
+The Git helper Detector resolves includes and precedence through Git's
+configuration-only plumbing. It does not invoke credential helpers or request
+Secret Application. File-backed findings include the origin path and line.
 
 
 The fix is not merely "use a better HTTPS credential helper". On macOS, if Git
@@ -37,24 +37,39 @@ Use SSH.
 
 ## Gate GPG Commit Signing
 
-Automic Vault can also gate use of the private key that signs Git commits and
-tags. Open **Settings → GPG Signing**, export the private key from GnuPG as
-instructed there, and select **Configure Git**. Git then invokes the `av-gpg`
-Command inside the signed app bundle. `av-gpg` forwards the payload to
-`av gpg-sign` at the GPG Signing Gate; it never receives the private key.
+Open **Settings → GPG Signing**:
 
-The settings also support an alternate GPG Signing Credential for an exact
-list of Verified Launchers. This is useful for agents: agent-authored commits
-can use a visibly different key from human-authored commits. The list is bound
-to designated requirements rather than app names or paths, and changing it
-requires Approval.
+1. Add the default GPG Signing Credential by importing its armored private key.
+2. Copy the public key Automic Vault displays and add it to your Git host.
+3. Select **Configure Git**.
 
-The signing Target necessarily handles the private key in memory while it
-creates the signature. Automic Vault controls its application and zeroizes
-transient input buffers; it does not claim that a compromised Target cannot
-inspect its own memory.
+Automic Vault sets Git's global `gpg.program`, `gpg.format=openpgp`, and
+`commit.gpgSign=true`. Your normal workflow now produces signed commits:
 
-## Check What Git Can Read
+```sh
+$ git commit --message 'document gated signing'
+$ git tag --sign v1.2.3
+```
+
+Git calls the bundled `av-gpg` Command. The GPG Signing Gate authorizes the
+complete signing request and the signed `av gpg-sign` Target creates the
+detached signature. Git and `av-gpg` never receive the private key or
+passphrase.
+
+The gate offers **Approval Required** and **Allow Signing**. To give agents a
+distinct signing identity, import or generate an alternate credential, upload
+its displayed public key, then add the exact Verified Launchers that should use
+it. Missing alternate credential material fails closed instead of falling back
+to the default credential.
+
+Launcher selections bind designated requirements rather than app names or
+paths. Changing the selection requires Approval.
+
+The signing Target handles the private key in memory while creating the
+signature. Automic Vault controls its application and zeroizes transient input
+buffers; a compromised Target can still inspect its own memory.
+
+## Check Git Credential Configuration
 
 Start with the boring check:
 
@@ -84,26 +99,30 @@ $ av scan
 ╰─ scan complete
 ```
 
-Then check what Git itself can retrieve for GitHub:
+Inspect the effective configuration without invoking a helper:
 
 ```sh
-$ printf 'protocol=https\nhost=github.com\n\n' | git credential fill
-protocol=https
-host=github.com
-username=x-access-token
-password=github_pat_...
-# ^^ bad: Git can retrieve a token without you approving this command
+$ git config --includes --show-origin --get-regexp \
+    '^credential\..*\.helper$|^credential\.helper$'
+file:/Applications/Xcode.app/.../gitconfig credential.helper osxkeychain
+file:/Users/you/.gitconfig credential.https://github.com.helper
+file:/Users/you/.gitconfig credential.https://github.com.helper !/usr/local/bin/gh auth git-credential
 ```
 
-Clean output is no `password=` line:
+The empty helper resets the inherited `osxkeychain` entry. The remaining
+absolute `gh` helper is accepted only when it carries the Automic Vault Isotope
+signature.
+
+You can also inspect GitHub Internet-password metadata without retrieving its
+value:
 
 ```sh
-$ printf 'protocol=https\nhost=github.com\n\n' | git credential fill
-protocol=https
-host=github.com
-username=
-# ^^ fine; exact output varies, but there should be no password
+$ security find-internet-password -s github.com -r htps
 ```
+
+An explicit `git credential fill` test invokes the configured helper. It may
+request Automic Vault Approval and print a usable credential, so `av scan`
+never performs it. Do not paste its output anywhere.
 
 Also check for plaintext credential-store files:
 
@@ -112,8 +131,6 @@ $ test -f ~/.git-credentials && sed -n '1,3p' ~/.git-credentials
 https://user:token@example.com/repo.git
 # ^^ bad: plaintext token on disk
 ```
-
-Do not paste the output anywhere. It may be the secret.
 
 ## The Safe Target State
 
@@ -376,13 +393,16 @@ $ git config --global --edit
 
 Delete the `helper = !gh auth git-credential` line.
 
-Then verify:
+Then verify the effective helper configuration:
 
 ```sh
-$ printf 'protocol=https\nhost=github.com\n\n' | git credential fill
+$ git config --includes --show-origin --get-regexp \
+    '^credential\..*\.helper$|^credential\.helper$'
+$ av scan
 ```
 
-Again: no `password=`.
+An SSH-only setup has no effective GitHub HTTPS helper. A hardened HTTPS setup
+has one reset followed only by the signed Automic Vault `gh` Isotope.
 
 ## Remove `git-credential-oauth` Exposure
 
@@ -422,13 +442,15 @@ $ av scan
 ╰─ vault sealed
 ```
 
-Check GitHub HTTPS credential fill:
+Check the effective helper configuration:
 
 ```sh
-$ printf 'protocol=https\nhost=github.com\n\n' | git credential fill
+$ git config --includes --show-origin --get-regexp \
+    '^credential\..*\.helper$|^credential\.helper$'
 ```
 
-There should be no `password=`.
+There should be no ambient GitHub helper. The signed Automic Vault `gh` Isotope
+may remain after an empty reset.
 
 Check remotes:
 

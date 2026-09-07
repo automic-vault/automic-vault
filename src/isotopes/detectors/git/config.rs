@@ -80,6 +80,13 @@ pub(crate) fn affected(path: &Path, line: usize) -> AffectedFile {
     }
 }
 
+pub(crate) fn affected_path(path: &Path) -> AffectedFile {
+    AffectedFile {
+        path: path.display().to_string(),
+        line: None,
+    }
+}
+
 pub(crate) fn git_config_paths(home: &Path) -> Vec<PathBuf> {
     // Git reads the XDG file before ~/.gitconfig, so preserve that precedence:
     // empty helper values in the latter must reset helpers from the former.
@@ -140,27 +147,6 @@ pub(crate) fn github_credential_helpers(contents: &str) -> Vec<GithubCredentialH
             })
         })
         .collect()
-}
-
-pub(crate) fn has_include_directive(contents: &str) -> bool {
-    contents.lines().any(|line| {
-        let trimmed = line.trim();
-        if let Some(section) = trimmed
-            .strip_prefix('[')
-            .and_then(|value| value.strip_suffix(']'))
-        {
-            let name = section
-                .split([' ', '\t', '"', '\''])
-                .next()
-                .unwrap_or_default();
-            return name.eq_ignore_ascii_case("include") || name.eq_ignore_ascii_case("includeif");
-        }
-        trimmed.split_once('=').is_some_and(|(key, _)| {
-            let key = key.trim();
-            key.eq_ignore_ascii_case("include.path")
-                || key.to_ascii_lowercase().starts_with("includeif.")
-        })
-    })
 }
 
 struct CredentialHelper<'a> {
@@ -242,6 +228,10 @@ fn credential_helper_applies_to_github(key: &str, section: GitConfigSection) -> 
     Some(credential_scope_applies_to_github(scope))
 }
 
+pub(crate) fn credential_helper_key_applies_to_github(key: &str) -> bool {
+    credential_helper_applies_to_github(key, GitConfigSection::Other).unwrap_or(false)
+}
+
 fn credential_scope_applies_to_github(scope: &str) -> bool {
     let scope = scope.trim();
     if scope.is_empty() {
@@ -260,9 +250,7 @@ fn credential_scope_applies_to_github(scope: &str) -> bool {
 }
 
 pub(crate) fn gh_auth_git_credential_executable(value: &str) -> Option<String> {
-    let Some(command) = value.trim().strip_prefix('!') else {
-        return None;
-    };
+    let command = value.trim().strip_prefix('!')?;
     let words = shell_words(command)?;
     (words.len() >= 3
         && command_name_is_gh(&words[0])
@@ -430,7 +418,7 @@ mod tests {
     }
 
     #[test]
-    fn recognizes_case_insensitive_git_config_names_and_includes() {
+    fn recognizes_case_insensitive_git_config_names() {
         assert_eq!(
             github_credential_helpers(
                 "[CrEdEnTiAl \"https://github.com\"]\nHeLpEr = !gh auth git-credential\n"
@@ -438,9 +426,5 @@ mod tests {
             .len(),
             1
         );
-        assert!(has_include_directive(
-            "[IncludeIf \"gitdir:~/src/\"]\npath = work.gitconfig\n"
-        ));
-        assert!(has_include_directive("include.path = ~/.gitconfig-extra\n"));
     }
 }

@@ -12,7 +12,7 @@ let package = Package(
         .library(name: "ApprovalCore", targets: ["ApprovalCore"]),
     ],
     dependencies: [
-        .package(url: "https://github.com/mxcl/AppUpdater.git", from: "4.1.0"),
+        .package(url: "https://github.com/mxcl/AppUpdater.git", from: "4.1.2"),
         .package(url: "https://github.com/GraphQLSwift/GraphQL.git", from: "4.2.0"),
         .package(url: "https://github.com/gonzalezreal/swift-markdown-ui", from: "2.4.1"),
     ],

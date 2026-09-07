@@ -92,7 +92,7 @@ private struct KeychainSecretValueCustodyAdapter: SecretValueCustodyAdapter {
     }
 
     func inventory() -> StoredSecretsLoad {
-        loadStoredSecretsResult()
+        loadStoredSecretsForUseResult()
     }
 
     func load(_ value: StoredSecretValue) -> StoredSecretValueLoad {

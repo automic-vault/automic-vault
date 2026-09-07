@@ -18,7 +18,9 @@ pub fn install_insecurity_reasons() -> Result<Vec<String>, String> {
 }
 
 fn wakatime_config_path() -> Result<PathBuf, String> {
-    let home = std::env::var_os("HOME")
+    let home = std::env::var_os("WAKATIME_HOME")
+        .filter(|value| !value.is_empty())
+        .or_else(|| std::env::var_os("HOME"))
         .map(PathBuf::from)
         .ok_or_else(|| "HOME is not set".to_string())?;
     Ok(home.join(".wakatime.cfg"))
@@ -63,7 +65,7 @@ fn line_has_secret(line: &str, section: &str) -> bool {
         return false;
     }
 
-    key == "api_key"
+    matches!(key.as_str(), "api_key" | "apikey" | "key")
         || (section == "project_api_key" && !key.is_empty())
         || (section == "api_urls"
             && value
@@ -85,6 +87,7 @@ mod tests {
         assert!(config_contains_api_key(
             "[api_urls]\n^/work = https://example.invalid/api/v1|fake-work-key\n"
         ));
+        assert!(config_contains_api_key("[settings]\napikey = fake-key\n"));
     }
 
     #[test]
@@ -106,8 +109,10 @@ mod tests {
         std::fs::create_dir_all(&home).unwrap();
 
         let previous_home = std::env::var_os("HOME");
+        let previous_wakatime_home = std::env::var_os("WAKATIME_HOME");
         unsafe {
             std::env::set_var("HOME", &home);
+            std::env::remove_var("WAKATIME_HOME");
         }
 
         let result = install_is_insecure().unwrap();
@@ -116,6 +121,10 @@ mod tests {
             match previous_home {
                 Some(value) => std::env::set_var("HOME", value),
                 None => std::env::remove_var("HOME"),
+            }
+            match previous_wakatime_home {
+                Some(value) => std::env::set_var("WAKATIME_HOME", value),
+                None => std::env::remove_var("WAKATIME_HOME"),
             }
         }
 
@@ -129,10 +138,22 @@ mod tests {
         let home =
             std::env::temp_dir().join(format!("wakatime-detect-home-{}", std::process::id()));
         let previous_home = std::env::var_os("HOME");
+        let previous_wakatime_home = std::env::var_os("WAKATIME_HOME");
         unsafe {
             std::env::set_var("HOME", &home);
+            std::env::remove_var("WAKATIME_HOME");
         }
         assert_eq!(wakatime_config_path().unwrap(), home.join(".wakatime.cfg"));
+        unsafe {
+            std::env::set_var("WAKATIME_HOME", home.join("custom"));
+        }
+        assert_eq!(
+            wakatime_config_path().unwrap(),
+            home.join("custom/.wakatime.cfg")
+        );
+        unsafe {
+            std::env::remove_var("WAKATIME_HOME");
+        }
         unsafe {
             std::env::remove_var("HOME");
         }
@@ -141,6 +162,10 @@ mod tests {
             match previous_home {
                 Some(value) => std::env::set_var("HOME", value),
                 None => std::env::remove_var("HOME"),
+            }
+            match previous_wakatime_home {
+                Some(value) => std::env::set_var("WAKATIME_HOME", value),
+                None => std::env::remove_var("WAKATIME_HOME"),
             }
         }
 
@@ -158,8 +183,10 @@ mod tests {
         let config = home.join(".wakatime.cfg");
         fs::write(&config, "[settings]\napi_key = fake-key\n").unwrap();
         let previous_home = std::env::var_os("HOME");
+        let previous_wakatime_home = std::env::var_os("WAKATIME_HOME");
         unsafe {
             std::env::set_var("HOME", &home);
+            std::env::remove_var("WAKATIME_HOME");
         }
 
         let reasons = install_insecurity_reasons().unwrap();
@@ -168,6 +195,10 @@ mod tests {
             match previous_home {
                 Some(value) => std::env::set_var("HOME", value),
                 None => std::env::remove_var("HOME"),
+            }
+            match previous_wakatime_home {
+                Some(value) => std::env::set_var("WAKATIME_HOME", value),
+                None => std::env::remove_var("WAKATIME_HOME"),
             }
         }
 

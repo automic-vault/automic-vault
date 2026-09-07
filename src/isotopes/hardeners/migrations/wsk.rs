@@ -70,6 +70,18 @@ fn wsk_props_path() -> Result<PathBuf, String> {
     Ok(user_home()?.join(".wskprops"))
 }
 
+pub(super) fn selected_props_have_auth() -> bool {
+    let path = match std::env::var_os("WSK_CONFIG_FILE") {
+        Some(path) => PathBuf::from(path),
+        None => match wsk_props_path() {
+            Ok(path) => path,
+            Err(_) => return false,
+        },
+    };
+    fs::read_to_string(path)
+        .is_ok_and(|contents| contents.lines().any(|line| parse_auth_line(line).is_some()))
+}
+
 fn user_home() -> Result<PathBuf, String> {
     std::env::var_os("HOME")
         .map(PathBuf::from)
@@ -295,5 +307,42 @@ mod tests {
             keychain_store_secret(KEYCHAIN_SERVICE, WHISK_AUTH_ENV_KEY, "value").unwrap_err(),
             "Automic Vault secret storage is only available on macOS"
         );
+    }
+
+    #[test]
+    fn token_routing_honors_only_the_selected_properties_file() {
+        let _lock = crate::global_test_env_lock().lock().unwrap();
+        let home = std::env::temp_dir().join(format!("wsk-routing-{}", std::process::id()));
+        let default = home.join(".wskprops");
+        let selected = home.join("selected.wskprops");
+        let previous_home = std::env::var_os("HOME");
+        let previous_config = std::env::var_os("WSK_CONFIG_FILE");
+        let _ = fs::remove_dir_all(&home);
+        fs::create_dir_all(&home).unwrap();
+        unsafe {
+            std::env::set_var("HOME", &home);
+            std::env::remove_var("WSK_CONFIG_FILE");
+        }
+
+        assert!(!selected_props_have_auth());
+        fs::write(&default, "AUTH=caller-default\n").unwrap();
+        assert!(selected_props_have_auth());
+        fs::write(&selected, "APIHOST=https://openwhisk.example\n").unwrap();
+        unsafe { std::env::set_var("WSK_CONFIG_FILE", &selected) };
+        assert!(!selected_props_have_auth());
+        fs::write(&selected, "AUTH=caller-selected\n").unwrap();
+        assert!(selected_props_have_auth());
+
+        unsafe {
+            match previous_home {
+                Some(value) => std::env::set_var("HOME", value),
+                None => std::env::remove_var("HOME"),
+            }
+            match previous_config {
+                Some(value) => std::env::set_var("WSK_CONFIG_FILE", value),
+                None => std::env::remove_var("WSK_CONFIG_FILE"),
+            }
+        }
+        fs::remove_dir_all(home).unwrap();
     }
 }

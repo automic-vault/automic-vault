@@ -133,6 +133,76 @@ import Testing
     #expect(hardener.secretGate?.routes.first?.callerIdentifiers == ["gh", "com.github.cli"])
 }
 
+@Test func dashboardHardeningJSONDecodesHardenerAndDoctorFromOneReport() throws {
+    let data = Data(#"""
+    {
+      "hardeners":[{"name":"aws","documentation":"AWS docs","hardened":true,"stub_path":"/usr/local/bin/aws","target_path":"/opt/av/aws/current/aws"}],
+      "detectors":[{"name":"aws-cli","homepage":"https://example.com","docs_url":"https://example.com/docs","documentation":"AWS detector","watch_scopes":[]}],
+      "secret_gates":[{"id":"aws","key_patterns":["AWS_ACCESS_KEY_ID"],"routes":[{"operation":"inject","script_path":null,"target_path":"/usr/local/bin/aws","caller_identifiers":["com.automicvault.av"],"key_patterns":["AWS_ACCESS_KEY_ID"],"replace_existing_env":false,"allow_missing_keys":false}]}],
+      "results":[{"name":"aws","commands":["aws"],"issues":[{"kind":"aws_update_available","command":"aws","message":"Update available","remediation":"Run `av harden aws`.","stub_path":"/usr/local/bin/aws","target_path":"/opt/av/aws/current/aws","resolved_path":null}]}]
+    }
+    """#.utf8)
+
+    let report = try dashboardHardening(from: data, loginShellPATHAvailable: false)
+
+    #expect(report.hardeners.map(\.name) == ["aws"])
+    #expect(report.detectors.map(\.name) == ["aws-cli"])
+    #expect(report.secretGates.map(\.id) == ["aws"])
+    #expect(report.doctorIssues.map(\.kind) == ["aws_update_available"])
+}
+
+@Test func dashboardHardeningLoadsThroughOneExecutableInvocation() throws {
+    let directory = temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let executable = directory.appendingPathComponent("av")
+    let invocations = directory.appendingPathComponent("invocations")
+    try #"""
+#!/bin/sh
+printf '%s\n' "$*" >> "$(dirname "$0")/invocations"
+test "$1" = '__dashboard-hardening-json' || exit 2
+printf '%s\n' '{"hardeners":[{"name":"aws","documentation":"AWS docs","hardened":true}],"detectors":[],"secret_gates":[{"id":"aws","key_patterns":["AWS_ACCESS_KEY_ID"],"routes":[{"operation":"inject","script_path":null,"target_path":"/usr/local/bin/aws","caller_identifiers":["com.automicvault.av"],"key_patterns":["AWS_ACCESS_KEY_ID"],"replace_existing_env":false,"allow_missing_keys":false}]}],"results":[]}'
+"""#.write(to: executable, atomically: true, encoding: .utf8)
+    try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
+
+    let report = loadDashboardHardening(avExecutableURL: executable)
+
+    #expect(report.hardeners.map(\.name) == ["aws"])
+    #expect(report.detectors.isEmpty)
+    #expect(report.secretGates.map(\.id) == ["aws"])
+    #expect(report.doctorIssues.isEmpty)
+    #expect(try String(contentsOf: invocations, encoding: .utf8) == "__dashboard-hardening-json\n")
+}
+
+@Test func dashboardHardeningFallsBackForOlderExecutable() throws {
+    let directory = temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let executable = directory.appendingPathComponent("av")
+    let invocations = directory.appendingPathComponent("invocations")
+    try #"""
+#!/bin/sh
+printf '%s\n' "$*" >> "$(dirname "$0")/invocations"
+case "$*" in
+  'hardeners --json') printf '%s\n' '{"hardeners":[{"name":"aws","documentation":"AWS docs","hardened":true}]}' ;;
+  'detectors --json') printf '%s\n' '{"detectors":[]}' ;;
+  '__secret-gates-json') printf '%s\n' '{"secret_gates":[{"id":"aws","key_patterns":["AWS_ACCESS_KEY_ID"],"routes":[{"operation":"inject","script_path":null,"target_path":"/usr/local/bin/aws","caller_identifiers":["com.automicvault.av"],"key_patterns":["AWS_ACCESS_KEY_ID"],"replace_existing_env":false,"allow_missing_keys":false}]}]}' ;;
+  'doctor --json') printf '%s\n' '{"results":[]}' ;;
+  *) exit 2 ;;
+esac
+"""#.write(to: executable, atomically: true, encoding: .utf8)
+    try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
+
+    let report = loadDashboardHardening(avExecutableURL: executable)
+
+    #expect(report.hardeners.map(\.name) == ["aws"])
+    #expect(report.detectors.isEmpty)
+    #expect(report.secretGates.map(\.id) == ["aws"])
+    #expect(report.doctorIssues.isEmpty)
+    #expect(
+        try String(contentsOf: invocations, encoding: .utf8)
+            == "__dashboard-hardening-json\nhardeners --json\n__secret-gates-json\ndetectors --json\ndoctor --json\n"
+    )
+}
+
 @Test func secretGateCatalogRequiresUniqueDefinitions() throws {
     let data = Data(#"{"secret_gates":[{"id":"aws","key_patterns":["AWS_ACCESS_KEY_ID"],"routes":[{"operation":"inject","script_path":null,"target_path":"/usr/local/libexec/av/aws","caller_identifiers":["com.automicvault.av"],"key_patterns":["AWS_ACCESS_KEY_ID"],"replace_existing_env":false,"allow_missing_keys":false}]}]}"#.utf8)
 
@@ -428,8 +498,99 @@ private func secretlessGateMetadata() -> HardenerMetadata {
     #expect(secretGate.protectionTitle(.fullExceptSecretDumps) == "Write Access")
 }
 
-@Test func brewGateBroadensPersistedReadOnlyPoliciesToReadAndUpdate() throws {
-    guard dataProtectionKeychainAvailable() else { return }
+@Test func targetedSecretGatePolicyReloadPreservesTheGateDefinition() throws {
+    let gate = SecretGate(
+        id: "gh",
+        keyPatterns: ["GH_TOKEN_*"],
+        routes: try #require(testGateMetadata().secretGate).routes,
+        defaultProtection: .fullIncludingSecretDumps,
+        appPolicies: [SecretGatePolicy(
+            bundleIdentifier: "com.example.app",
+            requirement: #"identifier "com.example.app""#,
+            protection: .fullIncludingSecretDumps,
+            runtimeRequirement: .hardened
+        )]
+    )
+    let refreshed = reloadSecretGatePolicy(
+        for: gate,
+        service: "com.automicvault.tests.\(UUID().uuidString)"
+    )
+
+    #expect(refreshed.id == gate.id)
+    #expect(refreshed.keyPatterns == gate.keyPatterns)
+    #expect(refreshed.routes == gate.routes)
+    #expect(refreshed.defaultProtection == .readOnly)
+    #expect(refreshed.appPolicies.isEmpty)
+}
+
+@Test func targetedAuthorizationReloadReplacesOnlyAuthorizationState() {
+    func script(_ path: String) -> BlessedScript {
+        BlessedScript(
+            path: path,
+            checksum: "checksum",
+            keys: [],
+            target: "/bin/true",
+            replaceExistingEnv: false,
+            allowMissingKeys: false,
+            capabilities: [:],
+            launchers: []
+        )
+    }
+    let oldLauncher = BlessedScriptLauncher(bundleIdentifier: "old", requirement: "old")
+    let newLauncher = BlessedScriptLauncher(bundleIdentifier: "new", requirement: "new")
+    let newScript = script("/new")
+    let oldGate = SecretGate(
+        id: "test",
+        keyPatterns: ["TOKEN"],
+        routes: [],
+        defaultProtection: .readOnly,
+        appPolicies: []
+    )
+    let snapshot = DashboardSnapshot(
+        detectors: [DetectorMetadata(name: "detector", homepage: "", docsURL: "")],
+        detectorFindings: [],
+        hardenedTools: [HardenedTool(name: "tool", targetPath: nil)],
+        secretGates: [oldGate],
+        blessedScripts: [script("/old")],
+        secretNameAccessApps: [oldLauncher],
+        secrets: [StoredSecret(account: "OLD")],
+        doctorIssues: [DoctorIssue(
+            hardener: "tool",
+            kind: "test",
+            message: "keep",
+            remediation: "keep"
+        )]
+    )
+    let newSecret = StoredSecret(
+        account: "NEW",
+        directAccessLaunchers: [newLauncher]
+    )
+    let refreshed = reloadDashboardAuthorizationState(
+        from: snapshot,
+        blessedScripts: [newScript],
+        secretNameAccessApps: [newLauncher],
+        secrets: [newSecret]
+    ) { gate in
+        SecretGate(
+            id: gate.id,
+            keyPatterns: gate.keyPatterns,
+            routes: gate.routes,
+            defaultProtection: .noAccess,
+            appPolicies: []
+        )
+    }
+
+    #expect(refreshed.detectors == snapshot.detectors)
+    #expect(refreshed.hardenedTools == snapshot.hardenedTools)
+    #expect(refreshed.doctorIssues == snapshot.doctorIssues)
+    #expect(refreshed.blessedScripts == [newScript])
+    #expect(refreshed.secretNameAccessApps == [newLauncher])
+    #expect(refreshed.secrets == [newSecret])
+    #expect(refreshed.secretGates[0].defaultProtection == .noAccess)
+}
+
+@Test(.enabled(if: dataProtectionKeychainAvailable(), "requires an entitled Keychain test host"))
+func brewGateBroadensPersistedReadOnlyPoliciesToReadAndUpdate() throws {
     let service = "com.automicvault.tests.\(UUID().uuidString)"
     let account = "policies.\(UUID().uuidString)"
     defer { _ = deleteStoredSecret(account: account, service: service) }
@@ -445,8 +606,8 @@ private func secretlessGateMetadata() -> HardenerMetadata {
     #expect(gate.appPolicies.first?.protection == .readOnlyAndUpdates)
 }
 
-@Test func newGateGetsExplicitInitialPolicy() throws {
-    guard dataProtectionKeychainAvailable() else { return }
+@Test(.enabled(if: dataProtectionKeychainAvailable(), "requires an entitled Keychain test host"))
+func newGateGetsExplicitInitialPolicy() throws {
     let service = "com.automicvault.tests.\(UUID().uuidString)"
     let account = "policies.\(UUID().uuidString)"
     defer { _ = deleteStoredSecret(account: account, service: service) }
@@ -457,8 +618,8 @@ private func secretlessGateMetadata() -> HardenerMetadata {
     #expect(keychainAccessibility(account: account, service: service) == kSecAttrAccessibleAfterFirstUnlock as String)
 }
 
-@Test func newBrewGateGetsReadOnlyAndUpdatesPolicy() throws {
-    guard dataProtectionKeychainAvailable() else { return }
+@Test(.enabled(if: dataProtectionKeychainAvailable(), "requires an entitled Keychain test host"))
+func newBrewGateGetsReadOnlyAndUpdatesPolicy() throws {
     let service = "com.automicvault.tests.\(UUID().uuidString)"
     let account = "policies.\(UUID().uuidString)"
     defer { _ = deleteStoredSecret(account: account, service: service) }
@@ -468,8 +629,8 @@ private func secretlessGateMetadata() -> HardenerMetadata {
     #expect(loadSecretGates(hardeners: [metadata], service: service, account: account).first?.defaultProtection == .readOnlyAndUpdates)
 }
 
-@Test func malformedPoliciesFailClosedAndAreNotReplaced() throws {
-    guard dataProtectionKeychainAvailable() else { return }
+@Test(.enabled(if: dataProtectionKeychainAvailable(), "requires an entitled Keychain test host"))
+func malformedPoliciesFailClosedAndAreNotReplaced() throws {
     let service = "com.automicvault.tests.\(UUID().uuidString)"
     let account = "policies.\(UUID().uuidString)"
     defer { _ = deleteStoredSecret(account: account, service: service) }
@@ -481,8 +642,8 @@ private func secretlessGateMetadata() -> HardenerMetadata {
     #expect(loadStoredSecret(account: account, service: service) == "not json")
 }
 
-@Test func secretNameAccessAppsArePersistedSortedAndRevocable() throws {
-    guard dataProtectionKeychainAvailable() else { return }
+@Test(.enabled(if: dataProtectionKeychainAvailable(), "requires an entitled Keychain test host"))
+func secretNameAccessAppsArePersistedSortedAndRevocable() throws {
     let service = "com.automicvault.tests.\(UUID().uuidString)"
     let account = "name-access.\(UUID().uuidString)"
     defer { _ = deleteStoredSecret(account: account, service: service) }
@@ -497,8 +658,8 @@ private func secretlessGateMetadata() -> HardenerMetadata {
     #expect(loadSecretNameAccessApps(service: service, account: account) == [zeta])
 }
 
-@Test func malformedSecretNameAccessPolicyFailsClosedAndIsNotReplaced() throws {
-    guard dataProtectionKeychainAvailable() else { return }
+@Test(.enabled(if: dataProtectionKeychainAvailable(), "requires an entitled Keychain test host"))
+func malformedSecretNameAccessPolicyFailsClosedAndIsNotReplaced() throws {
     let service = "com.automicvault.tests.\(UUID().uuidString)"
     let account = "name-access.\(UUID().uuidString)"
     defer { _ = deleteStoredSecret(account: account, service: service) }
@@ -571,8 +732,8 @@ private func secretlessGateMetadata() -> HardenerMetadata {
     ))
 }
 
-@Test func directAccessRulesArePersistedWithSecretsAndRevocable() throws {
-    guard dataProtectionKeychainAvailable() else { return }
+@Test(.enabled(if: dataProtectionKeychainAvailable(), "requires an entitled Keychain test host"))
+func directAccessRulesArePersistedWithSecretsAndRevocable() throws {
     let secretService = "com.automicvault.tests.secret.\(UUID().uuidString)"
     let policyService = "com.automicvault.tests.direct.\(UUID().uuidString)"
     let policyAccount = "rules"
@@ -611,8 +772,8 @@ private func secretlessGateMetadata() -> HardenerMetadata {
     #expect(loadDirectAccessRules(service: policyService, account: policyAccount).isEmpty)
 }
 
-@Test func legacyDirectAccessRulesRemainStrictlyHardened() throws {
-    guard dataProtectionKeychainAvailable() else { return }
+@Test(.enabled(if: dataProtectionKeychainAvailable(), "requires an entitled Keychain test host"))
+func legacyDirectAccessRulesRemainStrictlyHardened() throws {
     let service = "com.automicvault.tests.direct.\(UUID().uuidString)"
     let account = "rules"
     defer { _ = deleteStoredSecret(account: account, service: service) }
@@ -629,8 +790,8 @@ private func secretlessGateMetadata() -> HardenerMetadata {
     ))
 }
 
-@Test func malformedDirectAccessPolicyFailsClosedAndIsNotReplaced() throws {
-    guard dataProtectionKeychainAvailable() else { return }
+@Test(.enabled(if: dataProtectionKeychainAvailable(), "requires an entitled Keychain test host"))
+func malformedDirectAccessPolicyFailsClosedAndIsNotReplaced() throws {
     let service = "com.automicvault.tests.direct.\(UUID().uuidString)"
     let secretService = "com.automicvault.tests.secret.\(UUID().uuidString)"
     let account = "rules"
@@ -654,8 +815,8 @@ private func secretlessGateMetadata() -> HardenerMetadata {
     #expect(loadStoredSecret(account: account, service: service) == "not json")
 }
 
-@Test func deletingOrRenamingASecretRevokesDirectAccessFirst() throws {
-    guard dataProtectionKeychainAvailable() else { return }
+@Test(.enabled(if: dataProtectionKeychainAvailable(), "requires an entitled Keychain test host"))
+func deletingOrRenamingASecretRevokesDirectAccessFirst() throws {
     let secretService = "com.automicvault.tests.secret.\(UUID().uuidString)"
     let policyService = "com.automicvault.tests.direct.\(UUID().uuidString)"
     let policyAccount = "rules"
@@ -689,8 +850,8 @@ private func secretlessGateMetadata() -> HardenerMetadata {
     #expect(loadDirectAccessRules(service: policyService, account: policyAccount).isEmpty)
 }
 
-@Test func secretlessGateNormalizesLegacyFullPolicy() throws {
-    guard dataProtectionKeychainAvailable() else { return }
+@Test(.enabled(if: dataProtectionKeychainAvailable(), "requires an entitled Keychain test host"))
+func secretlessGateNormalizesLegacyFullPolicy() throws {
     let service = "com.automicvault.tests.\(UUID().uuidString)"
     let account = "policies.\(UUID().uuidString)"
     defer { _ = deleteStoredSecret(account: account, service: service) }
@@ -721,8 +882,8 @@ private func secretlessGateMetadata() -> HardenerMetadata {
     #expect(gate.defaultProtection == .readOnlyAndUpdates)
 }
 
-@Test func existingHardenedRuntimePoliciesRemainStrict() throws {
-    guard dataProtectionKeychainAvailable() else { return }
+@Test(.enabled(if: dataProtectionKeychainAvailable(), "requires an entitled Keychain test host"))
+func existingHardenedRuntimePoliciesRemainStrict() throws {
     let service = "com.automicvault.tests.\(UUID().uuidString)"
     let account = "policies.\(UUID().uuidString)"
     defer { _ = deleteStoredSecret(account: account, service: service) }
@@ -797,16 +958,40 @@ func protectionPolicyMatrix(
     #expect(gate.authorizationGateName == "npm Authorization Gate")
 }
 
-@Test func secretGatePoliciesPersistAndResolveOverrides() throws {
-    guard dataProtectionKeychainAvailable() else { return }
+@Test func secretGateDefaultPolicyLabelsVerifiedLaunchers() {
+    let gate = SecretGate(
+        id: "aws",
+        keyPatterns: [],
+        routes: [],
+        defaultProtection: .readOnly,
+        appPolicies: []
+    )
+    let overriddenGate = SecretGate(
+        id: gate.id,
+        keyPatterns: gate.keyPatterns,
+        routes: gate.routes,
+        defaultProtection: gate.defaultProtection,
+        appPolicies: [SecretGatePolicy(
+            bundleIdentifier: "com.example.app",
+            requirement: #"identifier "com.example.app""#,
+            protection: .readOnly
+        )]
+    )
+
+    #expect(gate.defaultPolicyLabel == "All Verified Launchers")
+    #expect(overriddenGate.defaultPolicyLabel == "All Other Verified Launchers")
+}
+
+@Test(.enabled(if: dataProtectionKeychainAvailable(), "requires an entitled Keychain test host"))
+func secretGatePoliciesPersistAndResolveOverrides() throws {
     let service = "com.automicvault.tests.\(UUID().uuidString)"
     let account = "policies.\(UUID().uuidString)"
     defer { _ = deleteStoredSecret(account: account, service: service) }
     let metadata = testGateMetadata()
     var gate = try #require(loadSecretGates(hardeners: [metadata], service: service, account: account).first)
     let requirement = #"identifier "com.example.app""#
-    #expect(gate.defaultPolicyLabel == "All Apps")
-    #expect(secretGateProtection(for: nil, in: gate).source == "All Apps")
+    #expect(gate.defaultPolicyLabel == "All Verified Launchers")
+    #expect(secretGateProtection(for: nil, in: gate).source == "All Verified Launchers")
 
     #expect(setSecretGateDefaultProtection(.fullExceptSecretDumps, for: gate, service: service, account: account) == errSecSuccess)
     gate = try #require(loadSecretGates(hardeners: [metadata], service: service, account: account).first)
@@ -825,7 +1010,7 @@ func protectionPolicyMatrix(
     #expect(appPolicy.protection == .noAccess)
     #expect(appPolicy.requiresHardenedRuntime)
     #expect(appPolicy.runtimeRequirement == .hardenedAllowingLibraryValidationDisabled)
-    #expect(gate.defaultPolicyLabel == "All Other Apps")
+    #expect(gate.defaultPolicyLabel == "All Other Verified Launchers")
     #expect(secretGateProtection(for: requirement, in: gate).protection == .noAccess)
     #expect(secretGateProtection(for: #"identifier "com.other.app""#, in: gate).protection == .fullExceptSecretDumps)
 
@@ -843,7 +1028,7 @@ func protectionPolicyMatrix(
     #expect(removeSecretGateAppPolicy(appPolicy, from: gate, service: service, account: account) == errSecSuccess)
     gate = try #require(loadSecretGates(hardeners: [metadata], service: service, account: account).first)
     #expect(gate.appPolicies.isEmpty)
-    #expect(gate.defaultPolicyLabel == "All Apps")
+    #expect(gate.defaultPolicyLabel == "All Verified Launchers")
     #expect(secretGateProtection(for: requirement, in: gate).protection == .fullExceptSecretDumps)
 }
 
@@ -854,8 +1039,8 @@ func protectionPolicyMatrix(
     #expect(codeSigningTeamIdentifier(from: codex) == "2DC432GLL2")
 }
 
-@Test func noAccessDefaultIsPersisted() throws {
-    guard dataProtectionKeychainAvailable() else { return }
+@Test(.enabled(if: dataProtectionKeychainAvailable(), "requires an entitled Keychain test host"))
+func noAccessDefaultIsPersisted() throws {
     let service = "com.automicvault.tests.\(UUID().uuidString)"
     let account = "policies.\(UUID().uuidString)"
     defer { _ = deleteStoredSecret(account: account, service: service) }
@@ -867,8 +1052,8 @@ func protectionPolicyMatrix(
     #expect(loadSecretGates(hardeners: [metadata], service: service, account: account).first?.defaultProtection == .noAccess)
 }
 
-@Test func storedSecretsListNamesOnlyAndDelete() throws {
-    guard dataProtectionKeychainAvailable() else { return }
+@Test(.enabled(if: dataProtectionKeychainAvailable(), "requires an entitled Keychain test host"))
+func storedSecretsListNamesOnlyAndDelete() throws {
     let service = "com.automicvault.tests.\(UUID().uuidString)"
     #expect(saveStoredSecret(account: "API_TOKEN", value: "secret", service: service) == errSecSuccess)
     defer { _ = deleteStoredSecret(account: "API_TOKEN", service: service) }
@@ -883,8 +1068,8 @@ func protectionPolicyMatrix(
     #expect(loadStoredSecrets(service: service).isEmpty)
 }
 
-@Test func storedSecretExistenceDoesNotRequireLoadingItsValue() throws {
-    guard dataProtectionKeychainAvailable() else { return }
+@Test(.enabled(if: dataProtectionKeychainAvailable(), "requires an entitled Keychain test host"))
+func storedSecretExistenceDoesNotRequireLoadingItsValue() throws {
     let service = "com.automicvault.tests.\(UUID().uuidString)"
     #expect(!storedSecretExists(account: "API_TOKEN", service: service))
     #expect(saveStoredSecret(account: "API_TOKEN", value: "secret", service: service) == errSecSuccess)
@@ -893,8 +1078,8 @@ func protectionPolicyMatrix(
     #expect(storedSecretExists(account: "API_TOKEN", service: service))
 }
 
-@Test func storedSecretsUseDataProtectionKeychain() throws {
-    guard dataProtectionKeychainAvailable() else { return }
+@Test(.enabled(if: dataProtectionKeychainAvailable(), "requires an entitled Keychain test host"))
+func storedSecretsUseDataProtectionKeychain() throws {
     let service = "com.automicvault.tests.\(UUID().uuidString)"
     #expect(saveStoredSecret(account: "API_TOKEN", value: "secret", service: service) == errSecSuccess)
     defer { _ = deleteStoredSecret(account: "API_TOKEN", service: service) }
@@ -902,8 +1087,8 @@ func protectionPolicyMatrix(
     #expect(keychainAccessibility(account: "API_TOKEN", service: service) == kSecAttrAccessibleWhenUnlocked as String)
 }
 
-@Test func touchIDApprovalOptInPersistsAndInvalidDataFailsClosed() {
-    guard dataProtectionKeychainAvailable() else { return }
+@Test(.enabled(if: dataProtectionKeychainAvailable(), "requires an entitled Keychain test host"))
+func touchIDApprovalOptInPersistsAndInvalidDataFailsClosed() {
     let service = "com.automicvault.tests.touch-id.\(UUID().uuidString)"
     let account = "TouchIDApproval"
     defer { _ = setTouchIDApprovalEnabled(false, service: service, account: account) }
@@ -917,8 +1102,8 @@ func protectionPolicyMatrix(
     #expect(!touchIDApprovalIsEnabled(service: service, account: account))
 }
 
-@Test func conditionalSecretSaveNeverReplacesDifferingValue() {
-    guard dataProtectionKeychainAvailable() else { return }
+@Test(.enabled(if: dataProtectionKeychainAvailable(), "requires an entitled Keychain test host"))
+func conditionalSecretSaveNeverReplacesDifferingValue() {
     let service = "com.automicvault.tests.conditional-save.\(UUID().uuidString)"
     let account = "TOKEN"
     defer { _ = deleteStoredSecret(account: account, service: service) }
@@ -953,8 +1138,8 @@ func protectionPolicyMatrix(
     #expect(status == errSecInteractionNotAllowed)
 }
 
-@Test func conditionalSecretSavePreservesExistingAccessibility() {
-    guard dataProtectionKeychainAvailable() else { return }
+@Test(.enabled(if: dataProtectionKeychainAvailable(), "requires an entitled Keychain test host"))
+func conditionalSecretSavePreservesExistingAccessibility() {
     let service = "com.automicvault.tests.conditional-save.\(UUID().uuidString)"
     let account = "TOKEN"
     defer { _ = deleteStoredSecret(account: account, service: service) }
@@ -969,8 +1154,8 @@ func protectionPolicyMatrix(
     #expect(keychainAccessibility(account: account, service: service) == kSecAttrAccessibleAfterFirstUnlock as String)
 }
 
-@Test func storedSecretAccessibilityCanChangeWithoutChangingValue() throws {
-    guard dataProtectionKeychainAvailable() else { return }
+@Test(.enabled(if: dataProtectionKeychainAvailable(), "requires an entitled Keychain test host"))
+func storedSecretAccessibilityCanChangeWithoutChangingValue() throws {
     let service = "com.automicvault.tests.\(UUID().uuidString)"
     defer { _ = deleteStoredSecret(account: "API_TOKEN", service: service) }
 
@@ -993,8 +1178,8 @@ func protectionPolicyMatrix(
     #expect(keychainAccessibility(account: "API_TOKEN", service: service) == kSecAttrAccessibleWhenUnlocked as String)
 }
 
-@Test func storedSecretsCanBeRenamed() throws {
-    guard dataProtectionKeychainAvailable() else { return }
+@Test(.enabled(if: dataProtectionKeychainAvailable(), "requires an entitled Keychain test host"))
+func storedSecretsCanBeRenamed() throws {
     let service = "com.automicvault.tests.\(UUID().uuidString)"
     #expect(saveStoredSecret(
         account: "OLD_TOKEN",
@@ -1010,8 +1195,8 @@ func protectionPolicyMatrix(
     #expect(loadStoredSecrets(service: service).first?.accessibility == .afterFirstUnlock)
 }
 
-@Test func projectValuesGroupUnderOneSecretNameAndSelectNearestAncestor() throws {
-    guard dataProtectionKeychainAvailable() else { return }
+@Test(.enabled(if: dataProtectionKeychainAvailable(), "requires an entitled Keychain test host"))
+func projectValuesGroupUnderOneSecretNameAndSelectNearestAncestor() throws {
     let service = "com.automicvault.tests.project-values.\(UUID().uuidString)"
     let root = FileManager.default.temporaryDirectory
         .appendingPathComponent("av-project-values-\(UUID().uuidString)", isDirectory: true)
@@ -1065,6 +1250,27 @@ func protectionPolicyMatrix(
     #expect(selected["MISSING"] == nil)
 }
 
+@Test func filesystemRootSelectionCannotResolveAProjectValue() throws {
+    let global = StoredSecretValue(
+        source: .global,
+        keychainAccount: "GLOBAL",
+        accessibility: .whenUnlocked,
+        keychainProperties: []
+    )
+    let project = StoredSecretValue(
+        source: .projectDirectory(FileManager.default.temporaryDirectory.path),
+        keychainAccount: "PROJECT",
+        accessibility: .whenUnlocked,
+        keychainProperties: []
+    )
+    let selected = try resolveStoredSecretValues(
+        names: ["TOKEN"],
+        cwd: "/",
+        secrets: [StoredSecret(account: "TOKEN", values: [project, global])]
+    )
+    #expect(selected["TOKEN"] == global)
+}
+
 @Test func projectDirectoryValidationUsesPhysicalCanonicalPathsAndRejectsRoots() throws {
     let root = FileManager.default.temporaryDirectory
         .appendingPathComponent("av-project-path-\(UUID().uuidString)", isDirectory: true)
@@ -1111,8 +1317,8 @@ func protectionPolicyMatrix(
     #expect(ancestors == ["/project", "/"])
 }
 
-@Test func multiValueAvailabilityAndRenameCompleteAsForwardOperations() throws {
-    guard dataProtectionKeychainAvailable() else { return }
+@Test(.enabled(if: dataProtectionKeychainAvailable(), "requires an entitled Keychain test host"))
+func multiValueAvailabilityAndRenameCompleteAsForwardOperations() throws {
     let service = "com.automicvault.tests.project-mutation.\(UUID().uuidString)"
     let directory = try canonicalProjectDirectory(FileManager.default.temporaryDirectory.path)
     defer {
@@ -1171,8 +1377,8 @@ func protectionPolicyMatrix(
     }
 }
 
-@Test func deletingOneValueRetainsDirectAccessUntilTheLastValueIsDeleted() throws {
-    guard dataProtectionKeychainAvailable() else { return }
+@Test(.enabled(if: dataProtectionKeychainAvailable(), "requires an entitled Keychain test host"))
+func deletingOneValueRetainsDirectAccessUntilTheLastValueIsDeleted() throws {
     let secretService = "com.automicvault.tests.project-delete.\(UUID().uuidString)"
     let policyService = "com.automicvault.tests.project-delete-policy.\(UUID().uuidString)"
     let policyAccount = "rules"
@@ -1212,8 +1418,8 @@ func protectionPolicyMatrix(
     #expect(loadDirectAccessRules(service: policyService, account: policyAccount).isEmpty)
 }
 
-@Test func malformedProjectValueAccountsFailClosed() {
-    guard dataProtectionKeychainAvailable() else { return }
+@Test(.enabled(if: dataProtectionKeychainAvailable(), "requires an entitled Keychain test host"))
+func malformedProjectValueAccountsFailClosed() {
     let service = "com.automicvault.tests.project-corruption.\(UUID().uuidString)"
     let account = "AVProjectValueV1:not-valid"
     defer { _ = deleteStoredSecretValue(secretName: account, source: .global, service: service) }
@@ -1225,29 +1431,40 @@ func protectionPolicyMatrix(
     #expect(status == errSecDecode)
 }
 
-@Test func backgroundMetadataMigratesWithoutChangingSecretAccessibility() throws {
-    guard dataProtectionKeychainAvailable() else { return }
+@Test(.enabled(if: dataProtectionKeychainAvailable(), "requires an entitled Keychain test host"))
+func backgroundMetadataMigratesWithoutChangingSecretAccessibility() throws {
     let policyService = "com.automicvault.tests.policy.\(UUID().uuidString)"
     let accessLogService = "com.automicvault.tests.log.\(UUID().uuidString)"
     let secretService = "com.automicvault.tests.secret.\(UUID().uuidString)"
+    let gpgSigningService = "com.automicvault.tests.gpg-config.\(UUID().uuidString)"
     let policyAccount = "policies"
     let accessLogAccount = "access-log"
+    let gpgSigningAccount = "configuration"
     defer { _ = deleteStoredSecret(account: policyAccount, service: policyService) }
     defer { _ = deleteStoredSecret(account: accessLogAccount, service: accessLogService) }
     defer { _ = deleteStoredSecret(account: "API_TOKEN", service: secretService) }
+    defer { _ = deleteStoredSecret(account: gpgSigningAccount, service: gpgSigningService) }
 
     #expect(saveStoredSecret(account: policyAccount, value: "[]", service: policyService) == errSecSuccess)
     #expect(saveStoredSecret(account: accessLogAccount, value: "[]", service: accessLogService) == errSecSuccess)
     #expect(saveStoredSecret(account: "API_TOKEN", value: "secret", service: secretService) == errSecSuccess)
+    #expect(saveStoredSecret(
+        account: gpgSigningAccount,
+        value: "{}",
+        service: gpgSigningService
+    ) == errSecSuccess)
 
     #expect(migrateBackgroundKeychainItems(
         policyService: policyService,
         policyAccount: policyAccount,
         accessLogService: accessLogService,
-        accessLogAccount: accessLogAccount
+        accessLogAccount: accessLogAccount,
+        gpgSigningService: gpgSigningService,
+        gpgSigningAccount: gpgSigningAccount
     ) == errSecSuccess)
     #expect(keychainAccessibility(account: policyAccount, service: policyService) == kSecAttrAccessibleAfterFirstUnlock as String)
     #expect(keychainAccessibility(account: accessLogAccount, service: accessLogService) == kSecAttrAccessibleAfterFirstUnlock as String)
+    #expect(keychainAccessibility(account: gpgSigningAccount, service: gpgSigningService) == kSecAttrAccessibleAfterFirstUnlock as String)
     #expect(keychainAccessibility(account: "API_TOKEN", service: secretService) == kSecAttrAccessibleWhenUnlocked as String)
 }
 
@@ -1308,8 +1525,8 @@ func protectionPolicyMatrix(
     #expect(restored.callerPath == "/usr/local/bin/av")
 }
 
-@Test func productionAccessRequestLogIgnoresUserDefaultsTampering() {
-    guard dataProtectionKeychainAvailable() else { return }
+@Test(.enabled(if: dataProtectionKeychainAvailable(), "requires an entitled Keychain test host"))
+func productionAccessRequestLogIgnoresUserDefaultsTampering() {
     let key = "AccessRequestLogTests-\(UUID().uuidString)"
     defer { _ = deleteStoredSecret(account: key, service: accessRequestLogKeychainService) }
     defer { UserDefaults.standard.removeObject(forKey: key) }
@@ -1369,14 +1586,14 @@ private func temporaryDirectory() -> URL {
     return url
 }
 
-private func dataProtectionKeychainAvailable() -> Bool {
+func dataProtectionKeychainAvailable() -> Bool {
     let service = "com.automicvault.tests.probe.\(UUID().uuidString)"
     let status = saveStoredSecret(account: "PROBE", value: "secret", service: service)
     defer { _ = deleteStoredSecret(account: "PROBE", service: service) }
     return status != errSecMissingEntitlement
 }
 
-private func keychainAccessibility(account: String, service: String) -> String? {
+func keychainAccessibility(account: String, service: String) -> String? {
     let query: [String: Any] = [
         kSecClass as String: kSecClassGenericPassword,
         kSecAttrService as String: service,

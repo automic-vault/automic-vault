@@ -42,8 +42,15 @@ Automic Vault decides whether a complete operation may use it.
   Write Access to one Verified Launcher, Tool-specific Authorization Gate, and
   agent task. A persistent strip shows the grant and lets the user add ten
   minutes, suspend its countdown, or end it; suspension also suspends its
-  authority.
+  authority. The user may opt to collapse the strip after five seconds to a
+  visible warning tab while the menu-bar shield remains orange.
 - Existing developer commands continue to work above the security boundary.
+- An explicitly recognized, vendor-signed CLI sealed inside its vendor's app
+  may represent that app as a Verified Launcher; unrelated bundled executables
+  do not inherit the app's authority.
+- When Automic Vault discovers signed helpers while adding an app as a Verified
+  Launcher, the user may explicitly associate selected helpers with that app
+  after reviewing the cross-gate authority warning.
 - Git can keep its ordinary commit workflow while the GPG Signing Gate
   authorizes private-key use and may select an alternate credential for exact
   Verified Launchers.
@@ -53,6 +60,8 @@ Automic Vault decides whether a complete operation may use it.
 User-facing copy must preserve these limits:
 
 - Code signing establishes software identity and integrity, not intent.
+- App Launcher verification covers the exact executable that represents the
+  Launcher, not every unrelated resource shipped in the containing app.
 - After Secret Application, the Target controls the Secret in its memory,
   helpers, child processes, and output.
 - Automic Vault does not contain root or kernel compromise, prevent arbitrary

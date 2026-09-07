@@ -20,9 +20,16 @@
 Bash startup files contain arbitrary user programs and shared environment
 configuration. Automic Vault cannot rewrite them without changing shell
 behavior or guessing which commands need each secret. Move the reported value
-with `av save KEY`, then inject it only into the command that needs it. For an
-unsafe `PATH`, move every protected system directory before the reported
-user-writable directories and remove empty or relative entries.
+with `av save KEY`, then inject it only into the command that needs it.
+
+## PATH Mitigation
+
+Version managers commonly prepend user-writable tool directories to `PATH`;
+this is expected, but those directories can still shadow later commands. Remove
+empty, relative, and unexpected entries. If the ordering is intentional, use
+absolute paths for security-sensitive commands and keep reusable secrets out of
+the shell environment with `av inject` or `av proxy`; these reduce exposure but
+do not make the `PATH` safe.
 
 ## Why This is not Yet Hardened
 

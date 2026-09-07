@@ -13,8 +13,8 @@ private let legacyGPGSecretNames = [
     ("AUTOMIC_GPG_AGENT_SIGNING_PASSPHRASE", gpgAlternatePassphraseSecretName),
 ]
 
-private let gpgSigningConfigurationService = "com.automicvault.gpg-signing-configuration"
-private let gpgSigningConfigurationAccount = "configuration"
+public let gpgSigningConfigurationService = "com.automicvault.gpg-signing-configuration"
+public let gpgSigningConfigurationAccount = "configuration"
 
 public struct GPGSigningConfiguration: Codable, Equatable, Sendable {
     public var alternateKeyLaunchers: [BlessedScriptLauncher]
@@ -60,7 +60,7 @@ func saveGPGSigningConfiguration(
         data,
         service: service,
         account: account,
-        accessibility: .whenUnlocked
+        accessibility: .afterFirstUnlock
     )
 }
 

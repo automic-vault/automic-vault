@@ -22,9 +22,13 @@ the launcher is upgraded.
 
 ## Decision
 
-The AWS Hardener downloads only AWS's fixed HTTPS package URL with redirects
-disabled and a strict size limit. The privileged phase copies the package
-through `O_NOFOLLOW`, rechecks its SHA-256, and verifies all of these claims:
+The AWS Hardener reads recent versions from AWS CLI's upstream changelog,
+selects the newest version whose macOS package is published, and downloads only
+that version's HTTPS package URL with redirects disabled and a strict size
+limit. The requested version crosses the privileged boundary with the package
+digest. The privileged phase copies the package through
+`O_NOFOLLOW`, rechecks its SHA-256, requires the signed package version to match,
+and verifies all of these claims:
 
 - Apple accepts the installer package and its notarization;
 - the package has a trusted timestamp and AWS team `94KV3E626L` as Developer ID

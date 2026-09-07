@@ -17,6 +17,14 @@ const TAP_FORMULA_ROOT: &str =
     "https://raw.githubusercontent.com/automic-vault/homebrew-isotopes/main/Formula";
 const MAX_ARCHIVE_BYTES: u64 = 128 * 1024 * 1024;
 
+pub(crate) const WRANGLER: Spec = Spec {
+    hardener: "wrangler",
+    formula: "wrangler-isotope",
+    repository: "wrangler",
+    primary: "wrangler",
+    binaries: &["wrangler"],
+    test_path: "AUTOMIC_VAULT_TEST_WRANGLER_TARGET",
+};
 pub(crate) const GH: Spec = Spec {
     hardener: "gh",
     formula: "gh-cli",
@@ -56,6 +64,22 @@ pub(crate) const OXIDE: Spec = Spec {
     primary: "oxide",
     binaries: &["oxide"],
     test_path: "AUTOMIC_VAULT_TEST_OXIDE_TARGET",
+};
+pub(crate) const FASTLY: Spec = Spec {
+    hardener: "fastly-cli",
+    formula: "fastly-cli-isotope",
+    repository: "fastly-cli",
+    primary: "fastly",
+    binaries: &["fastly"],
+    test_path: "AUTOMIC_VAULT_TEST_FASTLY_TARGET",
+};
+pub(crate) const SQLCMD: Spec = Spec {
+    hardener: "sqlcmd",
+    formula: "sqlcmd-isotope",
+    repository: "go-sqlcmd",
+    primary: "sqlcmd",
+    binaries: &["sqlcmd"],
+    test_path: "AUTOMIC_VAULT_TEST_SQLCMD_TARGET",
 };
 pub(crate) const GOAT: Spec = Spec {
     hardener: "goat",
@@ -104,6 +128,38 @@ pub(crate) const PLUMBER: Spec = Spec {
     primary: "plumber",
     binaries: &["plumber"],
     test_path: "AUTOMIC_VAULT_TEST_PLUMBER_TARGET",
+};
+pub(crate) const ALIYUN: Spec = Spec {
+    hardener: "aliyun-cli",
+    formula: "aliyun-cli-isotope",
+    repository: "aliyun-cli",
+    primary: "aliyun",
+    binaries: &["aliyun"],
+    test_path: "AUTOMIC_VAULT_TEST_ALIYUN_TARGET",
+};
+pub(crate) const WAKATIME: Spec = Spec {
+    hardener: "wakatime-cli",
+    formula: "wakatime-cli-isotope",
+    repository: "wakatime-cli",
+    primary: "wakatime-cli",
+    binaries: &["wakatime-cli"],
+    test_path: "AUTOMIC_VAULT_TEST_WAKATIME_TARGET",
+};
+pub(crate) const RCLONE: Spec = Spec {
+    hardener: "rclone",
+    formula: "rclone-isotope",
+    repository: "rclone",
+    primary: "rclone",
+    binaries: &["rclone"],
+    test_path: "AUTOMIC_VAULT_TEST_RCLONE_TARGET",
+};
+pub(crate) const KUBECTL: Spec = Spec {
+    hardener: "kubectl",
+    formula: "kubectl-isotope",
+    repository: "kubectl",
+    primary: "kubectl",
+    binaries: &["kubectl"],
+    test_path: "AUTOMIC_VAULT_TEST_KUBECTL_TARGET",
 };
 
 #[derive(Clone, Copy)]
@@ -189,6 +245,14 @@ pub(crate) fn plan(spec: Spec) -> Result<InstallPlan, String> {
             let manifest = current_manifest(spec)?;
             let current = fs::read_to_string(receipt_path(spec)).ok();
             if current.as_deref().map(str::trim) != Some(manifest.sha256.as_str()) {
+                if spec.hardener == WRANGLER.hardener
+                    && let Some(brew) = brew_path()
+                {
+                    return Ok(InstallPlan::Homebrew {
+                        brew,
+                        conflict: conflicting_formula(spec),
+                    });
+                }
                 return Ok(InstallPlan::Direct {
                     manifest,
                     update: true,
@@ -213,6 +277,9 @@ pub(crate) fn target(spec: Spec) -> PathBuf {
     if let Some(path) = crate::test_env_var(spec.test_path) {
         return path.into();
     }
+    if spec.hardener == WRANGLER.hardener {
+        return super::wrangler::TARGET.into();
+    }
     brew_path()
         .map(|_| brew_target(spec))
         .unwrap_or_else(|| direct_target(spec))
@@ -225,7 +292,11 @@ pub(crate) fn detect(spec: Spec) -> HardenerDetection {
     let mut detection =
         HardenerDetection::command(exists, spec.primary, Some(target_text.clone()), target_text);
     detection.commands[0].isotope = Some(Doctor {
-        identifier: spec.primary,
+        identifier: if spec.hardener == WRANGLER.hardener {
+            "com.automicvault.wrangler"
+        } else {
+            spec.primary
+        },
         formula_url: formula_url(spec),
         repository: spec.repository,
         receipt_path: is_direct_target(spec, &target)
@@ -266,6 +337,9 @@ pub(crate) fn install_privileged(
     sha256: &str,
     archive: &Path,
 ) -> Result<(), String> {
+    if hardener == WRANGLER.hardener {
+        return super::wrangler::install_privileged(sha256, archive);
+    }
     let spec = spec(hardener).ok_or_else(|| format!("unknown isotope `{hardener}`"))?;
     if crate::test_env_var("AUTOMIC_VAULT_TEST_ISOTOPE_DIRECT_DIR").is_none()
         && super::effective_uid() != 0
@@ -313,6 +387,10 @@ pub(crate) fn install_privileged(
         }
         if spec.hardener == OXIDE.hardener {
             super::oxide_cli::verify_target(&stage)?;
+        } else if spec.hardener == FASTLY.hardener {
+            super::fastly_cli::verify_target(&stage)?;
+        } else if spec.hardener == SQLCMD.hardener {
+            super::sqlcmd::verify_target(&stage)?;
         }
         if spec.hardener == GOAT.hardener {
             super::goat::verify_target(&stage)?;
@@ -331,6 +409,15 @@ pub(crate) fn install_privileged(
         }
         if spec.hardener == PLUMBER.hardener {
             super::plumber::verify_target(&stage)?;
+        }
+        if spec.hardener == WAKATIME.hardener {
+            super::wakatime_cli::verify_target(&stage)?;
+        }
+        if spec.hardener == RCLONE.hardener {
+            super::rclone::verify_target(&stage)?;
+        }
+        if spec.hardener == KUBECTL.hardener {
+            super::kubectl::verify_target(&stage)?;
         }
         staged.push((stage, bin_dir.join(binary)));
     }
@@ -393,6 +480,9 @@ fn install_and_verify_with_homebrew(spec: Spec, brew: &Path) -> Result<(), Strin
     if !status.success() {
         return Err(format!("Homebrew isotope installation failed: {status}"));
     }
+    if spec.hardener == WRANGLER.hardener {
+        return install_direct(spec, &current_manifest(spec)?);
+    }
     let target = target(spec);
     if !executable(&target) || !signature_valid(&target, spec.primary) {
         return Err(format!(
@@ -422,7 +512,15 @@ fn restore_homebrew_conflict(spec: Spec, brew: &Path, conflict: &str) -> Result<
 fn install_direct(spec: Spec, manifest: &Manifest) -> Result<(), String> {
     let temporary = TemporaryDirectory::new(spec.hardener)?;
     let archive = temporary.path.join("isotope.tgz");
-    download(&manifest.url, &archive)?;
+    download(
+        &manifest.url,
+        &archive,
+        if spec.hardener == WRANGLER.hardener {
+            super::wrangler::MAX_ARCHIVE_BYTES
+        } else {
+            MAX_ARCHIVE_BYTES
+        },
+    )?;
     let actual = sha256_file(&archive)?;
     if actual != manifest.sha256 {
         return Err(format!(
@@ -456,6 +554,9 @@ fn extract_and_verify(
     archive: &Path,
     destination: &Path,
 ) -> Result<Vec<PathBuf>, String> {
+    if spec.hardener == WRANGLER.hardener {
+        return super::wrangler::extract_and_verify(archive, destination).map(|path| vec![path]);
+    }
     let expected = spec
         .binaries
         .iter()
@@ -556,8 +657,8 @@ fn fetch(url: &str, timeout: u32) -> Result<String, String> {
         .map_err(|err| format!("failed to read {url}: {err}"))
 }
 
-fn download(url: &str, destination: &Path) -> Result<(), String> {
-    let mut body = get(url, 120)?.into_reader().take(MAX_ARCHIVE_BYTES + 1);
+fn download(url: &str, destination: &Path, limit: u64) -> Result<(), String> {
+    let mut body = get(url, 120)?.into_reader().take(limit + 1);
     let mut output = OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -566,8 +667,10 @@ fn download(url: &str, destination: &Path) -> Result<(), String> {
         .map_err(|err| format!("failed to create {}: {err}", destination.display()))?;
     let size = io::copy(&mut body, &mut output)
         .map_err(|err| format!("failed to download {url}: {err}"))?;
-    if size > MAX_ARCHIVE_BYTES {
-        return Err("refusing an isotope archive larger than 128 MiB".into());
+    if size > limit {
+        return Err(format!(
+            "refusing an isotope archive larger than {limit} bytes"
+        ));
     }
     output
         .sync_all()
@@ -653,16 +756,21 @@ fn conflicting_formula(spec: Spec) -> Option<String> {
         return crate::test_env_string("AUTOMIC_VAULT_TEST_ISOTOPE_CONFLICT")
             .filter(|formula| !formula.is_empty());
     }
+    let conflict = if spec.hardener == KUBECTL.hardener {
+        "kubernetes-cli"
+    } else {
+        spec.hardener
+    };
     ["/opt/homebrew/opt", "/usr/local/opt"]
         .map(|root| {
             Path::new(root)
-                .join(spec.hardener)
+                .join(conflict)
                 .join("bin")
                 .join(spec.primary)
         })
         .into_iter()
         .any(|path| executable(&path))
-        .then(|| spec.hardener.to_string())
+        .then(|| conflict.to_string())
 }
 
 fn direct_target(spec: Spec) -> PathBuf {
@@ -682,17 +790,21 @@ fn direct_receipt_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("/usr/local/share/automic-vault/isotopes"))
 }
 
-fn receipt_path(spec: Spec) -> PathBuf {
+pub(super) fn receipt_path(spec: Spec) -> PathBuf {
     direct_receipt_dir().join(format!("{}.sha256", spec.formula))
 }
 
 fn is_direct_target(spec: Spec, path: &Path) -> bool {
     path == direct_target(spec)
+        || (spec.hardener == WRANGLER.hardener && path == Path::new(super::wrangler::TARGET))
 }
 
 fn installed(spec: Spec, path: &Path) -> bool {
     if crate::test_env_var(spec.test_path).is_some() {
         return path.exists();
+    }
+    if spec.hardener == WRANGLER.hardener {
+        return super::wrangler::verify_installed().is_ok();
     }
     if !executable(path) {
         return false;
@@ -702,6 +814,12 @@ fn installed(spec: Spec, path: &Path) -> bool {
     }
     if spec.hardener == OXIDE.hardener {
         return super::oxide_cli::verify_target(path).is_ok();
+    }
+    if spec.hardener == FASTLY.hardener {
+        return super::fastly_cli::verify_target(path).is_ok();
+    }
+    if spec.hardener == SQLCMD.hardener {
+        return super::sqlcmd::verify_target(path).is_ok();
     }
     if spec.hardener == GOAT.hardener {
         return super::goat::verify_target(path).is_ok();
@@ -721,6 +839,18 @@ fn installed(spec: Spec, path: &Path) -> bool {
     if spec.hardener == PLUMBER.hardener {
         return super::plumber::verify_target(path).is_ok();
     }
+    if spec.hardener == ALIYUN.hardener {
+        return super::aliyun_cli::verify_target(path).is_ok();
+    }
+    if spec.hardener == WAKATIME.hardener {
+        return super::wakatime_cli::verify_target(path).is_ok();
+    }
+    if spec.hardener == RCLONE.hardener {
+        return super::rclone::verify_target(path).is_ok();
+    }
+    if spec.hardener == KUBECTL.hardener {
+        return super::kubectl::verify_target(path).is_ok();
+    }
     true
 }
 
@@ -730,7 +860,8 @@ fn formula_url(spec: Spec) -> String {
 
 fn spec(hardener: &str) -> Option<Spec> {
     [
-        GH, STRIPE, SUPABASE, OPENTOFU, OXIDE, GOAT, RAILWAY, ORDERCLI, OPENHUE, UAA, PLUMBER,
+        WRANGLER, GH, STRIPE, SUPABASE, OPENTOFU, OXIDE, FASTLY, GOAT, RAILWAY, ORDERCLI, OPENHUE,
+        UAA, PLUMBER, ALIYUN, WAKATIME, RCLONE, KUBECTL, SQLCMD,
     ]
     .into_iter()
     .find(|spec| spec.hardener == hardener)
@@ -791,8 +922,8 @@ pub(crate) fn copy_new(source: &Path, destination: &Path) -> Result<(), String> 
         .map_err(|err| format!("failed to sync {}: {err}", destination.display()))
 }
 
-struct TemporaryDirectory {
-    path: PathBuf,
+pub(super) struct TemporaryDirectory {
+    pub(super) path: PathBuf,
 }
 
 impl TemporaryDirectory {
@@ -800,7 +931,7 @@ impl TemporaryDirectory {
         Self::new_in(&std::env::temp_dir(), label)
     }
 
-    fn new_in(parent: &Path, label: &str) -> Result<Self, String> {
+    pub(super) fn new_in(parent: &Path, label: &str) -> Result<Self, String> {
         let path = parent.join(format!(
             "av-isotope-{label}-{}-{}",
             std::process::id(),
@@ -838,7 +969,8 @@ mod tests {
     #[test]
     fn every_executable_isotope_is_registered_for_direct_fallback() {
         for expected in [
-            OPENTOFU, OXIDE, GOAT, RAILWAY, ORDERCLI, OPENHUE, UAA, PLUMBER,
+            OPENTOFU, OXIDE, FASTLY, GOAT, RAILWAY, ORDERCLI, OPENHUE, UAA, PLUMBER, WAKATIME,
+            RCLONE, SQLCMD,
         ] {
             assert_eq!(
                 spec(expected.hardener).map(|value| value.hardener),
@@ -852,12 +984,16 @@ mod tests {
         for (isotope, formula, repository) in [
             (OPENTOFU, "opentofu-isotope", "opentofu"),
             (OXIDE, "oxide-cli-isotope", "oxide.rs"),
+            (FASTLY, "fastly-cli-isotope", "fastly-cli"),
             (GOAT, "goat-isotope", "goat"),
             (RAILWAY, "railway-isotope", "railway-cli"),
             (ORDERCLI, "ordercli-isotope", "ordercli"),
             (UAA, "uaa-cli-isotope", "uaa-cli"),
             (OPENHUE, "openhue-cli-isotope", "openhue-cli"),
             (PLUMBER, "plumber-isotope", "plumber"),
+            (WAKATIME, "wakatime-cli-isotope", "wakatime-cli"),
+            (RCLONE, "rclone-isotope", "rclone"),
+            (SQLCMD, "sqlcmd-isotope", "go-sqlcmd"),
         ] {
             assert_eq!(isotope.formula, formula);
             assert_eq!(isotope.repository, repository);
@@ -875,7 +1011,8 @@ mod tests {
             std::env::set_var("AUTOMIC_VAULT_TEST_ISOTOPE_BREW_PATH", "/test/bin/brew");
         }
         for isotope in [
-            GH, STRIPE, SUPABASE, OPENTOFU, OXIDE, GOAT, RAILWAY, ORDERCLI, OPENHUE, UAA, PLUMBER,
+            GH, STRIPE, SUPABASE, OPENTOFU, OXIDE, FASTLY, GOAT, RAILWAY, ORDERCLI, OPENHUE, UAA,
+            PLUMBER, WAKATIME, RCLONE, SQLCMD,
         ] {
             let missing =
                 std::env::temp_dir().join(format!("av-test-missing-{}-isotope", isotope.hardener));
@@ -927,6 +1064,57 @@ sha256 "29e7f73c54cc1c278b7431bc04d581b468ca033d1782c39c87034515ae5d7070""#,
             std::env::remove_var("AUTOMIC_VAULT_TEST_ISOTOPE_BREW_PATH");
             std::env::remove_var("AUTOMIC_VAULT_TEST_ISOTOPE_FORMULA");
         }
+    }
+
+    #[test]
+    fn wrangler_receipt_updates_preserve_homebrew_selection() {
+        let _guard = crate::global_test_env_lock().lock().unwrap();
+        let directory = TemporaryDirectory::new("wrangler-plan").unwrap();
+        let target = directory.path.join("wrangler");
+        fs::write(&target, "installed").unwrap();
+        let digest = "a".repeat(64);
+        let formula = format!(
+            "url \"https://github.com/automic-vault/wrangler/releases/download/v4.129.0/cli-4.129.0.tgz\"\nsha256 \"{digest}\""
+        );
+        let variables = [
+            (WRANGLER.test_path, target.as_os_str()),
+            (
+                "AUTOMIC_VAULT_TEST_ISOTOPE_DIRECT_DIR",
+                directory.path.as_os_str(),
+            ),
+            (
+                "AUTOMIC_VAULT_TEST_ISOTOPE_BREW_PATH",
+                std::ffi::OsStr::new("/test/brew"),
+            ),
+            (
+                "AUTOMIC_VAULT_TEST_ISOTOPE_FORMULA",
+                std::ffi::OsStr::new(&formula),
+            ),
+            (
+                "AUTOMIC_VAULT_TEST_ISOTOPE_CONFLICT",
+                std::ffi::OsStr::new("upstream-wrangler"),
+            ),
+        ];
+        for (key, value) in variables {
+            unsafe {
+                std::env::set_var(key, value);
+            }
+        }
+        let receipt = receipt_path(WRANGLER);
+        fs::create_dir_all(receipt.parent().unwrap()).unwrap();
+        fs::write(&receipt, "old-digest").unwrap();
+        let update = plan(WRANGLER);
+        fs::write(&receipt, format!("{digest}\n")).unwrap();
+        let current = plan(WRANGLER);
+        for (key, _) in variables {
+            unsafe {
+                std::env::remove_var(key);
+            }
+        }
+        assert!(
+            matches!(update, Ok(InstallPlan::Homebrew { conflict: Some(conflict), .. }) if conflict == "upstream-wrangler")
+        );
+        assert!(matches!(current, Ok(InstallPlan::Ready)));
     }
 
     #[test]

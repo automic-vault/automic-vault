@@ -222,12 +222,34 @@ import Testing
     #expect(rows == [
         "--- Blessed",
         "+++ Current",
+        "@@ -1,4 +1,5 @@",
         "  one",
         "- two",
         "+ changed",
         "  three",
         "+ four",
         "  ",
+    ])
+}
+
+@Test func blessedScriptDiffLimitsUnchangedContext() {
+    let previous = (1...20).map { "line \($0)" }.joined(separator: "\n")
+    let current = previous.replacingOccurrences(of: "line 10", with: "changed 10")
+
+    let rows = blessedScriptDiff(previous: Data(previous.utf8), current: Data(current.utf8))
+
+    #expect(rows == [
+        "--- Blessed",
+        "+++ Current",
+        "@@ -7,7 +7,7 @@",
+        "  line 7",
+        "  line 8",
+        "  line 9",
+        "- line 10",
+        "+ changed 10",
+        "  line 11",
+        "  line 12",
+        "  line 13",
     ])
 }
 
@@ -362,4 +384,69 @@ func malformedBlessedScriptManifestsFailClosed(_ source: String) {
     } catch {
         #expect(error.localizedDescription == "invalid av inject shebang")
     }
+}
+
+@Test func blessedScriptNarrowedPolicyExplanationIdentifiesMissingCapability() {
+    let script = BlessedScript(
+        path: "/tmp/deploy.sh",
+        checksum: "checksum",
+        keys: [],
+        target: "/bin/sh",
+        replaceExistingEnv: false,
+        allowMissingKeys: false,
+        capabilities: ["aws": .fullExceptSecretDumps],
+        launchers: []
+    )
+
+    let explanation = activeBlessedScriptPromptExplanation(
+        script: script,
+        gateID: "gpg-signing",
+        launcherAllowsOperation: true
+    )
+    #expect(explanation == "The Blessed Script’s declared Capabilities narrow gate policy for this execution and lack a gpg-signing Capability. Approval applies only to this request.")
+}
+
+@Test func blessedScriptNarrowedPolicyExplanationIdentifiesExceededCapability() {
+    let script = BlessedScript(
+        path: "/tmp/deploy.sh",
+        checksum: "checksum",
+        keys: [],
+        target: "/bin/sh",
+        replaceExistingEnv: false,
+        allowMissingKeys: false,
+        capabilities: ["gh": .readOnly],
+        launchers: []
+    )
+
+    let explanation = activeBlessedScriptPromptExplanation(
+        script: script,
+        gateID: "gh",
+        launcherAllowsOperation: true
+    )
+    #expect(explanation == "The Blessed Script’s declared Capabilities narrow gate policy for this execution and exceed the declared gh Capability. Approval applies only to this request.")
+}
+
+@Test func blessedScriptNarrowedPolicyExplanationFallsBackWhenLauncherDoesNotAllow() {
+    let script = BlessedScript(
+        path: "/tmp/deploy.sh",
+        checksum: "checksum",
+        keys: [],
+        target: "/bin/sh",
+        replaceExistingEnv: false,
+        allowMissingKeys: false,
+        capabilities: ["aws": .fullExceptSecretDumps],
+        launchers: []
+    )
+
+    #expect(activeBlessedScriptPromptExplanation(
+        script: script,
+        gateID: "gpg-signing",
+        launcherAllowsOperation: false
+    ) == "This request exceeds the stored authority. Approval applies only to this request.")
+
+    #expect(activeBlessedScriptPromptExplanation(
+        script: script,
+        gateID: nil,
+        launcherAllowsOperation: true
+    ) == "This request exceeds the stored authority. Approval applies only to this request.")
 }
