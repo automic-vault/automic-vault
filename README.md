@@ -279,6 +279,7 @@ intercept every process execution. Keep your terminal and agent harness's
 
 - [User manual][user manual]
 - [Documentation index](docs/index.md)
+- [Choosing a Mechanism](docs/choosing-a-mechanism.md)
 - [Domain language](docs/domain-language.md), [architecture](docs/architecture.md), and [positioning](docs/positioning.md)
 - [Architecture decisions](docs/adr/)
 - [Homebrew tap](https://github.com/automic-vault/homebrew-isotopes)

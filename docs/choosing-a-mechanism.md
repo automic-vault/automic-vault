@@ -15,24 +15,26 @@ term used here.
 | Your situation | Use | Why |
 | --- | --- | --- |
 | "What on this machine could leak a credential?" | `av scan` (**Detectors**) | Read-only audit of supported Exposures and Hazards. Produces Findings with mitigations; changes nothing. |
-| "I want to protect a tool I already use (`gh`, `aws`, `docker`, etc.)" | `av harden <tool>` (**Hardened Tools**) | Moves a supported Tool into **Hardened State**. This is almost always the right first move for a supported tool. Hardened State isn't itself a safety guarantee, and it's a separate mechanism from the Tool's **Authorization Gate**: the Gate holds the static policy, and runtime authorization checks against it live. See [Domain Language](domain-language.md#hardener-and-hardening). |
+| "I want to protect a tool I already use (`gh`, `aws`, `docker`, etc.)" | `av harden <tool>` (**Hardened Tools**) | Moves a supported Tool into **Hardened State**. This is almost always the right first move for a supported tool. Hardened State isn't itself a safety guarantee, and it's a separate mechanism from the Tool's **Authorization Gate**: Automic Vault defines the Gate statically; the Gate owns a durable Authorization Policy, and runtime authorization evaluates live requests against it. See [Domain Language](domain-language.md#hardener-and-hardening). |
 | "Did hardening actually take effect?" | **Doctor** | Verifies Automic Vault's own installed protections (identity, ownership, permissions, content manifest, command resolution). Different from Detectors, which look at your environment, not Automic Vault's work. |
 | "I have a one-off script that does reviewed work and then exits" | **Bless** it (`av bless`) | Binds a Blessing to the script's canonical path, exact contents, and complete Script Declaration. Editing the script invalidates it, so review stays current. A multi-step task can still fit this: a reentrant Blessed Script does one step, exits, and picks up where it left off on the next invocation. |
 | "I have a long-running process or agent that repeatedly calls a supported tool" | **Hardened Tool** + Authorization Gate policy, not a Blessing | Blessed Scripts (reentrant or not) still work by exiting between steps; a Tool Authorization Gate's Access Level policy is the right control for something that stays running continuously, not just bounded step by step. |
 | "My app reads a secret from an env var at startup, and its HTTP client can use a supplied proxy and CA (Node 24+ with `--use-env-proxy`, or another compatible client)" | **Secret Proxy** (`av proxy`) | The app gets a random Secret Reference instead of the real value. No raw Secret value ever lands in the launched Target's environment; the proxy applies the real value only to approved outbound HTTP destinations. The Secret Reference and Proxy Credential are still bearer values for that session, not a guarantee the app can't request Secret Application at all. |
-| "I need a secret directly via `av inject` and none of the above fits" | **Direct Secret Access** | Broadest and least preferred option: it grants one Launcher access to one Secret Name across any Target and arguments it chooses, and that Target receives and controls the Secret. It does not authorize the separate Secret Disclosure operation, listing Secret Names, or Secret mutation. Prefer hardening, blessing, or the proxy first, see [Direct Secret Access](direct-secret-access.md#safer-alternatives). |
+| "I need a secret directly via `av inject` and none of the above fits" | **Direct Secret Access** | Broadest and least preferred option: it grants one Verified Launcher access to one Secret Name across any Target and arguments it chooses, and that Target receives and controls the Secret. It does not authorize the separate Secret Disclosure operation, listing Secret Names, or Secret mutation. Prefer hardening, blessing, or the proxy first, see [Direct Secret Access](direct-secret-access.md#safer-alternatives). |
 | "I have a single-file unsigned Mach-O CLI executable, so Automic Vault won't treat it as a Verified Launcher" | **Launcher Bundle** | Wraps the unsigned executable so macOS (and Automic Vault) can verify its identity. It's an identity artifact, not a gate or a grant of authority by itself. Scripts and directory-shaped tools aren't supported, see [Signed CLI Launchers](signed-cli-launchers.md). |
 | "What has Automic Vault allowed or denied recently?" | **Authorization History** | Local, bounded log of Authorization Requests and Decisions. Not tamper-proof or a complete audit trail. |
-| "An eligible agent task needs write access to an already-hardened tool for a few minutes, not a standing rule" | **Temporary Access Grant** | Offered inline in an Approval prompt for eligible agent tasks (Codex, Claude Code): ten active minutes of Write Access scoped to one Tool-specific gate, Verified Launcher, and runtime posture. It's not general secret access; the Direct Secret Gate, Secret mutation, Elevated Secret Application, Secret Disclosure, Unknown operations, and unverifiable Launchers stay excluded. |
+| "An eligible agent task needs write access to an already-hardened tool for a few minutes, not a standing rule" | **Temporary Access Grant** | Offered inline in an Approval prompt for eligible agent tasks (Codex, Claude Code): an initial ten active minutes of Write Access for one exact Tool-specific Authorization Gate, Verified Launcher, accepted runtime posture, and Agent Task Context. The user can add ten minutes, suspend the countdown, or end the grant. The grant excludes the Direct Secret Gate, Secret mutation, Elevated Secret Application, Secret Disclosure, Unknown operations, and unverifiable Launchers. |
 
 ## The two axes that matter
 
 Most of the confusion is really two separate questions:
 
-1. **Does this code already have a verifiable identity?** A signed app or an
-   official vendor binary does. An unsigned, compiled single-file CLI you
-   downloaded does not, and needs a **Launcher Bundle** before it can become
-   a Verified Launcher at all. A script is different: Automic Vault doesn't
+1. **Does this code already have a verifiable identity?** A signed app or
+   official vendor binary may already have one. It becomes a Verified Launcher
+   only when its code signature, designated requirement, and runtime protections
+   meet the gate's eligibility rules. An unsigned, single-file Mach-O CLI does
+   not, and needs a **Launcher Bundle** before it can become a Verified Launcher
+   at all. A script is different: Automic Vault doesn't
    support wrapping scripts in a Launcher Bundle at all, so a script gets its
    authority from a **Blessing** instead. A Blessing binds to the script's
    canonical path, exact contents, and complete Script Declaration; a
@@ -46,12 +48,12 @@ Most of the confusion is really two separate questions:
    Authorization Gate instead, so policy governs each call, not a one-time
    content match.
 
-Identity and duration are independent: you can have a signed app (no bundle
-needed) running long-lived (gate, not blessing), or a reviewed script (never
-needs a bundle, since bundles don't apply to scripts) that exits after one
-run (blessing, not gate). An unsigned compiled CLI always needs a Launcher
-Bundle first, whether it exits after one run or stays running — bundle
-identity and blessing/gate authority are separate questions.
+Identity and duration are independent: you can have an eligible signed app (no
+bundle needed) running long-lived (gate, not blessing), or a reviewed script
+(never needs a bundle, since bundles don't apply to scripts) that exits after
+one run (blessing, not gate). A supported unsigned, single-file Mach-O CLI needs
+a Launcher Bundle first, whether it exits after one run or stays running —
+bundle identity and blessing/gate authority are separate questions.
 
 ## Typical end-to-end flow
 
