@@ -30,8 +30,13 @@ public func saveSSHAgentConfiguration(_ config: SSHAgentConfiguration) -> OSStat
                            account: "configuration", accessibility: .afterFirstUnlock)
 }
 
-public func sshAgentSocketURL(home: URL = FileManager.default.homeDirectoryForCurrentUser) -> URL {
-    home.appendingPathComponent(".automic-vault-ssh/agent.sock")
+public func sshAgentSocketURL(
+    home: URL = FileManager.default.homeDirectoryForCurrentUser,
+    xdgDataHome: String? = ProcessInfo.processInfo.environment["XDG_DATA_HOME"]
+) -> URL {
+    let directory = xdgDataHome.flatMap { $0.hasPrefix("/") ? URL(fileURLWithPath: $0) : nil }
+        ?? home.appendingPathComponent(".local/share")
+    return directory.appendingPathComponent("automic-vault/ssh-agent.sock")
 }
 
 public func validSSHSigningArguments(_ arguments: [String]) -> Bool {
