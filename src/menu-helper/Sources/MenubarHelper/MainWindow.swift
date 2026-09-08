@@ -2231,6 +2231,10 @@ private struct DashboardDetailView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                 } else if model.selectedItem?.id == "ssh-agent" {
                     SSHAgentSettingsView(onCredentialSaved: model.reload, onOpenGate: { model.showSecretGate(id: "ssh-agent") })
+                        .padding(.horizontal, 22)
+                        .padding(.top, 32)
+                        .padding(.bottom, 28)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 } else if model.selectedItem?.id == "gpg-signing" {
                     GPGSigningSettingsView(onCredentialSaved: model.reload)
                         .padding(.horizontal, 22)
