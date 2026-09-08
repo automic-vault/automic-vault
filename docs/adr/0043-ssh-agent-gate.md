@@ -47,6 +47,12 @@ its parent from gaining a different Launcher's authority by executing an
 allow-listed app after preparing a request. Kernels that cannot provide original
 parent execution versions leave the feature unavailable; Settings explains this.
 The long-running helper never supplies Launcher attribution.
+A root-owned `/usr/bin/login` may be traversed as a system relay, because Terminal
+uses it to start the user's shell. Both original execution links must verify, the
+live relay must satisfy `anchor apple and identifier com.apple.login`, and its
+parent must have the child's UID and audit session. The relay supplies no Launcher
+authority. Its PID version comes from kernel process information when its audit
+token is inaccessible; the relay's unknown audit session is not used for attribution.
 A Verified Launcher is required even for manual Approval. The signing Target
 remains the signed `av` helper, which alone receives usable credential bytes.
 The peer and Keychain configuration are rechecked before release. Each use must

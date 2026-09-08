@@ -161,7 +161,9 @@ The optional SSH Agent Gate uses a Unix socket served by the bundled signed
 over authenticated XPC. The Mac derives the local peer's execution identity from
 its kernel audit token, recorded executable UUID and live endpoint ownership,
 then resolves a Verified Launcher through kernel-bound original parent
-executions. The peer cannot be its own Launcher. Unsupported kernels and changed
+executions. Terminal's root-owned Apple `login` relay may be traversed only with
+both original execution links verified and matching user/audit-session endpoints.
+The relay grants no authority. The peer cannot be its own Launcher. Unsupported kernels and changed
 ancestry deny use. The bounded SSH authentication payload digest is bound before
 authorizing. It rechecks the
 peer and credential configuration before releasing the single Global Value of

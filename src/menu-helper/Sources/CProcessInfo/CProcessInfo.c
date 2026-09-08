@@ -202,13 +202,30 @@ bool av_original_parent_tracking_available(void) {
     return unique_info(getpid(), &info) && info.original_parent_version > 0;
 }
 
-bool av_original_parent_identity(const AVProcessIdentity *child, AVProcessIdentity *parent_out) {
+static bool original_parent_execution(const AVProcessIdentity *child, AVProcessIdentity *parent_out) {
     struct av_unique_info original = {0}, parent = {0};
-    return child->ppid > 1 && unique_info(child->pid, &original) &&
+    if (!(child->ppid > 1 && unique_info(child->pid, &original) &&
         original.version == child->pidversion && original.original_parent_version > 0 &&
         av_process_identity(child->ppid, parent_out) && unique_info(child->ppid, &parent) &&
         original.parent_unique_id == parent.unique_id &&
-        original.original_parent_version == parent.version && parent.version == parent_out->pidversion &&
+        original.original_parent_version == parent.version)) return false;
+    // task_name_for_pid cannot expose root login's audit token to the user's app.
+    // Its kernel execution version remains available through proc_pidinfo.
+    if (parent_out->pidversion == 0 && parent_out->euid == 0 &&
+        strcmp(parent_out->path, "/usr/bin/login") == 0) parent_out->pidversion = parent.version;
+    return parent.version == parent_out->pidversion;
+}
+
+bool av_original_parent_identity(const AVProcessIdentity *child, AVProcessIdentity *parent_out) {
+    return original_parent_execution(child, parent_out) &&
+        child->euid == parent_out->euid && child->audit_session_id == parent_out->audit_session_id;
+}
+
+bool av_original_login_parent_identity(const AVProcessIdentity *child, AVProcessIdentity *parent_out) {
+    AVProcessIdentity login = {0};
+    return original_parent_execution(child, &login) && login.euid == 0 &&
+        strcmp(login.path, "/usr/bin/login") == 0 &&
+        original_parent_execution(&login, parent_out) &&
         child->euid == parent_out->euid && child->audit_session_id == parent_out->audit_session_id;
 }
 

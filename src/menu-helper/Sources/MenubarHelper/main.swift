@@ -1991,7 +1991,18 @@ private func sshAgentLaunchers(for identity: AVProcessIdentity) -> [LauncherIden
     var child = identity
     for _ in 0..<32 {
         var parent = AVProcessIdentity()
-        guard av_original_parent_identity(&child, &parent) else { return [] }
+        if !av_original_parent_identity(&child, &parent) {
+            // Terminal uses a root-owned login relay; it supplies no Launcher authority.
+            var code: SecCode?
+            var requirement: SecRequirement?
+            guard av_original_login_parent_identity(&child, &parent),
+                  SecCodeCopyGuestWithAttributes(nil, [kSecGuestAttributePid: child.ppid] as CFDictionary, [], &code) == errSecSuccess,
+                  let code,
+                  SecRequirementCreateWithString("anchor apple and identifier com.apple.login" as CFString, [], &requirement) == errSecSuccess,
+                  let requirement,
+                  SecCodeCheckValidity(code, [], requirement) == errSecSuccess
+            else { return [] }
+        }
         let candidates = launcherIdentities(pid: parent.pid, identity: parent)
             .filter { $0.runtimeProtection.allowsSecretGateAccess }
         if !candidates.isEmpty { return candidates }

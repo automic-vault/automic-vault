@@ -22,6 +22,9 @@ typedef struct {
 
 bool av_original_parent_tracking_available(void);
 bool av_original_parent_identity(const AVProcessIdentity *child, AVProcessIdentity *parent_out);
+// Verifies both execution links and endpoint UID/session. Caller must verify the live
+// Apple signature of /usr/bin/login at child->ppid before using the returned parent.
+bool av_original_login_parent_identity(const AVProcessIdentity *child, AVProcessIdentity *parent_out);
 bool av_socket_peer_identity(int fd, AVProcessIdentity *identity_out);
 ssize_t av_process_arguments_data(pid_t pid, char *out, size_t out_len);
 bool av_process_cwd(pid_t pid, char *out, size_t out_len);

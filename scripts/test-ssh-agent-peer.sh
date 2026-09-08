@@ -15,6 +15,21 @@ cat > "$scratch/check.c" <<'C'
 #include <stdio.h>
 #include <string.h>
 int main(int argc, char **argv) {
+ if(argc==3 && strcmp(argv[1],"--login-child")==0) {
+   AVProcessIdentity child={0}, parent={0}, login={0};
+   assert(av_process_identity(atoi(argv[2]),&child));
+   assert(!av_original_parent_identity(&child,&parent));
+   assert(av_original_login_parent_identity(&child,&parent));
+   assert(av_process_identity(child.ppid,&login));
+   assert(parent.pid==login.ppid && parent.euid==child.euid && parent.audit_session_id==child.audit_session_id);
+   AVProcessIdentity changed=child; changed.pidversion++;
+   assert(!av_original_login_parent_identity(&changed,&parent));
+   changed=child; changed.audit_session_id++;
+   assert(!av_original_login_parent_identity(&changed,&parent));
+   changed=child; changed.euid++;
+   assert(!av_original_login_parent_identity(&changed,&parent));
+   puts("SSH original login relay checks passed"); return 0;
+ }
  char args[65536]; ssize_t count=av_process_arguments_data(getpid(),args,sizeof(args));
  assert(count>0); char *cursor=args;
  for(int i=0;i<argc;i++) { assert(strcmp(cursor,argv[i])==0); cursor+=strlen(cursor)+1; }
@@ -38,6 +53,7 @@ int main(int argc, char **argv) {
  close(channel[0]); int fd=accept(server,NULL,NULL); assert(fd>=0);
  AVProcessIdentity peer={0}; assert(av_socket_peer_identity(fd,&peer)); assert(peer.pid==child);
  AVProcessIdentity parent={0}; assert(av_original_parent_identity(&peer,&parent)); assert(parent.pid==getpid());
+ assert(!av_original_login_parent_identity(&peer,&parent));
  AVProcessIdentity changed=peer; changed.pidversion++;
  assert(!av_original_parent_identity(&changed,&parent));
  assert(peer.pidversion>0); char cwd[4096]; assert(av_process_cwd(child,cwd,sizeof(cwd))); assert(cwd[0]=='/');
@@ -78,3 +94,6 @@ clang -Wall -Wextra -Werror \
   "$scratch/check.c" "$repo/src/menu-helper/Sources/CProcessInfo/CProcessInfo.c" \
   -lbsm -o "$scratch/check"
 "$scratch/check" 'a b' $'a\nb' ''
+if [[ -n "${AV_SSH_LOGIN_CHILD_PID:-}" ]]; then
+  "$scratch/check" --login-child "$AV_SSH_LOGIN_CHILD_PID"
+fi
