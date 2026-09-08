@@ -167,6 +167,8 @@ fn serve(path: &Path) -> Result<(), String> {
 use std::os::unix::fs::DirBuilderExt;
 
 fn connection(mut stream: UnixStream) -> Result<(), String> {
+    // Darwin accepts inherit O_NONBLOCK; wait for each request using the bounded timeout.
+    stream.set_nonblocking(false).map_err(|e| e.to_string())?;
     stream
         .set_read_timeout(Some(Duration::from_secs(120)))
         .map_err(|e| e.to_string())?;
@@ -309,6 +311,27 @@ fn respond(
 mod tests {
     use super::*;
     use signature::Verifier;
+
+    #[test]
+    fn connection_survives_a_pause_after_an_unsupported_request() {
+        let (server, mut client) = UnixStream::pair().unwrap();
+        // Darwin accepts inherit the listener's nonblocking mode.
+        server.set_nonblocking(true).unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let worker = std::thread::spawn(|| connection(server));
+        for _ in 0..2 {
+            client.write_all(&[0, 0, 0, 1, 27]).unwrap();
+            let mut response = [0; 5];
+            client.read_exact(&mut response).unwrap();
+            assert_eq!(response, [0, 0, 0, 1, 5]);
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        drop(client);
+        worker.join().unwrap().unwrap();
+    }
+
     fn request(key: &PrivateKey) -> (Vec<u8>, Vec<u8>) {
         let blob = key.public_key().to_bytes().unwrap();
         let mut payload = Vec::new();
