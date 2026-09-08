@@ -610,7 +610,7 @@ public struct SecretGate: Equatable, Identifiable, Sendable {
     public var defaultPolicyLabel: String {
         appPolicies.isEmpty ? "All Verified Launchers" : "All Other Verified Launchers"
     }
-    public var displayName: String { id == "ssh-agent" ? "SSH Agent" : id == "node" ? "npm" : id }
+    public var displayName: String { id == "node" ? "npm" : id }
     public var authorizationGateName: String {
         if id == "ssh-agent" { return "SSH Agent Authorization Gate" }
         return id == "node" ? "npm Authorization Gate" : "\(id.uppercased()) Authorization Gate"
