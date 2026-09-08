@@ -231,13 +231,34 @@ fn authentication(payload: &[u8], key: &[u8], algorithm: &str) -> Result<(), Str
         || take(&mut input, 1)? != [50]
         || field(&mut input)?.is_empty()
         || field(&mut input)? != b"ssh-connection"
-        || field(&mut input)? != b"publickey"
-        || take(&mut input, 1)? != [1]
-        || field(&mut input)? != algorithm.as_bytes()
-        || field(&mut input)? != key
-        || !input.is_empty()
     {
         return Err("Only SSH public-key authentication is supported".into());
+    }
+    let host_bound = match field(&mut input)? {
+        b"publickey" => false,
+        b"publickey-hostbound-v00@openssh.com" => true,
+        _ => return Err("Unsupported SSH authentication method".into()),
+    };
+    if take(&mut input, 1)? != [1]
+        || field(&mut input)? != algorithm.as_bytes()
+        || field(&mut input)? != key
+    {
+        return Err("Invalid SSH authentication request".into());
+    }
+    if host_bound {
+        let host = field(&mut input)?;
+        // Structural validation only; destination policy remains the SSH client's responsibility.
+        if PublicKey::from_bytes(host).is_err()
+            && !matches!(
+                ssh_key::Certificate::from_bytes(host).map(|cert| cert.cert_type()),
+                Ok(ssh_key::certificate::CertType::Host)
+            )
+        {
+            return Err("Invalid SSH server host key".into());
+        }
+    }
+    if !input.is_empty() {
+        return Err("Trailing SSH authentication data".into());
     }
     Ok(())
 }
@@ -333,22 +354,108 @@ mod tests {
     }
 
     fn request(key: &PrivateKey) -> (Vec<u8>, Vec<u8>) {
+        request_with_host(key, None)
+    }
+    fn request_with_host(key: &PrivateKey, host: Option<&[u8]>) -> (Vec<u8>, Vec<u8>) {
         let blob = key.public_key().to_bytes().unwrap();
         let mut payload = Vec::new();
         string(&mut payload, &[7; 32]);
         payload.push(50);
         string(&mut payload, b"git");
         string(&mut payload, b"ssh-connection");
-        string(&mut payload, b"publickey");
+        string(
+            &mut payload,
+            if host.is_some() {
+                b"publickey-hostbound-v00@openssh.com"
+            } else {
+                b"publickey"
+            },
+        );
         payload.push(1);
         string(&mut payload, key.algorithm().as_str().as_bytes());
         string(&mut payload, &blob);
+        if let Some(host) = host {
+            string(&mut payload, host);
+        }
         let mut packet = vec![13];
         string(&mut packet, &blob);
         string(&mut packet, &payload);
         packet.extend_from_slice(&0u32.to_be_bytes());
         (packet, payload)
     }
+    #[test]
+    fn host_bound_authentication_signs_the_complete_payload() {
+        let key = PrivateKey::random(&mut rand::rngs::OsRng, Algorithm::Ed25519).unwrap();
+        let host = PrivateKey::random(&mut rand::rngs::OsRng, Algorithm::Ed25519).unwrap();
+        let host_blob = host.public_key().to_bytes().unwrap();
+        let (packet, payload) = request_with_host(&key, Some(&host_blob));
+        let value = serde_json::json!({"private_key": key.to_openssh(Default::default()).unwrap().as_str(), "passphrase": ""}).to_string();
+        let response = respond(&packet, |args, signing| {
+            assert!(signing);
+            assert_eq!(args[0], format!("payload-sha256={}", digest(&payload)));
+            Ok([("AV_SSH_CREDENTIAL".into(), value.clone())].into())
+        })
+        .unwrap();
+        assert_eq!(response[0], 14);
+        let mut input = &response[1..];
+        let mut blob = field(&mut input).unwrap();
+        assert_eq!(field(&mut blob).unwrap(), b"ssh-ed25519");
+        let signature =
+            ssh_key::Signature::new(Algorithm::Ed25519, field(&mut blob).unwrap().to_vec())
+                .unwrap();
+        Verifier::verify(key.public_key(), &payload, &signature).unwrap();
+        let (_, changed_host) =
+            request_with_host(&key, Some(&key.public_key().to_bytes().unwrap()));
+        assert!(Verifier::verify(key.public_key(), &changed_host, &signature).is_err());
+        for host in [b"".as_slice(), b"invalid host key"] {
+            let (packet, _) = request_with_host(&key, Some(host));
+            assert!(respond(&packet, |_, _| panic!("malformed host key authorized")).is_err());
+        }
+        for cert_type in [
+            ssh_key::certificate::CertType::Host,
+            ssh_key::certificate::CertType::User,
+        ] {
+            let mut builder =
+                ssh_key::certificate::Builder::new(vec![0; 16], host.public_key(), 0, 60).unwrap();
+            builder
+                .cert_type(cert_type)
+                .unwrap()
+                .valid_principal("fixture")
+                .unwrap();
+            let certificate = builder.sign(&host).unwrap().to_bytes().unwrap();
+            let (_, payload) = request_with_host(&key, Some(&certificate));
+            assert_eq!(
+                authentication(
+                    &payload,
+                    &key.public_key().to_bytes().unwrap(),
+                    "ssh-ed25519"
+                )
+                .is_ok(),
+                cert_type == ssh_key::certificate::CertType::Host
+            );
+        }
+        for end in 0..payload.len() {
+            assert!(
+                authentication(
+                    &payload[..end],
+                    &key.public_key().to_bytes().unwrap(),
+                    "ssh-ed25519"
+                )
+                .is_err()
+            );
+        }
+        let mut trailing = payload;
+        trailing.push(0);
+        assert!(
+            authentication(
+                &trailing,
+                &key.public_key().to_bytes().unwrap(),
+                "ssh-ed25519"
+            )
+            .is_err()
+        );
+    }
+
     #[test]
     fn authentication_signature_binds_payload_and_key_and_verifies() {
         let key = PrivateKey::random(&mut rand::rngs::OsRng, Algorithm::Ed25519).unwrap();

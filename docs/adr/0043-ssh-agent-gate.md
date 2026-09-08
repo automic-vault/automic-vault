@@ -20,7 +20,11 @@ Approval surface. Disabling immediately prevents new Secret Application.
 
 The signed bundled `av ssh-agent` serves a mode-0600 Unix socket in a private
 mode-0700 directory. It implements bounded identity enumeration and SSH user
-authentication signing from RFC 9987. Unsupported operations, including adding
+authentication signing from RFC 9987, including OpenSSH's
+`publickey-hostbound-v00@openssh.com` format. The additional server host key or
+host certificate is structurally validated and included in the authorized payload
+digest and signature. This does not introduce destination policy: server trust
+remains the SSH client's responsibility. Unsupported operations, including adding
 keys, PKCS#11 loading, arbitrary signing and unrecognized flags, fail closed.
 Use RustCrypto's SSH key implementation for OpenSSH decoding, decryption and
 signatures for Ed25519 and ECDSA keys. RSA is rejected because the available
