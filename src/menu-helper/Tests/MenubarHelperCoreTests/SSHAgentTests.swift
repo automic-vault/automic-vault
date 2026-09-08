@@ -49,8 +49,16 @@ struct SSHAgentTests {
         #expect(configured.contains("  IdentityAgent \"\(socketPath)\"\n"))
         #expect(configured.contains("  IdentityFile none\n"))
         #expect(configured.contains("  UseKeychain no\n"))
+        #expect(configured.contains("# END Automic Vault SSH Agent\n\n" + original))
         #expect(try sshAgentConfig(configured, socketPath: nil) == original)
         #expect(try sshAgentConfig(configured, socketPath: socketPath) == configured)
+        let empty = try sshAgentConfig("", socketPath: socketPath)
+        #expect(empty.hasSuffix("# END Automic Vault SSH Agent\n"))
+        #expect(try sshAgentConfig(empty, socketPath: nil) == "")
+        let leadingBlank = try sshAgentConfig("\n" + original, socketPath: socketPath)
+        #expect(try sshAgentConfig(leadingBlank, socketPath: nil) == "\n" + original)
+        let legacy = configured.replacingOccurrences(of: "# END Automic Vault SSH Agent\n\n", with: "# END Automic Vault SSH Agent\n")
+        #expect(try sshAgentConfig(legacy, socketPath: socketPath) == configured)
         #expect(throws: SSHAgentError.self) { try sshAgentConfig(original + configured, socketPath: nil) }
         #expect(throws: SSHAgentError.self) { try sshAgentConfig(original, socketPath: "/tmp/a\nProxyCommand bad") }
         #expect(throws: SSHAgentError.self) { try sshAgentConfig(original, socketPath: "/tmp/%h") }

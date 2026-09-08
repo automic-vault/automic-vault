@@ -63,6 +63,7 @@ public func sshAgentConfig(_ existing: String, socketPath: String?) throws -> St
               !remaining[end.upperBound...].contains(sshConfigEnd)
         else { throw SSHAgentError.invalidConfiguration }
         remaining = String(remaining[end.upperBound...])
+        if remaining.hasPrefix("\n") { remaining.removeFirst() }
     }
     guard let socketPath else { return remaining }
     guard socketPath.hasPrefix("/"), !socketPath.contains(where: { "\n\r\"\\$%".contains($0) })
@@ -74,7 +75,7 @@ public func sshAgentConfig(_ existing: String, socketPath: String?) throws -> St
       ForwardAgent no
       AddKeysToAgent no
       UseKeychain no
-    """ + "\n" + sshConfigEnd + remaining
+    """ + "\n" + sshConfigEnd + (remaining.isEmpty ? "" : "\n" + remaining)
 }
 
 public func configureOpenSSHAgent(enabled: Bool, home: URL = FileManager.default.homeDirectoryForCurrentUser) throws {
