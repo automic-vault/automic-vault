@@ -64,6 +64,9 @@ persist and verify an Authorization Record before credential bytes leave custody
 No transient decision reuse, script authority, Temporary Access Grants or
 Retained Launcher Provenance applies. Policy offers Approval Required and Allow
 Authentication; authentication can enable remote writes.
+Both approval and denial reuse are disabled: the long-running Gate Client serves
+unrelated SSH clients and Launchers, so a process-scoped denial quarantine would
+incorrectly suppress their subsequent Approval requests.
 
 ## Consequences
 

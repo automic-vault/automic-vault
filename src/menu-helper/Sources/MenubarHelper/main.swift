@@ -2202,9 +2202,10 @@ private struct ApprovalRequest {
                 )
             },
             selectedSecretValues: selectedSecretValues,
-            policy: op == "ssh-sign" || awsRequestMayUseLongLivedCredentials(self)
-                ? .freshApprovalRequired
-                : .reusable
+            // The SSH helper is shared by unrelated clients and Launchers. Even
+            // denial reuse would quarantine every client using that helper.
+            policy: op == "ssh-sign" ? .disabled
+                : awsRequestMayUseLongLivedCredentials(self) ? .freshApprovalRequired : .reusable
         )
     }
 }
@@ -13202,7 +13203,7 @@ private func runApprovalSelfCheck() -> Int32 {
         ])
     )
     let sshRequest = ApprovalRequest(
-        op: "inject", keys: [sshCredentialSecretName], target: "/usr/local/bin/av",
+        op: "ssh-sign", keys: [sshCredentialSecretName], target: "/usr/local/bin/av",
         args: ["ssh-agent"], cwd: "/tmp", replaceExistingEnv: false,
         allowMissingKeys: false, envConflicts: [], shebangScript: nil,
         scriptData: nil, tool: "ssh-agent", title: nil, detail: nil,
@@ -13213,6 +13214,17 @@ private func runApprovalSelfCheck() -> Int32 {
         )
     )
     let nodePath = "/opt/homebrew/bin/node"
+    let sshReuseRequest = sshRequest.decisionReuseRequest(
+        clientIdentity: selfIdentity, callerPath: sshRequest.target, signing: helperSigning
+    )
+    var sshReuseCache = AuthorizationDecisionReuseCache()
+    for outcome in [AuthorizationDecisionReuseOutcome.denied, .approved, .alwaysApproved] {
+        sshReuseCache.remember(outcome, for: sshReuseRequest)
+        guard sshReuseCache.decision(for: sshReuseRequest) == nil else {
+            print("SSH requests must never reuse approval or denial")
+            return 1
+        }
+    }
     guard approvalCommandPath(sshRequest) == pathString(selfIdentity),
           sshRequest.target == "/usr/local/bin/av",
           approvalPromptCommand(sshRequest) == "\(shellQuote(pathString(selfIdentity))) pangolin true",

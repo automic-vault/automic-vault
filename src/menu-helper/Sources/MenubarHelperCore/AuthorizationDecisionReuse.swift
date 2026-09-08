@@ -48,6 +48,7 @@ public struct AuthorizationCredentialHelperParent: Hashable, Sendable {
 public enum AuthorizationDecisionReusePolicy: Hashable, Sendable {
     case reusable
     case freshApprovalRequired
+    case disabled
 }
 
 public enum AuthorizationDecisionReuseOutcome: Equatable, Sendable {
@@ -152,6 +153,7 @@ public struct AuthorizationDecisionReuseCache: Sendable {
         now: Date = Date()
     ) -> AuthorizationDecisionReuseOutcome? {
         prune(now: now)
+        guard request.policy != .disabled else { return nil }
         if expirations[.denial(request.client)] != nil { return .denied }
         guard request.policy == .reusable else { return nil }
         return expirations[.approval(request)] == nil ? nil : .approved
@@ -163,6 +165,7 @@ public struct AuthorizationDecisionReuseCache: Sendable {
         now: Date = Date()
     ) {
         prune(now: now)
+        guard request.policy != .disabled else { return }
         let key: Key
         switch outcome {
         case .canceled, .interrupted, .temporaryAccessGrant:

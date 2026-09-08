@@ -51,6 +51,27 @@ func authorizationDecisionReuseBindsEveryRequestField(_ mutation: RequestMutatio
     #expect(cache.decision(for: request, now: Date(timeIntervalSince1970: 101)) == nil)
 }
 
+@Test func authorizationDecisionReuseDisabledIsolatesRequestsSharingAHelper() {
+    let request = reuseRequest(policy: .disabled)
+    let otherRequest = reuseRequest(.arguments, policy: .disabled)
+    let now = Date(timeIntervalSince1970: 100)
+    var cache = AuthorizationDecisionReuseCache()
+    cache.remember(.denied, for: request, now: now)
+    #expect(cache.decision(for: request, now: now) == nil)
+    #expect(cache.decision(for: otherRequest, now: now) == nil)
+    #expect(cache.decision(for: reuseRequest(), now: now) == nil)
+
+    cache.remember(.approved, for: request, now: now)
+    cache.remember(.alwaysApproved, for: request, now: now)
+    #expect(cache.decision(for: request, now: now) == nil)
+
+    // A shared helper's existing denial must not suppress a fresh SSH request.
+    cache.remember(.denied, for: reuseRequest(), now: now)
+    #expect(cache.decision(for: request, now: now) == nil)
+    // Fresh approval alone deliberately retains denial quarantine for other gates.
+    #expect(cache.decision(for: reuseRequest(policy: .freshApprovalRequired), now: now) == .denied)
+}
+
 @Test func authorizationDecisionReuseDenialQuarantinesTheLiveGateClient() {
     let denied = reuseRequest()
     let differentRequest = reuseRequest(.arguments)
