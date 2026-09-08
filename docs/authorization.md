@@ -38,6 +38,38 @@ is inactive or its displays sleep. The originating process must remain alive,
 and Secret Availability still applies. AWS MFA entry remains Mac-local and
 requires an active session and awake displays.
 
+### Remote work from a locked Mac
+
+iPhone Approval does not unlock the Mac's Keychain. A Secret configured as
+**When Unlocked** stays unavailable while the Mac is locked, even if you can
+approve on your phone. Automic Vault may reject the request before it reaches
+Approval, so you receive no phone notification. A missing notification alone
+does not establish a relay or phone problem.
+
+To let a remote agent use a particular Secret while the Mac is locked:
+
+1. Unlock the Mac and open Automic Vault with `av open`.
+2. Open **Secrets**, select the Secret, and enable **Available While Locked**.
+   Repeat for each Secret the operation needs. For GitHub, check the relevant
+   `GH_TOKEN_…` account and host entries.
+3. Keep iPhone Approval enabled if you want to approve remotely, then retry a
+   read such as `gh auth status` from the same remote agent while the Mac is locked.
+
+This choice makes all Values of that Secret available after the first unlock
+following a restart. Enable it only for Secrets needed by your remote workflow.
+The Secret Gate still verifies and authorizes every operation; policy may allow
+a recognized read without prompting, and a request that needs Approval goes to
+an eligible iPhone. The Mac and originating process must keep running.
+
+Unlock the Mac for login or credential changes that fail with Keychain error
+`-25308`. Saving Secrets requires a complete inventory, which may be unavailable
+while locked even when a particular Secret allows use while locked. Some app
+versions also report an unavailable GitHub Secret as an "invalid token"; retry
+while unlocked before treating this as an expired or revoked GitHub token.
+
+See the canonical [Secret Availability](domain-language.md#secret-availability)
+definition for the storage and authorization boundaries.
+
 ## iPhone Approval
 
 iPhone Approval is optional and enabled per Mac. Once enabled, every human
@@ -59,6 +91,9 @@ To enroll:
    notifications.
 3. On the Mac, open **Settings → iPhone Approval** and click
    **Enable iPhone Approval**.
+
+If you will use an agent while the Mac is locked, also configure
+[Secret Availability for remote work](#remote-work-from-a-locked-mac).
 
 Routine requests can offer **Approve Once** in an authenticated notification.
 Requests with Unknown operation risk, Secret Disclosure, Unconstrained Secret

@@ -14,6 +14,8 @@ public enum SecretValueCustodyError: Error, Equatable, LocalizedError, Sendable 
         switch self {
         case .repairFailed(let status):
             "secret repair must complete before this request: \(status)"
+        case .inventoryUnavailable(let status) where status == errSecInteractionNotAllowed:
+            "Stored Secrets are unavailable from Keychain. Unlock the Mac and retry. (\(status))"
         case .inventoryUnavailable(let status):
             "failed to inspect stored Secrets: \(status)"
         case .secretMissing(let name):
@@ -78,7 +80,7 @@ struct SelectedSecretValueSourceIdentity: Hashable, Sendable {
 protocol SecretValueCustodyAdapter: Sendable {
     func repairPendingMutation() -> OSStatus
     func pendingMutationNames() -> Set<String>?
-    func inventory() -> StoredSecretsLoad
+    func inventory(requiredNames: [String]) -> StoredSecretsLoad
     func load(_ value: StoredSecretValue) -> StoredSecretValueLoad
 }
 
@@ -91,8 +93,8 @@ private struct KeychainSecretValueCustodyAdapter: SecretValueCustodyAdapter {
         MenubarHelperCore.pendingSecretMutationNames()
     }
 
-    func inventory() -> StoredSecretsLoad {
-        loadStoredSecretsForUseResult()
+    func inventory(requiredNames: [String]) -> StoredSecretsLoad {
+        loadStoredSecretsForUseResult(requiredNames: requiredNames)
     }
 
     func load(_ value: StoredSecretValue) -> StoredSecretValueLoad {
@@ -121,7 +123,7 @@ public struct SecretValueCustody: Sendable {
             }
         }
         let secrets: [StoredSecret]
-        switch adapter.inventory() {
+        switch adapter.inventory(requiredNames: names) {
         case .success(let inventory):
             secrets = inventory
         case .failure(let status):

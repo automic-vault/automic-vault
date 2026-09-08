@@ -1,4 +1,4 @@
-# Automic Vault [![Knock Knock](https://outclaw.dev/badge.svg)](https://outclaw.dev/automic-vault/automic-vault)
+# Automic Vault [![Chat w/Maintainer](https://outclaw.dev/badge.svg)](https://outclaw.dev/automic-vault/automic-vault)
 
 > Your secrets manager should know what the secrets *do*.
 
@@ -25,6 +25,11 @@ $ av scan
 $ av harden gh
 $ av doctor gh
 ```
+
+Automic Vault has several other mechanisms (Blessed Scripts, Launcher
+Bundles, the Secret Proxy, Direct Secret Access) for situations a Hardener
+doesn't cover. See [Choosing a Mechanism](docs/choosing-a-mechanism.md) for
+which one fits your situation.
 
 For the rest: [user manual] or `av help`.
 
@@ -191,6 +196,35 @@ The script declares the Secrets and Tool capabilities it needs:
 # ---
 ```
 
+For compatibility, omitting the manifest inherits automic authority already
+available from the calling context. Make that choice explicit with:
+
+```sh
+# --- automic-vault
+# capabilities: { inherit: true }
+# ---
+```
+
+Use an empty declaration to ensure every later gated operation requires
+Approval while Automic Vault can attribute it to the live script execution,
+regardless of which Launcher calls the script:
+
+```sh
+# --- automic-vault
+# capabilities: {}
+# ---
+```
+
+The Secret Names in the `av inject` shebang are authorized separately. A script
+with no Secret Names and `capabilities: {}` starts without Approval because it
+receives no Automic Vault authority. This is an authorization ceiling, not a
+sandbox: ordinary commands still run with the user's normal operating-system
+permissions. Restarting Automic Vault or losing observable ancestry ends the
+memory-only ceiling, just as it ends active Blessed Script state.
+
+Compatibility debts reserved for the next major version are tracked in
+[Future Breaking Changes](docs/future-breaking-changes.md).
+
 Editing the script or declaration invalidates the Blessing. A Launcher
 Endorsement lets one Verified Launcher automically authorize that exact
 Blessing. Use Blessed Scripts for reviewed work that exits, and Tool
@@ -274,6 +308,7 @@ intercept every process execution. Keep your terminal and agent harness's
 
 - [User manual][user manual]
 - [Documentation index](docs/index.md)
+- [Choosing a Mechanism](docs/choosing-a-mechanism.md)
 - [Domain language](docs/domain-language.md), [architecture](docs/architecture.md), and [positioning](docs/positioning.md)
 - [Architecture decisions](docs/adr/)
 - [Homebrew tap](https://github.com/automic-vault/homebrew-isotopes)

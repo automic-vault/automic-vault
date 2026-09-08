@@ -74,9 +74,17 @@ public func readBlessedScript(path: String) throws -> Data {
 
 public struct BlessedScriptManifest: Equatable, Sendable {
     public let capabilities: [String: SecretGateProtection]
+    public let inheritsCapabilities: Bool
+    public let hasEmptyCapabilityCeiling: Bool
 
-    public init(capabilities: [String: SecretGateProtection]) {
+    public init(
+        capabilities: [String: SecretGateProtection],
+        inheritsCapabilities: Bool = false,
+        hasEmptyCapabilityCeiling: Bool = false
+    ) {
         self.capabilities = capabilities
+        self.inheritsCapabilities = inheritsCapabilities
+        self.hasEmptyCapabilityCeiling = hasEmptyCapabilityCeiling
     }
 }
 
@@ -110,12 +118,14 @@ public struct BlessedScript: Codable, Equatable, Identifiable, Sendable {
     public let replaceExistingEnv: Bool
     public let allowMissingKeys: Bool
     public let allowsCanonicalPathExecution: Bool?
+    public let inheritsCapabilities: Bool?
     public let capabilities: [String: SecretGateProtection]
     public let launchers: [BlessedScriptLauncher]
     public let blessedAt: Date
     public let reviewedContents: Data?
 
     public var id: String { path }
+    public var usesCapabilityInheritance: Bool { inheritsCapabilities ?? true }
 
     public var verifiedReviewedContents: Data? {
         guard let reviewedContents,
@@ -176,6 +186,7 @@ public struct BlessedScript: Codable, Equatable, Identifiable, Sendable {
         replaceExistingEnv: Bool,
         allowMissingKeys: Bool,
         allowsCanonicalPathExecution: Bool = false,
+        inheritsCapabilities: Bool = false,
         capabilities: [String: SecretGateProtection],
         launchers: [BlessedScriptLauncher],
         blessedAt: Date = Date(),
@@ -188,6 +199,7 @@ public struct BlessedScript: Codable, Equatable, Identifiable, Sendable {
         self.replaceExistingEnv = replaceExistingEnv
         self.allowMissingKeys = allowMissingKeys
         self.allowsCanonicalPathExecution = allowsCanonicalPathExecution
+        self.inheritsCapabilities = inheritsCapabilities
         self.capabilities = capabilities
         self.launchers = launchers
         self.blessedAt = blessedAt
@@ -218,6 +230,7 @@ public struct BlessedScript: Codable, Equatable, Identifiable, Sendable {
         replaceExistingEnv = script.replaceExistingEnv
         allowMissingKeys = script.allowMissingKeys
         allowsCanonicalPathExecution = script.allowsCanonicalPathExecution
+        inheritsCapabilities = script.inheritsCapabilities
         capabilities = script.capabilities
         self.launchers = launchers
         blessedAt = script.blessedAt
@@ -312,6 +325,20 @@ public struct BlessedScriptDeclaration: Equatable, Sendable {
     public let allowMissingKeys: Bool
     public let snapshotIncompatibleInterpreter: String?
     public let manifest: BlessedScriptManifest
+
+    public func matchesExecution(
+        keys: [String],
+        target: String,
+        replaceExistingEnv: Bool,
+        allowMissingKeys: Bool,
+        snapshotIncompatibleInterpreter: String?
+    ) -> Bool {
+        self.keys == keys.sorted()
+            && self.target == target
+            && self.replaceExistingEnv == replaceExistingEnv
+            && self.allowMissingKeys == allowMissingKeys
+            && self.snapshotIncompatibleInterpreter == snapshotIncompatibleInterpreter
+    }
 }
 
 public func blessedScriptDeclaration(data: Data) throws -> BlessedScriptDeclaration {
@@ -406,13 +433,28 @@ private func validBlessedSecretKey(_ key: String) -> Bool {
 
 private func parseBlessedScriptManifest(lines: [String]) throws -> BlessedScriptManifest {
     guard lines.count > 1, lines[1] == "# --- automic-vault" else {
-        return BlessedScriptManifest(capabilities: [:])
+        return BlessedScriptManifest(capabilities: [:], inheritsCapabilities: true)
     }
-    var capabilities: [String: SecretGateProtection] = [:]
     var index = 2
-    guard index < lines.count, lines[index] == "# capabilities:" else {
+    guard index < lines.count else {
         throw BlessedScriptManifestError.malformedManifest("expected `capabilities:`")
     }
+    if lines[index] == "# capabilities: {}" || lines[index] == "# capabilities: { inherit: true }" {
+        let inheritsCapabilities = lines[index] == "# capabilities: { inherit: true }"
+        index += 1
+        guard index < lines.count, lines[index] == "# ---" else {
+            throw BlessedScriptManifestError.malformedManifest("missing closing marker")
+        }
+        return BlessedScriptManifest(
+            capabilities: [:],
+            inheritsCapabilities: inheritsCapabilities,
+            hasEmptyCapabilityCeiling: !inheritsCapabilities
+        )
+    }
+    guard lines[index] == "# capabilities:" else {
+        throw BlessedScriptManifestError.malformedManifest("expected `capabilities:`")
+    }
+    var capabilities: [String: SecretGateProtection] = [:]
     index += 1
     while index < lines.count, lines[index] != "# ---" {
         let line = lines[index]

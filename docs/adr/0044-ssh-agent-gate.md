@@ -1,4 +1,4 @@
-# ADR 0043: Gate SSH authentication through a local SSH agent
+# ADR 0044: Gate SSH authentication through a local SSH agent
 
 Status: accepted
 

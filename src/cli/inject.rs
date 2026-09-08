@@ -8,11 +8,17 @@ use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+#[path = "inject_fd.rs"]
+mod fd;
+
 const USAGE: &str = "\
 Usage: av inject [--replace-existing-env] [--allow-missing-keys] +KEY [+KEY...] [--] COMMAND [args...]
        av inject [--replace-existing-env] [--allow-missing-keys] -- COMMAND [args...]
+       av inject --mode=fd +KEY:FD [+KEY:FD...] -- COMMAND [args...]
 
-Injects named Keychain secrets into COMMAND's environment.";
+Injects named Keychain secrets into COMMAND's environment (default --mode=env).
+FD mode delivers each Secret through an anonymous pipe at FD (3 or higher),
+requires Approval, and removes the named variables from COMMAND's environment.";
 
 const APPROVAL_SERVICE: &str = "com.automicvault.av2.approval";
 const PATH_SCRIPT_INTERPRETERS: &[&str] = &["uv"];
@@ -20,6 +26,7 @@ type SecretValues = BTreeMap<String, String>;
 
 #[derive(Debug, PartialEq, Eq)]
 struct Options {
+    secret_fds: BTreeMap<String, i32>,
     replace_existing_env: bool,
     allow_missing_keys: bool,
     keys: Vec<String>,
@@ -30,6 +37,7 @@ struct Options {
 
 #[derive(Debug, PartialEq, Eq)]
 struct ApprovalRequest {
+    secret_fds: BTreeMap<String, i32>,
     op: &'static str,
     keys: Vec<String>,
     target: String,
@@ -111,13 +119,56 @@ fn dispatch(
 }
 
 fn parse(args: Vec<OsString>) -> Result<Options, String> {
+    let mut mode = None;
+    let mut secret_fds = BTreeMap::new();
     let mut replace_existing_env = false;
     let mut allow_missing_keys = false;
     let mut keys = Vec::new();
     let mut seen_keys = BTreeSet::new();
     let mut iter = args.into_iter();
 
+    let finish = |target,
+                  args,
+                  mut keys: Vec<String>,
+                  secret_fds: BTreeMap<String, i32>,
+                  mode,
+                  replace_existing_env,
+                  allow_missing_keys| {
+        if mode == Some("fd") {
+            if keys.is_empty() || secret_fds.len() != keys.len() {
+                return Err("FD mode requires +KEY:FD for every Secret".into());
+            }
+            if replace_existing_env || allow_missing_keys {
+                return Err(
+                    "FD mode does not accept environment replacement or missing Secrets".into(),
+                );
+            }
+        } else if !secret_fds.is_empty() {
+            return Err("+KEY:FD requires --mode=fd".into());
+        }
+        keys.sort();
+        Ok(Options {
+            secret_fds,
+            replace_existing_env,
+            allow_missing_keys,
+            keys,
+            target,
+            args,
+            shebang_script: None,
+        })
+    };
     while let Some(arg) = iter.next() {
+        if let Some(value) = arg.to_str().and_then(|arg| arg.strip_prefix("--mode=")) {
+            if mode.is_some() {
+                return Err("--mode may be specified only once".into());
+            }
+            mode = Some(match value {
+                "env" => "env",
+                "fd" => "fd",
+                _ => return Err("injection mode must be env or fd".into()),
+            });
+            continue;
+        }
         if arg == "--replace-existing-env" {
             replace_existing_env = true;
             continue;
@@ -139,8 +190,23 @@ fn parse(args: Vec<OsString>) -> Result<Options, String> {
         let value = arg
             .to_str()
             .ok_or_else(|| "inject arguments must be valid UTF-8".to_string())?;
-        if let Some(key) = value.strip_prefix('+') {
+        if let Some(spec) = value.strip_prefix('+') {
+            let (key, descriptor) = match spec.split_once(':') {
+                Some((key, number)) => {
+                    let descriptor = number.parse::<i32>().ok()
+                        .filter(|fd| *fd >= 3 && *fd < i32::MAX && fd.to_string() == number)
+                        .ok_or("file descriptor must be a canonical decimal integer from 3 to 2147483646")?;
+                    (key, Some(descriptor))
+                }
+                None => (spec, None),
+            };
             validate_key_name(key)?;
+            if let Some(descriptor) = descriptor {
+                if secret_fds.values().any(|fd| *fd == descriptor) {
+                    return Err(format!("duplicate file descriptor: {descriptor}"));
+                }
+                secret_fds.insert(key.to_string(), descriptor);
+            }
             if !seen_keys.insert(key.to_string()) {
                 return Err(format!("duplicate key requested: {key}"));
             }
@@ -152,29 +218,29 @@ fn parse(args: Vec<OsString>) -> Result<Options, String> {
             let target = iter
                 .next()
                 .ok_or_else(|| "missing target command".to_string())?;
-            keys.sort();
-            return Ok(Options {
+            return finish(
+                target,
+                iter.collect(),
+                keys,
+                secret_fds,
+                mode,
                 replace_existing_env,
                 allow_missing_keys,
-                keys,
-                target,
-                args: iter.collect(),
-                shebang_script: None,
-            });
+            );
         }
 
         if keys.is_empty() {
             return Err("at least one +KEY must be provided before the target".into());
         }
-        keys.sort();
-        return Ok(Options {
+        return finish(
+            arg,
+            iter.collect(),
+            keys,
+            secret_fds,
+            mode,
             replace_existing_env,
             allow_missing_keys,
-            keys,
-            target: arg,
-            args: iter.collect(),
-            shebang_script: None,
-        });
+        );
     }
 
     if keys.is_empty() {
@@ -187,6 +253,12 @@ fn parse(args: Vec<OsString>) -> Result<Options, String> {
 fn exec(mut options: Options, stderr: &mut dyn Write) -> i32 {
     if unsafe { geteuid() } == 0 {
         let _ = writeln!(stderr, "av inject: must not be run as root");
+        return 1;
+    }
+
+    if !options.secret_fds.is_empty() {
+        let error = fd::exec(&options);
+        let _ = writeln!(stderr, "av inject: {error}");
         return 1;
     }
 
@@ -392,11 +464,19 @@ fn approval_request(
     let env_conflicts = options
         .keys
         .iter()
-        .filter(|key| current_env.contains_key(std::ffi::OsStr::new(key.as_str())))
+        .filter(|key| {
+            options.secret_fds.is_empty()
+                && current_env.contains_key(std::ffi::OsStr::new(key.as_str()))
+        })
         .cloned()
         .collect();
     Ok(ApprovalRequest {
-        op: "inject",
+        secret_fds: options.secret_fds.clone(),
+        op: if options.secret_fds.is_empty() {
+            "inject"
+        } else {
+            "inject-fd"
+        },
         keys: options.keys.clone(),
         target: target.display().to_string(),
         args: options.args.iter().map(os_display).collect(),
@@ -431,6 +511,7 @@ pub(super) fn docker_credential(
 ) -> Result<String, String> {
     validate_key_name(&key)?;
     let request = ApprovalRequest {
+        secret_fds: BTreeMap::new(),
         op: "docker-get",
         keys: vec![key.clone()],
         target: String::new(),
@@ -469,6 +550,7 @@ pub(super) fn docker_credential(
 pub(super) fn terraform_credential(key: String, hostname: String) -> Result<String, String> {
     validate_key_name(&key)?;
     let request = ApprovalRequest {
+        secret_fds: BTreeMap::new(),
         op: "terraform-get",
         keys: vec![key.clone()],
         target: String::new(),
@@ -507,6 +589,7 @@ pub(super) fn terraform_credential(key: String, hostname: String) -> Result<Stri
 pub(super) fn aliyun_credential(key: String, profile: String) -> Result<String, String> {
     validate_key_name(&key)?;
     let request = ApprovalRequest {
+        secret_fds: BTreeMap::new(),
         op: "aliyun-get",
         keys: vec![key.clone()],
         target: String::new(),
@@ -545,6 +628,7 @@ pub(super) fn aliyun_credential(key: String, profile: String) -> Result<String, 
 pub(super) fn wakatime_credential(key: String, api_url: String) -> Result<String, String> {
     validate_key_name(&key)?;
     let request = ApprovalRequest {
+        secret_fds: BTreeMap::new(),
         op: "wakatime-get",
         keys: vec![key.clone()],
         target: String::new(),
@@ -583,6 +667,7 @@ pub(super) fn wakatime_credential(key: String, api_url: String) -> Result<String
 pub(super) fn rclone_password(key: String) -> Result<String, String> {
     validate_key_name(&key)?;
     let request = ApprovalRequest {
+        secret_fds: BTreeMap::new(),
         op: "rclone-get",
         keys: vec![key.clone()],
         target: String::new(),
@@ -621,6 +706,7 @@ pub(super) fn rclone_password(key: String) -> Result<String, String> {
 pub(super) fn kubectl_credential(key: String, scope: String) -> Result<String, String> {
     validate_key_name(&key)?;
     let request = ApprovalRequest {
+        secret_fds: BTreeMap::new(),
         op: "kubectl-get",
         keys: vec![key.clone()],
         target: String::new(),
@@ -659,6 +745,7 @@ pub(super) fn kubectl_credential(key: String, scope: String) -> Result<String, S
 pub(super) fn oxide_credential(key: String, scope: String) -> Result<String, String> {
     validate_key_name(&key)?;
     let request = ApprovalRequest {
+        secret_fds: BTreeMap::new(),
         op: "oxide-get",
         keys: vec![key.clone()],
         target: String::new(),
@@ -697,6 +784,7 @@ pub(super) fn oxide_credential(key: String, scope: String) -> Result<String, Str
 pub(super) fn fastly_credential(key: String, scope: String) -> Result<String, String> {
     validate_key_name(&key)?;
     let request = ApprovalRequest {
+        secret_fds: BTreeMap::new(),
         op: "fastly-get",
         keys: vec![key.clone()],
         target: String::new(),
@@ -735,6 +823,7 @@ pub(super) fn fastly_credential(key: String, scope: String) -> Result<String, St
 pub(super) fn sqlcmd_credential(key: String, scope: String) -> Result<String, String> {
     validate_key_name(&key)?;
     let request = ApprovalRequest {
+        secret_fds: BTreeMap::new(),
         op: "sqlcmd-get",
         keys: vec![key.clone()],
         target: String::new(),
@@ -773,6 +862,7 @@ pub(super) fn sqlcmd_credential(key: String, scope: String) -> Result<String, St
 pub(super) fn goat_credential(key: String, scope: String) -> Result<String, String> {
     validate_key_name(&key)?;
     let request = ApprovalRequest {
+        secret_fds: BTreeMap::new(),
         op: "goat-get",
         keys: vec![key.clone()],
         target: String::new(),
@@ -811,6 +901,7 @@ pub(super) fn goat_credential(key: String, scope: String) -> Result<String, Stri
 pub(super) fn railway_credential(key: String, scope: String) -> Result<String, String> {
     validate_key_name(&key)?;
     let request = ApprovalRequest {
+        secret_fds: BTreeMap::new(),
         op: "railway-get",
         keys: vec![key.clone()],
         target: String::new(),
@@ -849,6 +940,7 @@ pub(super) fn railway_credential(key: String, scope: String) -> Result<String, S
 pub(super) fn ordercli_credential(key: String, scope: String) -> Result<String, String> {
     validate_key_name(&key)?;
     let request = ApprovalRequest {
+        secret_fds: BTreeMap::new(),
         op: "ordercli-get",
         keys: vec![key.clone()],
         target: String::new(),
@@ -887,6 +979,7 @@ pub(super) fn ordercli_credential(key: String, scope: String) -> Result<String, 
 pub(super) fn uaa_credential(key: String, scope: String) -> Result<String, String> {
     validate_key_name(&key)?;
     let request = ApprovalRequest {
+        secret_fds: BTreeMap::new(),
         op: "uaa-get",
         keys: vec![key.clone()],
         target: String::new(),
@@ -925,6 +1018,7 @@ pub(super) fn uaa_credential(key: String, scope: String) -> Result<String, Strin
 pub(super) fn openhue_credential(key: String, scope: String) -> Result<String, String> {
     validate_key_name(&key)?;
     let request = ApprovalRequest {
+        secret_fds: BTreeMap::new(),
         op: "openhue-get",
         keys: vec![key.clone()],
         target: String::new(),
@@ -964,6 +1058,7 @@ pub(super) fn plumber_credential(key: String, scope: String) -> Result<String, S
     validate_key_name(&key)?;
     crate::cli::plumber_credential::parse_scope(&scope)?;
     let request = ApprovalRequest {
+        secret_fds: BTreeMap::new(),
         op: "plumber-get",
         keys: vec![key.clone()],
         target: String::new(),
@@ -1226,6 +1321,7 @@ pub(super) fn approve_gpg_signing(
 ) -> Result<SecretValues, String> {
     xpc_approve_request(
         &ApprovalRequest {
+            secret_fds: BTreeMap::new(),
             op: "gpg-sign",
             keys: Vec::new(),
             target,
@@ -1274,6 +1370,7 @@ pub(super) fn approve_ssh_agent(
     #[cfg(target_os = "macos")]
     {
         let request = ApprovalRequest {
+            secret_fds: BTreeMap::new(),
             op: if signing {
                 "ssh-sign"
             } else {
@@ -1384,18 +1481,16 @@ fn xpc_approve_request_with_socket(
         fn av_xpc_connection_set_empty_event_handler(connection: XpcObject);
     }
 
-    unsafe fn set_string(dict: XpcObject, key: &[u8], value: &str) -> Result<(), String> {
-        let value =
-            CString::new(value).map_err(|_| format!("XPC field contains NUL: {value:?}"))?;
+    unsafe fn set_string(dict: XpcObject, key: &'static [u8], value: &str) -> Result<(), String> {
+        let value = crate::approval_service::xpc_string(key, value)?;
         unsafe { xpc_dictionary_set_string(dict, key.as_ptr().cast(), value.as_ptr()) };
         Ok(())
     }
 
-    unsafe fn string_array(values: &[String]) -> Result<XpcObject, String> {
+    unsafe fn string_array(field: &'static [u8], values: &[String]) -> Result<XpcObject, String> {
         let array = unsafe { xpc_array_create_empty() };
         for value in values {
-            let value = CString::new(value.as_str())
-                .map_err(|_| format!("XPC array contains NUL: {value:?}"))?;
+            let value = crate::approval_service::xpc_string(field, value)?;
             let string = unsafe { xpc_string_create(value.as_ptr()) };
             unsafe {
                 xpc_array_append_value(array, string);
@@ -1507,15 +1602,26 @@ fn xpc_approve_request_with_socket(
             request.allow_missing_keys,
         );
 
-        let keys = string_array(&request.keys)?;
+        let keys = string_array(b"keys\0", &request.keys)?;
         xpc_dictionary_set_value(message, b"keys\0".as_ptr().cast(), keys);
         xpc_release(keys);
 
-        let args = string_array(&request.args)?;
+        if !request.secret_fds.is_empty() {
+            let mappings = request
+                .secret_fds
+                .iter()
+                .map(|(key, fd)| format!("{key}:{fd}"))
+                .collect::<Vec<_>>();
+            let array = string_array(b"secret_fds\0", &mappings)?;
+            xpc_dictionary_set_value(message, c"secret_fds".as_ptr(), array);
+            xpc_release(array);
+        }
+
+        let args = string_array(b"args\0", &request.args)?;
         xpc_dictionary_set_value(message, b"args\0".as_ptr().cast(), args);
         xpc_release(args);
 
-        let conflicts = string_array(&request.env_conflicts)?;
+        let conflicts = string_array(b"env_conflicts\0", &request.env_conflicts)?;
         xpc_dictionary_set_value(message, b"env_conflicts\0".as_ptr().cast(), conflicts);
         xpc_release(conflicts);
     }
@@ -1530,7 +1636,7 @@ fn xpc_approve_request_with_socket(
         return Err("Automic Vault approval did not reply".into());
     }
 
-    let result = unsafe {
+    let result = (|| unsafe {
         if xpc_get_type(reply) == std::ptr::addr_of!(_xpc_type_error).cast() {
             if crate::approval_service_connection_invalid(reply) {
                 Err(crate::approval_service_unavailable_message(&service).into())
@@ -1562,6 +1668,10 @@ fn xpc_approve_request_with_socket(
                     for key in response_keys {
                         let key_cstr = CString::new(key.as_str())
                             .map_err(|_| format!("invalid key returned by approval: {key:?}"))?;
+                        if request.op == "inject-fd" {
+                            secrets.insert(key.clone(), fd::read_xpc_value(values, &key_cstr)?);
+                            continue;
+                        }
                         let value = xpc_dictionary_get_string(values, key_cstr.as_ptr());
                         if !value.is_null() {
                             secrets.insert(
@@ -1585,7 +1695,7 @@ fn xpc_approve_request_with_socket(
                 })
             }
         }
-    };
+    })();
     unsafe { xpc_release(reply) };
     result
 }
@@ -1601,6 +1711,47 @@ fn human_approval_message(decision: &[u8]) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fd_mode_validates_complete_unambiguous_mappings() {
+        let options = parse(os(&["--mode=fd", "+FOO:3", "+BAR:4", "--", "/bin/foo"])).unwrap();
+        assert_eq!(options.keys, ["BAR", "FOO"]);
+        assert_eq!(
+            options.secret_fds,
+            BTreeMap::from([("FOO".into(), 3), ("BAR".into(), 4)])
+        );
+        let request = approval_request(&options, Path::new("/bin/foo"), None, None).unwrap();
+        assert_eq!(request.op, "inject-fd");
+        assert_eq!(request.secret_fds, options.secret_fds);
+        assert!(request.env_conflicts.is_empty());
+        for args in [
+            vec!["--mode=fd", "+FOO"],
+            vec!["--mode=fd"],
+            vec!["+FOO:3"],
+            vec!["--mode=fd", "+FOO:3", "+BAR"],
+            vec!["--mode=fd", "+FOO:3", "+BAR:3"],
+            vec!["--mode=fd", "+FOO:3", "+FOO:4"],
+            vec!["--mode=fd", "+FOO:0"],
+            vec!["--mode=fd", "+FOO:1"],
+            vec!["--mode=fd", "+FOO:2"],
+            vec!["--mode=fd", "+FOO:03"],
+            vec!["--mode=fd", "+FOO:+3"],
+            vec!["--mode=fd", "+FOO:2147483647"],
+            vec!["--mode=fd", "+FOO:3:4"],
+            vec!["--mode=fd", "+FOO:3", "--allow-missing-keys"],
+            vec!["--mode=fd", "+FOO:3", "--replace-existing-env"],
+            vec!["--mode=fd", "--mode=env", "+FOO:3"],
+            vec!["--mode=other", "+FOO"],
+        ] {
+            let mut args = os(&args);
+            args.extend(os(&["--", "/bin/foo"]));
+            assert!(parse(args.clone()).is_err(), "{args:?}");
+        }
+        assert_eq!(
+            parse(os(&["--mode=env", "+FOO", "--", "/bin/foo"])).unwrap(),
+            parse(os(&["+FOO", "--", "/bin/foo"])).unwrap()
+        );
+    }
 
     #[test]
     fn reports_only_known_human_approval_decisions() {
@@ -1631,6 +1782,7 @@ mod tests {
         assert_eq!(
             parse(os(&["+B", "+A", "/bin/echo", "hi"])).unwrap(),
             Options {
+                secret_fds: BTreeMap::new(),
                 replace_existing_env: false,
                 allow_missing_keys: false,
                 keys: vec!["A".into(), "B".into()],
@@ -1653,31 +1805,30 @@ mod tests {
 
     #[test]
     fn denied_approval_does_not_load_secrets() {
-        let options = Options {
-            replace_existing_env: false,
-            allow_missing_keys: false,
-            keys: vec!["SOME_SECRET".into()],
-            target: "/bin/echo".into(),
-            args: os(&["hi"]),
-            shebang_script: None,
-        };
-        let mut stderr = Vec::new();
-        let err = prepare_injection(
-            &options,
-            &mut stderr,
-            None,
-            None,
-            |_| Err("user denied injection".into()),
-            |_, _, _| panic!("approval denial must happen before loading secrets"),
-        )
-        .unwrap_err();
+        for args in [
+            os(&["+SOME_SECRET", "--", "/bin/echo", "hi"]),
+            os(&["--mode=fd", "+SOME_SECRET:3", "--", "/bin/echo", "hi"]),
+        ] {
+            let options = parse(args).unwrap();
+            let mut stderr = Vec::new();
+            let err = prepare_injection(
+                &options,
+                &mut stderr,
+                None,
+                None,
+                |_| Err("user denied injection".into()),
+                |_, _, _| panic!("approval denial must happen before loading secrets"),
+            )
+            .unwrap_err();
 
-        assert_eq!(err, "user denied injection");
+            assert_eq!(err, "user denied injection");
+        }
     }
 
     #[test]
     fn builds_approval_request_without_secret_values() {
         let options = Options {
+            secret_fds: BTreeMap::new(),
             replace_existing_env: true,
             allow_missing_keys: true,
             keys: vec!["A".into(), "B".into()],
@@ -1708,6 +1859,7 @@ mod tests {
         let _guard = crate::global_test_env_lock().lock().unwrap();
         unsafe { std::env::set_var("SOME_SECRET", "ambient") };
         let options = Options {
+            secret_fds: BTreeMap::new(),
             replace_existing_env: false,
             allow_missing_keys: true,
             keys: vec!["SOME_SECRET".into()],
@@ -1728,6 +1880,7 @@ mod tests {
         let _guard = crate::global_test_env_lock().lock().unwrap();
         unsafe { std::env::set_var("NODE_AUTH_TOKEN", "ambient") };
         let options = Options {
+            secret_fds: BTreeMap::new(),
             replace_existing_env: false,
             allow_missing_keys: true,
             keys: vec!["NODE_AUTH_TOKEN".into()],
@@ -1758,6 +1911,7 @@ mod tests {
             unsafe { std::env::set_var(key, value) };
         }
         let options = Options {
+            secret_fds: BTreeMap::new(),
             replace_existing_env: false,
             allow_missing_keys: true,
             keys: vec!["S3CMD_ENV_ASSIGNMENTS".into()],
@@ -1829,6 +1983,7 @@ mod tests {
     #[test]
     fn build_env_uses_approved_secret_values() {
         let options = Options {
+            secret_fds: BTreeMap::new(),
             replace_existing_env: true,
             allow_missing_keys: false,
             keys: vec!["APPROVED_SECRET".into()],
@@ -1887,6 +2042,7 @@ mod tests {
     fn infers_split_shebang_script_argument() {
         let script = temp_script("#!/usr/local/bin/av inject +A /bin/zsh\n");
         let options = Options {
+            secret_fds: BTreeMap::new(),
             replace_existing_env: false,
             allow_missing_keys: false,
             keys: vec!["A".into()],
@@ -1905,6 +2061,7 @@ mod tests {
     fn infers_split_shebang_script_after_interpreter_options() {
         let script = temp_script("#!/usr/local/bin/av inject +A /bin/zsh -f\n");
         let options = Options {
+            secret_fds: BTreeMap::new(),
             replace_existing_env: false,
             allow_missing_keys: false,
             keys: vec!["A".into()],

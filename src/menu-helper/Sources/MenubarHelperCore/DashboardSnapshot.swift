@@ -1669,9 +1669,10 @@ public func loadStoredSecretsResult(
 
 public func loadStoredSecretsForUseResult(
     service: String = automicVaultKeychainService,
-    directAccessRules: [DirectAccessRule] = []
+    directAccessRules: [DirectAccessRule] = [],
+    requiredNames: [String] = []
 ) -> StoredSecretsLoad {
-    retryLockedSecretInventory { accessibility in
+    retryLockedSecretInventory(requiredNames: requiredNames) { accessibility in
         loadStoredSecretsResult(
             service: service,
             directAccessRules: directAccessRules,
@@ -1681,11 +1682,18 @@ public func loadStoredSecretsForUseResult(
 }
 
 func retryLockedSecretInventory(
+    requiredNames: [String] = [],
     _ load: (StoredSecretAccessibility?) -> StoredSecretsLoad
 ) -> StoredSecretsLoad {
     let result = load(nil)
     if case .failure(errSecInteractionNotAllowed) = result {
-        return load(.afterFirstUnlock)
+        let available = load(.afterFirstUnlock)
+        if case .success(let secrets) = available,
+           !Set(requiredNames).isSubset(of: Set(secrets.map(\.account))) {
+            // A filtered inventory cannot establish that an omitted Secret is absent.
+            return result
+        }
+        return available
     }
     return result
 }

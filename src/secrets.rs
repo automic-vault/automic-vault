@@ -916,9 +916,8 @@ fn xpc_request_with_project_directory(
         fn av_xpc_connection_set_empty_event_handler(connection: XpcObject);
     }
 
-    unsafe fn set_string(dict: XpcObject, key: &[u8], value: &str) -> Result<(), String> {
-        let value =
-            CString::new(value).map_err(|_| format!("XPC field contains NUL: {value:?}"))?;
+    unsafe fn set_string(dict: XpcObject, key: &'static [u8], value: &str) -> Result<(), String> {
+        let value = crate::approval_service::xpc_string(key, value)?;
         unsafe { xpc_dictionary_set_string(dict, key.as_ptr().cast(), value.as_ptr()) };
         Ok(())
     }

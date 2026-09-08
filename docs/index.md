@@ -10,6 +10,7 @@
 
 ## Using Automic Vault
 
+- [Choosing a Mechanism](choosing-a-mechanism.md) — which feature to reach for, starting from your situation
 - [Detection and Tool Hardening](tool-hardening.md) — Findings, verification, AWS/Docker handoffs, and terminal permissions
 - [Authorization Gates and Approval](authorization.md) — Access Levels, iPhone and Touch ID setup, Temporary Access Grants, and History
 - [Project Secrets](project-secrets.md) — Project Values with dotenvx and mise

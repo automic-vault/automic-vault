@@ -1,4 +1,11 @@
-use std::ffi::CStr;
+use std::ffi::{CStr, CString};
+
+// Field names are static protocol metadata; rejected values must never enter diagnostics.
+pub(crate) fn xpc_string(field: &'static [u8], value: &str) -> Result<CString, String> {
+    let field =
+        CStr::from_bytes_with_nul(field).map_err(|_| "invalid XPC field name".to_string())?;
+    CString::new(value).map_err(|_| format!("XPC field {} contains NUL", field.to_string_lossy()))
+}
 
 #[cfg(target_os = "macos")]
 unsafe extern "C" {
@@ -53,6 +60,23 @@ fn unavailable_message_for_sandbox(sandbox_denied: bool) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn xpc_string_errors_name_fields_without_disclosing_values() {
+        for field in [&b"value\0"[..], &b"args\0"[..], &b"target\0"[..]] {
+            let name = CStr::from_bytes_with_nul(field).unwrap().to_str().unwrap();
+            assert_eq!(
+                xpc_string(field, "sensitive-before\0sensitive-after").unwrap_err(),
+                format!("XPC field {name} contains NUL")
+            );
+        }
+        assert_eq!(
+            xpc_string(b"value\0", " line\r\nline\n ")
+                .unwrap()
+                .to_bytes(),
+            b" line\r\nline\n "
+        );
+    }
 
     #[cfg(target_os = "macos")]
     #[test]

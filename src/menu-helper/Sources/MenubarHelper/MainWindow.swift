@@ -18,6 +18,27 @@ private let directAccessDocumentationURL = URL(
 private let launcherBundleDocumentationURL = URL(
     string: "https://github.com/automic-vault/automic-vault/blob/main/docs/signed-cli-launchers.md"
 )!
+private let choosingAMechanismDocumentationURL = URL(
+    string: "https://github.com/automic-vault/automic-vault/blob/main/docs/choosing-a-mechanism.md"
+)!
+private let detectionAndHardeningDocumentationURL = URL(
+    string: "https://github.com/automic-vault/automic-vault/blob/main/docs/domain-language.md#detection-and-hardening"
+)!
+private let toolHardeningDocumentationURL = URL(
+    string: "https://github.com/automic-vault/automic-vault/blob/main/docs/architecture.md#tool-hardening"
+)!
+private let authorizationGatesDocumentationURL = URL(
+    string: "https://github.com/automic-vault/automic-vault/blob/main/README.md#authorization-gates"
+)!
+private let blessedScriptsDocumentationURL = URL(
+    string: "https://github.com/automic-vault/automic-vault/blob/main/README.md#blessed-scripts"
+)!
+private let secretProxyDocumentationURL = URL(
+    string: "https://github.com/automic-vault/automic-vault/blob/main/docs/secret-proxy.md"
+)!
+private let authorizationHistoryDocumentationURL = URL(
+    string: "https://github.com/automic-vault/automic-vault/blob/main/docs/domain-language.md#authorization-history"
+)!
 
 enum AutomaticApprovalFeedback: String, CaseIterable, Identifiable {
     case notification
@@ -41,6 +62,28 @@ private extension SecretGateProtection {
             allows($0) && !current.allows($0)
         }
     }
+}
+
+private func blessedScriptAccessSummary(
+    capabilities: [String: SecretGateProtection],
+    inheritsCapabilities: Bool
+) -> String {
+    let summary = capabilities.sorted { $0.key < $1.key }
+        .map { "\($0.key): \($0.value.normalized(forGateID: $0.key).title)" }
+        .joined(separator: ", ")
+    if inheritsCapabilities {
+        return summary.isEmpty
+            ? "Inherited from execution context"
+            : "\(summary); additional authority inherited from execution context"
+    }
+    return summary.isEmpty ? "None" : summary
+}
+
+private func blessedScriptAccessSummary(_ script: BlessedScript) -> String {
+    blessedScriptAccessSummary(
+        capabilities: script.capabilities,
+        inheritsCapabilities: script.usesCapabilityInheritance
+    )
 }
 
 struct BlessedScriptReviewRequest: Sendable {
@@ -518,6 +561,7 @@ final class DashboardModel: ObservableObject {
             replaceExistingEnv: declaration.replaceExistingEnv,
             allowMissingKeys: declaration.allowMissingKeys,
             allowsCanonicalPathExecution: declaration.snapshotIncompatibleInterpreter != nil,
+            inheritsCapabilities: declaration.manifest.inheritsCapabilities,
             capabilities: declaration.manifest.capabilities,
             launchers: pendingBlessingLaunchers,
             reviewedContents: request.scriptData
@@ -530,7 +574,7 @@ final class DashboardModel: ObservableObject {
                 "Checksum: \(script.checksum)",
                 "Target: \(script.target)",
                 "Secret Names: \(script.keys.joined(separator: ", "))",
-                "Access: \(script.capabilities.sorted { $0.key < $1.key }.map { "\($0.key): \($0.value.title)" }.joined(separator: ", "))",
+                "Access: \(blessedScriptAccessSummary(script))",
                 "Launchers: \(script.launchers.map(\.bundleIdentifier).joined(separator: ", "))",
             ].joined(separator: "\n")
         ) { [weak self] in
@@ -603,6 +647,7 @@ final class DashboardModel: ObservableObject {
                 replaceExistingEnv: script.replaceExistingEnv,
                 allowMissingKeys: script.allowMissingKeys,
                 allowsCanonicalPathExecution: script.allowsCanonicalPathExecution == true,
+                inheritsCapabilities: script.usesCapabilityInheritance,
                 capabilities: script.capabilities,
                 launchers: script.launchers + [launcher],
                 blessedAt: script.blessedAt,
@@ -615,7 +660,7 @@ final class DashboardModel: ObservableObject {
                     "Script: \(script.path)",
                     "Checksum: \(script.checksum)",
                     "Secret Names: \(script.keys.joined(separator: ", "))",
-                    "Access: \(script.capabilities.sorted { $0.key < $1.key }.map { "\($0.key): \($0.value.title)" }.joined(separator: ", "))",
+                    "Access: \(blessedScriptAccessSummary(script))",
                 ].joined(separator: "\n")
             ) {
                 self.finishPolicyUpdate(saveBlessedScript(updated), error: "Could not add Verified Launcher")
@@ -656,6 +701,7 @@ final class DashboardModel: ObservableObject {
             replaceExistingEnv: script.replaceExistingEnv,
             allowMissingKeys: script.allowMissingKeys,
             allowsCanonicalPathExecution: script.allowsCanonicalPathExecution == true,
+            inheritsCapabilities: script.usesCapabilityInheritance,
             capabilities: script.capabilities,
             launchers: launchers,
             blessedAt: script.blessedAt,
@@ -2329,13 +2375,12 @@ private struct DashboardRow: View {
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(.primary)
                     .lineLimit(1)
+                    .layoutPriority(1)
                 if let status = item.blessingStatus {
                     BlessingStatusPill(status: status)
-                        .fixedSize()
                 }
                 if let kind = item.kind {
                     DetectorKindPill(kind: kind)
-                        .fixedSize()
                 }
                 if item.isHardened, !item.isTriggered {
                     HardenedDetectorPill()
@@ -2344,9 +2389,11 @@ private struct DashboardRow: View {
                 if let severity = item.severity {
                     Text(severity)
                         .font(.system(size: 10, weight: .bold))
+                        .lineLimit(1)
                         .padding(.horizontal, 6)
                         .frame(height: 18)
                         .outlinedPill(detectorSeverityColor(severity))
+                        .layoutPriority(1)
                 }
             }
             Group {
@@ -2389,11 +2436,17 @@ private struct EmptyListView: View {
     let section: DashboardSection
 
     var body: some View {
-        Text(emptyText)
-            .font(.system(size: 13, weight: .medium))
-            .foregroundStyle(.tertiary)
-            .multilineTextAlignment(.center)
-            .padding()
+        VStack(spacing: 6) {
+            Text(emptyText)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(.tertiary)
+                .multilineTextAlignment(.center)
+            if let learnMoreURL {
+                Link("Learn more", destination: learnMoreURL)
+                    .font(.system(size: 12))
+            }
+        }
+        .padding()
     }
 
     private var emptyText: String {
@@ -2408,6 +2461,21 @@ private struct EmptyListView: View {
         case .proxySessions: "Active `av proxy` sessions appear here while their target process is running"
         case .secretUsage: "Authorization History records requests and their authorization decisions"
         case .settings: "Settings control how Automic Vault behaves"
+        }
+    }
+
+    private var learnMoreURL: URL? {
+        switch section {
+        case .detectors: detectionAndHardeningDocumentationURL
+        case .doctor: detectionAndHardeningDocumentationURL
+        case .hardenedTools: toolHardeningDocumentationURL
+        case .secretGates: authorizationGatesDocumentationURL
+        case .blessedScripts: blessedScriptsDocumentationURL
+        case .launcherBundles: launcherBundleDocumentationURL
+        case .allSecrets: choosingAMechanismDocumentationURL
+        case .proxySessions: secretProxyDocumentationURL
+        case .secretUsage: authorizationHistoryDocumentationURL
+        case .settings: nil
         }
     }
 }
@@ -3632,6 +3700,7 @@ private struct BlessedScriptReviewView: View {
                         path: request.path,
                         checksum: request.declaration.checksum,
                         keys: request.declaration.keys,
+                        inheritsCapabilities: request.declaration.manifest.inheritsCapabilities,
                         capabilities: request.declaration.manifest.capabilities
                     )
                     launcherList(model.pendingBlessingLaunchers) {
@@ -3845,6 +3914,7 @@ private struct BlessedScriptDetailView: View {
                 path: script.path,
                 checksum: script.checksum,
                 keys: script.keys,
+                inheritsCapabilities: script.usesCapabilityInheritance,
                 capabilities: script.capabilities
             )
             launcherList(script.launchers) {
@@ -3882,6 +3952,7 @@ private struct BlessedScriptFields: View {
     let path: String
     let checksum: String
     let keys: [String]
+    let inheritsCapabilities: Bool
     let capabilities: [String: SecretGateProtection]
 
     var body: some View {
@@ -3891,9 +3962,10 @@ private struct BlessedScriptFields: View {
             SecretGateField("Secrets", keys.joined(separator: ", "))
             SecretGateField(
                 "Capabilities",
-                capabilities.sorted(by: { $0.key < $1.key })
-                    .map { "\($0.key): \($0.value.normalized(forGateID: $0.key).title)" }
-                    .joined(separator: ", ")
+                blessedScriptAccessSummary(
+                    capabilities: capabilities,
+                    inheritsCapabilities: inheritsCapabilities
+                )
             )
         }
     }

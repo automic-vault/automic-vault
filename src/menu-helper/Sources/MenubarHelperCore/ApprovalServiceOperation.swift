@@ -16,6 +16,7 @@ public enum ApprovalServiceOperation: String, CaseIterable, Sendable {
     case rcloneHelperVersion = "rclone-helper-version"
     case kubectlHelperVersion = "kubectl-helper-version"
     case inject
+    case injectFd = "inject-fd"
     case varlock
     case keys
     case authorize

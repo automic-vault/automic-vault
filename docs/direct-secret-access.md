@@ -63,3 +63,33 @@ the Secret also revokes every Direct Access Rule for that Secret Name.
 
 All allowed uses still require a persisted Authorization Record before Automic
 Vault releases the Secret.
+
+## Apply Secrets through file descriptors
+
+For a consumer that reads credentials from file descriptors:
+
+```sh
+av inject --mode=fd +FOO:3 +BAR:4 -- /bin/foo
+```
+
+Each mapping supplies the exact stored UTF-8 bytes through its own anonymous
+pipe, followed by EOF. There is no bundle format, trimming, or added newline.
+The consumer must know which descriptor to read for each Secret. The requested
+Secret Names are removed from its environment, including any existing values.
+Other invocations keep the default environment delivery (`--mode=env`).
+
+FD delivery requires Approval for every invocation, even when a Direct Access
+Rule or Blessing exists. The Approval shows the mappings and selected Global or
+Project Values; Authorization History records them before release. Keep the app
+and CLI updated together: older apps reject this delivery operation.
+
+Descriptors must be distinct, unused, canonical decimal integers of 3 or higher;
+stdin, stdout, and stderr are preserved. Duplicate Secret Names, omitted mappings,
+missing Secrets, `--allow-missing-keys`, `--replace-existing-env`, and FD shebangs
+are rejected. If any Value exceeds the available kernel pipe buffer capacity,
+the command fails without starting the Target. FD delivery preserves bytes already
+stored; it cannot recover whitespace removed by an earlier import.
+
+The Target can copy the bytes or pass its read descriptors to children. Pipes
+avoid a named plaintext file and Secret environment injection; they do not make
+the consumer trustworthy or provide encrypted backup/recovery.

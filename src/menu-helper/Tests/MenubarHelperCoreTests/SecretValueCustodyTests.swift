@@ -30,7 +30,7 @@ private struct InMemorySecretValueCustodyAdapter: SecretValueCustodyAdapter {
 
     func repairPendingMutation() -> OSStatus { repairStatus }
     func pendingMutationNames() -> Set<String>? { pendingNames }
-    func inventory() -> StoredSecretsLoad { inventoryResult }
+    func inventory(requiredNames: [String]) -> StoredSecretsLoad { inventoryResult }
     func load(_ value: StoredSecretValue) -> StoredSecretValueLoad {
         loadedValues[value.keychainAccount] ?? .notFound
     }
@@ -161,11 +161,68 @@ private struct InMemorySecretValueCustodyAdapter: SecretValueCustodyAdapter {
     }
 }
 
-private func storedValue(source: StoredSecretValueSource, account: String) -> StoredSecretValue {
+private func storedValue(
+    source: StoredSecretValueSource,
+    account: String,
+    accessibility: StoredSecretAccessibility = .whenUnlocked
+) -> StoredSecretValue {
     StoredSecretValue(
         source: source,
         keychainAccount: account,
-        accessibility: .whenUnlocked,
+        accessibility: accessibility,
         keychainProperties: []
     )
+}
+
+private struct LockedInventoryCustodyAdapter: SecretValueCustodyAdapter {
+    let available: [StoredSecret]
+
+    func repairPendingMutation() -> OSStatus { errSecSuccess }
+    func pendingMutationNames() -> Set<String>? { [] }
+    func inventory(requiredNames: [String]) -> StoredSecretsLoad {
+        retryLockedSecretInventory(requiredNames: requiredNames) { accessibility in
+            accessibility == nil ? .failure(errSecInteractionNotAllowed) : .success(available)
+        }
+    }
+    func load(_ value: StoredSecretValue) -> StoredSecretValueLoad { .success("test-secret") }
+}
+
+@Test(arguments: [false, true])
+func lockedSecretIsUnavailableRatherThanMissing(hasOtherAvailableSecret: Bool) throws {
+    let cwd = try canonicalProjectDirectory(FileManager.default.temporaryDirectory.path)
+    let other = StoredSecret(account: "OTHER_TOKEN", accessibility: .afterFirstUnlock, values: [
+        storedValue(source: .global, account: "OTHER_TOKEN", accessibility: .afterFirstUnlock),
+    ])
+    let custody = SecretValueCustody(adapter: LockedInventoryCustodyAdapter(
+        available: hasOtherAvailableSecret ? [other] : []
+    ))
+
+    #expect(throws: SecretValueCustodyError.inventoryUnavailable(errSecInteractionNotAllowed)) {
+        let selected = try custody.bind(names: ["GH_TOKEN_GITHUB_COM"], cwd: cwd)
+        _ = try custody.load(selected, names: ["GH_TOKEN_GITHUB_COM"])
+    }
+}
+
+@Test func availableWhileLockedSecretRemainsUsable() throws {
+    let cwd = try canonicalProjectDirectory(FileManager.default.temporaryDirectory.path)
+    let secret = StoredSecret(account: "GH_TOKEN_GITHUB_COM", accessibility: .afterFirstUnlock, values: [
+        storedValue(source: .global, account: "GH_TOKEN_GITHUB_COM", accessibility: .afterFirstUnlock),
+    ])
+    let custody = SecretValueCustody(adapter: LockedInventoryCustodyAdapter(available: [secret]))
+    let selected = try custody.bind(names: [secret.account], cwd: cwd)
+
+    #expect(try custody.load(selected, names: [secret.account]) == [secret.account: "test-secret"])
+    #expect(throws: SecretValueCustodyError.inventoryUnavailable(errSecInteractionNotAllowed)) {
+        _ = try custody.bind(names: [secret.account, "LOCKED_TOKEN"], cwd: cwd)
+    }
+}
+
+@Test func completeInventoryStillReportsAnAbsentSecretAsMissing() throws {
+    let cwd = try canonicalProjectDirectory(FileManager.default.temporaryDirectory.path)
+    let custody = SecretValueCustody(adapter: InMemorySecretValueCustodyAdapter(secrets: [], loadedValues: [:]))
+    let selected = try custody.bind(names: ["ABSENT_TOKEN"], cwd: cwd)
+
+    #expect(throws: SecretValueCustodyError.secretMissing("ABSENT_TOKEN")) {
+        _ = try custody.load(selected, names: ["ABSENT_TOKEN"])
+    }
 }

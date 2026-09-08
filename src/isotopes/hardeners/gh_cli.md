@@ -43,3 +43,14 @@ Write Access authorizes recognized remote writes, but Secret Disclosure through
   git-credential`; the hardened `gh` helper path requests the token through
   Automic Vault.
 - `av harden gh-cli` remains accepted as a compatibility alias.
+
+## Using GitHub while the Mac is locked
+
+iPhone Approval cannot unlock a Secret configured as When Unlocked. For a remote
+agent, enable **Available While Locked** on the relevant GitHub Secrets while
+the Mac is unlocked. The Secret Gate still authorizes each operation.
+
+If `gh auth status` reports an invalid token only while locked, or login fails
+with Keychain error `-25308`, follow the
+[locked-Mac setup and troubleshooting guide](../../../docs/authorization.md#remote-work-from-a-locked-mac).
+Login and credential changes can still require an unlocked Mac.

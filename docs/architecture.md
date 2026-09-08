@@ -171,7 +171,7 @@ peer and credential configuration before releasing the single Global Value of
 Private keys are never added to the system agent. There is no decision reuse,
 Blessing, Temporary Access Grant, or retained provenance at this gate. Settings
 stores its enabled state and public key in the Data Protection Keychain.
-See [ADR 0043](adr/0043-ssh-agent-gate.md).
+See [ADR 0044](adr/0044-ssh-agent-gate.md).
 
 ### Launcher Packaging
 
@@ -224,6 +224,21 @@ between verification and execution, and warns on every run. The Blessing stores
 the override, so existing Blessings must be reviewed again before they can use
 canonical-path execution.
 
+For compatibility, a script with no capabilities manifest uses Capability
+Inheritance. `capabilities: { inherit: true }` makes the same behavior explicit.
+Blessing records created before this mode was stored retain their previous
+inheritance behavior until the user reblesses the script.
+An explicit `capabilities: {}` instead establishes a memory-only empty capability
+ceiling for that exact execution. It blocks automic authorization inherited from
+an outer Blessed Script, Launcher policy, Direct Access Rules, and Temporary
+Access Grants; a later gated request may still receive human Approval. A
+snapshot-compatible script that requests no Secret Names and declares this empty
+ceiling starts without Approval because doing so grants no authority. Scripts
+that request Secret Names still require the ordinary Authorization Decision and
+record before release, and then run beneath the empty ceiling. The ceiling uses
+the same live-ancestry evidence and memory-only lifetime as active Blessed Script
+state; restarting Automic Vault or losing observable ancestry ends it.
+
 ### Distribution
 
 The app, CLI, signed helpers, signed fork Isotope releases and Isotopes tap,
@@ -256,9 +271,10 @@ biometric result. Reuse still requires an Authorization Record before Secret
 Application. Operations that may receive long-lived AWS credentials remain
 excluded and require fresh Approval.
 
-An active Blessing is evaluated before a Temporary Access Grant. A matching
-grant may authorize a recognized operation beyond a narrower Blessing only
-inside the grant's exact scope. Matching happens after ordinary Gate Client,
+An active Blessing is evaluated before a Temporary Access Grant. Unless an
+explicit empty capability ceiling is active, a matching grant may authorize a
+recognized operation beyond a narrower Blessing only inside the grant's exact
+scope. Matching happens after ordinary Gate Client,
 Target, request, Secret, gate, Launcher, and runtime verification succeeds.
 Before presenting a queued Approval, the service checks Temporary Access Grants
 again against the still-live Gate Client, current Agent Task Context, and
@@ -455,6 +471,27 @@ stored rule's effective signing authority while omitting policy presets that
 cannot describe a distinct GPG operation.
 
 The Homebrew migration intentionally broadens persisted `readOnly` rules to allow explicit `brew update`. Homebrew could already update itself and its package metadata as a secondary effect of an authorized inspection command, so the old distinction did not enforce strict read-only execution. The legacy `update` classification covers only `brew update`, a Homebrew Update. The legacy `secretDump` classification covers both Secret Disclosure and AWS Elevated Secret Application. The legacy `mutating` classification can cover local, system, or remote effects. Replacing those values with characteristic sets is a policy-engine migration. It requires a reviewed Tool catalog, compatibility tests, and proof that no existing rule gains authority. Until that migration, the legacy classifier remains the enforcement source and the UI explains its established behavior with the canonical names.
+
+## File descriptor delivery
+
+`av inject --mode=fd +FOO:3 +BAR:4 -- COMMAND` performs Secret Application through
+one anonymous pipe per Secret. The signed `av` Gate Client submits the distinct
+`inject-fd` operation, which older helpers reject. The app validates the complete
+mapping and constructs canonical mapping detail for the immutable request,
+iPhone Approval digest, and persisted Authorization Record. Every invocation
+requires fresh Approval, without Direct Access, Blessing, Tool-specific policy,
+or temporary-grant authorization. The ordinary record-before-release transaction
+and exact Project Value selection still apply.
+
+Only unoccupied descriptors of 3 or higher are accepted. The CLI reserves them
+with close-on-exec before XPC, receives length-delimited UTF-8 Secret bytes,
+prebuffers every pipe using nonblocking writes, and closes every write end before
+executing the Target with the same PID. Failure to buffer a complete Value denies
+execution and closes all pipes. Only the requested read ends have close-on-exec
+cleared for the Target. The requested names are removed from its environment.
+FD mode does not support shebang dispatch, missing Secrets, or environment
+replacement flags. Pipe capacity bounds each Value; this is not a streaming
+export or backup format. See [ADR 0043](adr/0043-file-descriptor-secret-delivery.md).
 
 ## Secret custody and availability
 
