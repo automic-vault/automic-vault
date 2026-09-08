@@ -1727,7 +1727,7 @@ private func automaticAccessRecord(_ record: AccessRequestRecord) -> AutoApprova
         accessRequestID: record.id,
         date: record.date,
         launcher: record.launcher ?? "Launcher unavailable",
-        launcherIconPath: "",
+        launcherIconPath: record.launcherIconPath ?? "",
         tool: record.tool,
         displayCommand: record.commandForDisplay,
         keys: record.keys,
@@ -1765,6 +1765,7 @@ private func accessRequestRecord(
         approvalSource: approvalSource,
         reason: reason,
         launcher: launcher.map { approvalPromptRequester(launcher: $0, fallback: $0.path).name },
+        launcherIconPath: launcher.map { approvalPromptRequester(launcher: $0, fallback: $0.path).iconPath },
         callerPath: callerPath,
         target: request.target,
         targetRuntimeProtection: automaticTargetRuntimeProtection(
@@ -1861,6 +1862,13 @@ private func exactAuthorizationCommand(_ request: ApprovalRequest, scriptPath: S
 }
 
 private func authorizationHistoryCommand(_ request: ApprovalRequest, scriptPath: String? = nil) -> String {
+    if let peer = request.sshPeer {
+        let tool = pathString(peer.identity)
+        return prettyShellCommand(
+            target: tool,
+            args: redactedAuthorizationArguments(tool: tool, arguments: Array(peer.arguments.dropFirst()))
+        )
+    }
     let parts = authorizationCommandParts(request, scriptPath: scriptPath)
     return prettyShellCommand(
         target: parts.tool,
@@ -13228,6 +13236,9 @@ private func runApprovalSelfCheck() -> Int32 {
     guard approvalCommandPath(sshRequest) == pathString(selfIdentity),
           sshRequest.target == "/usr/local/bin/av",
           approvalPromptCommand(sshRequest) == "\(shellQuote(pathString(selfIdentity))) pangolin true",
+          authorizationHistoryCommand(sshRequest) == prettyShellCommand(
+              target: pathString(selfIdentity), args: ["pangolin", "true"]
+          ),
           approvalProcessInvocationName(path: nodePath, arguments: ["npm i", "", ""]) == "npm",
           approvalProcessInvocationName(path: nodePath, arguments: ["npm", "install"]) == "npm",
           approvalProcessInvocationName(path: nodePath, arguments: [nodePath, "/opt/npm/bin/npm-cli.js", "i"]) == "npm",
@@ -15604,6 +15615,7 @@ private func runMenuStatusSelfCheck() -> Int32 {
         approvalSource: "Auto",
         reason: "Read Only from app policy",
         launcher: "Codex",
+        launcherIconPath: "/Applications/Codex.app",
         callerPath: "/usr/local/bin/av",
         target: "/bin/zsh",
         cwd: "/tmp",
@@ -15620,6 +15632,7 @@ private func runMenuStatusSelfCheck() -> Int32 {
             approvalSource: source,
             reason: recordedApproval.reason,
             launcher: recordedApproval.launcher,
+            launcherIconPath: recordedApproval.launcherIconPath,
             callerPath: recordedApproval.callerPath,
             target: recordedApproval.target,
             cwd: recordedApproval.cwd,
@@ -15628,6 +15641,9 @@ private func runMenuStatusSelfCheck() -> Int32 {
         )
     }
     let policyDenial = retrospectiveRecord("Denied")
+    guard automaticAccessRecord(policyDenial).launcherIconPath == "/Applications/Codex.app",
+          restoredApproval.launcherIconPath == "/Applications/Codex.app"
+    else { return 1 }
     let grantController = TemporaryAccessGrantController()
     let grantWallNow = Date(timeIntervalSince1970: 20_000)
     let grantMonotonicNow: TimeInterval = 100

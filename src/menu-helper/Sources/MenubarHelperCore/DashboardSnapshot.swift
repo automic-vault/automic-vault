@@ -790,6 +790,7 @@ public struct AccessRequestRecord: Codable, Equatable, Identifiable, Sendable {
     public let approvalSource: String?
     public let reason: String
     public let launcher: String?
+    public let launcherIconPath: String?
     public let callerPath: String
     public let target: String
     public let targetRuntimeProtection: String?
@@ -808,6 +809,7 @@ public struct AccessRequestRecord: Codable, Equatable, Identifiable, Sendable {
         approvalSource: String? = nil,
         reason: String,
         launcher: String?,
+        launcherIconPath: String? = nil,
         callerPath: String,
         target: String,
         targetRuntimeProtection: String? = nil,
@@ -825,6 +827,7 @@ public struct AccessRequestRecord: Codable, Equatable, Identifiable, Sendable {
         self.approvalSource = approvalSource
         self.reason = reason
         self.launcher = launcher
+        self.launcherIconPath = launcherIconPath
         self.callerPath = callerPath
         self.target = target
         self.targetRuntimeProtection = targetRuntimeProtection

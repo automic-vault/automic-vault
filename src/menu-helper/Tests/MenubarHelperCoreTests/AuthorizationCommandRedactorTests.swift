@@ -103,6 +103,7 @@ import Testing
         decision: "Approved",
         reason: "Approved in prompt",
         launcher: "Terminal",
+        launcherIconPath: "/System/Applications/Utilities/Terminal.app",
         callerPath: "/usr/local/bin/av",
         target: "/usr/bin/curl",
         targetRuntimeProtection: "Hardened Runtime",
@@ -115,6 +116,7 @@ import Testing
     #expect(decoded.command == "curl --api-key api-secret")
     #expect(decoded.commandForDisplay == "curl --api-key <redacted>")
     #expect(decoded.targetRuntimeProtection == "Hardened Runtime")
+    #expect(decoded.launcherIconPath == "/System/Applications/Utilities/Terminal.app")
     #expect(!decoded.commandForDisplay.contains("api-secret"))
 }
 
@@ -140,5 +142,6 @@ import Testing
     #expect(record.command == "gh api --header Authorization:secret-value")
     #expect(record.commandForDisplay == "gh <arguments hidden>")
     #expect(record.targetRuntimeProtection == nil)
+    #expect(record.launcherIconPath == nil)
     #expect(!record.commandForDisplay.contains("secret-value"))
 }
