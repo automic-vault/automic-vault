@@ -408,6 +408,12 @@ observe a Secret after Application. These findings inform Approval; they do not
 create authority, replace Target verification, or imply that a Target will keep
 a Secret confidential.
 
+Execution Chain labels may identify an invocation such as `npm` from mutable
+process arguments. They retain the interpreter's executable path and runtime
+posture and do not establish the invoked code's identity. SSH Approvals identify
+the local SSH client separately from the `av` signing Target and describe the
+operation as authentication, which may permit remote writes.
+
 For `av proxy`, the CLI remains the Gate Client and the signed proxy helper is
 the immediate Secret Target. The launched executable is bound as the Proxy
 Session Target and receives bearer Secret References. Its PID version, start

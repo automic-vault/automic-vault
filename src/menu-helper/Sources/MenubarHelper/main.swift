@@ -1869,7 +1869,8 @@ private func authorizationHistoryCommand(_ request: ApprovalRequest, scriptPath:
 }
 
 private func approvalCommandPath(_ request: ApprovalRequest) -> String {
-    resolvedShebangScriptPath(request) ?? request.target
+    if let peer = request.sshPeer { return pathString(peer.identity) }
+    return resolvedShebangScriptPath(request) ?? request.target
 }
 
 private func resolvedShebangScriptPath(_ request: ApprovalRequest) -> String? {
@@ -1970,7 +1971,7 @@ func avExecutableURL() -> URL {
     return URL(fileURLWithPath: "/usr/local/bin/av")
 }
 
-private func sshAgentPeerArguments(_ pid: pid_t) -> [String]? {
+private func processArgumentVector(_ pid: pid_t) -> [String]? {
     var buffer = [CChar](repeating: 0, count: 64 * 1024)
     let count = av_process_arguments_data(pid, &buffer, buffer.count)
     guard count > 0,
@@ -2042,7 +2043,7 @@ private final class SSHAgentPeer: Sendable {
               signing.identifier == "com.automicvault.av", signing.runtimeProtection == .hardened,
               av_socket_peer_identity(socket.fileDescriptor, &current),
               sameProcessIdentity(identity, current), pathString(identity) == pathString(current),
-              sshAgentPeerArguments(current.pid) == arguments, sshAgentPeerCWD(current.pid) == cwd,
+              processArgumentVector(current.pid) == arguments, sshAgentPeerCWD(current.pid) == cwd,
               loadSSHAgentConfiguration() == configuration, configuration.enabled,
               launcherBundleIntegrityError(for: current) == nil
         else { throw AppError("SSH agent connection or configuration changed") }
@@ -6573,7 +6574,7 @@ private final class ApprovalServer: @unchecked Sendable {
         guard av_socket_peer_identity(fd, &origin), origin.euid == helperIdentity.euid,
               origin.audit_session_id == helperIdentity.audit_session_id,
               launcherBundleIntegrityError(for: origin) == nil,
-              let arguments = sshAgentPeerArguments(origin.pid), !arguments.isEmpty
+              let arguments = processArgumentVector(origin.pid), !arguments.isEmpty
         else { throw AppError("SSH socket peer cannot be verified") }
         let config = loadSSHAgentConfiguration()
         let publicFields = config.publicKey.split(separator: " ")
@@ -10500,9 +10501,26 @@ private struct ApprovalProcessSecurityNode: Identifiable {
     let posture: ApprovalProcessPosture
     let explanation: String
     let isAutomicVaultSigned: Bool
+    var invocationName: String? = nil
 
     var id: String { "\(pid ?? -1):\(path)" }
-    var name: String { URL(fileURLWithPath: path).lastPathComponent }
+    var executableName: String { URL(fileURLWithPath: path).lastPathComponent }
+    var name: String { invocationName ?? executableName }
+}
+
+// Diagnostic display only: argv (including npm's rewritten process title) is
+// mutable. It must never replace the executable identity or its runtime posture.
+private func approvalProcessInvocationName(path: String, arguments: [String]) -> String? {
+    guard ["node", "nodejs"].contains(URL(fileURLWithPath: path).lastPathComponent),
+          let first = arguments.first
+    else { return nil }
+    if first == "npm" || first.hasPrefix("npm ") { return "npm" }
+    if let script = arguments.dropFirst().first,
+       URL(fileURLWithPath: script).lastPathComponent == "npm-cli.js"
+    {
+        return "npm"
+    }
+    return nil
 }
 
 private struct ApprovalProcessSecurity {
@@ -10677,8 +10695,16 @@ private func approvalProcessSecurity(
         if isLauncher { roles.append("Verified Launcher") }
         if isTarget { roles.append(request.keys.isEmpty ? "Target" : "Secret recipient") }
         if isGateClient { roles.append("Verified Gate Client") }
+        if identity.pid == request.sshPeer?.identity.pid { roles.append("SSH client") }
         if roles.isEmpty { roles.append("Intermediary") }
 
+        let invocationName = identity.execution.flatMap { execution -> String? in
+            guard !isLauncher, approvalProcessExecutionIsLive(execution),
+                  let arguments = processArgumentVector(identity.pid),
+                  approvalProcessExecutionIsLive(execution)
+            else { return nil }
+            return approvalProcessInvocationName(path: identity.path, arguments: arguments)
+        }
         let signing = identity.execution.flatMap { execution -> LiveSigningInfo? in
             guard approvalProcessExecutionIsLive(execution) else { return nil }
             let signing = liveSigningInfo(pid: identity.pid)
@@ -10699,7 +10725,8 @@ private func approvalProcessSecurity(
             isAutomicVaultSigned: isAutomicVaultSigned(
                 signing,
                 teamIdentifier: automicVaultTeamIdentifier
-            )
+            ),
+            invocationName: invocationName
         )
     }
 
@@ -11527,7 +11554,8 @@ private func showApprovalAlert(
             launcher: launcher,
             processSecurity: processSecurity,
             receivedAt: receivedAt
-        )
+        ),
+        sshSigningTargetPath: request.sshPeer.map { _ in escapedSecurityPath(request.target) }
     )
     let usesIPhoneApproval = PhoneApprovalCoordinator.shared.isEnabled
     let usesTouchIDApproval = TouchIDApproval.isEnabled
@@ -11829,6 +11857,15 @@ private struct ApprovalPromptContent {
     let blessing: BlessedScriptPromptContext?
     let processSecurity: ApprovalProcessSecurity
     let sections: [ApprovalPromptSection]
+    var sshSigningTargetPath: String? = nil
+
+    var operationTitle: String? {
+        sshSigningTargetPath == nil ? operation : "SSH Authentication"
+    }
+
+    var writeAccessUnavailableReason: String? {
+        sshSigningTargetPath == nil ? temporaryGrantUnavailableReason : nil
+    }
 }
 
 private extension ApprovalProcessPosture {
@@ -11857,6 +11894,9 @@ private extension ApprovalProcessSecurityNode {
         [
             "\(displayRoles): \(name.isEmpty ? path : name)",
             "Path: \(escapedSecurityPath(path))",
+            invocationName.map { _ in
+                "Invoked via \(executableName); name reported by mutable process arguments, not verified code identity"
+            },
             pid.map { "PID: \($0)" },
             "Status: \(posture.presentation.title)",
             explanation,
@@ -12073,12 +12113,18 @@ private struct ApprovalPromptProcessNodeView: View {
             .overlay {
                 Capsule().stroke(.white.opacity(0.1), lineWidth: 1)
             }
+            if node.invocationName != nil {
+                Text("via \(node.executableName)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
             ApprovalPromptPathView(path: escapedSecurityPath(node.path))
         }
         .frame(width: 150)
+        .help(node.details)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(
-            "\(node.displayRoles), \(node.name), \(presentation.title)\(node.isAutomicVaultSigned ? ", signed by Automic Vault" : "")"
+            "\(node.displayRoles), \(node.name)\(node.invocationName == nil ? "" : " via \(node.executableName)"), \(presentation.title)\(node.isAutomicVaultSigned ? ", signed by Automic Vault" : "")"
         )
     }
 }
@@ -12260,7 +12306,7 @@ private struct ApprovalPromptView: View {
             .defaultScrollAnchor(.top)
             .layoutPriority(1)
 
-            if let reason = content.temporaryGrantUnavailableReason {
+            if let reason = content.writeAccessUnavailableReason {
                 Text(reason)
                     .font(.footnote)
                     .foregroundStyle(.secondary)
@@ -12438,7 +12484,7 @@ private struct ApprovalPromptCommandView: View {
                     }
                 }
                 VStack(alignment: .leading, spacing: 8) {
-                    if let operation = content.operation {
+                    if let operation = content.operationTitle {
                         ApprovalPromptInlineMeta(
                             label: "Operation",
                             value: operation,
@@ -12463,10 +12509,17 @@ private struct ApprovalPromptCommandView: View {
                         systemImage: "folder"
                     )
                     ApprovalPromptInlineMeta(
-                        label: "Full Path",
+                        label: content.sshSigningTargetPath == nil ? "Full Path" : "SSH Client",
                         value: content.commandPath,
                         systemImage: "terminal"
                     )
+                    if let target = content.sshSigningTargetPath {
+                        ApprovalPromptInlineMeta(
+                            label: "Signing Target",
+                            value: target,
+                            systemImage: "key.horizontal"
+                        )
+                    }
                     if let blessing = content.blessing {
                         ApprovalPromptInlineMeta(
                             label: "Capabilities",
@@ -13148,6 +13201,33 @@ private func runApprovalSelfCheck() -> Int32 {
             ),
         ])
     )
+    let sshRequest = ApprovalRequest(
+        op: "inject", keys: [sshCredentialSecretName], target: "/usr/local/bin/av",
+        args: ["ssh-agent"], cwd: "/tmp", replaceExistingEnv: false,
+        allowMissingKeys: false, envConflicts: [], shebangScript: nil,
+        scriptData: nil, tool: "ssh-agent", title: nil, detail: nil,
+        sshPeer: SSHAgentPeer(
+            socket: .nullDevice, identity: selfIdentity, configuration: SSHAgentConfiguration(),
+            launchers: [], arguments: [pathString(selfIdentity), "pangolin", "true"],
+            cwd: "/tmp", helperIdentity: selfIdentity
+        )
+    )
+    let nodePath = "/opt/homebrew/bin/node"
+    guard approvalCommandPath(sshRequest) == pathString(selfIdentity),
+          sshRequest.target == "/usr/local/bin/av",
+          approvalPromptCommand(sshRequest) == "\(shellQuote(pathString(selfIdentity))) pangolin true",
+          approvalProcessInvocationName(path: nodePath, arguments: ["npm i", "", ""]) == "npm",
+          approvalProcessInvocationName(path: nodePath, arguments: ["npm", "install"]) == "npm",
+          approvalProcessInvocationName(path: nodePath, arguments: [nodePath, "/opt/npm/bin/npm-cli.js", "i"]) == "npm",
+          approvalProcessInvocationName(path: nodePath, arguments: [nodePath, "postinstall.cjs"]) == nil,
+          approvalProcessInvocationName(path: nodePath, arguments: [nodePath, "-e", "npm-cli.js"]) == nil,
+          approvalProcessInvocationName(path: nodePath, arguments: ["npm-imposter"]) == nil,
+          approvalProcessInvocationName(path: "/usr/bin/ssh", arguments: ["npm i"]) == nil,
+          approvalProcessInvocationName(path: nodePath, arguments: []) == nil
+    else {
+        print("SSH command and npm invocation presentation self-check failed")
+        return 1
+    }
     guard processEnvironmentValueSelfCheck() else {
         print("bounded peer environment self-check failed")
         return 2
@@ -13346,6 +13426,28 @@ private func runApprovalSelfCheck() -> Int32 {
         processSecurity: promptProcessSecurity,
         sections: []
     )
+    var sshPromptContent = promptContent
+    sshPromptContent.sshSigningTargetPath = sshRequest.target
+    let npmNode = ApprovalProcessSecurityNode(
+        pid: 42, path: nodePath, roles: ["Intermediary"], posture: .doesNotMeetRequirements,
+        explanation: "Hardened Runtime is not enabled; Executes mutable JavaScript and dependencies",
+        isAutomicVaultSigned: false, invocationName: "npm"
+    )
+    guard sshPromptContent.operationTitle == "SSH Authentication",
+          sshPromptContent.writeAccessUnavailableReason == nil,
+          promptContent.operationTitle == promptContent.operation,
+          promptContent.writeAccessUnavailableReason == promptContent.temporaryGrantUnavailableReason,
+          npmNode.name == "npm", npmNode.executableName == "node",
+          npmNode.details.contains(nodePath),
+          npmNode.details.contains("not verified code identity"),
+          npmNode.posture == .doesNotMeetRequirements,
+          !npmNode.isLauncher, !npmNode.isTarget,
+          NSHostingView(rootView: ApprovalPromptCommandView(content: sshPromptContent)).fittingSize.height > 0,
+          NSHostingView(rootView: ApprovalPromptProcessNodeView(node: npmNode)).fittingSize.height > 0
+    else {
+        print("SSH Approval presentation self-check failed")
+        return 1
+    }
     let collapsedPrompt = NSHostingView(
         rootView: ApprovalPromptView(
             content: promptContent,
