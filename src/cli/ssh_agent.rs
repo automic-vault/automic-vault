@@ -101,7 +101,11 @@ fn serve(path: &Path) -> Result<(), String> {
         .filter(|p| p.is_absolute())
         .ok_or("Socket path must be absolute")?;
     // Never follow a substituted private directory or lock file.
-    match std::fs::DirBuilder::new().recursive(true).mode(0o700).create(parent) {
+    match std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(parent)
+    {
         Ok(()) => (),
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => (),
         Err(e) => return Err(e.to_string()),
