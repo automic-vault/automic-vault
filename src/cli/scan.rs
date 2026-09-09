@@ -74,6 +74,7 @@ fn json_detectors(home: &Path) -> Vec<serde_json::Value> {
                 "homepage": detector.homepage,
                 "docs_url": detector.docs_url,
                 "documentation": detector.documentation,
+                "requires_periodic_scan": detector.requires_periodic_scan,
                 "watch_scopes": detector.watch_scopes.into_iter().map(|scope| serde_json::json!({
                     "path": scope.path,
                     "recursive": scope.recursive,
@@ -601,6 +602,30 @@ mod tests {
         assert!(output.contains(r#""name":"git-credentials-file""#));
         assert!(output.contains(r##""documentation":"# git-credential-fill Detector"##));
         assert!(output.contains(r#""watch_scopes":[{"path":"#));
+    }
+
+    #[test]
+    fn detectors_with_non_file_state_require_periodic_scans_even_when_clean() {
+        // Metadata, not last-scan findings, must opt in: the first exposure has
+        // no affected path to watch either.
+        let detectors = json_detectors(Path::new("/Users/fixture"));
+        let periodic = detectors
+            .iter()
+            .filter(|detector| detector["requires_periodic_scan"] == true)
+            .map(|detector| detector["name"].as_str().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            periodic,
+            [
+                "cloudflare-wrangler",
+                "gh-cli-keychain-access",
+                "git-credential-fill",
+                "macOS",
+                "sip",
+                "stripe-cli",
+                "sudo",
+            ]
+        );
     }
 
     #[test]

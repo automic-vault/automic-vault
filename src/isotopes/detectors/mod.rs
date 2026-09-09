@@ -164,6 +164,7 @@ pub(crate) struct DetectorMetadata {
     pub(crate) docs_url: String,
     pub(crate) documentation: &'static str,
     pub(crate) watch_scopes: Vec<DetectorWatchScope>,
+    pub(crate) requires_periodic_scan: bool,
 }
 
 pub(crate) struct DetectorWatchScope {
@@ -558,6 +559,19 @@ pub(crate) fn metadata(home: &Path) -> Vec<DetectorMetadata> {
                 documentation: detector.documentation,
                 homepage: detector.docs_url.to_string(),
                 docs_url: detector.docs_url.to_string(),
+                // Keychain metadata, launchd environment, and system state can
+                // change without writing any declared watch scope. Opt in even
+                // while clean, so the first exposure is discovered too.
+                requires_periodic_scan: matches!(
+                    name.as_str(),
+                    "cloudflare-wrangler"
+                        | "gh-cli-keychain-access"
+                        | "git-credential-fill"
+                        | "macOS"
+                        | "sip"
+                        | "stripe-cli"
+                        | "sudo"
+                ),
                 name,
                 watch_scopes: sensitive_file_scopes(detector.documentation, home),
             }

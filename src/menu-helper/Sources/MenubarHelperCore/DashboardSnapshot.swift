@@ -156,6 +156,7 @@ public struct DetectorMetadata: Codable, Equatable, Sendable {
     public let docsURL: String
     public let documentation: String
     public let watchScopes: [DetectorWatchScope]
+    public let requiresPeriodicScan: Bool
 
     public var displayName: DetectorDisplayName {
         detectorDisplayName(name)
@@ -166,13 +167,15 @@ public struct DetectorMetadata: Codable, Equatable, Sendable {
         homepage: String,
         docsURL: String,
         documentation: String = "",
-        watchScopes: [DetectorWatchScope] = []
+        watchScopes: [DetectorWatchScope] = [],
+        requiresPeriodicScan: Bool = false
     ) {
         self.name = name
         self.homepage = homepage
         self.docsURL = docsURL
         self.documentation = documentation
         self.watchScopes = watchScopes
+        self.requiresPeriodicScan = requiresPeriodicScan
     }
 
     public init(from decoder: Decoder) throws {
@@ -182,6 +185,7 @@ public struct DetectorMetadata: Codable, Equatable, Sendable {
         self.docsURL = try container.decode(String.self, forKey: .docsURL)
         self.documentation = try container.decodeIfPresent(String.self, forKey: .documentation) ?? ""
         self.watchScopes = try container.decodeIfPresent([DetectorWatchScope].self, forKey: .watchScopes) ?? []
+        self.requiresPeriodicScan = try container.decodeIfPresent(Bool.self, forKey: .requiresPeriodicScan) ?? false
     }
 
     enum CodingKeys: String, CodingKey {
@@ -190,6 +194,7 @@ public struct DetectorMetadata: Codable, Equatable, Sendable {
         case docsURL = "docs_url"
         case documentation
         case watchScopes = "watch_scopes"
+        case requiresPeriodicScan = "requires_periodic_scan"
     }
 }
 

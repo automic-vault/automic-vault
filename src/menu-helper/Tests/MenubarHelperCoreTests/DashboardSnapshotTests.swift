@@ -59,7 +59,7 @@ import Testing
 
 @Test func detectorMetadataDecodesAllDetectors() throws {
     let data = Data("""
-    {"detectors":[{"name":"git","homepage":"https://git-scm.com/","docs_url":"https://example.test/git","documentation":"# git Detector","watch_scopes":[{"path":"/Users/tester/.gitconfig","recursive":false}]}]}
+    {"detectors":[{"name":"git","homepage":"https://git-scm.com/","docs_url":"https://example.test/git","documentation":"# git Detector","requires_periodic_scan":true,"watch_scopes":[{"path":"/Users/tester/.gitconfig","recursive":false}]}]}
     """.utf8)
 
     #expect(try detectorMetadata(from: data) == [
@@ -68,7 +68,8 @@ import Testing
             homepage: "https://git-scm.com/",
             docsURL: "https://example.test/git",
             documentation: "# git Detector",
-            watchScopes: [DetectorWatchScope(path: "/Users/tester/.gitconfig", recursive: false)]
+            watchScopes: [DetectorWatchScope(path: "/Users/tester/.gitconfig", recursive: false)],
+            requiresPeriodicScan: true
         )
     ])
 }

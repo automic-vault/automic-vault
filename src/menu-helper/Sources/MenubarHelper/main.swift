@@ -19,6 +19,7 @@ private let pendingSecretGateKey = "pendingSecretGate"
 private let varlockProtocolVersion: UInt64 = 1
 let secCodeSignatureAdHoc: UInt32 = 0x2
 private let scanMaximumDelay: TimeInterval = 5
+private let periodicDetectorScanInterval: TimeInterval = 5 * 60
 private let scanQueue = DispatchQueue(label: "com.automicvault.av2.scan")
 private let temporaryAccessGrantCollapseDelay: TimeInterval = 5
 private let updateCheckInterval: Duration = .seconds(24 * 60 * 60)
@@ -87,7 +88,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var scanBurstStartedAt: TimeInterval?
     private var pendingFullScan = false
     private var pendingScanDetectors = Set<String>()
+    private var servicesStopped = false
     private var isScanRunning = false
+    private var failedScanDetectors = Set<String>()
+    private var fullScanFailed = false
     private var latestDetectorFindings: [DetectorFinding] = []
     private var detectorMetadata: [DetectorMetadata] = []
     private var eventStream: FSEventStreamRef?
@@ -95,6 +99,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var fileWatchSources: [DispatchSourceFileSystemObject] = []
     private var missingFileWatchDetectors: [String: Set<String>] = [:]
     private var missingFilePoller: DispatchSourceTimer?
+    private var periodicDetectorPoller: DispatchSourceTimer?
     private var mainWindow: NSWindow?
     private var isUserSessionActive = true
     private var areScreensAwake = true
@@ -382,6 +387,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func stopServices() {
+        servicesStopped = true
         sshAgent.stop()
         temporaryAccessGrants.cancelAll()
         refreshTemporaryAccessGrants()
@@ -401,6 +407,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         scanWorkItem = nil
         scanBurstStartedAt = nil
         stopDetectorWatchers()
+        periodicDetectorPoller?.cancel()
+        periodicDetectorPoller = nil
         approval?.stop()
         approval = nil
     }
@@ -679,6 +687,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func startDetectorWatchers() {
+        guard !servicesStopped else { return }
         stopDetectorWatchers()
         let home = FileManager.default.homeDirectoryForCurrentUser.standardizedFileURL.path
         var exact = [String: Set<String>]()
@@ -738,6 +747,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         recursiveWatchDetectors = recursive
         startRecursiveWatcher(paths: Array(recursive.keys))
         startMissingFilePoller()
+        startPeriodicDetectorPoller()
     }
 
     private func startRecursiveWatcher(paths: [String]) {
@@ -786,6 +796,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if !detectors.isEmpty {
             scheduleScan(detectors: detectors, after: 1)
         }
+    }
+
+    private func startPeriodicDetectorPoller() {
+        // Watchers are rebuilt after every scan. Keep this independent so
+        // unrelated file activity cannot postpone a non-file state refresh.
+        guard periodicDetectorPoller == nil,
+              detectorMetadata.contains(where: \.requiresPeriodicScan) else { return }
+        let poller = DispatchSource.makeTimerSource(queue: .main)
+        poller.schedule(
+            deadline: .now() + periodicDetectorScanInterval,
+            repeating: periodicDetectorScanInterval,
+            leeway: .seconds(15)
+        )
+        poller.setEventHandler { [weak self] in
+            self?.schedulePeriodicDetectorScan()
+        }
+        poller.resume()
+        periodicDetectorPoller = poller
+    }
+
+    private func schedulePeriodicDetectorScan() {
+        let detectors = Set(detectorMetadata.filter(\.requiresPeriodicScan).map(\.name))
+        guard !detectors.isEmpty else { return }
+        // Reuse the single-flight queue: timer and file events coalesce, with
+        // at most one pending refresh while a scan is already running.
+        scheduleScan(detectors: detectors, after: 0)
     }
 
     private func startMissingFilePoller() {
@@ -847,7 +883,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func runPendingScan() {
-        guard !isScanRunning, pendingFullScan || !pendingScanDetectors.isEmpty else { return }
+        guard !servicesStopped, !isScanRunning, pendingFullScan || !pendingScanDetectors.isEmpty else { return }
         let detectors = pendingFullScan ? nil : pendingScanDetectors
         pendingFullScan = false
         pendingScanDetectors.removeAll()
@@ -862,14 +898,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func applyScanResult(_ result: ScanResult) {
         isScanRunning = false
+        guard !servicesStopped else { return }
         switch result {
         case .success(let findings, let detectors):
             if let detectors {
+                failedScanDetectors.subtract(detectors)
                 latestDetectorFindings.removeAll {
                     !Set($0.detectors).isDisjoint(with: detectors)
                 }
                 latestDetectorFindings.append(contentsOf: findings)
             } else {
+                failedScanDetectors.removeAll()
+                fullScanFailed = false
                 latestDetectorFindings = findings
             }
             if !detectorMetadata.isEmpty {
@@ -904,7 +944,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     image: shieldImage(color: level.color)
                 )
             }
-        case .failed:
+        case .failed(let detectors):
+            if let detectors {
+                failedScanDetectors.formUnion(detectors)
+            } else {
+                fullScanFailed = true
+            }
+        }
+        // A successful unrelated partial scan cannot certify a failed check.
+        if fullScanFailed || !failedScanDetectors.isEmpty {
             setBaseStatusImage(brandImage(color: .systemRed))
             setScanStatus("Scan failed", image: shieldImage(color: .systemRed))
         }
@@ -1883,7 +1931,7 @@ private func resolvedShebangScriptPath(_ request: ApprovalRequest) -> String? {
 
 private enum ScanResult {
     case success([DetectorFinding], Set<String>?)
-    case failed
+    case failed(Set<String>?)
 }
 
 private func boundedScanDelay(
@@ -1937,7 +1985,7 @@ private func scanResult(detectors: Set<String>?) -> ScanResult {
     do {
         try process.run()
     } catch {
-        return .failed
+        return .failed(detectors)
     }
 
     let data = output.fileHandleForReading.readDataToEndOfFile()
@@ -1945,7 +1993,7 @@ private func scanResult(detectors: Set<String>?) -> ScanResult {
     guard process.terminationStatus == 0,
           let findings = try? detectorFindings(from: data)
     else {
-        return .failed
+        return .failed(detectors)
     }
     return .success(findings, detectors)
 }
@@ -16847,6 +16895,7 @@ private func runMenuStatusSelfCheck() -> Int32 {
     return 0
 }
 
+@MainActor
 private func runScanSchedulingSelfCheck() -> Int32 {
     var burstStartedAt: TimeInterval?
     guard boundedScanDelay(
@@ -16868,11 +16917,67 @@ private func runScanSchedulingSelfCheck() -> Int32 {
         maximumDelay: 5
     ) == 0,
     scanDetectorGroup(["npm"]) == ["npm"],
-    scanDetectorGroup(["bash"]) == ["bash", "zsh"]
+    scanDetectorGroup(["bash"]) == ["bash", "zsh"],
+    AppDelegate().checkPeriodicDetectorRefresh()
     else {
         return 1
     }
     return 0
+}
+
+extension AppDelegate {
+    fileprivate func checkPeriodicDetectorRefresh() -> Bool {
+        detectorMetadata = [
+            DetectorMetadata(name: "git-credential-fill", homepage: "", docsURL: "", requiresPeriodicScan: true),
+            DetectorMetadata(name: "npm", homepage: "", docsURL: ""),
+        ]
+        defer { stopServices() }
+        startDetectorWatchers()
+        guard let poller = periodicDetectorPoller else { return false }
+        let timerIdentity = ObjectIdentifier(poller as AnyObject)
+
+        // Start clean, change only non-file state, and invoke the timer's real
+        // callback. No filesystem event, credential probe, or real CLI runs.
+        isScanRunning = true
+        schedulePeriodicDetectorScan()
+        scheduleScan(detectors: ["npm"], after: 1)
+        schedulePeriodicDetectorScan()
+        runPendingScan()
+        guard !pendingFullScan,
+              pendingScanDetectors == ["git-credential-fill", "npm"],
+              isScanRunning else { return false }
+        scheduleScan(after: 0)
+        schedulePeriodicDetectorScan()
+        guard pendingFullScan, pendingScanDetectors.isEmpty else { return false }
+        scanWorkItem?.cancel()
+        scanWorkItem = nil
+        pendingFullScan = false
+
+        let json = Data(#"{"findings":[{"source":"git-credential-fill","severity":"high","affected":[]},{"source":"npm","severity":"high","affected":[]}]}"#.utf8)
+        guard let findings = try? detectorFindings(from: json) else { return false }
+        applyScanResult(.success(findings, nil))
+        guard latestDetectorFindings.count == 2,
+              let retainedPoller = periodicDetectorPoller,
+              ObjectIdentifier(retainedPoller as AnyObject) == timerIdentity else { return false }
+        applyScanResult(.failed(["git-credential-fill"]))
+        guard latestDetectorFindings.count == 2, scanStatusItem.title == "Scan failed" else { return false }
+        applyScanResult(.success([findings[1]], ["npm"]))
+        guard scanStatusItem.title == "Scan failed" else { return false }
+        // Remediation clears just the refreshed detector; unrelated findings
+        // and the timer's original deadline survive the partial result.
+        applyScanResult(.success([], ["git-credential-fill"]))
+        guard latestDetectorFindings.map(\.source) == ["npm"],
+              failedScanDetectors.isEmpty, scanStatusItem.title != "Scan failed" else { return false }
+        applyScanResult(.failed(nil))
+        applyScanResult(.success([], ["git-credential-fill"]))
+        guard scanStatusItem.title == "Scan failed" else { return false }
+        applyScanResult(.success([], nil))
+        guard !fullScanFailed, scanStatusItem.title == "No Vulnerabilities Detected" else { return false }
+        stopServices()
+        applyScanResult(.success([], nil))
+        startDetectorWatchers()
+        return periodicDetectorPoller == nil && missingFilePoller == nil
+    }
 }
 
 @MainActor
