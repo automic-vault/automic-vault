@@ -7,6 +7,7 @@ mod gpg;
 mod isotopes;
 mod path_security;
 mod secrets;
+mod uv;
 
 pub use cli::{run, run_scanner_terminal, run_terminal};
 pub use gpg::run_git_program;
