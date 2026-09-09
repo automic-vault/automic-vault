@@ -9355,7 +9355,20 @@ private func awsRequestMayUseLongLivedCredentials(_ request: ApprovalRequest) ->
 }
 
 private func approvalRequestWithCredentialContext(_ request: ApprovalRequest) -> ApprovalRequest {
-    guard awsRequestMayUseLongLivedCredentials(request) else { return request }
+    let title: String
+    let detail: String
+    if request.tool == "gh", ghRequestClassification(request.args) == .secretDump {
+        title = "Disclose GitHub token?"
+        detail = "This Secret Disclosure can return the raw GitHub token to standard output or another general-purpose destination. Write Access does not authorize it."
+    } else if request.tool == "gh", ghRequestClassification(request.args) == .unknown {
+        title = "Allow unclassified GitHub credential use?"
+        detail = "Automic Vault cannot determine this command’s effects from its arguments. A gh alias can expand to a command that prints the raw GitHub token. Approval permits this possible Secret Disclosure."
+    } else if awsRequestMayUseLongLivedCredentials(request) {
+        title = "Use long-lived AWS credentials?"
+        detail = "AWS does not allow non-MFA GetSessionToken credentials to call this operation. Unless the selected profile uses MFA or assumes a role, Automic Vault will provide your original AWS access keys directly to AWS CLI; they retain every IAM permission assigned to those keys."
+    } else {
+        return request
+    }
     return ApprovalRequest(
         op: request.op,
         keys: request.keys,
@@ -9369,8 +9382,8 @@ private func approvalRequestWithCredentialContext(_ request: ApprovalRequest) ->
         scriptData: request.scriptData,
         snapshotIncompatibleInterpreter: request.snapshotIncompatibleInterpreter,
         tool: request.tool,
-        title: "Use long-lived AWS credentials?",
-        detail: "AWS does not allow non-MFA GetSessionToken credentials to call this operation. Unless the selected profile uses MFA or assumes a role, Automic Vault will provide your original AWS access keys directly to AWS CLI; they retain every IAM permission assigned to those keys.",
+        title: title,
+        detail: detail,
         selectedSecretValues: request.selectedSecretValues
     )
 }
@@ -9409,10 +9422,15 @@ private let brewReadOnlyCommands = Set([
 ])
 
 private func ghRequestIsSecretDump(_ args: [String]) -> Bool {
-    let words = ghCommandWords(args).map { $0.lowercased() }
+    let words = ghCommandWords(args)
     guard words.count >= 2, words[0] == "auth" else { return false }
     return words[1] == "token"
-        || (words[1] == "status" && words.dropFirst(2).contains("--show-token"))
+        // Only get currently reads a token. Treat any credential request through
+        // this helper as disclosure, including future protocol operations.
+        || words[1] == "git-credential"
+        || (words[1] == "status" && words.dropFirst(2).contains {
+            $0 == "--show-token" || $0.hasPrefix("--show-token=")
+        })
 }
 
 private func awsRequestIsReadOnly(_ args: [String]) -> Bool {
@@ -9498,16 +9516,18 @@ private func standardizedPath(_ path: String, cwd: String) -> String {
 private func ghRequestIsReadOnly(_ args: [String]) -> Bool {
     let words = ghCommandWords(args)
     guard let firstWord = words.first else { return false }
-    let command = ghCanonicalCommand(firstWord.lowercased())
+    let command = ghCanonicalCommand(firstWord)
     if words.contains("--show-token") { return false }
     if command == "api" {
         return ghApiRequestClassification(Array(words.dropFirst())) == .readOnly
     }
     if ["alias", "extension", "config", "skill"].contains(command) { return false }
-    if ["status", "browse", "search"].contains(command) { return true }
+    if ["status", "browse"].contains(command) { return true }
     guard words.count >= 2 else { return false }
-    let subcommand = words[1].lowercased()
+    let subcommand = words[1]
     switch command {
+    case "search":
+        return ["code", "commits", "issues", "prs", "repos"].contains(subcommand)
     case "auth":
         return subcommand == "status"
     case "repo":
@@ -9539,19 +9559,49 @@ private func ghRequestClassification(_ args: [String]) -> SecretGateRequestClass
     if ghRequestIsSecretDump(args) { return .secretDump }
     if ghRequestIsReadOnly(args) { return .readOnly }
     if ghRequestIsLocalWrite(args) { return .localWrite }
+    let words = ghCommandWords(args)
+    guard let command = words.first.map(ghCanonicalCommand) else { return .unknown }
+    if command == "api" { return .mutating }
+    guard words.count >= 2,
+          ghWriteCommands[command]?.contains(words[1]) == true
+    else { return .unknown }
     return .mutating
 }
+
+// Reviewed against automic-vault/gh-cli f192b2530444b0ddec92f4063ac4315d13d2b354.
+// Only builtin leaf commands belong here: gh expands user aliases in-process
+// while its keyring bridge still submits the original argv. Unknown commands
+// and parsing failures must never inherit Write Access (or Full Access).
+private let ghWriteCommands: [String: Set<String>] = [
+    "auth": ["login", "logout", "refresh", "setup-git", "switch"],
+    "repo": ["archive", "create", "new", "delete", "edit", "fork", "rename", "set-default", "sync", "unarchive"],
+    "issue": ["close", "comment", "create", "new", "delete", "develop", "edit", "lock", "pin", "reopen", "transfer", "unlock", "unpin"],
+    "pr": ["close", "comment", "create", "new", "edit", "lock", "merge", "ready", "reopen", "revert", "review", "unlock", "update-branch"],
+    "run": ["cancel", "delete", "rerun", "watch"],
+    "workflow": ["disable", "enable", "run"],
+    "release": ["create", "new", "delete", "delete-asset", "edit", "upload", "verify", "verify-asset"],
+    "gist": ["create", "new", "delete", "edit", "rename"],
+    "cache": ["delete"],
+    "secret": ["delete", "remove", "set"],
+    "variable": ["delete", "remove", "get", "set"],
+    "label": ["clone", "create", "delete", "edit"],
+    "gpg-key": ["add", "delete"],
+    "ssh-key": ["add", "delete"],
+    "agent-task": ["create"],
+    "project": ["close", "copy", "create", "delete", "edit", "field-create", "field-delete", "field-list", "item-add", "item-archive", "item-create", "item-delete", "item-edit", "item-list", "link", "list", "ls", "mark-template", "unlink", "view"],
+    "codespace": ["code", "cp", "create", "delete", "edit", "jupyter", "list", "ls", "logs", "ports", "rebuild", "ssh", "stop", "view"],
+]
 
 private func ghRequestIsLocalWrite(_ args: [String]) -> Bool {
     let words = ghCommandWords(args)
     guard words.count >= 2 else { return false }
-    let command = ghCanonicalCommand(words[0].lowercased())
-    let subcommand = words[1].lowercased()
+    let command = ghCanonicalCommand(words[0])
+    let subcommand = words[1]
     switch command {
     case "repo":
         return subcommand == "clone"
     case "pr":
-        return subcommand == "checkout"
+        return ["checkout", "co"].contains(subcommand)
     case "gist":
         return subcommand == "clone"
     case "run", "release", "attestation":
@@ -9563,6 +9613,8 @@ private func ghRequestIsLocalWrite(_ args: [String]) -> Bool {
 
 private func ghCanonicalCommand(_ command: String) -> String {
     switch command {
+    case "cs":
+        return "codespace"
     case "agent-tasks", "agent", "agents":
         return "agent-task"
     case "at":
@@ -14463,6 +14515,9 @@ private func runApprovalSelfCheck() -> Int32 {
           ) == nil,
           classifySecretGateRequest(gateID: "gh", request: readOnlyGh) == .readOnly,
           classifySecretGateRequest(gateID: "gh", request: ghRequest(args: ["repo", "delete", "owner/name"])) == .mutating,
+          classifySecretGateRequest(gateID: "gh", request: ghRequest(args: ["auth", "git-credential", "get"])) == .secretDump,
+          approvalRequestWithCredentialContext(ghRequest(args: ["auth", "git-credential", "get"])).title == "Disclose GitHub token?",
+          approvalRequestWithCredentialContext(ghRequest(args: ["credential-alias"])).detail?.contains("possible Secret Disclosure") == true,
           classifySecretGateRequest(gateID: "gh", request: ghRequest(args: ["auth", "token"])) == .secretDump,
           classifySecretGateRequest(gateID: "gh", request: ghRequest(args: ["auth", "status", "--show-token"])) == .secretDump,
           isGhTokenKey("GH_TOKEN_GITHUB_COM_MXCL"),
@@ -15631,6 +15686,73 @@ private func runStandaloneLauncherSelfCheck() -> Int32 {
 }
 
 private func runGhReadOnlySelfCheck() -> Int32 {
+    let disclosures = [
+        ["auth", "git-credential", "get"],
+        ["auth", "git-credential", "--", "get"],
+        ["auth", "git-credential", "get", "--help=false"],
+        ["auth", "git-credential", "store"],
+        ["auth", "git-credential", "erase"],
+        ["auth", "git-credential", "future-operation"],
+        ["auth", "token"],
+        ["auth", "status", "--show-token"],
+        ["auth", "status", "--show-token=true"],
+        ["auth", "status", "--show-token=1"],
+    ]
+    for args in disclosures {
+        let classification = ghRequestClassification(args)
+        guard classification == .secretDump,
+              !SecretGateProtection.readOnly.allows(classification),
+              !SecretGateProtection.readOnlyAndLocalWrites.allows(classification),
+              !SecretGateProtection.fullExceptSecretDumps.allows(classification),
+              SecretGateProtection.fullIncludingSecretDumps.allows(classification),
+              temporaryAccessGrantUnavailableReason(
+                  hasToolSpecificGate: true, classification: classification,
+                  launcherRuntimeProtection: nil, agentTaskContext: nil
+              )?.contains("Secret Disclosure") == true
+        else { return 1 }
+    }
+
+    // Aliases can expand to auth token or git-credential without changing argv.
+    // Case variants are distinct alias names in gh, not builtin commands.
+    let unknown = [
+        [], ["--"], ["-R"], ["--hostname"],
+        ["credential-alias"], ["auth", "credential-alias"],
+        ["repo", "credential-alias"], ["search", "credential-alias"],
+        ["AUTH", "token"], ["REPO", "view"], ["repo", "VIEW"],
+        ["--help=false", "auth", "git-credential", "get"],
+        ["auth", "--help=false", "git-credential", "get"],
+        ["auth", "--help=false", "token"],
+        ["auth", "--show-token", "status"],
+        ["--", "auth", "git-credential", "get"],
+        ["--future-option", "auth", "token"],
+        ["repo", "future-command"],
+    ]
+    for args in unknown {
+        let classification = ghRequestClassification(args)
+        guard classification == .unknown,
+              !SecretGateProtection.fullExceptSecretDumps.allows(classification),
+              !SecretGateProtection.fullIncludingSecretDumps.allows(classification),
+              temporaryAccessGrantUnavailableReason(
+                  hasToolSpecificGate: true, classification: classification,
+                  launcherRuntimeProtection: nil, agentTaskContext: nil
+              )?.contains("Unknown") == true
+        else { return 1 }
+    }
+
+    let writes = [
+        ["issue", "create"], ["pr", "merge"], ["release", "create"],
+        ["repo", "fork"], ["workflow", "run"], ["secret", "set"],
+        ["project", "item-add"], ["codespace", "create"],
+        ["api", "--method", "POST", "repos/owner/repo/dispatches"],
+    ]
+    for args in writes {
+        let classification = ghRequestClassification(args)
+        guard classification == .mutating,
+              SecretGateProtection.fullExceptSecretDumps.allows(classification),
+              !SecretGateProtection.readOnly.allows(classification)
+        else { return 1 }
+    }
+
     let allowed = [
         ["auth", "status"],
         ["status"],
