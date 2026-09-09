@@ -294,6 +294,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func startServices() {
+        servicesStopped = false
         if isStartingUp {
             isStartingUp = false
             updateMenuVisibility(
@@ -860,6 +861,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func scheduleScan(detectors: Set<String>? = nil, after delay: TimeInterval) {
+        guard !servicesStopped else { return }
         if let detectors, !pendingFullScan {
             pendingScanDetectors.formUnion(scanDetectorGroup(detectors))
         } else if detectors == nil {
@@ -16974,9 +16976,15 @@ extension AppDelegate {
         applyScanResult(.success([], nil))
         guard !fullScanFailed, scanStatusItem.title == "No Vulnerabilities Detected" else { return false }
         stopServices()
+        // A timer or watcher callback already enqueued before cancellation
+        // must not leave scan work behind while services are stopped.
+        schedulePeriodicDetectorScan()
+        scheduleScan(detectors: ["npm"], after: 0)
+        scheduleScan(after: 0)
         applyScanResult(.success([], nil))
         startDetectorWatchers()
         return periodicDetectorPoller == nil && missingFilePoller == nil
+            && scanWorkItem == nil && !pendingFullScan && pendingScanDetectors.isEmpty
     }
 }
 
