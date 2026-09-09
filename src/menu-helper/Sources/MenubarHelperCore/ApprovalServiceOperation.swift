@@ -1,4 +1,7 @@
 public enum ApprovalServiceOperation: String, CaseIterable, Sendable {
+    case uvHelperVersion = "uv-helper-version"
+    case uvRegister = "uv-register"
+    case uvGet = "uv-get"
     case awsHelperVersion = "aws-helper-version"
     case dockerHelperVersion = "docker-helper-version"
     case goatHelperVersion = "goat-helper-version"
