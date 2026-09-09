@@ -9569,7 +9569,7 @@ private func ghRequestClassification(_ args: [String]) -> SecretGateRequestClass
 }
 
 // Reviewed against automic-vault/gh-cli f192b2530444b0ddec92f4063ac4315d13d2b354.
-// Only builtin leaf commands belong here: gh expands user aliases in-process
+// Only builtin runnable commands belong here: gh expands user aliases in-process
 // while its keyring bridge still submits the original argv. Unknown commands
 // and parsing failures must never inherit Write Access (or Full Access).
 private let ghWriteCommands: [String: Set<String>] = [
