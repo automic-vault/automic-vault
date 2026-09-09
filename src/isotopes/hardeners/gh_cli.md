@@ -33,8 +33,10 @@ Only automically authorizes known read-only commands and `gh api` GET requests.
 Local Write also authorizes `repo clone`, `pr checkout`, `gist clone`, and
 download commands, which can change local files but do not mutate GitHub.
 Write Access authorizes recognized remote writes, but Secret Disclosure through
-`gh auth token`, `gh auth status --show-token`, or `gh auth git-credential get`
-still requires Approval. Full Access includes recognized Secret Disclosure.
+`gh auth token` or `gh auth status --show-token` still requires Approval. The gate
+also classifies the entire `gh auth git-credential` command family as Secret
+Disclosure, including `get`, `store`, `erase`, and future protocol operations.
+Full Access includes recognized Secret Disclosure.
 In-process aliases, unrecognized commands, and argument forms the gate cannot
 classify require Approval at every Access Level because they may disclose the
 token. Ordinary recognized read and write commands retain their Access Levels.

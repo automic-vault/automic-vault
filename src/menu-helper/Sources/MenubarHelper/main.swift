@@ -9357,10 +9357,11 @@ private func awsRequestMayUseLongLivedCredentials(_ request: ApprovalRequest) ->
 private func approvalRequestWithCredentialContext(_ request: ApprovalRequest) -> ApprovalRequest {
     let title: String
     let detail: String
-    if request.tool == "gh", ghRequestClassification(request.args) == .secretDump {
+    let ghClassification = request.tool == "gh" ? ghRequestClassification(request.args) : nil
+    if ghClassification == .secretDump {
         title = "Disclose GitHub token?"
         detail = "This Secret Disclosure can return the raw GitHub token to standard output or another general-purpose destination. Write Access does not authorize it."
-    } else if request.tool == "gh", ghRequestClassification(request.args) == .unknown {
+    } else if ghClassification == .unknown {
         title = "Allow unclassified GitHub credential use?"
         detail = "Automic Vault cannot determine this command’s effects from its arguments. A gh alias can expand to a command that prints the raw GitHub token. Approval permits this possible Secret Disclosure."
     } else if awsRequestMayUseLongLivedCredentials(request) {
