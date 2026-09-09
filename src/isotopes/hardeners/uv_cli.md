@@ -62,7 +62,10 @@ a selected Python interpreter.
 
 ## Reviewed credential-consuming commands
 
-Reviewed against [uv 0.12.12](https://github.com/astral-sh/uv/tree/0.12.12).
+Reviewed against [uv 0.12.12](https://github.com/astral-sh/uv/tree/0.12.12):
+the [command surface](https://github.com/astral-sh/uv/blob/0.12.12/crates/uv-cli/src/lib.rs),
+[keyring protocol](https://github.com/astral-sh/uv/blob/0.12.12/crates/uv-auth/src/keyring.rs),
+and [Python interpreter execution](https://github.com/astral-sh/uv/blob/0.12.12/crates/uv-python/src/interpreter.rs).
 Registration occurs only for these command families. A command that does not
 actually request keyring credentials produces no Secret Use or Approval.
 

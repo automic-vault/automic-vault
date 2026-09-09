@@ -29,8 +29,9 @@ with tempfile.TemporaryDirectory(prefix="av-uv-keyring-") as temporary:
     helper.chmod(0o700)
 
     class Registry(http.server.BaseHTTPRequestHandler):
+        reject_all = False
         def do_GET(self):
-            self.send_response(404 if self.headers.get("Authorization") else 401)
+            self.send_response(404 if self.headers.get("Authorization") and not self.reject_all else 401)
             self.send_header("WWW-Authenticate", 'Basic realm="probe"')
             self.end_headers()
         def log_message(self, *_):
@@ -59,6 +60,10 @@ with tempfile.TemporaryDirectory(prefix="av-uv-keyring-") as temporary:
         records = [json.loads(line) for line in calls.read_text().splitlines()]
         assert any(args == ["get", url, "probe-user"] and parent == pid for args, parent in records), records
         calls.unlink()
+        Registry.reject_all = True
+        run(base + ["--index-url", url.replace("https://", "https://probe-user:alternative@")], "av-dummy-nonexistent==1\n")
+        assert not calls.exists(), "explicit alternative credentials unexpectedly called keyring"
+        Registry.reject_all = False
         config = root / "uv.toml"
         config.write_text(f'[[index]]\nname = "probe"\nurl = "{url}"\nauthenticate = "always"\n')
         pid, _, _, _ = run(["--config-file", str(config), *base], "av-dummy-nonexistent==1\n")
@@ -81,7 +86,7 @@ with tempfile.TemporaryDirectory(prefix="av-uv-keyring-") as temporary:
         import tomllib
         stored = tomllib.loads((root / "credentials/credentials.toml").read_text())
         assert stored == {"credential": [{"service": f"https://localhost:{server.server_port}/", "username": "probe-user", "scheme": "basic", "password": "probe-password"}]}, stored
-        print("PASS: password and creds protocols, direct uv parent, auth-token exclusion, plaintext schema, interpreter exec boundary")
+        print("PASS: password and creds protocols, direct uv parent, auth-token exclusion, plaintext schema, alternative credentials, interpreter exec boundary")
     finally:
         server.shutdown()
         server.server_close()
