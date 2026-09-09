@@ -450,4 +450,22 @@ mod tests {
         std::os::unix::fs::symlink("/dev/null", &path).unwrap();
         assert!(read_credentials(&path).is_err());
     }
+
+    #[test]
+    #[ignore = "requires AV_UV_RELEASE_FIXTURE pointing to the reviewed official archive"]
+    fn official_archive_extracts_and_rejects_binary_tampering() {
+        let archive = std::env::var_os("AV_UV_RELEASE_FIXTURE").expect("set AV_UV_RELEASE_FIXTURE");
+        let archive = Path::new(&archive);
+        assert_eq!(isotope::sha256_file(archive).unwrap(), release().unwrap().1);
+        let root =
+            isotope::TemporaryDirectory::new_in(&std::env::temp_dir(), "uv-release-test").unwrap();
+        let binary = root.path.join("uv");
+        extract_binary(archive, &binary, false).unwrap();
+        fs::set_permissions(&binary, fs::Permissions::from_mode(0o755)).unwrap();
+        verify_binary(&binary).unwrap();
+        let mut file = OpenOptions::new().append(true).open(&binary).unwrap();
+        file.write_all(b"tampered").unwrap();
+        file.sync_all().unwrap();
+        assert!(verify_binary(&binary).is_err());
+    }
 }

@@ -645,7 +645,7 @@ public struct SecretGate: Equatable, Identifiable, Sendable {
     }
 
     public var initialProtection: SecretGateProtection {
-        if id == "ssh-agent" || id == "gpg-signing" || id == "kubectl" { return .noAccess }
+        if id == "ssh-agent" || id == "gpg-signing" || id == "kubectl" || id == "uv" { return .noAccess }
         return id == "brew" ? .readOnlyAndUpdates : .readOnly
     }
 

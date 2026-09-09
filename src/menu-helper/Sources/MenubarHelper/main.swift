@@ -3632,7 +3632,9 @@ private final class ApprovalServer: @unchecked Sendable {
             reply(peer, to: message, ok: true, error: nil)
         case .uvHelperVersion where isTrustedAvCaller(path: callerPath, signing: signing):
             let supported = xpc_dictionary_get_uint64(message, "requested_version") == 1
-            reply(peer, to: message, ok: supported, error: supported ? nil : "uv helper upgrade required", value: supported ? "1" : nil)
+                && av_original_parent_tracking_available()
+            reply(peer, to: message, ok: supported,
+                  error: supported ? nil : "uv helper requires an app or macOS update", value: supported ? "1" : nil)
         case .uvRegister where isTrustedAvCaller(path: callerPath, signing: signing):
             handleUVRegistration(message, on: peer, pid: pid, identity: identity, callerPath: callerPath)
         case .awsHelperVersion where isTrustedAvCaller(path: callerPath, signing: signing):
@@ -6932,7 +6934,7 @@ private final class ApprovalServer: @unchecked Sendable {
             args: Array(arguments.dropFirst()), cwd: cwd, replaceExistingEnv: false, allowMissingKeys: false,
             envConflicts: [], shebangScript: nil, scriptData: nil, tool: "uv",
             title: "Use uv credential for \(service)?",
-            detail: "Apply the selected credential to this registered uv operation. Scripts and build hooks cannot use its keyring helper.",
+            detail: "Apply the selected credential within this registered uv operation. Python and package code launched directly by uv can invoke the helper; the nonce does not isolate that code.",
             credentialScope: scope, credentialParent: credentialParent)
     }
 

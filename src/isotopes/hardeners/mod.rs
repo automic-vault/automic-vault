@@ -140,7 +140,7 @@ pub(crate) struct RequiredIdentity {
 }
 
 pub(crate) fn write_secret_gate_notice(stdout: &mut dyn std::io::Write, gate_id: &str) {
-    let protection = if gate_id == "kubectl" {
+    let protection = if gate_id == "kubectl" || gate_id == "uv" {
         "Approval Required"
     } else if gate_id == "brew" {
         "Read & Update"
