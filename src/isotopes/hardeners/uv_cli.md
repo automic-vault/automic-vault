@@ -43,14 +43,22 @@ pinned live code identity, Hardened Runtime, and current working directory. It
 binds the first helper request to the Target's PID version, so another `exec`
 cannot reuse the registration. Every credential request then goes through the
 uv Authorization Gate and recording before release. The nonce alone grants no
-authority. Scripts, build hooks, sibling processes, and direct helper invocations
-cannot use the registration.
+authority. Unregistered and sibling processes cannot use the registration. A direct
+child of uv can replace itself with the signed helper and preserve its parent
+relationship. The nonce binds the full operation; it does not isolate Python or
+package code inside that operation. Even `pip list` can execute a selected Python
+interpreter, so these command families are Unknown and require Approval.
 
 The keyring helper receives only the selected username/password, never the
 credential bundle. Selection requires HTTPS, the same host and port, a service
 path prefix at a segment boundary, and a matching username when specified.
 The most specific path wins; ambiguous usernames fail closed. Scheme-less host
 fallback is rejected to prevent an HTTP request from obtaining an HTTPS Secret.
+
+The uv Gate defaults to Approval Required. No Python-capable operation can be
+automically authorized, even under Full Access. `publish` can be authorized by
+a Write Access policy because it uploads existing distributions without running
+a selected Python interpreter.
 
 ## Reviewed credential-consuming commands
 
@@ -60,12 +68,12 @@ actually request keyring credentials produces no Secret Use or Approval.
 
 | Commands | Classification | Credential use |
 | --- | --- | --- |
-| `add`, `remove`, `sync`, `lock`, `upgrade`, `tree`, `export`, `audit` | Local Write | Resolve dependencies and update project/lock state |
-| `version` | Local Write | Version changes may re-lock and sync |
-| `venv` | Local Write | Install seed packages |
-| `pip compile`, `pip install`, `pip sync`, `pip uninstall` | Local Write | Resolve/install packages or fetch remote requirements |
-| `pip list`, `pip tree`, `tool list` | Read Only | Look up outdated package versions |
-| `tool install`, `tool upgrade` | Local Write | Resolve and install tools |
+| `add`, `remove`, `sync`, `lock`, `upgrade`, `tree`, `export`, `audit` | Unknown; Approval Required | Resolve dependencies and update project/lock state |
+| `version` | Unknown; Approval Required | Version changes may re-lock and sync |
+| `venv` / `virtualenv` / `v` | Unknown; Approval Required | Install seed packages |
+| `pip compile`, `pip install`, `pip sync`, `pip uninstall` | Unknown; Approval Required | Resolve/install packages or fetch remote requirements |
+| `pip list` / `pip ls`, `pip tree`, `tool list` / `tool ls` | Unknown; Approval Required | Look up outdated package versions |
+| `tool install`, `tool upgrade` / `tool update` | Unknown; Approval Required | Resolve and install tools |
 | `run`, `tool run` / `uvx`, `check`, `build` | Unknown; Approval Required | Resolve dependencies before running arbitrary code |
 | `publish` | Remote Write | Upload packages |
 

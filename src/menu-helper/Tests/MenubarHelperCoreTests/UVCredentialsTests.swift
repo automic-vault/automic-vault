@@ -4,13 +4,14 @@ import Testing
 
 @Test func uvRoutesReviewedCommandsAndClassifiesTheirEffects() {
     let commands: [(String, SecretGateRequestClassification)] = [
-        ("add", .localWrite), ("remove", .localWrite), ("sync", .localWrite),
-        ("lock", .localWrite), ("upgrade", .localWrite), ("tree", .localWrite),
-        ("export", .localWrite), ("audit", .localWrite), ("version", .localWrite),
-        ("venv", .localWrite), ("pip compile", .localWrite), ("pip install", .localWrite),
-        ("pip sync", .localWrite), ("pip uninstall", .localWrite),
-        ("tool install", .localWrite), ("tool upgrade", .localWrite),
-        ("pip list", .readOnly), ("pip tree", .readOnly), ("tool list", .readOnly),
+        ("add", .unknown), ("remove", .unknown), ("sync", .unknown),
+        ("lock", .unknown), ("upgrade", .unknown), ("tree", .unknown),
+        ("export", .unknown), ("audit", .unknown), ("version", .unknown),
+        ("venv", .unknown), ("virtualenv", .unknown), ("v", .unknown),
+        ("pip ls", .unknown), ("tool ls", .unknown), ("tool update", .unknown), ("pip compile", .unknown), ("pip install", .unknown),
+        ("pip sync", .unknown), ("pip uninstall", .unknown),
+        ("tool install", .unknown), ("tool upgrade", .unknown),
+        ("pip list", .unknown), ("pip tree", .unknown), ("tool list", .unknown),
         ("run", .unknown), ("tool run", .unknown), ("tool uvx", .unknown),
         ("check", .unknown), ("build", .unknown), ("publish", .mutating),
     ]
@@ -18,8 +19,17 @@ import Testing
         let args = command.split(separator: " ").map(String.init)
         #expect(uvCredentialCommand(args) != nil, "\(command)")
         #expect(uvRequestClassification(args) == classification, "\(command)")
+        if classification == .unknown {
+            for protection in SecretGateProtection.allCases {
+                #expect(!protection.allows(classification), "\(command) must require Approval")
+            }
+        }
         #expect(uvRequestClassification(["--directory", "auth"] + args) == classification)
     }
+    #expect(uvRequestClassification(["pip", "list", "--python", "/tmp/untrusted-python"]) == .unknown)
+    #expect(uvRequestClassification(["pip", "--cert", "bundle.pem", "list"]) == .unknown)
+    #expect(uvCredentialCommand(["tool", "--offline", "run", "example"]) == "tool run")
+    #expect(uvCredentialCommand(["-qvv", "pip", "install", "example"]) == "pip install")
     for command in ["", "--help", "--version", "pip install --help", "run -V", "help", "auth token", "auth helper get",
                     "auth login", "init", "format", "python install", "self update",
                     "pip show", "pip freeze", "pip check", "tool uninstall", "tool audit",

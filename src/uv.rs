@@ -36,7 +36,7 @@ pub(crate) fn credential_command(args: &[String]) -> Option<&'static str> {
         "build" => Some("build"),
         "publish" => Some("publish"),
         "version" => Some("version"),
-        "venv" => Some("venv"),
+        "venv" | "virtualenv" | "v" => Some("venv"),
         "pip" => match args
             .get(i + 1 + command_offset(&args[i + 1..], true)?)?
             .as_str()
@@ -45,7 +45,7 @@ pub(crate) fn credential_command(args: &[String]) -> Option<&'static str> {
             "install" => Some("pip install"),
             "sync" => Some("pip sync"),
             "uninstall" => Some("pip uninstall"),
-            "list" => Some("pip list"),
+            "list" | "ls" => Some("pip list"),
             "tree" => Some("pip tree"),
             _ => None,
         },
@@ -55,8 +55,8 @@ pub(crate) fn credential_command(args: &[String]) -> Option<&'static str> {
         {
             "run" | "uvx" => Some("tool run"),
             "install" => Some("tool install"),
-            "upgrade" => Some("tool upgrade"),
-            "list" => Some("tool list"),
+            "upgrade" | "update" => Some("tool upgrade"),
+            "list" | "ls" => Some("tool list"),
             _ => None,
         },
         _ => None,
@@ -86,7 +86,9 @@ fn command_offset(args: &[String], pip: bool) -> Option<usize> {
             | "--directory"
             | "--project"
             | "--config-file"
+            | "--trusted-host"
             | "--allow-insecure-host"
+            | "--preview-feature"
             | "--preview-features"
             | "--no-preview-features" => {
                 if !arg.contains('=') {
@@ -221,6 +223,14 @@ mod tests {
             "publish",
             "version",
             "venv",
+            "virtualenv",
+            "v",
+            "pip ls",
+            "tool ls",
+            "tool update",
+            "pip --offline install",
+            "tool --directory=auth run",
+            "-qvv pip --cert bundle.pem install",
             "pip compile",
             "pip install",
             "pip sync",

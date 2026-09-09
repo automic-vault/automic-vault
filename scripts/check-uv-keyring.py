@@ -65,6 +65,15 @@ with tempfile.TemporaryDirectory(prefix="av-uv-keyring-") as temporary:
         records = [json.loads(line) for line in calls.read_text().splitlines()]
         assert any(args == ["get", url, "--mode", "creds"] and parent == pid for args, parent in records), records
         calls.unlink()
+        # A user-selected interpreter can exec into a helper while retaining uv
+        # as its original parent. These operations must never be auto-authorized.
+        interpreter = root / "python3"
+        interpreter.write_text(f"#!{sys.executable}\nimport os\nos.execv({str(helper)!r}, {[str(helper), 'get', url, 'probe-user']!r})\n")
+        interpreter.chmod(0o700)
+        pid, _, _, _ = run(["pip", "list", "--python", str(interpreter)])
+        records = [json.loads(line) for line in calls.read_text().splitlines()]
+        assert any(parent == pid for _, parent in records), records
+        calls.unlink()
         _, code, _, _ = run(["auth", "token", url, "--username", "probe-user"])
         assert code != 0 and not calls.exists(), "auth token unexpectedly called keyring"
         _, code, _, _ = run(["auth", "login", url, "--username", "probe-user", "--password", "probe-password"])
@@ -72,7 +81,7 @@ with tempfile.TemporaryDirectory(prefix="av-uv-keyring-") as temporary:
         import tomllib
         stored = tomllib.loads((root / "credentials/credentials.toml").read_text())
         assert stored == {"credential": [{"service": f"https://localhost:{server.server_port}/", "username": "probe-user", "scheme": "basic", "password": "probe-password"}]}, stored
-        print("PASS: password and creds protocols, direct uv parent, auth-token exclusion, plaintext schema")
+        print("PASS: password and creds protocols, direct uv parent, auth-token exclusion, plaintext schema, interpreter exec boundary")
     finally:
         server.shutdown()
         server.server_close()

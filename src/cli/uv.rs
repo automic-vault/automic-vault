@@ -62,7 +62,8 @@ pub(crate) fn run(mut args: Vec<OsString>, uvx: bool, stderr: &mut dyn Write) ->
             .env_remove("AV_UV_NONCE")
             .env_remove(SECRET);
         // The private PATH entry contains only the root-owned keyring stub. Children
-        // may inherit the nonce, but cannot satisfy the helper's live-parent binding.
+        // may inherit the nonce; the gate authorizes the complete uv operation,
+        // including direct children, and requires Approval for Python-capable commands.
         let path = std::env::var_os("PATH").unwrap_or_else(|| "/usr/bin:/bin".into());
         let mut search = OsString::from("/opt/av/uv/bin:");
         search.push(path);

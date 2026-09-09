@@ -12,13 +12,14 @@ public func uvCredentialCommand(_ args: [String]) -> String? {
     guard !args.contains(where: { ["-h", "--help", "-V", "--version"].contains($0) }) else { return nil }
     guard let index = uvCommandOffset(args) else { return nil }
     guard index < args.count else { return nil }
-    let command = args[index]
+    let command = ["v", "virtualenv"].contains(args[index]) ? "venv" : args[index]
     if ["add", "remove", "sync", "lock", "upgrade", "tree", "export", "audit", "check", "run",
         "build", "publish", "version", "venv"].contains(command) { return command }
     guard index + 1 < args.count else { return nil }
     guard let offset = uvCommandOffset(Array(args.dropFirst(index + 1)), pip: command == "pip"),
           index + 1 + offset < args.count else { return nil }
-    let subcommand = args[index + 1 + offset]
+    let raw = args[index + 1 + offset]
+    let subcommand = raw == "ls" ? "list" : (command == "tool" && raw == "update" ? "upgrade" : raw)
     if command == "pip", ["compile", "install", "sync", "uninstall", "list", "tree"].contains(subcommand) {
         return "pip \(subcommand)"
     }
@@ -30,7 +31,7 @@ public func uvCredentialCommand(_ args: [String]) -> String? {
 
 private func uvCommandOffset(_ args: [String], pip: Bool = false) -> Int? {
     var values: Set<String> = ["--color", "--cache-dir", "--directory", "--project", "--config-file",
-        "--allow-insecure-host", "--preview-features", "--no-preview-features"]
+        "--allow-insecure-host", "--trusted-host", "--preview-feature", "--preview-features", "--no-preview-features"]
     if pip { values.insert("--cert") }
     let flags: Set<String> = ["-q", "--quiet", "-v", "--verbose", "-n", "--no-cache", "--no-config",
         "--offline", "--no-offline", "--no-system-certs", "--no-native-tls", "--no-progress", "--system-certs", "--native-tls", "--managed-python",
@@ -58,13 +59,11 @@ private func uvCommandOffset(_ args: [String], pip: Bool = false) -> Int? {
 }
 
 public func uvRequestClassification(_ args: [String]) -> SecretGateRequestClassification {
-    switch uvCredentialCommand(args) {
-    case "publish": .mutating
-    case "pip list", "pip tree", "tool list": .readOnly
-    case "run", "tool run", "check", "build": .unknown
-    case .some: .localWrite
-    case .none: .unknown
-    }
+    // Even list/tree may execute a selected Python interpreter. A direct child
+    // can exec the signed helper and retain uv as its original parent. The nonce
+    // binds the complete operation; it does not isolate code inside that operation.
+    // Never auto-authorize these commands as Read Only or Local Write.
+    uvCredentialCommand(args) == "publish" ? .mutating : .unknown
 }
 
 public struct UVKeyringCredential: Equatable, Sendable {

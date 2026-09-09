@@ -45,8 +45,14 @@ Every keyring request is a Secret Application request through the uv Secret
 Gate. Existing Launcher verification, operation policy, task context, Approval,
 recording, and release checks apply to the full operation. The service and
 optional username narrow the request and are included in its credential scope.
-The nonce alone conveys no authority. Direct keyring execution, inherited nonces
-in build hooks, scripts, and sibling uv processes cannot satisfy this binding.
+The nonce alone conveys no authority. Unregistered helper execution and sibling uv processes cannot satisfy this
+binding. A direct child of uv can, however, replace itself with the signed helper
+and retain uv as its original parent. The nonce binds an operation, not the
+provenance of code running inside it. Even `pip list` can execute a selected
+Python interpreter before network access. All Python-capable command families
+therefore classify as Unknown and require Approval; they must not gain automic
+Read Only or Local Write authorization. `publish` uploads existing distributions
+without selecting a Python interpreter and classifies as Remote Write.
 
 Store the imported HTTP Basic credential records as one protected
 `UV_CREDENTIALS` Secret. After Authorization, the menu app selects one credential
