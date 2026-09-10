@@ -3,7 +3,7 @@ use crate::git_transport::*;
 use std::ffi::OsString;
 use std::fs;
 use std::io::Write;
-use std::os::unix::fs::{MetadataExt, PermissionsExt};
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
@@ -13,7 +13,16 @@ fn checked(mut command: Command) -> Result<Output, String> {
         .output()
         .map_err(|e| e.to_string())?;
     if !output.status.success() {
-        return Err(String::from_utf8_lossy(&output.stderr).trim().into());
+        let error = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+        return Err(if error.is_empty() {
+            format!(
+                "{} exited with {}",
+                command.get_program().to_string_lossy(),
+                output.status
+            )
+        } else {
+            error
+        });
     }
     Ok(output)
 }
@@ -319,7 +328,26 @@ fn execute(
             return Err("unexpected Git advertisement".into());
         }
         transport("fetch", oid)?;
-        local(&repo, &["update-ref", "FETCH_HEAD", oid])?;
+        let fetch_head = repo.join(text_output(local(
+            &repo,
+            &["rev-parse", "--git-path", "FETCH_HEAD"],
+        )?)?);
+        let lock = fetch_head.with_extension("lock");
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&lock)
+            .map_err(|e| format!("cannot lock FETCH_HEAD: {e}"))?;
+        let written = (|| {
+            writeln!(file, "{oid}\t\tbranch 'main' of {}", operation.url)?;
+            file.sync_all()?;
+            fs::rename(&lock, &fetch_head)
+        })();
+        if let Err(error) = written {
+            let _ = fs::remove_file(&lock);
+            return Err(format!("cannot write FETCH_HEAD: {error}"));
+        }
         let output = match operation.command.as_str() {
             "clone" => Some(local(&repo, &["reset", "--hard", oid])?),
             "pull" => Some(local(&repo, &["merge", "--ff-only", "--no-edit", oid])?),

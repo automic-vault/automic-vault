@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Signed, live Vault/GitHub test. Creates and deletes one private test repository.
+"""Signed, live Vault/GitHub test against a disposable private repository.
 
 Requires the built app and av to be installed, /opt/av/git installed, and a
-Vault-managed GitHub credential authorized to create/push/delete that repository.
+Vault-managed GitHub credential authorized to push the selected repository.
+Without --repository, creates a fixture; --keep-repository retains it for reuse.
 Normal policy and Approval remain in force. Never reads or prints a raw token.
 """
 import argparse
@@ -20,6 +21,8 @@ import uuid
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run", action="store_true", help="create, exercise, and delete a private GitHub test repository")
+    parser.add_argument("--repository", help="existing disposable private OWNER/NAME; never deleted")
+    parser.add_argument("--keep-repository", action="store_true", help="retain a newly created fixture for reuse")
     parser.add_argument("--av", default="/usr/local/bin/av")
     parser.add_argument("--gh", default="/opt/homebrew/bin/gh")
     parser.add_argument("--app", default="/Applications/Automic Vault.app/Contents/MacOS/AutomicVaultMenubar")
@@ -43,7 +46,7 @@ def main():
         clean = {"PATH": "/opt/av/git/bin:/usr/bin:/bin", "HOME": "/opt/av/git/empty",
                  "GH_CONFIG_DIR": "/opt/av/git/empty", "GIT_TERMINAL_PROMPT": "0"}
         request = b"protocol=https\nhost=github.com\npath=automic-vault/automic-vault.git\n\n"
-        direct = run([gh, "auth", "git-credential", "get"], cwd=root, data=request, env=clean, ok=False)
+        direct = run([gh, "auth", "git-credential", "get"], cwd="/opt/av/git", data=request, env=clean, ok=False)
         assert direct.returncode and direct.stdout == b"", "direct protected helper was not denied"
         print("PASS: direct signed provider receives no credential", flush=True)
 
@@ -58,18 +61,28 @@ def main():
         name = "av-git-e2e-" + uuid.uuid4().hex[:16]
         repository = None
         try:
-            created = api("user/repos", "POST", {"name": name, "private": True, "auto_init": True})
+            if options.repository:
+                assert re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", options.repository), "invalid fixture repository"
+                created = api(f"repos/{options.repository}")
+            else:
+                created = api("user/repos", "POST", {"name": name, "private": True, "auto_init": True})
             repository = created["full_name"]
-            assert repository == f"{owner}/{name}" and created["private"] is True
-            print(f"Created private fixture: https://github.com/{repository}", flush=True)
+            assert repository == (options.repository or f"{owner}/{name}") and created["private"] is True
+            print(f"Private fixture: https://github.com/{repository}", flush=True)
             if created["default_branch"] != "main":
                 commit = api(f"repos/{repository}/commits/{created['default_branch']}")["sha"]
                 api(f"repos/{repository}/git/refs", "POST", {"ref": "refs/heads/main", "sha": commit})
                 api(f"repos/{repository}", "PATCH", {"default_branch": "main"})
             url = f"https://github.com/{repository}.git"
+            unregistered_env = dict(clean, GIT_DIR="/opt/av/git/repository", GIT_EXEC_PATH="/opt/av/git/bin",
+                                    GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL="/dev/null", AV_GIT_NONCE="a" * 64)
+            unregistered = run([git, "-c", "credential.helper=!exec /opt/av/git/bin/gh auth git-credential",
+                                "ls-remote", "--", url], cwd="/opt/av/git", env=unregistered_env, ok=False)
+            assert unregistered.returncode and unregistered.stdout == b"", "unregistered signed Git chain gained authority"
+            print("PASS: signed Git/HTTPS/gh chain without registration is denied", flush=True)
             clone = root / "clone"
             run([options.av, "git", "clone", url, str(clone)], cwd=root)
-            assert (clone / "README.md").is_file()
+            assert (clone / ".git/HEAD").is_file()
             print("PASS: authenticated clone", flush=True)
 
             # These controls must not enter the registered network Git's config.
@@ -86,15 +99,16 @@ def main():
             assert not sink.exists() and not trace.exists()
             print("PASS: authenticated fetch ignores hostile config/environment", flush=True)
 
-            api(f"repos/{repository}/contents/e2e.txt", "PUT", {
+            fixture_file = "av-e2e-" + uuid.uuid4().hex + ".txt"
+            api(f"repos/{repository}/contents/{fixture_file}", "PUT", {
                 "message": "E2E remote update", "branch": "main",
                 "content": base64.b64encode(b"remote update\n").decode(),
             })
             run([options.av, "git", "pull", url], cwd=clone)
-            assert (clone / "e2e.txt").read_text() == "remote update\n"
+            assert (clone / fixture_file).read_text() == "remote update\n"
             print("PASS: authenticated fast-forward pull", flush=True)
 
-            (clone / "e2e.txt").write_text("local update\n")
+            (clone / fixture_file).write_text("local update\n")
             run([git, "-c", "user.name=AV E2E", "-c", "user.email=e2e@example.invalid",
                  "-c", "commit.gpgsign=false", "commit", "-am", "E2E local update"], cwd=clone)
             run([options.av, "git", "push", url], cwd=clone)
@@ -105,7 +119,7 @@ def main():
 
             # After unregister, a signed provider beneath unrelated software has
             # no operation authority, even with a syntactically valid nonce.
-            replay = run([gh, "auth", "git-credential", "get"], cwd=root, data=request,
+            replay = run([gh, "auth", "git-credential", "get"], cwd="/opt/av/git", data=request,
                          env=dict(clean, AV_GIT_NONCE="a" * 64), ok=False)
             assert replay.returncode and replay.stdout == b""
             print("PASS: unrelated signed provider with a nonce is denied", flush=True)
@@ -121,13 +135,15 @@ def main():
             assert operations == {"clone", "fetch", "pull", "push"}, "missing real authorization records"
             print("PASS: all four operations have persisted Vault authorization records", flush=True)
         finally:
-            if repository:
+            if repository and not options.repository and not options.keep_repository:
                 try:
                     api(f"repos/{repository}", "DELETE")
                     print("Deleted private test fixture", flush=True)
                 except Exception:
                     print(f"Cleanup required: https://github.com/{repository}", flush=True)
                     raise
+            elif repository:
+                print(f"Retained private fixture: https://github.com/{repository}", flush=True)
     print("RESULT: signed live integration checks passed; not a proof against every native-code defect")
 
 
