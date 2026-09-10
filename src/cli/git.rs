@@ -150,6 +150,9 @@ pub(super) fn install(args: &[OsString], stderr: &mut dyn Write) -> i32 {
             ] {
                 let path = stage.join("bin").join(name);
                 fs::copy(source, &path).map_err(|e| e.to_string())?;
+                // macOS copyfile can preserve the source owner, including a
+                // Homebrew user's writable ownership. Mode bits alone are insufficient.
+                std::os::unix::fs::chown(&path, Some(0), Some(0)).map_err(|e| e.to_string())?;
                 fs::set_permissions(&path, fs::Permissions::from_mode(0o755))
                     .map_err(|e| e.to_string())?;
                 // Verify the protected copy, never a mutable source before copying.
@@ -172,7 +175,12 @@ pub(super) fn install(args: &[OsString], stderr: &mut dyn Write) -> i32 {
             fs::set_permissions(&stage, fs::Permissions::from_mode(0o755))
                 .map_err(|e| e.to_string())?;
             fs::rename(&stage, ROOT).map_err(|e| e.to_string())?;
-            verify_runtime()
+            if let Err(error) = verify_runtime() {
+                fs::remove_dir_all(ROOT)
+                    .map_err(|cleanup| format!("{error}; runtime cleanup failed: {cleanup}"))?;
+                return Err(error);
+            }
+            Ok(())
         })();
         if stage.exists() {
             let _ = fs::remove_dir_all(stage);
