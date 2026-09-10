@@ -23,6 +23,9 @@ configuration. The installer verifies protected copies before publishing them;
 unverified source material remains inside a root-only staging directory.
 It preserves upstream signatures. Copies are necessary because a writable
 parent directory can permit replacement of an otherwise root-owned executable.
+Both client and service reject extended ACLs on protected paths and unexpected
+entries in the fixed repository. Executables are copied as bytes into newly
+created files so source ownership and ACLs cannot weaken the installed copy.
 
 The network Git receives an explicitly constructed environment and the user's
 object directory. It never reads the user's repository, global, or system Git
@@ -36,7 +39,8 @@ The signed av Gate Client registers each network phase with the approval
 service. Registration binds its live execution, original operation, working
 directory, object directory, exact transport arguments, and a random nonce.
 Registration alone releases no Secret. The service accepts a protected gh
-request only through the live original chain `av → Git → HTTPS transport → gh`,
+request only through the live original chain
+`av → Git operation → Git remote-https dispatcher → HTTPS transport → gh`,
 with exact paths, arguments, same user/session, code requirements, and eligible
 runtime protections. The root-owned provider prevents an unsigned interceptor
 from executing gh after rearranging its credential pipe. A nonce alone conveys

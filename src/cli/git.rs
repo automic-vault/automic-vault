@@ -1,11 +1,44 @@
 use super::credential_xpc::*;
 use crate::git_transport::*;
-use std::ffi::OsString;
+use std::ffi::{CString, OsString, c_char, c_void};
 use std::fs;
 use std::io::Write;
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
+
+#[test]
+fn rejects_acl_writes_even_when_mode_is_private() {
+    let file = std::env::temp_dir().join(format!("av-git-acl-{:016x}", rand::random::<u64>()));
+    let path = file.as_path();
+    fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path)
+        .unwrap();
+    assert!(
+        Command::new("/bin/chmod")
+            .arg("-N")
+            .arg(path)
+            .status()
+            .unwrap()
+            .success()
+    );
+    assert!(no_extended_acl(path));
+    assert!(
+        Command::new("/bin/chmod")
+            .args(["+a", "everyone allow write"])
+            .arg(path)
+            .status()
+            .unwrap()
+            .success()
+    );
+    assert_eq!(fs::metadata(path).unwrap().mode() & 0o777, 0o600);
+    assert!(!no_extended_acl(path));
+    fs::remove_file(path).unwrap();
+}
 
 fn checked(mut command: Command) -> Result<Output, String> {
     let output = command
@@ -40,6 +73,7 @@ fn protected(path: &Path, directory: bool) -> Result<(), String> {
     let metadata = fs::symlink_metadata(path).map_err(|e| format!("{}: {e}", path.display()))?;
     if metadata.uid() != 0
         || metadata.mode() & 0o022 != 0
+        || !no_extended_acl(path)
         || if directory {
             !metadata.is_dir()
         } else {
@@ -52,6 +86,33 @@ fn protected(path: &Path, directory: bool) -> Result<(), String> {
         ));
     }
     Ok(())
+}
+
+fn no_extended_acl(path: &Path) -> bool {
+    unsafe extern "C" {
+        fn acl_get_link_np(path: *const c_char, kind: i32) -> *mut c_void;
+        fn acl_valid(acl: *mut c_void) -> i32;
+        fn acl_get_entry(acl: *mut c_void, entry: i32, out: *mut *mut c_void) -> i32;
+        fn acl_free(acl: *mut c_void) -> i32;
+    }
+    let Ok(path) = CString::new(path.as_os_str().as_bytes()) else {
+        return false;
+    };
+    // Darwin sys/acl.h: ACL_TYPE_EXTENDED = 0x100, ACL_FIRST_ENTRY = 0.
+    unsafe {
+        let acl = acl_get_link_np(path.as_ptr(), 0x100);
+        if acl.is_null() {
+            // Darwin also reports ENOENT for an existing file with no ACL.
+            // protected() separately requires valid lstat metadata.
+            return std::io::Error::last_os_error().raw_os_error() == Some(libc::ENOENT);
+        }
+        let mut entry = std::ptr::null_mut();
+        let empty = acl_valid(acl) == 0
+            && acl_get_entry(acl, 0, &mut entry) == -1
+            && std::io::Error::last_os_error().raw_os_error() == Some(libc::EINVAL);
+        acl_free(acl);
+        empty
+    }
 }
 
 pub(super) fn verify_runtime() -> Result<(), String> {
@@ -90,6 +151,22 @@ pub(super) fn verify_runtime() -> Result<(), String> {
             .is_some()
     {
         return Err("protected Git runtime configuration changed".into());
+    }
+    for (directory, expected) in [
+        (REPOSITORY, vec!["HEAD", "config", "objects", "refs"]),
+        ("/opt/av/git/repository/refs", vec!["heads"]),
+        ("/opt/av/git/repository/refs/heads", vec![]),
+        ("/opt/av/git/repository/objects", vec![]),
+    ] {
+        let mut names = fs::read_dir(directory)
+            .map_err(|e| e.to_string())?
+            .map(|entry| entry.map(|e| e.file_name()))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
+        names.sort();
+        if names != expected.into_iter().map(OsString::from).collect::<Vec<_>>() {
+            return Err("unexpected files in protected Git repository".into());
+        }
     }
     signing(Path::new(GIT), "anchor apple and identifier com.apple.git")?;
     signing(
@@ -158,10 +235,16 @@ pub(super) fn install(args: &[OsString], stderr: &mut dyn Write) -> i32 {
                 ),
             ] {
                 let path = stage.join("bin").join(name);
-                fs::copy(source, &path).map_err(|e| e.to_string())?;
-                // macOS copyfile can preserve the source owner, including a
-                // Homebrew user's writable ownership. Mode bits alone are insufficient.
-                std::os::unix::fs::chown(&path, Some(0), Some(0)).map_err(|e| e.to_string())?;
+                // Copy bytes only: macOS copyfile can preserve ownership and ACLs.
+                let mut input = fs::File::open(source).map_err(|e| e.to_string())?;
+                let mut output = fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .mode(0o600)
+                    .open(&path)
+                    .map_err(|e| e.to_string())?;
+                std::io::copy(&mut input, &mut output).map_err(|e| e.to_string())?;
+                output.sync_all().map_err(|e| e.to_string())?;
                 fs::set_permissions(&path, fs::Permissions::from_mode(0o755))
                     .map_err(|e| e.to_string())?;
                 // Verify the protected copy, never a mutable source before copying.
