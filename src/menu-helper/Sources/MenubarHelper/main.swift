@@ -3447,6 +3447,7 @@ private struct GitRegistration: Sendable {
 private struct GitCredentialContext: Sendable {
     let registration: GitRegistration
     let git: GitProcessExecution
+    let dispatcher: GitProcessExecution
     let transport: GitProcessExecution
     let helper: GitProcessExecution
 }
@@ -6893,8 +6894,13 @@ private final class ApprovalServer: @unchecked Sendable {
         for path in directories + files {
             var info = stat()
             let directory = directories.contains(path)
-            guard lstat(path, &info) == 0, info.st_uid == 0, info.st_mode & 0o022 == 0,
+            guard lstat(path, &info) == 0, info.st_uid == 0, info.st_mode & 0o022 == 0, gitTransportPathHasNoACL(path),
                   info.st_mode & S_IFMT == (directory ? S_IFDIR : S_IFREG), directory || info.st_nlink == 1 else { return false }
+        }
+        for (path, names) in [(gitTransportRepository, ["HEAD", "config", "objects", "refs"]),
+            (gitTransportRepository + "/refs", ["heads"]), (gitTransportRepository + "/refs/heads", []),
+            (gitTransportRepository + "/objects", [])] {
+            guard (try? FileManager.default.contentsOfDirectory(atPath: path).sorted()) == names else { return false }
         }
         return (try? String(contentsOfFile: gitTransportRepository + "/config", encoding: .utf8)) == gitTransportConfig
             && (try? String(contentsOfFile: gitTransportRepository + "/HEAD", encoding: .utf8)) == "ref: refs/heads/main\n"
@@ -6954,20 +6960,25 @@ private final class ApprovalServer: @unchecked Sendable {
         let registration = context.registration
         guard gitRuntimeProtected(), registration.root.live() != nil,
               let helper = context.helper.live(), let transport = gitOriginalParent(helper),
-              context.transport.matches(transport), let git = gitOriginalParent(transport), context.git.matches(git),
+              context.transport.matches(transport), let dispatcher = gitOriginalParent(transport), context.dispatcher.matches(dispatcher),
+              let git = gitOriginalParent(dispatcher), context.git.matches(git),
               let root = gitOriginalParent(git), registration.root.matches(root),
               sshAgentPeerCWD(root.pid) == registration.cwd,
               sshAgentPeerCWD(git.pid) == gitTransportRoot,
+              sshAgentPeerCWD(dispatcher.pid) == gitTransportRoot,
               sshAgentPeerCWD(transport.pid) == gitTransportRoot,
               sshAgentPeerCWD(helper.pid) == gitTransportRoot,
-              context.git.path == gitTransportBinary, context.transport.path == gitTransportHTTPS,
+              context.git.path == gitTransportBinary, context.dispatcher.path == gitTransportBinary,
+              context.transport.path == gitTransportHTTPS,
               context.helper.path == gitTransportGH,
               context.git.arguments == [gitTransportBinary] + registration.arguments,
+              context.dispatcher.arguments == [gitTransportBinary, "remote-https", registration.operation.url, registration.operation.url],
               ["git-remote-https", gitTransportHTTPS].contains(context.transport.arguments.first ?? ""),
               Array(context.transport.arguments.dropFirst()) == [registration.operation.url, registration.operation.url],
               context.helper.arguments == [gitTransportGH, "auth", "git-credential", "get"],
               gitLiveCode(registration.root, requirement: #"anchor apple generic and certificate leaf[subject.OU] = ZU76A67LGU and identifier "com.automicvault.av""#),
               gitLiveCode(context.git, requirement: "anchor apple and identifier com.apple.git"),
+              gitLiveCode(context.dispatcher, requirement: "anchor apple and identifier com.apple.git"),
               gitLiveCode(context.transport, requirement: #"anchor apple and identifier "com.apple.git-remote-http""#),
               gitLiveCode(context.helper, requirement: "anchor apple generic and certificate leaf[subject.OU] = ZU76A67LGU and identifier gh") else { return false }
         // The verified av execution constructs the entire environment with env_clear.
@@ -6992,12 +7003,15 @@ private final class ApprovalServer: @unchecked Sendable {
               request.replaceExistingEnv, !request.allowMissingKeys, request.envConflicts.isEmpty,
               request.shebangScript == nil, request.scriptData == nil, request.snapshotIncompatibleInterpreter == nil,
               request.cwd == gitTransportRoot,
-              let transport = gitOriginalParent(helper), let git = gitOriginalParent(transport), let root = gitOriginalParent(git),
+              let transport = gitOriginalParent(helper), let dispatcher = gitOriginalParent(transport),
+              let git = gitOriginalParent(dispatcher), let root = gitOriginalParent(git),
               let registration = gitRegistrationsLock.withLock({ gitRegistrations[root.pid] }),
-              let gitExecution = GitProcessExecution(git), let transportExecution = GitProcessExecution(transport),
+              let gitExecution = GitProcessExecution(git), let dispatcherExecution = GitProcessExecution(dispatcher),
+              let transportExecution = GitProcessExecution(transport),
               let helperExecution = GitProcessExecution(helper)
         else { throw AppError("gh is not bound to a protected Git transport") }
-        let context = GitCredentialContext(registration: registration, git: gitExecution, transport: transportExecution, helper: helperExecution)
+        let context = GitCredentialContext(registration: registration, git: gitExecution,
+            dispatcher: dispatcherExecution, transport: transportExecution, helper: helperExecution)
         guard gitCredentialContextValid(context) else { throw AppError("protected Git process chain changed") }
         let parent = CredentialHelperParent(pid: root.pid, startUsec: root.start_usec, euid: root.euid,
             target: pathString(root), arguments: registration.root.arguments, gitContext: context)

@@ -1,4 +1,14 @@
 import Foundation
+import Darwin
+
+public func gitTransportPathHasNoACL(_ path: String) -> Bool {
+    // On Darwin, ENOENT also means an existing file has no extended ACL.
+    // Callers separately require the path's protected lstat metadata.
+    guard let acl = acl_get_link_np(path, ACL_TYPE_EXTENDED) else { return errno == ENOENT }
+    defer { acl_free(UnsafeMutableRawPointer(acl)) }
+    var entry: acl_entry_t?
+    return acl_valid(acl) == 0 && acl_get_entry(acl, Int32(ACL_FIRST_ENTRY.rawValue), &entry) == -1 && errno == EINVAL
+}
 
 public let gitTransportRoot = "/opt/av/git"
 public let gitTransportBinary = "/opt/av/git/bin/git"
