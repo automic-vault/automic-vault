@@ -1,6 +1,6 @@
 # Configuration-selected Git transport: security review
 
-Status: routing demonstrated; unrestricted relay rejected; secure adapter not yet implemented.
+Status: bounded adapter passes loopback workflow/attack checks; signed Vault integration pending.
 Date: 2026-09-10
 
 The proposed integration can preserve ordinary Git commands, but a helper that
@@ -95,9 +95,62 @@ Then exercise ordinary private feature-branch workflows and verify both remote
 effects and local tracking refs. Passing the old `av git` tests cannot establish
 these new guarantees.
 
-The configuration-driven UX remains a viable direction. This review rejects a
-transparent byte relay, not Git's remote-helper extension. We have not yet
-verified a complete secure implementation of the proposed adapter.
+## Bounded adapter experiment
+
+The [prototype adapter](../scripts/git-remote-av-prototype.py) now implements the
+fixed-batch approach above. It advertises only fetch, push, and reviewed options.
+Each network request starts a fresh Apple HTTPS process with a complete input
+batch; subsequent client commands cannot enter that process. Push planning
+resolves source refs to exact commit IDs before executing the transport.
+Git protocol v0 provides explicit ref lists without exposing an opaque
+stateless-connect session. Git still performs local checkout, merge, upstream
+configuration, and tracking-ref updates.
+
+Run the authenticated loopback test:
+
+```sh
+python3 scripts/check-git-credential-confinement.py --adapter
+```
+
+Observed with Apple Git 2.50.1 (Apple Git-155):
+
+- Ordinary `git clone`, feature-branch `git push -u origin feature/workflow`,
+  `git fetch origin`, `git pull --ff-only`, and `git push` succeeded. The
+  original HTTPS URL stayed unchanged. Remote refs, local files, upstream
+  configuration, and `origin/feature/workflow` matched the expected commits.
+- `git push --dry-run` left the remote unchanged. Unsupported lease, atomic,
+  and signed-push options failed instead of continuing with weaker semantics.
+- A deterministic same-user ref change during authenticated push discovery
+  did not change the already-planned commit sent to the remote.
+- A read-only fixture refused a push after an authenticated read. An arbitrary
+  `get` after a read never contacted the second HTTPS origin. Neither attack
+  caused another credential lookup after the allowed read.
+- Outer credential-store, TLS/proxy configuration, proxy environment, and
+  tracing did not capture the dummy credential or affect the isolated transport.
+- Unreviewed connection commands/options, mixed or incomplete batches, and
+  oversized input failed before credential lookup. Recorded fixture plans
+  contained the exact push object IDs, destination refs, URL, and option values.
+
+This is an executable feasibility result, **not production authorization**.
+The Python adapter permits only the loopback fixture endpoint, has mutable
+test files, and uses a fixture read/write setting and JSON plan log instead of
+Vault. The fixture's read/write labels describe network effects; they do not
+replace classification of the complete original Git operation. In particular,
+fetch, clone, and pull must still require Local Write in the real Gate.
+The prototype does not prove live identity binding, Project Value selection,
+record-before-release, cancellation, or real Approval behavior for this route.
+No real Secret or installed Git configuration changed during these tests.
+
+The tested surface covers full SHA-1 repositories and ordinary branch
+operations. Force/deletion, tags, shallow/partial clones, submodules, LFS,
+leases, atomic/signed pushes, and GUI compatibility remain outside this
+prototype's supported surface. Its controlled test server uses small packs;
+large transfers and streaming/resource bounds still need production validation.
+
+The next step is to port the bounded protocol handling into a signed Gate
+Client, register its actual transport plans and original-operation context,
+and repeat the signed Vault tests against the new process chain. A complete
+secure implementation of the configuration-selected route is not yet verified.
 
 ## Upstream mechanisms
 
