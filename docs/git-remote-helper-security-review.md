@@ -1,6 +1,6 @@
 # Configuration-selected Git transport: security review
 
-Status: bounded adapter passes loopback workflow/attack checks; signed Vault integration pending.
+Status: native signed adapter passes private GitHub/Vault E2E; broad workflow and distribution coverage pending.
 Date: 2026-09-10
 
 The proposed integration can preserve ordinary Git commands, but a helper that
@@ -10,9 +10,9 @@ show why controlling configuration and keeping the token off stdout are
 insufficient.
 
 This assessment follows the [domain language](domain-language.md),
-[architecture](architecture.md), and [positioning](positioning.md). It does not
-extend the signed `av git` E2E results in [ADR 0047](adr/0047-protected-git-https-transport.md)
-to a different process chain or protocol boundary.
+[architecture](architecture.md), and [positioning](positioning.md). The native adapter now has its own signed E2E evidence in
+[ADR 0047](adr/0047-protected-git-https-transport.md); the loopback probes below
+remain separate tests of Git behavior and the protocol boundary.
 
 ## Executable evidence
 
@@ -147,10 +147,21 @@ leases, atomic/signed pushes, and GUI compatibility remain outside this
 prototype's supported surface. Its controlled test server uses small packs;
 large transfers and streaming/resource bounds still need production validation.
 
-The next step is to port the bounded protocol handling into a signed Gate
-Client, register its actual transport plans and original-operation context,
-and repeat the signed Vault tests against the new process chain. A complete
-secure implementation of the configuration-selected route is not yet verified.
+The native port is implemented in `src/cli/git_remote.rs`. The Gate independently
+validates the complete plan and original execution context, checks the shorter
+adapter process chain, and uses the existing gh fulfillment transaction. Its
+signed private-repository run verifies ordinary feature-branch workflows,
+exact authorization records, hostile configuration isolation, malformed-input
+denial, and rejection of copied live/expired nonces. Run:
+
+```sh
+python3 scripts/test-git-remote-e2e.py --repository OWNER/PRIVATE_TEST_REPO
+```
+
+The live run used existing Write Access authority. Human Approval, cancellation,
+large transfers and GUI clients remain to be exercised; the loopback results
+alone do not establish those properties. The [manual testing guide](git-workflow-testing.md)
+provides configuration, workflow, policy and rollback steps.
 
 ## Upstream mechanisms
 

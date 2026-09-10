@@ -1,6 +1,6 @@
 # ADR 0047: Protected Git HTTPS transport
 
-- Status: Prototype implemented; signed av git E2E verified; transparent workflow and distribution integration pending
+- Status: Signed configuration-selected adapter installed and E2E verified; distribution integration pending
 - Date: 2026-09-10
 
 ## Context
@@ -11,7 +11,7 @@ settings and change after inspection. See the [confinement experiment](../git-cr
 
 ## Decision
 
-`av git` accepts four fixed forms: `clone URL DIRECTORY`, `fetch URL`, `pull URL`,
+The earlier `av git` test harness accepts four fixed forms: `clone URL DIRECTORY`, `fetch URL`, `pull URL`,
 and `push URL`. URL must be an explicit `https://github.com/OWNER/REPO.git`.
 Only `main`, full SHA-1 repositories, fast-forward pull, and non-force push are
 supported. There are no arbitrary Git flags, remote names, submodules, or LFS.
@@ -64,17 +64,44 @@ transition. Exiting av also invalidates registration for subsequent lookups.
 
 ## Validation and limits
 
-The shipping workflow must preserve ordinary Git commands, following the
-domain model's Zeroconf principle. `av git` is the prototype harness, not the
-required user-facing workflow. Configuration-selected remote helpers are under
-investigation. A [security review and executable probe](../git-remote-helper-security-review.md)
-found that an unrestricted relay to `git-remote-https` can reuse one credential
-lookup for a later Remote Write or another HTTPS origin. The transparent route
-requires a protocol adapter that enforces immutable operations and destination
-bounds. A loopback-only adapter prototype now passes ordinary feature-branch
-clone/fetch/pull/push, tracking-ref, dry-run, mutable-source-ref, and adversarial
-protocol checks. It uses fixture authorization; production integration is not
-implemented or covered by the signed E2E results below.
+The user workflow uses Git's native remote-helper extension. A `git-remote-av`
+entry point executes the signed av Gate Client; a Git `url.*.insteadOf`
+configuration selects it while preserving saved HTTPS origins. Configuration
+selects routing and does not grant authority. Overrides that bypass the route
+cannot use the protected provider.
+
+The native adapter implements only `list`, `list for-push`, bounded `fetch`
+batches, and non-forced branch `push` batches. It accepts a small positive set
+of options, rejects unknown commands/options, and requires a complete batch
+before registration. Push source refs resolve to commit object IDs once,
+before authorization. URL, phase, exact OIDs/refs, options, object directory,
+original caller execution/arguments and working directory are bound to the
+Authorization Request. Both Rust and Swift validate the transport plan.
+
+Each request creates a fresh HTTPS process in the protected runtime. Native
+av owns and writes its complete stdin; it never relays the caller's stream.
+Protocol version 0 supplies explicit ref advertisements without an opaque
+`stateless-connect` session. The supported chain is
+`native av adapter → Git remote-https → HTTPS transport → gh`. The service
+checks this exact topology, the original live caller, fixed arguments and
+protected code just as it checks the older harness's additional dispatcher.
+The adapter waits for process exit and unregisters before forwarding output or
+reading another command. Cached credentials cannot survive into the next
+request. The original Git performs tracking-ref, checkout, hook and merge work
+outside this credential-bearing process.
+
+Both list/fetch requests conservatively require Local Write; list-for-push and
+push require Remote Write, including dry-run discovery. The actual transport
+plan determines classification, so a caller cannot label a push as a read.
+Project Value selection uses the original caller's working directory.
+Authorization History contains original arguments plus the exact transport
+plan; it does not describe a resolved push merely as mutable `HEAD`.
+
+An [unrestricted-relay probe](../git-remote-helper-security-review.md) demonstrates
+why a single authenticated HTTPS session cannot be reused for arbitrary helper
+commands: it can write after an initial read or send the cached credential to
+another origin. The Python bounded adapter remains a loopback-only test double;
+the native implementation has separate signed, live Vault evidence below.
 
 Verified on macOS 26.6.2 with the installed, signed app and CLI, Apple Git
 2.50.1 (Apple Git-155), and hardened gh 2.98.0-2:
@@ -95,10 +122,30 @@ Verified on macOS 26.6.2 with the installed, signed app and CLI, Apple Git
   and proxy overrides, and hostile environment configuration, tracing, proxy,
   TLS, and executable-path settings. No credential-store or trace file appeared.
 
+The signed native adapter was also tested with an installed app and CLI:
+
+- Ordinary clone, feature-branch `push -u`, saved upstream fetch/pull/push and
+  remote tracking refs matched actual private GitHub commits.
+- Dry-run did not change the remote. Lease, atomic and signed push requests
+  failed explicitly. Hostile outer credential-store/TLS/proxy/trace settings
+  did not receive the credential.
+- Malformed, mixed and incomplete native helper requests created no credential
+  authorization records. Direct protected gh access was denied.
+- Copying a live adapter nonce and exact signed Git invocation did not authorize
+  a sibling transport, including after the original request completed.
+- The run produced 20 fresh Vault records, including the exact pushed OID/ref.
+  It used the existing installation's Write Access policy; a human Approval
+  interaction and cancellation were not exercised by this live test.
+- All 330 Swift tests passed, including remote-plan classification and rejection
+  tests; focused Rust plan and framing checks passed. The loopback workflow,
+  source-ref mutation and cross-origin/read-to-write attack checks also passed.
+
 Repeat the live checks with an installed runtime and a disposable private
 repository the Vault-managed credential may update:
 
 ```sh
+python3 scripts/test-git-remote-e2e.py --repository OWNER/PRIVATE_TEST_REPO
+# Regression check for the earlier harness:
 python3 scripts/test-git-credential-e2e.py --run --repository OWNER/PRIVATE_TEST_REPO
 ```
 
@@ -116,3 +163,10 @@ a general promise that signed Git cannot disclose credentials.
 The runtime currently requires explicit installation and supports only the
 reviewed Git build. Distribution, refresh/repair integration, and a broader
 command surface must be reviewed before extending this installation.
+
+The configuration-selected surface currently requires explicit GitHub HTTPS
+URLs ending in `.git`, full SHA-1 repositories, and branch refs. Tags, shallow
+or partial clones, force/deletion, leases, atomic/signed pushes, submodules,
+LFS, and embedded/GUI Git compatibility are not supported or verified.
+Large transfers and output buffering still need validation. See the
+[manual testing guide](../git-workflow-testing.md) for opt-in and rollback.
