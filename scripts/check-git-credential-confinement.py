@@ -2,6 +2,7 @@
 """Adversarial Git credential experiment for issue #319; never uses real Secrets.
 
 Run on macOS: python3 scripts/check-git-credential-confinement.py
+Add --remote-helper to probe configuration routing and raw-helper session attacks.
 Uses Apple Git, a dummy provider, and two ephemeral loopback TLS identities.
 PASS means an expected observation held, including expected counterexamples.
 This is not a production wrapper or a test of AV's XPC/Launcher boundary.
@@ -31,6 +32,96 @@ def run(argv, *, cwd, env, data=None, ok=True):
 
 TOKEN = "AV319_DUMMY_NOT_A_CREDENTIAL"
 AUTH = "Basic " + base64.b64encode(f"probe:{TOKEN}".encode()).decode()
+
+
+def remote_helper_probe(git, exec_path, root, env, url, common, pin, server, Server, Backend, calls):
+    """Exercise the actual Apple HTTPS helper, not a mock authorization engine."""
+    def local(*args):
+        return run([str(git), *args], cwd=root, env=env).stdout.strip()
+
+    protected = root / "fixed.git"
+    local("init", "--bare", "--template=", str(protected))
+    transport_env = dict(env, HOME=str(root / "empty"), XDG_CONFIG_HOME=str(root / "empty"),
+                         GIT_DIR=str(protected), GIT_OBJECT_DIRECTORY=str(root / "seed/.git/objects"),
+                         GIT_EXEC_PATH=str(exec_path))
+    (root / "empty").mkdir()
+    transport = [str(git), *common, "-c", f"http.pinnedPubkey={pin}",
+                 "remote-https", url, url]
+
+    def exchange(commands):
+        return run(transport, cwd=root, env=transport_env, data=commands.encode())
+
+    def clean(result):
+        assert TOKEN.encode() not in result.stdout + result.stderr
+        assert AUTH.encode() not in result.stdout + result.stderr
+
+    # The routing helper is deliberately mutable and has no Vault authority.
+    # Its sole job is to relay bytes to the actual, isolated Apple transport.
+    helper = root / "git-remote-avprobe"
+    helper.write_text(f"#!{sys.executable}\nimport os, sys\n"
+                      f"command = {transport!r}\n"
+                      f"assert sys.argv[2] == {url!r}\n"
+                      f"os.execve(command[0], command, {transport_env!r})\n")
+    helper.chmod(0o700)
+    routing = dict(env, PATH=f"{root}:{env['PATH']}")
+    client = root / "client"
+    local("init", "--template=", str(client))
+    local("-C", str(client), "remote", "add", "origin", url)
+    prefix = url.rsplit("/", 1)[0] + "/"
+    local("-C", str(client), "config", f"url.avprobe::{prefix}.insteadOf", prefix)
+    leak = root / "outer-credential-store"
+    trace = root / "outer-curl-trace"
+    local("-C", str(client), "config", "credential.helper", f"store --file={leak}")
+    local("-C", str(client), "config", f"http.{url}.sslVerify", "false")
+    local("-C", str(client), "config", f"http.{url}.proxy", "http://127.0.0.1:1")
+    result = run([str(git), "ls-remote", "origin"], cwd=client,
+                 env=dict(routing, GIT_TRACE_CURL=str(trace), GIT_TRACE_REDACT="0"))
+    clean(result)
+    assert b"refs/heads/main" in result.stdout and server.authenticated > 0
+    assert local("-C", str(client), "config", "--get", "remote.origin.url").decode() == url
+    assert not leak.exists() and not trace.exists()
+    print("PASS: ordinary git ls-remote origin authenticates through configuration-selected isolated transport")
+    print("PASS: unchanged origin; outer helper/TLS/proxy configuration and tracing receive no dummy credential")
+
+    # A longer rewrite can bypass our helper. This must remove protected
+    # credential access, never grant it. There are no ambient credentials here.
+    before = calls.read_text().count("get\n")
+    result = run([str(git), "-c", f"url.https://127.0.0.1:1/.insteadOf={url}",
+                  "ls-remote", url], cwd=client, env=routing, ok=False)
+    assert result.returncode and calls.read_text().count("get\n") == before
+    print("PASS: bypassing URL routing cannot reach this dummy credential provider")
+
+    # Simulate trusting an initial read label and then forwarding all later
+    # stdin to the same credential-bearing transport. No new provider lookup
+    # is needed for an actual remote write.
+    oid = local("-C", str(root / "seed"), "rev-parse", "HEAD").decode()
+    before = calls.read_text().count("get\n")
+    result = exchange(f"list\npush {oid}:refs/heads/read-session-write\n\n\n")
+    clean(result)
+    assert local("--git-dir=" + str(root / "remote.git"), "rev-parse",
+                 "refs/heads/read-session-write").decode() == oid
+    assert calls.read_text().count("get\n") == before + 1
+    print("COUNTEREXAMPLE: a read-authenticated raw-helper session creates a remote branch with one credential lookup")
+
+    # Broad helper verbs must be rejected or separately bounded by an adapter. The native
+    # helper accepts `get URL PATH`, which can target a different TLS origin.
+    sink = Server(("127.0.0.1", 0), Backend)
+    worker = threading.Thread(target=sink.serve_forever, daemon=True)
+    worker.start()
+    try:
+        other = f"https://localhost:{sink.server_port}/remote.git/info/refs?service=git-upload-pack"
+        before = calls.read_text().count("get\n")
+        result = exchange(f"list\nget {other} {root / 'download'}\n\n")
+        clean(result)
+        assert sink.authenticated > 0
+        assert calls.read_text().count("get\n") == before + 1
+        print("COUNTEREXAMPLE: raw-helper get sends the cached dummy credential to another TLS origin")
+    finally:
+        sink.shutdown()
+        sink.server_close()
+        worker.join(timeout=5)
+    print("RESULT: configuration routing works; an unrestricted remote-HTTPS relay violates operation and destination bounds")
+    print("No real Secrets or Vault authorization used; this is not a bypass of the existing registered av git route")
 
 
 def main():
@@ -197,6 +288,10 @@ def main():
                 assert value not in result.stdout + result.stderr, "credential appeared in output"
 
         try:
+            if sys.argv[1:] == ["--remote-helper"]:
+                remote_helper_probe(git, exec_path, root, env, url, common, pin,
+                                    server, Server, Backend, calls)
+                return
             clone = root / "clone"
             for operation in ("clone", "fetch"):
                 before = server.authenticated
