@@ -33,7 +33,7 @@ fn harden_explains_launcher_collisions_without_changing_files() {
         let collision = harden.output().unwrap();
         assert!(!collision.status.success());
         let error = stderr(&collision);
-        assert!(error.contains(&format!("cannot harden {command}: {}", launcher.display())));
+        assert!(error.starts_with(&format!("av harden: {command}: {}", launcher.display())));
         assert!(error.contains("reserved Automic Vault Launcher path"));
         assert!(error.contains("no separate Target was found on PATH"));
         assert!(error.contains("Review and preserve this executable"));

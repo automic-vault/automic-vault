@@ -8074,7 +8074,7 @@ fn find_target(stub: &StubSpec) -> Result<PathBuf, String> {
     find_target_on_path(stub.command).ok_or_else(|| {
         if super::executable(&launcher) && !is_managed_stub(&launcher, stub) {
             format!(
-                "cannot harden {}: {} occupies the reserved Automic Vault Launcher path, and no separate Target was found on PATH. Review and preserve this executable, then move or reinstall the Target elsewhere on PATH, leaving {} absent before retrying hardening.",
+                "{}: {} occupies the reserved Automic Vault Launcher path, and no separate Target was found on PATH. Review and preserve this executable, then move or reinstall the Target elsewhere on PATH, leaving {} absent before retrying hardening.",
                 stub.command,
                 launcher.display(),
                 launcher.display()
