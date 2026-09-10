@@ -5,6 +5,7 @@ use std::path::PathBuf;
 pub(crate) mod aliyun_credential;
 mod aws;
 mod bless;
+mod credential_xpc;
 pub(crate) mod docker_credential;
 pub(crate) mod doctor;
 pub(crate) mod fastly_credential;
@@ -29,6 +30,7 @@ pub(crate) mod sqlcmd_credential;
 mod ssh_agent;
 pub(crate) mod terraform_credential;
 pub(crate) mod uaa_credential;
+mod uv;
 pub(crate) mod wakatime_credential;
 
 use crate::isotopes::hardeners;
@@ -69,6 +71,10 @@ pub(crate) fn bash_shell_secret_insecurity_reasons() -> Result<Vec<String>, Stri
 
 pub(crate) fn zsh_shell_secret_insecurity_reasons() -> Result<Vec<String>, String> {
     shell_secrets::zsh_reasons()
+}
+
+pub(crate) fn ensure_uv_helper_ready() -> Result<(), String> {
+    uv::ensure_helper_ready()
 }
 
 pub(crate) fn ensure_aws_helper_ready() -> Result<(), String> {
@@ -246,6 +252,10 @@ where
                 }
             }
         }
+        Some("__install-uv-release") if rest.len() == 1 => privileged_result(
+            hardeners::uv_cli::install_privileged(&PathBuf::from(&rest[0])),
+            stderr,
+        ),
         Some("__install-aws-release") if rest.len() == 3 => {
             let Some(version) = rest[0].to_str() else {
                 let _ = writeln!(stderr, "av: invalid AWS release version");
@@ -391,6 +401,9 @@ where
             } else {
                 target
             };
+            if target == "uv" {
+                return finish_hardening(hardeners::uv_cli::run(stdout, yes), "uv", stdout, stderr);
+            }
             if target == "aws" {
                 let result = hardeners::aws_cli::run_aws(stdout, yes);
                 return finish_hardening(result, "aws", stdout, stderr);
@@ -516,6 +529,9 @@ where
         }
         Some("inject") => inject::run(rest, stdout, stderr, shebang_script),
         Some("proxy") => proxy::run(rest, stdout, stderr),
+        Some("uv") => uv::run(rest, false, stderr),
+        Some("uvx") => uv::run(rest, true, stderr),
+        Some("uv-keyring") => uv::keyring(rest, stdout, stderr),
         Some("aws") => aws::run(rest, stderr),
         Some("aws-official") => aws::run_official(rest, stderr),
         Some("aws-credentials") if rest.is_empty() => aws::credentials(None, stdout, stderr),

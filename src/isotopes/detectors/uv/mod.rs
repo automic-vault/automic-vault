@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use std::path::PathBuf;
+use crate::uv::credentials_path as uv_credentials_path;
 
 pub fn install_is_insecure() -> Result<bool, String> {
     install_insecurity_reasons().map(|reasons| !reasons.is_empty())
@@ -16,17 +16,6 @@ pub fn install_insecurity_reasons() -> Result<Vec<String>, String> {
         ));
     }
     Ok(reasons)
-}
-
-fn uv_credentials_path() -> Result<PathBuf, String> {
-    if let Some(path) = std::env::var_os("UV_CREDENTIALS_DIR").filter(|value| !value.is_empty()) {
-        return Ok(PathBuf::from(path).join("credentials.toml"));
-    }
-
-    let home = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .ok_or_else(|| "HOME is not set".to_string())?;
-    Ok(home.join(".local/share/uv/credentials/credentials.toml"))
 }
 
 fn read_to_string(path: &std::path::Path) -> Result<String, String> {
@@ -115,4 +104,8 @@ mod tests {
 
 pub(crate) fn findings(home: &std::path::Path) -> Vec<crate::Finding> {
     super::radioisotope::findings("uv", install_insecurity_reasons, home)
+        .into_iter().map(|mut finding| {
+            finding.solution = "Run `av harden uv` to move supported HTTP Basic credentials into Automic Vault and install the official uv credential helper.".into();
+            finding
+        }).collect()
 }

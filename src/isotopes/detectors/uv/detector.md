@@ -7,6 +7,7 @@
 ## Sensitive Files
 
 - `$UV_CREDENTIALS_DIR/credentials.toml`
+- `$XDG_DATA_HOME/uv/credentials/credentials.toml`
 - `~/.local/share/uv/credentials/credentials.toml`
 
 ## Native Keychain Does Not Close the Exposure
@@ -29,7 +30,7 @@ this Unprotected Credential Access path.
 
 Native Keychain storage can reduce plaintext storage exposure, but configuring
 it is not a Hardened State under the [Automic Vault security model](../../../../docs/domain-language.md).
-The Detector remains report-only. It currently checks the plaintext store;
+The Detector checks the selected plaintext store;
 absence of that file does not establish that native credentials are protected.
 Scans must not invoke `uv auth token` or read credential bytes to test access.
 
@@ -67,14 +68,11 @@ and [token command](https://github.com/astral-sh/uv/blob/0.12.12/crates/uv/src/c
 when reassessing a newer release. The `native-auth` preview is distinct from the
 external `--keyring-provider subprocess` integration.
 
-## Why This Is Not Yet Hardened
+## Hardening
 
-The retired `uv` hardener moved the detected secret to the macOS Keychain, then
-recreated `$UV_CREDENTIALS_DIR/credentials.toml` inside a temporary directory
-for each run. We no longer consider a temporary plaintext file a sufficient
-security boundary, so this detector remains report-only.
-
-A future Hardener must cover Secret Application and Secret Disclosure without
-writing the credential back to disk or leaving an ungated retrieval command.
-
-[Open an issue to discuss a safer integration](https://github.com/automic-vault/automic-vault/issues).
+`av harden uv` migrates supported plaintext HTTP Basic credentials into AV
+custody and installs the official signed distributable with a registered
+keyring helper. See the [uv Hardener](../../hardeners/uv_cli.md) for setup,
+supported commands, and limitations. Native Keychain and other credential
+sources require separate migration; an empty plaintext store does not certify
+their absence.
