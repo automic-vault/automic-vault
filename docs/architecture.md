@@ -99,6 +99,11 @@ authorization policy.
 
 ### Runtime Authorization
 
+The protected `av git` HTTPS path registers a fixed network phase separately
+from local repository operations. Its root-owned Git configuration and exact
+live av/Git/HTTPS/gh chain narrow credential use at the existing gh Secret Gate.
+It is under validation; see [ADR 0047](adr/0047-protected-git-https-transport.md).
+
 Authorization Gates verify the Launcher, bind the Gate Client and Target, classify the complete operation, apply the gate's Authorization Policy, request Approval when policy cannot allow it, and enforce the Authorization Decision.
 
 The Direct Secret Gate handles direct `av inject` requests that do not match a

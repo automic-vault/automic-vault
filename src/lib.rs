@@ -3,6 +3,7 @@
 mod approval_service;
 pub mod brew_cask_policy;
 mod cli;
+mod git_transport;
 mod gpg;
 mod isotopes;
 mod path_security;

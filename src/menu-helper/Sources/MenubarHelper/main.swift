@@ -1886,6 +1886,9 @@ private func authorizationCommandParts(
     _ request: ApprovalRequest,
     scriptPath: String? = nil
 ) -> AuthorizationCommandParts {
+    if let context = request.credentialParent?.gitContext {
+        return AuthorizationCommandParts(tool: "av", arguments: Array(context.registration.root.arguments.dropFirst()))
+    }
     let scriptPath = scriptPath ?? resolvedShebangScriptPath(request)
     var args = request.args
     if let scriptPath,
@@ -2255,7 +2258,7 @@ private struct ApprovalRequest {
             selectedSecretValues: selectedSecretValues,
             // The SSH helper is shared by unrelated clients and Launchers. Even
             // denial reuse would quarantine every client using that helper.
-            policy: op == "ssh-sign" ? .disabled
+            policy: op == "ssh-sign" || credentialParent?.gitContext != nil ? .disabled
                 : op == "inject-fd" || awsRequestMayUseLongLivedCredentials(self)
                     ? .freshApprovalRequired : .reusable
         )
@@ -3404,12 +3407,57 @@ private struct AWSRegistration: Sendable {
     var credentials: AWSCredentials?
 }
 
+private struct GitProcessExecution: Sendable {
+    let pid: pid_t
+    let version: Int32
+    let start: UInt64
+    let uid: uid_t
+    let session: UInt32
+    let path: String
+    let arguments: [String]
+
+    init?(_ identity: AVProcessIdentity) {
+        guard let arguments = processArgumentVector(identity.pid) else { return nil }
+        pid = identity.pid; version = identity.pidversion; start = identity.start_usec
+        uid = identity.euid; session = identity.audit_session_id
+        path = pathString(identity); self.arguments = arguments
+    }
+
+    func matches(_ identity: AVProcessIdentity) -> Bool {
+        pid == identity.pid && version == identity.pidversion && start == identity.start_usec
+            && uid == identity.euid && session == identity.audit_session_id && path == pathString(identity)
+    }
+
+    func live() -> AVProcessIdentity? {
+        var identity = AVProcessIdentity()
+        guard av_process_identity(pid, &identity), matches(identity), processArgumentVector(pid) == arguments else { return nil }
+        return identity
+    }
+}
+
+private struct GitRegistration: Sendable {
+    let root: GitProcessExecution
+    let operation: GitTransportOperation
+    let arguments: [String]
+    let cwd: String
+    let objects: String
+    let nonce: String
+}
+
+private struct GitCredentialContext: Sendable {
+    let registration: GitRegistration
+    let git: GitProcessExecution
+    let transport: GitProcessExecution
+    let helper: GitProcessExecution
+}
+
 private struct CredentialHelperParent: Sendable {
     let pid: pid_t
     let startUsec: UInt64
     let euid: uid_t
     let target: String
     let arguments: [String]
+    var gitContext: GitCredentialContext? = nil
     var uvNonce: String? = nil
     var uvCWD: String? = nil
 }
@@ -3464,6 +3512,8 @@ private final class ApprovalServer: @unchecked Sendable {
     private let blessedExecutionsLock = NSLock()
     private var blessedExecutions: [BlessedExecutionKey: BlessedScript] = [:]
     private var emptyCapabilityCeilings: Set<BlessedExecutionKey> = []
+    private let gitRegistrationsLock = NSLock()
+    private var gitRegistrations: [pid_t: GitRegistration] = [:]
     private let uvRegistrationsLock = NSLock()
     private var uvRegistrations: [pid_t: UVRegisteredInvocation] = [:]
     private let awsRegistrationsLock = NSLock()
@@ -3635,6 +3685,20 @@ private final class ApprovalServer: @unchecked Sendable {
                 && av_original_parent_tracking_available()
             reply(peer, to: message, ok: supported,
                   error: supported ? nil : "uv helper requires an app or macOS update", value: supported ? "1" : nil)
+        case .gitHelperVersion where isTrustedAvCaller(path: callerPath, signing: signing):
+            let supported = xpc_dictionary_get_uint64(message, "requested_version") == 1 && av_original_parent_tracking_available()
+            reply(peer, to: message, ok: supported, error: supported ? nil : "protected Git requires an app or macOS update", value: supported ? "1" : nil)
+        case .gitRegister where isTrustedAvCaller(path: callerPath, signing: signing):
+            handleGitRegistration(message, on: peer, identity: identity)
+        case .gitUnregister where isTrustedAvCaller(path: callerPath, signing: signing):
+            let nonce = xpc_dictionary_get_string(message, "nonce").map { String(cString: $0) }
+            let removed = gitRegistrationsLock.withLock {
+                guard let registration = gitRegistrations[pid], registration.root.matches(identity),
+                      registration.nonce == nonce else { return false }
+                gitRegistrations.removeValue(forKey: pid)
+                return true
+            }
+            reply(peer, to: message, ok: removed, error: removed ? nil : "Git registration is unavailable", value: removed ? "closed" : nil)
         case .uvRegister where isTrustedAvCaller(path: callerPath, signing: signing):
             handleUVRegistration(message, on: peer, pid: pid, identity: identity, callerPath: callerPath)
         case .awsHelperVersion where isTrustedAvCaller(path: callerPath, signing: signing):
@@ -4238,8 +4302,9 @@ private final class ApprovalServer: @unchecked Sendable {
                 helperPath: callerPath,
                 helperSigning: signing
             )
-            let uvRequest = try uvCredentialRequest(from: message, request: kubectlRequest,
+            let registeredUVRequest = try uvCredentialRequest(from: message, request: kubectlRequest,
                 helperIdentity: identity, helperPath: callerPath, helperSigning: signing)
+            let uvRequest = try gitCredentialRequest(request: registeredUVRequest, helper: identity)
             let conflicts = Set(uvRequest.envConflicts)
             let selectionNames = uvRequest.keys.filter {
                 uvRequest.replaceExistingEnv || !conflicts.contains($0)
@@ -6819,6 +6884,134 @@ private final class ApprovalServer: @unchecked Sendable {
         )
     }
 
+    private func gitRuntimeProtected() -> Bool {
+        let directories = ["/opt", "/opt/av", gitTransportRoot, gitTransportRoot + "/bin", gitTransportRoot + "/empty",
+            gitTransportRepository, gitTransportRepository + "/refs", gitTransportRepository + "/refs/heads",
+            gitTransportRepository + "/objects", "/private", "/private/etc", "/private/etc/ssl"]
+        let files = [gitTransportBinary, gitTransportHTTPS, gitTransportGH, gitTransportRepository + "/config",
+            gitTransportRepository + "/HEAD", "/private/etc/ssl/cert.pem"]
+        for path in directories + files {
+            var info = stat()
+            let directory = directories.contains(path)
+            guard lstat(path, &info) == 0, info.st_uid == 0, info.st_mode & 0o022 == 0,
+                  info.st_mode & S_IFMT == (directory ? S_IFDIR : S_IFREG), directory || info.st_nlink == 1 else { return false }
+        }
+        return (try? String(contentsOfFile: gitTransportRepository + "/config", encoding: .utf8)) == gitTransportConfig
+            && (try? String(contentsOfFile: gitTransportRepository + "/HEAD", encoding: .utf8)) == "ref: refs/heads/main\n"
+            && (try? FileManager.default.contentsOfDirectory(atPath: gitTransportRoot + "/empty")) == []
+    }
+
+    private func gitLiveCode(_ process: GitProcessExecution, requirement: String) -> Bool {
+        guard process.live() != nil, let signing = liveSigningInfo(pid: process.pid),
+              signing.mainExecutable == process.path, signing.runtimeProtection == .hardened,
+              liveProcessHasNoEntitlements(pid: process.pid) else { return false }
+        var code: SecCode?
+        var parsed: SecRequirement?
+        return SecRequirementCreateWithString(requirement as CFString, [], &parsed) == errSecSuccess
+            && SecCodeCopyGuestWithAttributes(nil, [kSecGuestAttributePid as String: NSNumber(value: process.pid)] as CFDictionary, [], &code) == errSecSuccess
+            && code.map { SecCodeCheckValidity($0, [], parsed) == errSecSuccess } == true
+    }
+
+    private func gitOriginalParent(_ child: AVProcessIdentity) -> AVProcessIdentity? {
+        var child = child, original = AVProcessIdentity(), current = AVProcessIdentity()
+        guard av_original_parent_identity(&child, &original), av_process_identity(child.ppid, &current),
+              sameProcessIdentity(original, current), child.euid == current.euid,
+              child.audit_session_id == current.audit_session_id else { return nil }
+        return current
+    }
+
+    private func handleGitRegistration(_ message: xpc_object_t, on peer: xpc_connection_t, identity: AVProcessIdentity) {
+        guard let args = stringArray(message, "args"), args.count <= 3,
+              args.reduce(0, { $0 + $1.utf8.count }) < 16_384,
+              let operation = GitTransportOperation(args),
+              let cwd = xpc_dictionary_get_string(message, "cwd").map({ String(cString: $0) }),
+              let objects = xpc_dictionary_get_string(message, "objects").map({ String(cString: $0) }),
+              let phase = xpc_dictionary_get_string(message, "phase").map({ String(cString: $0) }),
+              let oid = xpc_dictionary_get_string(message, "oid").map({ String(cString: $0) }),
+              let arguments = operation.arguments(phase: phase, oid: oid),
+              let root = GitProcessExecution(identity), identity.euid != 0,
+              Array(root.arguments.dropFirst()) == ["git"] + args, cwd == sshAgentPeerCWD(identity.pid),
+              objects.hasPrefix("/"), objects.utf8.count < 4096, !objects.contains("\0"),
+              gitRuntimeProtected(), av_original_parent_tracking_available(),
+              gitLiveCode(root, requirement: #"anchor apple generic and certificate leaf[subject.OU] = ZU76A67LGU and identifier "com.automicvault.av""#)
+        else { reply(peer, to: message, ok: false, error: "invalid protected Git registration"); return }
+        var random = [UInt8](repeating: 0, count: 32)
+        guard SecRandomCopyBytes(kSecRandomDefault, random.count, &random) == errSecSuccess else {
+            reply(peer, to: message, ok: false, error: "cannot create Git registration"); return
+        }
+        let nonce = random.map { String(format: "%02x", $0) }.joined()
+        let registered = gitRegistrationsLock.withLock {
+            gitRegistrations = gitRegistrations.filter { $0.value.root.live() != nil }
+            guard gitRegistrations.count < 1024, gitRegistrations[identity.pid] == nil else { return false }
+            gitRegistrations[identity.pid] = GitRegistration(root: root, operation: operation, arguments: arguments,
+                cwd: cwd, objects: objects, nonce: nonce)
+            return true
+        }
+        reply(peer, to: message, ok: registered, error: registered ? nil : "Git registration unavailable", value: registered ? nonce : nil)
+    }
+
+    private func gitCredentialContextValid(_ context: GitCredentialContext) -> Bool {
+        let registration = context.registration
+        guard gitRuntimeProtected(), registration.root.live() != nil,
+              let helper = context.helper.live(), let transport = gitOriginalParent(helper),
+              context.transport.matches(transport), let git = gitOriginalParent(transport), context.git.matches(git),
+              let root = gitOriginalParent(git), registration.root.matches(root),
+              sshAgentPeerCWD(root.pid) == registration.cwd,
+              sshAgentPeerCWD(git.pid) == gitTransportRoot,
+              sshAgentPeerCWD(transport.pid) == gitTransportRoot,
+              sshAgentPeerCWD(helper.pid) == gitTransportRoot,
+              context.git.path == gitTransportBinary, context.transport.path == gitTransportHTTPS,
+              context.helper.path == gitTransportGH,
+              context.git.arguments == [gitTransportBinary] + registration.arguments,
+              ["git-remote-https", gitTransportHTTPS].contains(context.transport.arguments.first ?? ""),
+              Array(context.transport.arguments.dropFirst()) == [registration.operation.url, registration.operation.url],
+              context.helper.arguments == [gitTransportGH, "auth", "git-credential", "get"],
+              gitLiveCode(registration.root, requirement: #"anchor apple generic and certificate leaf[subject.OU] = ZU76A67LGU and identifier "com.automicvault.av""#),
+              gitLiveCode(context.git, requirement: "anchor apple and identifier com.apple.git"),
+              gitLiveCode(context.transport, requirement: #"anchor apple and identifier "com.apple.git-remote-http""#),
+              gitLiveCode(context.helper, requirement: "anchor apple generic and certificate leaf[subject.OU] = ZU76A67LGU and identifier gh") else { return false }
+        // The verified av execution constructs the entire environment with env_clear.
+        // These checks bind its selected object store and nonce to this live child.
+        for (key, expected) in gitTransportEnvironment(objects: registration.objects, nonce: registration.nonce) {
+            var value = [CChar](repeating: 0, count: expected.utf8.count + 1)
+            guard av_process_environment_value(git.pid, key, &value, value.count),
+                  String(decoding: value.prefix(while: { $0 != 0 }).map { UInt8(bitPattern: $0) }, as: UTF8.self) == expected else { return false }
+        }
+        return gitRegistrationsLock.withLock {
+            guard let current = gitRegistrations[root.pid] else { return false }
+            return current.nonce == registration.nonce && current.root.matches(root)
+        }
+    }
+
+    private func gitCredentialRequest(request: ApprovalRequest, helper: AVProcessIdentity) throws -> ApprovalRequest {
+        // Only the installed, protected provider can enter this route. Ordinary
+        // gh credential requests retain their existing Secret Disclosure policy.
+        guard pathString(helper) == gitTransportGH else { return request }
+        guard request.op == "keys", request.tool == "gh", request.target == gitTransportGH,
+              request.args == ["auth", "git-credential", "get"], request.keys == ["GH_TOKEN_GITHUB_COM"],
+              request.replaceExistingEnv, !request.allowMissingKeys, request.envConflicts.isEmpty,
+              request.shebangScript == nil, request.scriptData == nil, request.snapshotIncompatibleInterpreter == nil,
+              request.cwd == gitTransportRoot,
+              let transport = gitOriginalParent(helper), let git = gitOriginalParent(transport), let root = gitOriginalParent(git),
+              let registration = gitRegistrationsLock.withLock({ gitRegistrations[root.pid] }),
+              let gitExecution = GitProcessExecution(git), let transportExecution = GitProcessExecution(transport),
+              let helperExecution = GitProcessExecution(helper)
+        else { throw AppError("gh is not bound to a protected Git transport") }
+        let context = GitCredentialContext(registration: registration, git: gitExecution, transport: transportExecution, helper: helperExecution)
+        guard gitCredentialContextValid(context) else { throw AppError("protected Git process chain changed") }
+        let parent = CredentialHelperParent(pid: root.pid, startUsec: root.start_usec, euid: root.euid,
+            target: pathString(root), arguments: registration.root.arguments, gitContext: context)
+        let scope = String(decoding: try JSONSerialization.data(withJSONObject: [
+            "url": registration.operation.url, "transportArguments": registration.arguments, "objects": registration.objects,
+        ]), as: UTF8.self)
+        return ApprovalRequest(op: request.op, keys: request.keys, target: request.target, args: request.args,
+            cwd: registration.cwd, replaceExistingEnv: request.replaceExistingEnv, allowMissingKeys: false,
+            envConflicts: [], shebangScript: nil, scriptData: nil, tool: "gh",
+            title: "Allow Git \(registration.operation.command)?",
+            detail: "Git \(registration.operation.command): \(registration.operation.url), main branch. Transport selection: \(registration.arguments.last ?? "").",
+            credentialScope: scope, credentialParent: parent)
+    }
+
     private func handleUVRegistration(_ message: xpc_object_t, on peer: xpc_connection_t,
                                       pid: pid_t, identity: AVProcessIdentity, callerPath: String) {
         guard let args = stringArray(message, "args"), args.count <= 4096,
@@ -7986,7 +8179,8 @@ private final class ApprovalServer: @unchecked Sendable {
     }
 
     private func credentialHelperTool(_ parent: CredentialHelperParent) -> String {
-        switch URL(fileURLWithPath: parent.target).lastPathComponent {
+        if parent.gitContext != nil { return "gh" }
+        return switch URL(fileURLWithPath: parent.target).lastPathComponent {
         case "aliyun": "aliyun-cli"
         case "docker": "docker"
         case "goat": "goat"
@@ -8013,6 +8207,7 @@ private final class ApprovalServer: @unchecked Sendable {
         _ parent: CredentialHelperParent,
         tool: String
     ) -> Bool {
+        if let context = parent.gitContext { return tool == "gh" && gitCredentialContextValid(context) }
         var identity = AVProcessIdentity()
         guard av_process_identity(parent.pid, &identity),
               identity.start_usec == parent.startUsec,
@@ -8311,7 +8506,15 @@ private final class ApprovalServer: @unchecked Sendable {
         } else {
             credentialParent = nil
         }
+        if let context = request.credentialParent?.gitContext {
+            guard request.op == "keys", request.tool == "gh", request.target == gitTransportGH,
+                  request.args == ["auth", "git-credential", "get"], request.keys == ["GH_TOKEN_GITHUB_COM"],
+                  gitCredentialContextValid(context) else { throw AppError("Git transport changed before Secret Application") }
+        }
         let secrets = try approvedSecrets(for: request)
+        if let context = request.credentialParent?.gitContext, !gitCredentialContextValid(context) {
+            throw AppError("Git transport changed while loading the credential")
+        }
         if let credentialParent,
            let scope = request.credentialScope,
            let tool = request.tool
@@ -8453,8 +8656,10 @@ private final class ApprovalServer: @unchecked Sendable {
             record: {
                 do {
                     try request.sshPeer?.validate()
+                    if let context = request.credentialParent?.gitContext, !gitCredentialContextValid(context) { return false }
                     guard onAccessRequest(record) else { return false }
                     try request.sshPeer?.validate()
+                    if let context = request.credentialParent?.gitContext, !gitCredentialContextValid(context) { return false }
                     return true
                 } catch { return false }
             },
@@ -9122,7 +9327,8 @@ private func secretGateMatches(
     return gate.routes.contains { route in
         route.operation == request.op
             && route.callerIdentifiers.contains(signing.identifier)
-            && normalizedExecutablePath(route.targetPath) == normalizedExecutablePath(request.target)
+            && (normalizedExecutablePath(route.targetPath) == normalizedExecutablePath(request.target)
+                || (gate.id == "gh" && request.target == gitTransportGH && request.credentialParent?.gitContext != nil))
             && route.scriptPath.map { standardizedPath($0, cwd: request.cwd) }
                 == resolvedShebangScriptPath(request)
             && routeKeysMatch(route.keyPatterns, request.keys)
@@ -9226,7 +9432,7 @@ private func classifySecretGateRequest(
     case "wrangler":
         return .unknown
     case "gh":
-        return ghRequestClassification(request.args)
+        return request.credentialParent?.gitContext?.registration.operation.classification ?? ghRequestClassification(request.args)
     case "docker":
         return dockerRequestClassification(request.args)
     case "podman":
@@ -9569,6 +9775,7 @@ private func awsRequestMayUseLongLivedCredentials(_ request: ApprovalRequest) ->
 private func approvalRequestWithCredentialContext(_ request: ApprovalRequest) -> ApprovalRequest {
     let title: String
     let detail: String
+    if request.credentialParent?.gitContext != nil { return request }
     let ghClassification = request.tool == "gh" ? ghRequestClassification(request.args) : nil
     if ghClassification == .secretDump {
         title = "Disclose GitHub token?"
@@ -11537,7 +11744,7 @@ private extension ApprovalServiceOperation {
              .fastlyHelperVersion,
              .sqlcmdHelperVersion,
              .aliyunHelperVersion, .wakatimeHelperVersion, .rcloneHelperVersion,
-             .kubectlHelperVersion, .uvHelperVersion: false
+             .kubectlHelperVersion, .uvHelperVersion, .gitHelperVersion: false
         default: true
         }
     }
@@ -17619,6 +17826,15 @@ if CommandLine.arguments.contains("--verify-update") {
         exit(await runUpdatePreflight())
     }
     dispatchMain()
+}
+
+if CommandLine.arguments.count == 3, CommandLine.arguments[1] == "--self-check-git-records" {
+    let url = CommandLine.arguments[2]
+    guard GitTransportOperation(["fetch", url]) != nil else { exit(64) }
+    let records = loadAccessRequestRecords().filter { $0.target == gitTransportGH && $0.command.contains(url) }
+    guard let data = try? JSONEncoder().encode(records) else { exit(1) }
+    FileHandle.standardOutput.write(data)
+    exit(records.isEmpty ? 1 : 0)
 }
 
 let app = NSApplication.shared
