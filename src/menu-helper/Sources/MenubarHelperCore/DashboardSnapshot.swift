@@ -240,6 +240,7 @@ private let splitDetectorDisplayNames: [String: DetectorDisplayName] = [
     "pnpm-minimum-release-age": DetectorDisplayName(packageName: "pnpm", kind: "minimum release age"),
     "secretlint-persisted-report": DetectorDisplayName(packageName: "secretlint", kind: "persisted report"),
     "secretlint-shell-history": DetectorDisplayName(packageName: "secretlint", kind: "shell history"),
+    "codesign": DetectorDisplayName(packageName: "Code Signing", kind: "key access"),
     "sip": DetectorDisplayName(packageName: "SIP", kind: "system integrity"),
     "sudo": DetectorDisplayName(packageName: "sudo", kind: "system integrity"),
 ]
