@@ -1,6 +1,6 @@
 # ADR 0047: Protected Git HTTPS transport
 
-- Status: Implemented; signed E2E verified; distribution integration pending
+- Status: Prototype implemented; signed av git E2E verified; transparent workflow and distribution integration pending
 - Date: 2026-09-10
 
 ## Context
@@ -63,6 +63,15 @@ inherit this credential registration. Failure to unregister prevents that phase
 transition. Exiting av also invalidates registration for subsequent lookups.
 
 ## Validation and limits
+
+The shipping workflow must preserve ordinary Git commands, following the
+domain model's Zeroconf principle. `av git` is the prototype harness, not the
+required user-facing workflow. Configuration-selected remote helpers are under
+investigation. A [security review and executable probe](../git-remote-helper-security-review.md)
+found that an unrestricted relay to `git-remote-https` can reuse one credential
+lookup for a later Remote Write or another HTTPS origin. The transparent route
+requires a protocol adapter that enforces immutable operations and destination
+bounds; it is not implemented or covered by the signed E2E results below.
 
 Verified on macOS 26.6.2 with the installed, signed app and CLI, Apple Git
 2.50.1 (Apple Git-155), and hardened gh 2.98.0-2:
