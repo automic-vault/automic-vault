@@ -5,6 +5,61 @@ use std::process::{Command, Output};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[test]
+fn harden_explains_launcher_collisions_without_changing_files() {
+    for command in ["sentry-cli", "doctl"] {
+        let root = fixture(command);
+        prepare(&root, command);
+        let launcher = root.join("stubs").join(command);
+        let target = root.join("targets").join(command);
+        // An executable in the working directory is not a Target unless on PATH.
+        fs::rename(&target, root.join(command)).unwrap();
+        let config = root.join("doctl.yaml");
+        let credentials = "access-token: do_secret\ncontext: default\n";
+        fs::write(&config, credentials).unwrap();
+
+        let mut harden = av(&root, command);
+        harden
+            .env_remove("AUTOMIC_VAULT_TEST_ENV_WRAPPER_TARGET_DIR")
+            .env("PATH", root.join("stubs"))
+            .env("DIGITALOCEAN_CONFIG", &config)
+            .current_dir(&root);
+
+        let missing = harden.output().unwrap();
+        assert!(!missing.status.success());
+        assert!(stderr(&missing).contains(&format!("{command} is not installed on PATH")));
+
+        fs::copy(root.join(command), &launcher).unwrap();
+        let original = fs::read(&launcher).unwrap();
+        let collision = harden.output().unwrap();
+        assert!(!collision.status.success());
+        let error = stderr(&collision);
+        assert!(error.contains(&format!("cannot harden {command}: {}", launcher.display())));
+        assert!(error.contains("reserved Automic Vault Launcher path"));
+        assert!(error.contains("no separate Target was found on PATH"));
+        assert!(error.contains("Review and preserve this executable"));
+        assert!(error.contains("leaving"));
+        assert!(stdout(&collision).is_empty());
+        assert_eq!(fs::read(&launcher).unwrap(), original);
+        assert_eq!(fs::read_to_string(&config).unwrap(), credentials);
+        assert!(!root.join("keychain").exists());
+
+        // A separate Target still cannot authorize overwriting the occupant.
+        fs::copy(root.join(command), &target).unwrap();
+        harden.env(
+            "PATH",
+            std::env::join_paths([root.join("stubs"), root.join("targets")]).unwrap(),
+        );
+        let occupied = harden.output().unwrap();
+        assert!(!occupied.status.success());
+        assert!(stderr(&occupied).contains("is not an Automic Vault env-wrapper stub"));
+        assert_eq!(fs::read(&launcher).unwrap(), original);
+        assert_eq!(fs::read_to_string(&config).unwrap(), credentials);
+        assert!(!root.join("keychain").exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[test]
 fn harden_installs_stub_then_migrates_direct_token() {
     let root = fixture("direct");
     let config = root.join("doctl.yaml");
