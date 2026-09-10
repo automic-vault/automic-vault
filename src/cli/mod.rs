@@ -9,6 +9,8 @@ mod credential_xpc;
 pub(crate) mod docker_credential;
 pub(crate) mod doctor;
 pub(crate) mod fastly_credential;
+#[cfg(target_os = "macos")]
+mod git;
 pub(crate) mod goat_credential;
 mod gpg_sign;
 mod history;
@@ -51,6 +53,7 @@ commands:
   $ av inject -- <command>                # run an approved script
   $ av inject --mode=fd +KEY:FD -- <cmd>  # apply secrets through anonymous pipes
   $ av proxy +KEY... [--] <command>       # proxy secret references for a command
+  $ av git <clone|fetch|pull|push> <URL>  # protected GitHub HTTPS, main branch
   $ av list                               # list saved secret names
   $ av history [--json] [--since 7d]      # show Authorization History
   $ av save [options] KEY                 # store a global or Project Value
@@ -538,6 +541,10 @@ where
         }
         Some("inject") => inject::run(rest, stdout, stderr, shebang_script),
         Some("proxy") => proxy::run(rest, stdout, stderr),
+        #[cfg(target_os = "macos")]
+        Some("git") => git::run(&rest, stdout, stderr),
+        #[cfg(target_os = "macos")]
+        Some("__install-git-runtime") => git::install(&rest, stderr),
         Some("uv") => uv::run(rest, false, stderr),
         Some("uvx") => uv::run(rest, true, stderr),
         Some("uv-keyring") => uv::keyring(rest, stdout, stderr),

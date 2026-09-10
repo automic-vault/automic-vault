@@ -1,4 +1,7 @@
 public enum ApprovalServiceOperation: String, CaseIterable, Sendable {
+    case gitHelperVersion = "git-helper-version"
+    case gitRegister = "git-register"
+    case gitUnregister = "git-unregister"
     case uvHelperVersion = "uv-helper-version"
     case uvRegister = "uv-register"
     case uvGet = "uv-get"
