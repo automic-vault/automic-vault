@@ -66,27 +66,7 @@ impl Operation {
             }
             _ => return Err("invalid Git transport phase".into()),
         };
-        let mut args = vec!["--no-replace-objects".into()];
-        for (key, value) in [
-            ("credential.helper", ""),
-            (
-                "credential.helper",
-                "!exec /opt/av/git/bin/gh auth git-credential",
-            ),
-            ("credential.useHttpPath", "true"),
-            ("core.hooksPath", "/dev/null"),
-            ("core.fsmonitor", "false"),
-            ("http.sslBackend", "openssl"),
-            ("http.sslVerify", "true"),
-            ("http.sslCAInfo", "/private/etc/ssl/cert.pem"),
-            ("http.sslCAPath", "/opt/av/git/empty"),
-            ("http.followRedirects", "false"),
-            ("http.proxy", ""),
-            ("protocol.allow", "never"),
-            ("protocol.https.allow", "always"),
-        ] {
-            args.extend(["-c".into(), format!("{key}={value}")]);
-        }
+        let mut args = configuration();
         args.extend(tail.into_iter().map(String::from));
         if phase == "push" {
             args.push(format!("{oid}:refs/heads/main"));
@@ -95,7 +75,32 @@ impl Operation {
     }
 }
 
-fn valid_url(value: &str) -> bool {
+fn configuration() -> Vec<String> {
+    let mut args = vec!["--no-replace-objects".into()];
+    for (key, value) in [
+        ("credential.helper", ""),
+        (
+            "credential.helper",
+            "!exec /opt/av/git/bin/gh auth git-credential",
+        ),
+        ("credential.useHttpPath", "true"),
+        ("core.hooksPath", "/dev/null"),
+        ("core.fsmonitor", "false"),
+        ("http.sslBackend", "openssl"),
+        ("http.sslVerify", "true"),
+        ("http.sslCAInfo", "/private/etc/ssl/cert.pem"),
+        ("http.sslCAPath", "/opt/av/git/empty"),
+        ("http.followRedirects", "false"),
+        ("http.proxy", ""),
+        ("protocol.allow", "never"),
+        ("protocol.https.allow", "always"),
+    ] {
+        args.extend(["-c".into(), format!("{key}={value}")]);
+    }
+    args
+}
+
+pub(crate) fn valid_url(value: &str) -> bool {
     let Some(path) = value
         .strip_prefix("https://github.com/")
         .and_then(|p| p.strip_suffix(".git"))
@@ -189,5 +194,127 @@ mod tests {
         assert_eq!(env["GIT_OBJECT_DIRECTORY"], "/tmp/objects");
         assert!(!env.contains_key("GIT_TRACE_CURL"));
         assert!(!env.contains_key("GH_TOKEN"));
+    }
+}
+
+/// Complete input for one fresh HTTPS process. No outer stdin is relayed.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct RemotePlan {
+    pub url: String,
+    pub phase: String,
+    pub options: BTreeMap<String, String>,
+    pub commands: Vec<String>,
+}
+
+pub(crate) fn valid_branch(value: &str) -> bool {
+    value.starts_with("refs/heads/")
+        && value.len() <= 4096
+        && value
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || b"_./-".contains(&c))
+        && !value.contains("..")
+        && value.split('/').all(|p| {
+            !p.is_empty() && !p.starts_with('.') && !p.ends_with('.') && !p.ends_with(".lock")
+        })
+}
+
+pub(crate) fn valid_option(key: &str, value: &str) -> bool {
+    match key {
+        "progress" | "cloning" | "followtags" | "check-connectivity" | "dry-run" => {
+            matches!(value, "true" | "false")
+        }
+        "verbosity" => matches!(value, "0" | "1" | "2" | "3"),
+        _ => false,
+    }
+}
+
+impl RemotePlan {
+    pub fn validate(&self) -> Result<(), String> {
+        let valid = valid_url(&self.url) && self.url.len() <= 8192
+            && self.options.iter().all(|(k,v)| valid_option(k,v))
+            && !self.commands.is_empty() && self.commands.len() <= 4096
+            && self.commands.iter().map(String::len).sum::<usize>() <= 1024 * 1024
+            && match self.phase.as_str() {
+                "list" | "list for-push" => self.commands == [self.phase.clone()],
+                "fetch" => self.commands.iter().all(|line| {
+                    let parts: Vec<_> = line.split(' ').collect();
+                    matches!(parts.as_slice(), ["fetch", oid, reference] if valid_oid(oid) && (*reference == "HEAD" || valid_branch(reference)))
+                }),
+                "push" => self.commands.iter().all(|line| {
+                    line.strip_prefix("push ").and_then(|s| s.split_once(':'))
+                        .is_some_and(|(oid, reference)| valid_oid(oid) && valid_branch(reference))
+                }),
+                _ => false,
+            };
+        if valid {
+            Ok(())
+        } else {
+            Err("unsupported protected Git request".into())
+        }
+    }
+
+    pub fn wire(&self) -> Vec<String> {
+        let mut result = vec!["remote-helper".into(), self.url.clone(), self.phase.clone()];
+        result.extend(self.options.iter().map(|(k, v)| format!("option {k} {v}")));
+        result.push(String::new());
+        result.extend(self.commands.clone());
+        result
+    }
+
+    pub fn payload(&self) -> Vec<u8> {
+        let mut lines: Vec<_> = self
+            .options
+            .iter()
+            .map(|(k, v)| format!("option {k} {v}"))
+            .collect();
+        lines.extend(self.commands.clone());
+        // Batch terminator, then end-of-session. The child never sees another request.
+        (lines.join("\n") + "\n\n\n").into_bytes()
+    }
+
+    pub fn arguments(&self) -> Vec<String> {
+        let mut args = configuration();
+        args.extend([
+            "-c".into(),
+            "protocol.version=0".into(),
+            "remote-https".into(),
+            self.url.clone(),
+            self.url.clone(),
+        ]);
+        args
+    }
+}
+
+#[test]
+fn remote_requests_are_closed_and_fixed() {
+    let mut plan = RemotePlan {
+        url: "https://github.com/a/b.git".into(),
+        phase: "push".into(),
+        options: BTreeMap::new(),
+        commands: vec![format!("push {}:refs/heads/topic", "a".repeat(40))],
+    };
+    assert!(plan.validate().is_ok());
+    for command in [
+        "push HEAD:refs/heads/main",
+        "push +HEAD:refs/heads/main",
+        "push :refs/heads/main",
+        "get https://evil /tmp/token",
+        "fetch HEAD HEAD",
+    ] {
+        plan.commands = vec![command.into()];
+        assert!(plan.validate().is_err());
+    }
+    for option in ["cas", "atomic", "pushcert", "servpath"] {
+        assert!(!valid_option(option, "true"));
+    }
+    for reference in [
+        "refs/heads/../config",
+        "refs/heads/a.lock",
+        "refs/heads/a..b",
+        "refs/heads/.a",
+        "refs/heads/a/",
+        "refs/tags/v1",
+    ] {
+        assert!(!valid_branch(reference));
     }
 }
