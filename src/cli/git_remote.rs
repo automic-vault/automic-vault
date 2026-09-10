@@ -253,3 +253,20 @@ pub(super) fn run(args: &[OsString], stdout: &mut dyn Write, stderr: &mut dyn Wr
         }
     }
 }
+
+#[test]
+fn helper_lines_require_bounded_complete_utf8_frames() {
+    for bytes in [
+        b"list".as_slice(),
+        b"list\r\n",
+        b"list\0\n",
+        b"\xff\n",
+        &vec![b'x'; 8193],
+    ] {
+        assert!(line(&mut std::io::Cursor::new(bytes)).is_err());
+    }
+    let mut input = std::io::Cursor::new(b"list\n\n");
+    assert_eq!(line(&mut input).unwrap(), Some("list".into()));
+    assert_eq!(line(&mut input).unwrap(), Some(String::new()));
+    assert_eq!(line(&mut input).unwrap(), None);
+}
