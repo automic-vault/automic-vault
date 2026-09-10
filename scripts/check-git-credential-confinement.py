@@ -3,6 +3,7 @@
 
 Run on macOS: python3 scripts/check-git-credential-confinement.py
 Add --remote-helper to probe configuration routing and raw-helper session attacks.
+Add --adapter to exercise a bounded adapter with ordinary feature-branch workflows.
 Uses Apple Git, a dummy provider, and two ephemeral loopback TLS identities.
 PASS means an expected observation held, including expected counterexamples.
 This is not a production wrapper or a test of AV's XPC/Launcher boundary.
@@ -10,6 +11,7 @@ This is not a production wrapper or a test of AV's XPC/Launcher boundary.
 import base64
 import hashlib
 import http.server
+import json
 import os
 from pathlib import Path
 import shlex
@@ -32,6 +34,163 @@ def run(argv, *, cwd, env, data=None, ok=True):
 
 TOKEN = "AV319_DUMMY_NOT_A_CREDENTIAL"
 AUTH = "Basic " + base64.b64encode(f"probe:{TOKEN}".encode()).decode()
+
+
+def adapter_probe(git, exec_path, root, env, url, common, pin, server, Server, Backend, calls):
+    adapter = Path(__file__).with_name("git-remote-av-prototype.py").resolve()
+    fixed, empty, plans = root / "adapter.git", root / "empty", root / "plans.jsonl"
+    run([str(git), "init", "--bare", "--template=", str(fixed)], cwd=root, env=env)
+    empty.mkdir()
+    spec = {"git": str(git), "url": url, "repository": str(fixed), "empty": str(empty),
+            "environment": dict(env, GIT_EXEC_PATH=str(exec_path)), "config": common + ["-c", f"http.pinnedPubkey={pin}"],
+            "authority": "write", "plans": str(plans)}
+    fixture = root / "adapter-fixture.json"
+    fixture.write_text(json.dumps(spec))
+    helper = root / "git-remote-avprobe"
+    helper.write_text("#!/bin/sh\nexec " + " ".join(map(shlex.quote, [sys.executable, str(adapter), str(fixture)])) + ' "$@"\n')
+    helper.chmod(0o700)
+    config = root / "client.gitconfig"
+    config.write_text(f'[url "avprobe::{url}"]\n\tinsteadOf = {url}\n')
+    routing = dict(env, PATH=f"{root}:{env['PATH']}", GIT_CONFIG_GLOBAL=str(config))
+
+    def client(*args, cwd=root, ok=True, environment=routing):
+        result = run([str(git), *args], cwd=cwd, env=environment, ok=ok)
+        assert TOKEN.encode() not in result.stdout + result.stderr
+        assert AUTH.encode() not in result.stdout + result.stderr
+        return result
+
+    def remote(ref):
+        return client("--git-dir=" + str(root / "remote.git"), "rev-parse", ref).stdout.strip()
+
+    clone = root / "workflow"
+    result = client("clone", url, str(clone))
+    if not (clone / "file").exists():
+        raise AssertionError("clone did not check out file: " + result.stderr.decode() +
+                             client("ls-remote", "origin", cwd=clone).stdout.decode())
+    assert (clone / "file").read_text() == "initial\n"
+    assert client("config", "--get", "remote.origin.url", cwd=clone).stdout.decode().strip() == url
+    client("switch", "-c", "feature/workflow", cwd=clone)
+    (clone / "file").write_text("feature work\n")
+    client("commit", "-am", "feature work", cwd=clone)
+    client("push", "-u", "origin", "feature/workflow", cwd=clone)
+    first = client("rev-parse", "HEAD", cwd=clone).stdout.strip()
+    assert remote("refs/heads/feature/workflow") == first
+    assert client("rev-parse", "@{upstream}", cwd=clone).stdout.strip() == first
+    print("PASS: ordinary clone and feature-branch push -u; origin URL and tracking refs are correct")
+
+    seed = root / "seed"
+    client("fetch", str(root / "remote.git"), "feature/workflow", cwd=seed)
+    client("switch", "-c", "feature/workflow", "FETCH_HEAD", cwd=seed)
+    (seed / "file").write_text("remote feature update\n")
+    client("commit", "-am", "remote feature update", cwd=seed)
+    client("push", str(root / "remote.git"), "HEAD:refs/heads/feature/workflow", cwd=seed)
+    updated = remote("refs/heads/feature/workflow")
+    client("fetch", "origin", cwd=clone)
+    assert client("rev-parse", "origin/feature/workflow", cwd=clone).stdout.strip() == updated
+    assert client("rev-parse", "HEAD", cwd=clone).stdout.strip() == first
+    client("pull", "--ff-only", cwd=clone)
+    assert client("rev-parse", "HEAD", cwd=clone).stdout.strip() == updated
+    assert (clone / "file").read_text() == "remote feature update\n"
+    print("PASS: ordinary fetch updates origin/feature/workflow; pull uses the saved upstream")
+
+    (clone / "file").write_text("local follow-up\n")
+    client("commit", "-am", "local follow-up", cwd=clone)
+    final = client("rev-parse", "HEAD", cwd=clone).stdout.strip()
+    client("push", "--dry-run", cwd=clone)
+    assert remote("refs/heads/feature/workflow") == updated
+    client("push", cwd=clone)
+    assert remote("refs/heads/feature/workflow") == final
+    assert client("rev-parse", "@{upstream}", cwd=clone).stdout.strip() == final
+    print("PASS: ordinary push uses the saved upstream; dry-run leaves the remote unchanged")
+
+    sink_file, trace = root / "stored", root / "trace"
+    client("config", "credential.helper", f"store --file={sink_file}", cwd=clone)
+    client("config", f"http.{url}.sslVerify", "false", cwd=clone)
+    client("config", f"http.{url}.proxy", "http://127.0.0.1:1", cwd=clone)
+    client("fetch", cwd=clone, environment=dict(routing, GIT_TRACE_CURL=str(trace), GIT_TRACE_REDACT="0",
+                                               HTTPS_PROXY="http://127.0.0.1:1", GIT_SSL_NO_VERIFY="true"))
+    assert not sink_file.exists() and not trace.exists()
+    print("PASS: outer credential helper, TLS/proxy overrides and tracing remain outside the credential process")
+
+    (clone / "file").write_text("commit selected before the ref race\n")
+    client("commit", "-am", "ref-race candidate", cwd=clone)
+    intended = client("rev-parse", "HEAD", cwd=clone).stdout.strip()
+    for option in ("--force-with-lease", "--atomic", "--signed"):
+        assert client("push", option, cwd=clone, ok=False).returncode
+        assert remote("refs/heads/feature/workflow") == final
+    print("PASS: unsupported lease/atomic/signed pushes fail instead of dropping their safety semantics")
+    raced = threading.Event()
+    race_lock = threading.Lock()
+
+    def change_source_after_plan(_):
+        with race_lock:
+            if raced.is_set():
+                return
+            plan = json.loads(plans.read_text().splitlines()[-1])
+            if plan["operation"] != "push" or plan["updates"][0][0] != intended.decode():
+                return
+            # The transport has already resolved and authorized the source OID.
+            # Another same-user process replaces the source ref before its
+            # authenticated discovery completes, without changing the OID plan.
+            client("update-ref", "refs/heads/feature/workflow", final.decode(), intended.decode(), cwd=clone)
+            raced.set()
+
+    server.before_authenticated_request = change_source_after_plan
+    try:
+        client("push", cwd=clone)
+        assert raced.is_set()
+        assert remote("refs/heads/feature/workflow") == intended
+        assert client("rev-parse", "HEAD", cwd=clone).stdout.strip() == final
+    finally:
+        del server.before_authenticated_request
+    client("reset", "--hard", intended.decode(), cwd=clone)
+    final = intended
+    print("PASS: changing the local source ref after planning cannot change the commit sent by the push")
+
+    def attack(commands):
+        return run([sys.executable, str(adapter), str(fixture), "origin", url], cwd=clone,
+                   env=routing, data=commands.encode(), ok=False)
+
+    spec["authority"] = "read"
+    fixture.write_text(json.dumps(spec))
+    before = calls.read_text().count("get\n")
+    result = attack(f"list\npush {final.decode()}:refs/heads/read-session-write\n\n\n")
+    assert result.returncode and calls.read_text().count("get\n") == before + 1
+    assert client("--git-dir=" + str(root / "remote.git"), "show-ref", "--verify",
+                  "refs/heads/read-session-write", ok=False).returncode
+    print("PASS: a read-authenticated session cannot push under fixture read authority")
+
+    sink = Server(("127.0.0.1", 0), Backend)
+    worker = threading.Thread(target=sink.serve_forever, daemon=True)
+    worker.start()
+    try:
+        other = f"https://localhost:{sink.server_port}/remote.git/info/refs?service=git-upload-pack"
+        before = calls.read_text().count("get\n")
+        result = attack(f"list\nget {other} {root / 'download'}\n\n")
+        assert result.returncode and sink.requests == 0
+        assert calls.read_text().count("get\n") == before + 1
+        assert not (root / "download").exists()
+        print("PASS: arbitrary get after authenticated read never contacts the second origin")
+    finally:
+        sink.shutdown()
+        sink.server_close()
+        worker.join(timeout=5)
+    for payload in ["stateless-connect git-receive-pack\n", "option cas refs/heads/feature/workflow:HEAD\n",
+                    "option atomic true\n", "option pushcert true\n", "option dry-run invalid\n",
+                    f"fetch {final.decode()} refs/heads/feature/workflow\npush HEAD:refs/heads/main\n\n",
+                    "push HEAD:refs/heads/main\n", "x" * 8193 + "\n"]:
+        before = calls.read_text().count("get\n")
+        assert attack(payload).returncode
+        assert calls.read_text().count("get\n") == before
+    print("PASS: unreviewed connection/options, mixed/incomplete batches and oversized input fail before credential lookup")
+    recorded = [json.loads(line) for line in plans.read_text().splitlines()]
+    pushes = [plan for plan in recorded if plan["operation"] == "push"]
+    assert pushes and all(plan["kind"] == "write" and plan["url"] == url for plan in pushes)
+    assert all(len(object_id) == 40 and ref == "refs/heads/feature/workflow"
+               for plan in pushes for object_id, ref in plan["updates"])
+    print("PASS: transport plans bind exact push OIDs, destination refs, URL and options")
+    print("RESULT: bounded adapter preserves the tested feature-branch workflow and blocks both raw-relay attacks")
+    print("Fixture authorization only; signed Vault integration and real-Secret E2E remain unimplemented")
 
 
 def remote_helper_probe(git, exec_path, root, env, url, common, pin, server, Server, Backend, calls):
@@ -208,6 +367,9 @@ def main():
                     self.end_headers()
                     return
                 self.server.authenticated += 1
+                callback = getattr(self.server, "before_authenticated_request", None)
+                if callback:
+                    callback(self.path)
                 if self.server.redirect:
                     self.send_response(302)
                     self.send_header("Location", self.server.redirect)
@@ -288,6 +450,10 @@ def main():
                 assert value not in result.stdout + result.stderr, "credential appeared in output"
 
         try:
+            if sys.argv[1:] == ["--adapter"]:
+                adapter_probe(git, exec_path, root, env, url, common, pin,
+                              server, Server, Backend, calls)
+                return
             if sys.argv[1:] == ["--remote-helper"]:
                 remote_helper_probe(git, exec_path, root, env, url, common, pin,
                                     server, Server, Backend, calls)

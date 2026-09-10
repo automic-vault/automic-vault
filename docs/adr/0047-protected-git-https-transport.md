@@ -71,7 +71,10 @@ investigation. A [security review and executable probe](../git-remote-helper-sec
 found that an unrestricted relay to `git-remote-https` can reuse one credential
 lookup for a later Remote Write or another HTTPS origin. The transparent route
 requires a protocol adapter that enforces immutable operations and destination
-bounds; it is not implemented or covered by the signed E2E results below.
+bounds. A loopback-only adapter prototype now passes ordinary feature-branch
+clone/fetch/pull/push, tracking-ref, dry-run, mutable-source-ref, and adversarial
+protocol checks. It uses fixture authorization; production integration is not
+implemented or covered by the signed E2E results below.
 
 Verified on macOS 26.6.2 with the installed, signed app and CLI, Apple Git
 2.50.1 (Apple Git-155), and hardened gh 2.98.0-2:
