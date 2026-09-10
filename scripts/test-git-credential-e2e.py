@@ -8,13 +8,16 @@ Normal policy and Approval remain in force. Never reads or prints a raw token.
 """
 import argparse
 import base64
+import ctypes
 import json
 import os
 from pathlib import Path
 import re
 import shlex
+import signal
 import subprocess
 import tempfile
+import time
 import uuid
 
 
@@ -74,6 +77,8 @@ def main():
                 api(f"repos/{repository}/git/refs", "POST", {"ref": "refs/heads/main", "sha": commit})
                 api(f"repos/{repository}", "PATCH", {"default_branch": "main"})
             url = f"https://github.com/{repository}.git"
+            baseline = json.loads(run([options.app, "--self-check-git-records", url], cwd=root, ok=False).stdout)
+            previous_records = {record["id"] for record in baseline}
             unregistered_env = dict(clean, GIT_DIR="/opt/av/git/repository", GIT_EXEC_PATH="/opt/av/git/bin",
                                     GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL="/dev/null", AV_GIT_NONCE="a" * 64)
             unregistered = run([git, "-c", "credential.helper=!exec /opt/av/git/bin/gh auth git-credential",
@@ -84,6 +89,70 @@ def main():
             run([options.av, "git", "clone", url, str(clone)], cwd=root)
             assert (clone / ".git/HEAD").is_file()
             print("PASS: authenticated clone", flush=True)
+
+            # Copy the actual nonce and invocation while the registered av is
+            # stopped, so a sibling attempts reuse before unregister can occur.
+            source = Path(__file__).resolve().parents[1] / "src/menu-helper/Sources/CProcessInfo"
+            observer = root / "observer.dylib"
+            run(["/usr/bin/clang", "-dynamiclib", "-I", str(source / "include"),
+                 str(source / "CProcessInfo.c"), "-lbsm", "-o", str(observer)], cwd=root)
+            process_info = ctypes.CDLL(str(observer))
+            process_info.av_process_environment_value.restype = ctypes.c_bool
+            process_info.av_process_arguments_data.restype = ctypes.c_ssize_t
+            proc = ctypes.CDLL("/usr/lib/libproc.dylib")
+            active = subprocess.Popen([options.av, "git", "fetch", url], cwd=clone,
+                                      stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            stopped = False
+            replay_args = replay_env = None
+            try:
+                deadline = time.monotonic() + 30
+                while active.poll() is None and time.monotonic() < deadline:
+                    children = (ctypes.c_int * 256)()
+                    proc.proc_listchildpids(active.pid, children, ctypes.sizeof(children))
+                    for child in children:
+                        if child <= 0:
+                            continue
+                        nonce = ctypes.create_string_buffer(65)
+                        if not process_info.av_process_environment_value(child, b"AV_GIT_NONCE", nonce, len(nonce)):
+                            continue
+                        assert re.fullmatch(rb"[0-9a-f]{64}", nonce.value)
+                        arguments = ctypes.create_string_buffer(65536)
+                        count = process_info.av_process_arguments_data(child, arguments, len(arguments))
+                        if count <= 0:
+                            continue
+                        candidate = [os.fsdecode(arg) for arg in arguments.raw[:count].split(b"\0")[:-1]]
+                        if not candidate or candidate[0] != git:
+                            continue
+                        os.kill(active.pid, signal.SIGSTOP)
+                        _, status = os.waitpid(active.pid, os.WUNTRACED)
+                        assert os.WIFSTOPPED(status), "registered av exited before the replay test"
+                        stopped = True
+                        replay_args = candidate
+                        replay_env = dict(clean, AV_GIT_NONCE=nonce.value.decode(),
+                                          XDG_CONFIG_HOME="/opt/av/git/empty", GIT_CONFIG_NOSYSTEM="1",
+                                          GIT_CONFIG_GLOBAL="/dev/null", GIT_EXEC_PATH="/opt/av/git/bin",
+                                          GIT_DIR="/opt/av/git/repository", GIT_PAGER="cat", LC_ALL="C",
+                                          GIT_OBJECT_DIRECTORY=str((clone / ".git/objects").resolve()))
+                        break
+                    if stopped:
+                        break
+                    time.sleep(0.001)
+                assert stopped, "did not capture an active registration"
+                replay = run(replay_args, cwd="/opt/av/git", env=replay_env, ok=False)
+                assert replay.returncode and replay.stdout == b"", "sibling reused an active registration"
+            finally:
+                if stopped:
+                    os.kill(active.pid, signal.SIGCONT)
+                try:
+                    out, err = active.communicate(timeout=180)
+                except subprocess.TimeoutExpired:
+                    active.kill()
+                    active.communicate()
+                    raise
+            assert active.returncode == 0 and not secret_pattern.search(out + err)
+            replay = run(replay_args, cwd="/opt/av/git", env=replay_env, ok=False)
+            assert replay.returncode and replay.stdout == b"", "sibling reused an expired registration"
+            print("PASS: copied live and expired nonces cannot authorize a sibling signed chain", flush=True)
 
             # These controls must not enter the registered network Git's config.
             sink = root / "credential-store"
@@ -127,7 +196,9 @@ def main():
             records = json.loads(run([options.app, "--self-check-git-records", url], cwd=root).stdout)
             operations = set()
             for record in records:
-                words = shlex.split(record["command"])
+                if record["id"] in previous_records:
+                    continue
+                words = shlex.split(record["command"].replace("\\\n", ""))
                 if record["decision"] == "Approved" and words[:2] == ["av", "git"]:
                     assert record["keys"] == ["GH_TOKEN_GITHUB_COM"]
                     assert record["callerPath"] == gh and record["target"] == gh

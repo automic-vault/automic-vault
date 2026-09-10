@@ -1,6 +1,6 @@
 # ADR 0047: Protected Git HTTPS transport
 
-- Status: Implementation under validation; not release-ready until signed E2E checks pass
+- Status: Implemented; signed E2E verified; distribution integration pending
 - Date: 2026-09-10
 
 ## Context
@@ -64,12 +64,36 @@ transition. Exiting av also invalidates registration for subsequent lookups.
 
 ## Validation and limits
 
-The Rust and Swift positive parsers and classifications have focused checks.
-Signed integration testing must additionally establish successful private
-repository operations, denial of direct/sibling/replayed helper requests,
-resistance to configuration and environment attacks, and authorization records
-from the real service. Passing parser or dummy transport tests alone does not
-establish that boundary.
+Verified on macOS 26.6.2 with the installed, signed app and CLI, Apple Git
+2.50.1 (Apple Git-155), and hardened gh 2.98.0-2:
+
+- All 329 Swift tests passed, including the positive operation surface, policy
+  classifications, and rejection of ACL writes hidden by restrictive mode bits.
+  The focused Rust operation-surface and ACL tests also passed.
+- The signed app's gh Read Only, Approval, and process-execution self-checks passed.
+- Real private GitHub clone, fetch, fast-forward pull, and non-force push passed.
+  Push's remote object ID matched the local commit. All four operations produced
+  new, persisted Authorization History records through the existing gh Gate;
+  this installation authorized them automatically under its existing policy.
+- Direct protected gh and an unregistered signed Git/HTTPS/gh chain were denied.
+  Copying the actual invocation and nonce while the registered av process was
+  stopped did not authorize a sibling chain. Replaying after unregister also
+  failed, while the original registered fetch completed successfully.
+- An authenticated fetch ignored repository credential-store, URL-scoped TLS
+  and proxy overrides, and hostile environment configuration, tracing, proxy,
+  TLS, and executable-path settings. No credential-store or trace file appeared.
+
+Repeat the live checks with an installed runtime and a disposable private
+repository the Vault-managed credential may update:
+
+```sh
+python3 scripts/test-git-credential-e2e.py --run --repository OWNER/PRIVATE_TEST_REPO
+```
+
+The fixture is retained when supplied explicitly. The script creates test
+commits, checks output without displaying possible credential material, and
+requires new authorization records from that run. These checks demonstrate the
+implemented boundary for the tested attacks; they are not an exhaustive proof.
 
 Root/kernel compromise, vulnerabilities in the trusted native executables or
 TLS stack, and credentials already outside Vault are outside this claim. The
