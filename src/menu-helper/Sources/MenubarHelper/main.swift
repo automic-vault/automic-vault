@@ -1887,7 +1887,12 @@ private func authorizationCommandParts(
     scriptPath: String? = nil
 ) -> AuthorizationCommandParts {
     if let context = request.credentialParent?.gitContext {
-        return AuthorizationCommandParts(tool: "av", arguments: Array(context.registration.root.arguments.dropFirst()))
+        let registration = context.registration
+        if let plan = registration.operation.remotePlan, let caller = registration.caller {
+            return AuthorizationCommandParts(tool: URL(fileURLWithPath: caller.path).lastPathComponent,
+                arguments: Array(caller.arguments.dropFirst()) + ["[protected HTTPS request]"] + plan.wire)
+        }
+        return AuthorizationCommandParts(tool: "av", arguments: Array(registration.root.arguments.dropFirst()))
     }
     let scriptPath = scriptPath ?? resolvedShebangScriptPath(request)
     var args = request.args
@@ -3438,6 +3443,8 @@ private struct GitProcessExecution: Sendable {
 private struct GitRegistration: Sendable {
     let root: GitProcessExecution
     let operation: GitTransportOperation
+    let caller: GitProcessExecution?
+    let projectCWD: String
     let arguments: [String]
     let cwd: String
     let objects: String
@@ -3447,7 +3454,7 @@ private struct GitRegistration: Sendable {
 private struct GitCredentialContext: Sendable {
     let registration: GitRegistration
     let git: GitProcessExecution
-    let dispatcher: GitProcessExecution
+    let dispatcher: GitProcessExecution?
     let transport: GitProcessExecution
     let helper: GitProcessExecution
 }
@@ -3687,8 +3694,9 @@ private final class ApprovalServer: @unchecked Sendable {
             reply(peer, to: message, ok: supported,
                   error: supported ? nil : "uv helper requires an app or macOS update", value: supported ? "1" : nil)
         case .gitHelperVersion where isTrustedAvCaller(path: callerPath, signing: signing):
-            let supported = xpc_dictionary_get_uint64(message, "requested_version") == 1 && av_original_parent_tracking_available()
-            reply(peer, to: message, ok: supported, error: supported ? nil : "protected Git requires an app or macOS update", value: supported ? "1" : nil)
+            let version = xpc_dictionary_get_uint64(message, "requested_version")
+            let supported = [1, 2].contains(version) && av_original_parent_tracking_available()
+            reply(peer, to: message, ok: supported, error: supported ? nil : "protected Git requires an app or macOS update", value: supported ? String(version) : nil)
         case .gitRegister where isTrustedAvCaller(path: callerPath, signing: signing):
             handleGitRegistration(message, on: peer, identity: identity)
         case .gitUnregister where isTrustedAvCaller(path: callerPath, signing: signing):
@@ -6927,8 +6935,8 @@ private final class ApprovalServer: @unchecked Sendable {
     }
 
     private func handleGitRegistration(_ message: xpc_object_t, on peer: xpc_connection_t, identity: AVProcessIdentity) {
-        guard let args = stringArray(message, "args"), args.count <= 3,
-              args.reduce(0, { $0 + $1.utf8.count }) < 16_384,
+        guard let args = stringArray(message, "args"), args.count <= 4106,
+              args.reduce(0, { $0 + $1.utf8.count }) <= 1024 * 1024 + 16_384,
               let operation = GitTransportOperation(args),
               let cwd = xpc_dictionary_get_string(message, "cwd").map({ String(cString: $0) }),
               let objects = xpc_dictionary_get_string(message, "objects").map({ String(cString: $0) }),
@@ -6936,11 +6944,19 @@ private final class ApprovalServer: @unchecked Sendable {
               let oid = xpc_dictionary_get_string(message, "oid").map({ String(cString: $0) }),
               let arguments = operation.arguments(phase: phase, oid: oid),
               let root = GitProcessExecution(identity), identity.euid != 0,
-              Array(root.arguments.dropFirst()) == ["git"] + args, cwd == sshAgentPeerCWD(identity.pid),
+              (operation.remotePlan == nil
+                ? Array(root.arguments.dropFirst()) == ["git"] + args
+                : root.arguments.count == 4 && root.arguments[1] == "__git-remote" && root.arguments[3] == operation.url),
+              cwd == sshAgentPeerCWD(identity.pid),
               objects.hasPrefix("/"), objects.utf8.count < 4096, !objects.contains("\0"),
               gitRuntimeProtected(), av_original_parent_tracking_available(),
               gitLiveCode(root, requirement: #"anchor apple generic and certificate leaf[subject.OU] = ZU76A67LGU and identifier "com.automicvault.av""#)
         else { reply(peer, to: message, ok: false, error: "invalid protected Git registration"); return }
+        let caller = operation.remotePlan == nil ? nil : gitOriginalParent(identity).flatMap(GitProcessExecution.init)
+        let projectCWD = caller.flatMap { sshAgentPeerCWD($0.pid) } ?? cwd
+        guard operation.remotePlan == nil || caller != nil else {
+            reply(peer, to: message, ok: false, error: "Git original caller is unavailable"); return
+        }
         var random = [UInt8](repeating: 0, count: 32)
         guard SecRandomCopyBytes(kSecRandomDefault, random.count, &random) == errSecSuccess else {
             reply(peer, to: message, ok: false, error: "cannot create Git registration"); return
@@ -6949,7 +6965,7 @@ private final class ApprovalServer: @unchecked Sendable {
         let registered = gitRegistrationsLock.withLock {
             gitRegistrations = gitRegistrations.filter { $0.value.root.live() != nil }
             guard gitRegistrations.count < 1024, gitRegistrations[identity.pid] == nil else { return false }
-            gitRegistrations[identity.pid] = GitRegistration(root: root, operation: operation, arguments: arguments,
+            gitRegistrations[identity.pid] = GitRegistration(root: root, operation: operation, caller: caller, projectCWD: projectCWD, arguments: arguments,
                 cwd: cwd, objects: objects, nonce: nonce)
             return true
         }
@@ -6958,31 +6974,38 @@ private final class ApprovalServer: @unchecked Sendable {
 
     private func gitCredentialContextValid(_ context: GitCredentialContext) -> Bool {
         let registration = context.registration
-        guard gitRuntimeProtected(), registration.root.live() != nil,
-              let helper = context.helper.live(), let transport = gitOriginalParent(helper),
-              context.transport.matches(transport), let dispatcher = gitOriginalParent(transport), context.dispatcher.matches(dispatcher),
-              let git = gitOriginalParent(dispatcher), context.git.matches(git),
-              let root = gitOriginalParent(git), registration.root.matches(root),
+        guard gitRuntimeProtected(), let root = registration.root.live(),
+              let helper = context.helper.live(), let transport = gitOriginalParent(helper), context.transport.matches(transport),
+              let transportParent = gitOriginalParent(transport), let git = context.git.live(),
+              let actualRoot = gitOriginalParent(git), registration.root.matches(actualRoot),
               sshAgentPeerCWD(root.pid) == registration.cwd,
               sshAgentPeerCWD(git.pid) == gitTransportRoot,
-              sshAgentPeerCWD(dispatcher.pid) == gitTransportRoot,
               sshAgentPeerCWD(transport.pid) == gitTransportRoot,
               sshAgentPeerCWD(helper.pid) == gitTransportRoot,
-              context.git.path == gitTransportBinary, context.dispatcher.path == gitTransportBinary,
-              context.transport.path == gitTransportHTTPS,
+              context.git.path == gitTransportBinary, context.transport.path == gitTransportHTTPS,
               context.helper.path == gitTransportGH,
               context.git.arguments == [gitTransportBinary] + registration.arguments,
-              context.dispatcher.arguments == [gitTransportBinary, "remote-https", registration.operation.url, registration.operation.url],
               ["git-remote-https", gitTransportHTTPS].contains(context.transport.arguments.first ?? ""),
               Array(context.transport.arguments.dropFirst()) == [registration.operation.url, registration.operation.url],
               context.helper.arguments == [gitTransportGH, "auth", "git-credential", "get"],
               gitLiveCode(registration.root, requirement: #"anchor apple generic and certificate leaf[subject.OU] = ZU76A67LGU and identifier "com.automicvault.av""#),
               gitLiveCode(context.git, requirement: "anchor apple and identifier com.apple.git"),
-              gitLiveCode(context.dispatcher, requirement: "anchor apple and identifier com.apple.git"),
               gitLiveCode(context.transport, requirement: #"anchor apple and identifier "com.apple.git-remote-http""#),
               gitLiveCode(context.helper, requirement: "anchor apple generic and certificate leaf[subject.OU] = ZU76A67LGU and identifier gh") else { return false }
-        // The verified av execution constructs the entire environment with env_clear.
-        // These checks bind its selected object store and nonce to this live child.
+        if registration.operation.remotePlan != nil {
+            guard context.dispatcher == nil, context.git.matches(transportParent),
+                  let caller = registration.caller, caller.live() != nil,
+                  let original = gitOriginalParent(root), caller.matches(original),
+                  sshAgentPeerCWD(caller.pid) == registration.projectCWD else { return false }
+        } else {
+            guard let dispatcher = context.dispatcher, dispatcher.matches(transportParent),
+                  let parent = gitOriginalParent(transportParent), context.git.matches(parent),
+                  dispatcher.path == gitTransportBinary, sshAgentPeerCWD(dispatcher.pid) == gitTransportRoot,
+                  dispatcher.arguments == [gitTransportBinary, "remote-https", registration.operation.url, registration.operation.url],
+                  gitLiveCode(dispatcher, requirement: "anchor apple and identifier com.apple.git") else { return false }
+        }
+        // Verified native av constructs the entire environment with env_clear and
+        // owns the child's complete stdin; no untrusted process receives that pipe.
         for (key, expected) in gitTransportEnvironment(objects: registration.objects, nonce: registration.nonce) {
             var value = [CChar](repeating: 0, count: expected.utf8.count + 1)
             guard av_process_environment_value(git.pid, key, &value, value.count),
@@ -7003,26 +7026,39 @@ private final class ApprovalServer: @unchecked Sendable {
               request.replaceExistingEnv, !request.allowMissingKeys, request.envConflicts.isEmpty,
               request.shebangScript == nil, request.scriptData == nil, request.snapshotIncompatibleInterpreter == nil,
               request.cwd == gitTransportRoot,
-              let transport = gitOriginalParent(helper), let dispatcher = gitOriginalParent(transport),
-              let git = gitOriginalParent(dispatcher), let root = gitOriginalParent(git),
-              let registration = gitRegistrationsLock.withLock({ gitRegistrations[root.pid] }),
-              let gitExecution = GitProcessExecution(git), let dispatcherExecution = GitProcessExecution(dispatcher),
-              let transportExecution = GitProcessExecution(transport),
-              let helperExecution = GitProcessExecution(helper)
+              let transport = gitOriginalParent(helper), let transportParent = gitOriginalParent(transport),
+              let next = gitOriginalParent(transportParent),
+              let transportExecution = GitProcessExecution(transport), let helperExecution = GitProcessExecution(helper)
         else { throw AppError("gh is not bound to a protected Git transport") }
+        let direct = gitRegistrationsLock.withLock { gitRegistrations[next.pid] }
+        let git: AVProcessIdentity
+        let root: AVProcessIdentity
+        let dispatcher: GitProcessExecution?
+        if direct?.operation.remotePlan != nil {
+            git = transportParent; root = next; dispatcher = nil
+        } else {
+            guard let ancestor = gitOriginalParent(next), let execution = GitProcessExecution(transportParent) else {
+                throw AppError("Git original process chain is unavailable")
+            }
+            git = next; root = ancestor; dispatcher = execution
+        }
+        guard let registration = gitRegistrationsLock.withLock({ gitRegistrations[root.pid] }),
+              let gitExecution = GitProcessExecution(git) else { throw AppError("Git transport is not registered") }
         let context = GitCredentialContext(registration: registration, git: gitExecution,
-            dispatcher: dispatcherExecution, transport: transportExecution, helper: helperExecution)
+            dispatcher: dispatcher, transport: transportExecution, helper: helperExecution)
         guard gitCredentialContextValid(context) else { throw AppError("protected Git process chain changed") }
         let parent = CredentialHelperParent(pid: root.pid, startUsec: root.start_usec, euid: root.euid,
             target: pathString(root), arguments: registration.root.arguments, gitContext: context)
         let scope = String(decoding: try JSONSerialization.data(withJSONObject: [
             "url": registration.operation.url, "transportArguments": registration.arguments, "objects": registration.objects,
+            "remotePlan": registration.operation.remotePlan?.wire ?? [],
         ]), as: UTF8.self)
         return ApprovalRequest(op: request.op, keys: request.keys, target: request.target, args: request.args,
-            cwd: registration.cwd, replaceExistingEnv: request.replaceExistingEnv, allowMissingKeys: false,
+            cwd: registration.projectCWD, replaceExistingEnv: request.replaceExistingEnv, allowMissingKeys: false,
             envConflicts: [], shebangScript: nil, scriptData: nil, tool: "gh",
             title: "Allow Git \(registration.operation.command)?",
-            detail: "Git \(registration.operation.command): \(registration.operation.url), main branch. Transport selection: \(registration.arguments.last ?? "").",
+            detail: registration.operation.remotePlan.map { "Git HTTPS request: " + $0.wire.dropFirst().joined(separator: "\n") }
+                ?? "Git \(registration.operation.command): \(registration.operation.url), main branch. Transport selection: \(registration.arguments.last ?? "").",
             credentialScope: scope, credentialParent: parent)
     }
 

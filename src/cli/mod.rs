@@ -11,6 +11,8 @@ pub(crate) mod doctor;
 pub(crate) mod fastly_credential;
 #[cfg(target_os = "macos")]
 mod git;
+#[cfg(target_os = "macos")]
+mod git_remote;
 pub(crate) mod goat_credential;
 mod gpg_sign;
 mod inject;
@@ -532,6 +534,8 @@ where
         }
         Some("inject") => inject::run(rest, stdout, stderr, shebang_script),
         Some("proxy") => proxy::run(rest, stdout, stderr),
+        #[cfg(target_os = "macos")]
+        Some("__git-remote") => git_remote::run(&rest, stdout, stderr),
         #[cfg(target_os = "macos")]
         Some("git") => git::run(&rest, stdout, stderr),
         #[cfg(target_os = "macos")]

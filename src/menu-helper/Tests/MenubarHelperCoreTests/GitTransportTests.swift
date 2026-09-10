@@ -47,3 +47,27 @@ import Testing
     #expect((try FileManager.default.attributesOfItem(atPath: path)[.posixPermissions] as? NSNumber)?.intValue == 0o600)
     #expect(!gitTransportPathHasNoACL(path))
 }
+
+@Test func remoteHelperBatchesCannotExpandAuthority() throws {
+    let url = "https://github.com/a/b.git", oid = String(repeating: "a", count: 40)
+    for phase in ["list", "list for-push", "fetch", "push"] {
+        let command = phase == "fetch" ? "fetch \(oid) HEAD" : phase == "push" ? "push \(oid):refs/heads/topic" : phase
+        let wire = ["remote-helper", url, phase, "option dry-run true", "", command]
+        let op = try #require(GitTransportOperation(wire))
+        #expect(op.arguments(phase: "remote-helper", oid: "")?.suffix(3) == ["remote-https", url, url])
+        #expect(op.classification == (phase.contains("push") ? .mutating : .localWrite))
+        #expect(SecretGateProtection.readOnlyAndLocalWrites.allows(op.classification) == !phase.contains("push"))
+        #expect(GitTransportOperation(wire + ["get https://evil /tmp/token"]) == nil)
+        #expect(op.arguments(phase: "push", oid: oid) == nil)
+    }
+    for command in ["push HEAD:refs/heads/main", "push +\(oid):refs/heads/main", "push :refs/heads/main",
+                    "push \(oid):refs/heads/a.lock", "push \(oid):refs/tags/v1", "push \(oid):refs/heads/../config"] {
+        #expect(GitRemotePlan(["remote-helper", url, "push", "", command]) == nil)
+    }
+    for option in ["cas", "atomic", "pushcert", "servpath"] {
+        #expect(GitRemotePlan(["remote-helper", url, "list", "option \(option) true", "", "list"]) == nil)
+    }
+    #expect(GitRemotePlan(["remote-helper", url, "list", "option progress true", "option progress false", "", "list"]) == nil)
+    #expect(GitRemotePlan(["remote-helper", "https://evil/a/b.git", "list", "", "list"]) == nil)
+    #expect(GitRemotePlan(["remote-helper", url, "fetch", "", "fetch \(oid) HEAD\npush \(oid):refs/heads/x"]) == nil)
+}
