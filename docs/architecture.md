@@ -99,7 +99,10 @@ Authorization Gates verify the Launcher, bind the Gate Client and Target, classi
 unless that exact Verified Launcher has a separate Authorization History Access
 grant in the Data Protection Keychain. Secret Name Access never satisfies this
 grant. The service records the history read before returning the records, and a
-recording failure denies disclosure. See [ADR 0046](adr/0046-cli-authorization-history-access.md).
+recording failure denies disclosure. The default view returns the newest 50
+records; `--since` requests a window of at most 30 days and is filtered before
+disclosure. See [ADR 0046](adr/0046-cli-authorization-history-access.md) and
+[ADR 0047](adr/0047-encrypted-rolling-authorization-history.md).
 
 The Direct Secret Gate handles direct `av inject` requests that do not match a
 Tool-specific gate. It defaults to Approval Required. A user may add a Direct
@@ -512,7 +515,12 @@ export or backup format. See [ADR 0043](adr/0043-file-descriptor-secret-delivery
 
 ## Secret custody and availability
 
-Secret bytes stay in the app's private Keychain access group. Gate policy and Authorization History use separate services. Availability controls whether Keychain may return a Secret while the device is locked. Authorization controls whether the operation may receive it. Both checks must pass.
+Secret bytes stay in the app's private Keychain access group. Gate policy stays
+in a separate Keychain service. Authorization History records are authenticated
+and encrypted in Application Support with a key held in a separate Data
+Protection Keychain service. Availability controls whether Keychain may return
+a Secret while the device is locked. Authorization controls whether the
+operation may receive it. Both checks must pass.
 
 For each requested Secret Name, the menu bar app selects a Value from the
 Authorization Request's working directory. It examines that physical canonical
@@ -669,6 +677,11 @@ the menu bar app to return an arbitrary existing Secret for client-side
 inspection or migration.
 
 Authorization History is bounded local operational history. Same-user compromise or storage failure can damage it. Product copy must not promise an append-only audit trail or complete forensic evidence.
+
+The rolling store retains at most 30 days and 25 MiB of encrypted record
+payloads. Each allowed Secret Use commits and verifies its record synchronously
+before release. Retention pruning is part of that transaction; there is no
+background archive. See [ADR 0047](adr/0047-encrypted-rolling-authorization-history.md).
 
 For an automically authorized Secret Use, the Authorization Record includes the
 Target's available Hardened Runtime posture at authorization time. Ordinary

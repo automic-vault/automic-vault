@@ -161,10 +161,16 @@ pub(crate) fn list_global_secret_names() -> Result<Vec<String>, String> {
     list_secret_names_filtered(true)
 }
 
-pub(crate) fn authorization_history() -> Result<String, String> {
-    xpc_request("history", None, None, None, None)?
-        .value
-        .ok_or_else(|| "the approval service returned no Authorization History".into())
+pub(crate) fn authorization_history(since: Option<u64>) -> Result<String, String> {
+    xpc_request(
+        "history",
+        None,
+        None,
+        None,
+        since.map(|value| (b"since\0" as &'static [u8], value)),
+    )?
+    .value
+    .ok_or_else(|| "the approval service returned no Authorization History".into())
 }
 
 fn list_secret_names_filtered(global_only: bool) -> Result<Vec<String>, String> {

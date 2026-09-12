@@ -21,9 +21,11 @@ let package = Package(
         .target(
             name: "MenubarHelperCore",
             dependencies: [
+                "CSQLite",
                 .product(name: "GraphQL", package: "GraphQL"),
             ]
         ),
+        .systemLibrary(name: "CSQLite"),
         .target(
             name: "CProcessInfo",
             publicHeadersPath: "include",
@@ -46,7 +48,7 @@ let package = Package(
         ),
         .testTarget(
             name: "MenubarHelperCoreTests",
-            dependencies: ["MenubarHelperCore"]
+            dependencies: ["CSQLite", "MenubarHelperCore"]
         ),
         .testTarget(
             name: "ApprovalCoreTests",
