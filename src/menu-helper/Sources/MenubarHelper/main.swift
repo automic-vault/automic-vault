@@ -13828,8 +13828,8 @@ private func runMetadataDisclosureSelfCheck() -> Int32 {
     let record = AccessRequestRecord(
         date: Date(timeIntervalSince1970: 0),
         tool: "av",
-        command: "av history",
-        displayCommand: "av history",
+        command: "av history --token plaintext-credential",
+        displayCommand: "av history --token <redacted>",
         decision: "Approved",
         approvalSource: "Manual",
         reason: "Allowed once in prompt",
@@ -13840,6 +13840,24 @@ private func runMetadataDisclosureSelfCheck() -> Int32 {
         keys: [],
         detail: nil
     )
+    var recordedSuccessfulDisclosure = false
+    guard let disclosure = authorizationHistoryDisclosureValue(
+        record: record,
+        records: { [] },
+        onAccessRequest: { _ in
+            recordedSuccessfulDisclosure = true
+            return true
+        }
+    ), recordedSuccessfulDisclosure,
+        let disclosureData = disclosure.data(using: .utf8)
+    else { return 1 }
+    let decoder = JSONDecoder()
+    decoder.dateDecodingStrategy = .iso8601
+    guard let disclosedRecords = try? decoder.decode([AccessRequestRecord].self, from: disclosureData),
+          disclosedRecords.first?.id == record.id,
+          disclosedRecords.first?.command == record.commandForDisplay,
+          disclosedRecords.first?.command != record.command
+    else { return 1 }
     guard authorizationHistoryDisclosureValue(
         record: record,
         records: { [] },

@@ -688,7 +688,11 @@ func authorizationHistoryAccessIsSeparatePersistedAuthority() throws {
     #expect(allowAuthorizationHistoryAccess(terminal, service: historyService, account: account) == errSecSuccess)
     #expect(loadAuthorizationHistoryAccessApps(service: historyService, account: account) == [terminal])
     #expect(keychainAccessibility(account: account, service: historyService) == kSecAttrAccessibleAfterFirstUnlock as String)
-    #expect(removeAuthorizationHistoryAccess(terminal, service: historyService, account: account) == errSecSuccess)
+    #expect(removeAuthorizationHistoryAccess(
+        forLauncherRequirement: terminal.requirement,
+        service: historyService,
+        account: account
+    ) == errSecSuccess)
     #expect(loadAuthorizationHistoryAccessApps(service: historyService, account: account).isEmpty)
     #expect(loadSecretNameAccessApps(service: secretNamesService, account: account) == [terminal])
 }

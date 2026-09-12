@@ -1524,26 +1524,38 @@ public func removeAuthorizationHistoryAccess(
 }
 
 @discardableResult
+public func removeAuthorizationHistoryAccess(
+    forLauncherRequirement requirement: String,
+    service: String = authorizationHistoryAccessKeychainService,
+    account: String = authorizationHistoryAccessKeychainAccount
+) -> OSStatus {
+    removeLauncherAccess(
+        forRequirement: requirement,
+        service: service,
+        account: account
+    )
+}
+
+@discardableResult
 public func removeSecretNameAccess(
     forLauncherRequirement requirement: String,
     service: String = secretNameAccessKeychainService,
     account: String = secretNameAccessKeychainAccount
 ) -> OSStatus {
-    let apps: [BlessedScriptLauncher]
-    switch loadSecretNameAccessAppsResult(service: service, account: account) {
-    case .success(let loaded): apps = loaded.filter { $0.requirement != requirement }
-    case .failure(let status): return status
-    }
-    return saveSecretNameAccessApps(apps, service: service, account: account)
+    removeLauncherAccess(
+        forRequirement: requirement,
+        service: service,
+        account: account
+    )
 }
 
-private enum SecretNameAccessAppsLoad {
+private enum LauncherAccessAppsLoad {
     case success([BlessedScriptLauncher])
     case failure(OSStatus)
 }
 
 private func loadLauncherAccessApps(service: String, account: String) -> [BlessedScriptLauncher] {
-    guard case .success(let apps) = loadSecretNameAccessAppsResult(service: service, account: account)
+    guard case .success(let apps) = loadLauncherAccessAppsResult(service: service, account: account)
     else { return [] }
     return apps.sorted { $0.bundleIdentifier.localizedStandardCompare($1.bundleIdentifier) == .orderedAscending }
 }
@@ -1554,13 +1566,13 @@ private func allowLauncherAccess(
     account: String
 ) -> OSStatus {
     var apps: [BlessedScriptLauncher]
-    switch loadSecretNameAccessAppsResult(service: service, account: account) {
+    switch loadLauncherAccessAppsResult(service: service, account: account) {
     case .success(let loaded): apps = loaded
     case .failure(let status): return status
     }
     apps.removeAll { $0.requirement == app.requirement }
     apps.append(app)
-    return saveSecretNameAccessApps(apps, service: service, account: account)
+    return saveLauncherAccessApps(apps, service: service, account: account)
 }
 
 private func removeLauncherAccess(
@@ -1569,21 +1581,34 @@ private func removeLauncherAccess(
     account: String
 ) -> OSStatus {
     let apps: [BlessedScriptLauncher]
-    switch loadSecretNameAccessAppsResult(service: service, account: account) {
+    switch loadLauncherAccessAppsResult(service: service, account: account) {
     case .success(let loaded): apps = loaded
     case .failure(let status): return status
     }
-    return saveSecretNameAccessApps(
+    return saveLauncherAccessApps(
         apps.filter { $0.requirement != app.requirement },
         service: service,
         account: account
     )
 }
 
-private func loadSecretNameAccessAppsResult(
+private func removeLauncherAccess(
+    forRequirement requirement: String,
     service: String,
     account: String
-) -> SecretNameAccessAppsLoad {
+) -> OSStatus {
+    let apps: [BlessedScriptLauncher]
+    switch loadLauncherAccessAppsResult(service: service, account: account) {
+    case .success(let loaded): apps = loaded.filter { $0.requirement != requirement }
+    case .failure(let status): return status
+    }
+    return saveLauncherAccessApps(apps, service: service, account: account)
+}
+
+private func loadLauncherAccessAppsResult(
+    service: String,
+    account: String
+) -> LauncherAccessAppsLoad {
     switch loadKeychainDataResult(service: service, account: account) {
     case .notFound:
         return .success([])
@@ -1596,7 +1621,7 @@ private func loadSecretNameAccessAppsResult(
     }
 }
 
-private func saveSecretNameAccessApps(
+private func saveLauncherAccessApps(
     _ apps: [BlessedScriptLauncher],
     service: String,
     account: String
