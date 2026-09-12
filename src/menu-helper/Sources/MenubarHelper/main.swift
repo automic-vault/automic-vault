@@ -4089,6 +4089,7 @@ private final class ApprovalServer: @unchecked Sendable {
             encoder.dateEncodingStrategy = .iso8601
             encoder.outputFormatting = [.sortedKeys]
             let records = Array(([record] + loadAccessRequestRecords()).prefix(50))
+                .map(\.redactedForDisclosure)
             guard let data = try? encoder.encode(records),
                   let value = String(data: data, encoding: .utf8)
             else {

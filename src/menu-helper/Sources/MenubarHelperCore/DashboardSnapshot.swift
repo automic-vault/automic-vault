@@ -853,6 +853,28 @@ public struct AccessRequestRecord: Codable, Equatable, Identifiable, Sendable {
         displayCommand ?? "\(tool.isEmpty ? "tool" : tool) <arguments hidden>"
     }
 
+    public var redactedForDisclosure: AccessRequestRecord {
+        AccessRequestRecord(
+            id: id,
+            date: date,
+            tool: tool,
+            command: commandForDisplay,
+            displayCommand: displayCommand,
+            decision: decision,
+            approvalSource: approvalSource,
+            reason: reason,
+            launcher: launcher,
+            launcherIconPath: launcherIconPath,
+            callerPath: callerPath,
+            target: target,
+            targetRuntimeProtection: targetRuntimeProtection,
+            cwd: cwd,
+            keys: keys,
+            detail: detail,
+            secretValueSources: secretValueSources
+        )
+    }
+
     public var approvalSourceLabel: String {
         if let approvalSource, !approvalSource.isEmpty {
             return switch approvalSource.lowercased() {

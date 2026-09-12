@@ -13,7 +13,8 @@ historical activity.
 
 `av history` uses the signed `av` Gate Client and the same live Verified Launcher
 verification and Approval flow as `av list`. It returns a table by default and
-JSON with `--json`.
+JSON with `--json`. Both formats receive the display-safe command; the exact
+command retained for authorization integrity never leaves the menu bar app.
 
 Automic authorization uses a separate, Data Protection Keychain-backed
 Authorization History Access list. Adding a Verified Launcher requires Approval;

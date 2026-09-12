@@ -693,6 +693,27 @@ func authorizationHistoryAccessIsSeparatePersistedAuthority() throws {
     #expect(loadSecretNameAccessApps(service: secretNamesService, account: account) == [terminal])
 }
 
+@Test
+func authorizationHistoryDisclosureOmitsExactCommand() {
+    let record = AccessRequestRecord(
+        date: Date(timeIntervalSince1970: 0),
+        tool: "curl",
+        command: "curl --api-key plaintext-credential",
+        displayCommand: "curl --api-key <redacted>",
+        decision: "Approved",
+        reason: "Allowed",
+        launcher: "Terminal",
+        callerPath: "/usr/bin/curl",
+        target: "/usr/bin/curl",
+        cwd: "/tmp",
+        keys: ["API_KEY"],
+        detail: nil
+    )
+
+    #expect(record.redactedForDisclosure.command == "curl --api-key <redacted>")
+    #expect(record.command == "curl --api-key plaintext-credential")
+}
+
 @Test func directAccessRequiresEveryExactSecretAndHardenedRuntime() {
     let launcher = BlessedScriptLauncher(
         bundleIdentifier: "com.example.launcher",
