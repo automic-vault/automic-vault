@@ -172,7 +172,9 @@ the decision source. Automic Vault persists and verifies an allowed Secret
 Use's record before releasing the Secret; recording failure denies release.
 
 History is bounded and local. It provides neither tamper resistance nor a
-complete forensic log.
+complete forensic log. The Mac retains up to 30 days or 25 MiB of encrypted
+record payloads. `av history --since 7d --json` reads an explicit window through
+the same approved Authorization History Access surface.
 
 [Authorization History and its limits](docs/authorization.md#authorization-history)
 

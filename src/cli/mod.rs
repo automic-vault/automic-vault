@@ -49,7 +49,7 @@ commands:
   $ av inject --mode=fd +KEY:FD -- <cmd>  # apply secrets through anonymous pipes
   $ av proxy +KEY... [--] <command>       # proxy secret references for a command
   $ av list                               # list saved secret names
-  $ av history [--json]                   # show Authorization History
+  $ av history [--json] [--since 7d]      # show Authorization History
   $ av save [options] KEY                 # store a global or Project Value
   $ av harden <tool> [-y|--yes]           # harden a tool; migrate credentials
   $ av unharden brew [-y|--yes]           # temporarily restore Homebrew for cask migration
@@ -63,7 +63,7 @@ modes:
 more:
   $ open https://www.automicvault.com/docs/";
 
-pub(crate) const INSTALL_REVISION: u32 = 53;
+pub(crate) const INSTALL_REVISION: u32 = 54;
 
 pub(crate) fn bash_shell_secret_insecurity_reasons() -> Result<Vec<String>, String> {
     shell_secrets::bash_reasons()

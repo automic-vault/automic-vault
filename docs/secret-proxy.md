@@ -68,7 +68,8 @@ output-redaction guarantee; the helper cannot recognize transformed output.
 
 Active sessions and their statistics appear under **Credential Proxies**. Ending a
 session terminates only the proxy helper, not the Target. Its records remain in
-Authorization History, which has one global 50-entry cap.
+the global Authorization History. The dashboard shows the newest 50 records;
+the rolling store may retain up to 30 days or 25 MiB of encrypted payloads.
 
 See [Canonical Domain Language](domain-language.md),
 [Architecture](architecture.md), and

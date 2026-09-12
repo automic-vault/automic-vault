@@ -16,6 +16,8 @@ public let touchIDApprovalKeychainService = "com.automicvault.touch-id-approval"
 public let touchIDApprovalKeychainAccount = "TouchIDApprovalV1"
 public let accessRequestLogDefaultsKey = "AccessRequestLog"
 public let accessRequestLogKeychainService = "com.automicvault.access-log"
+public let authorizationHistoryEncryptionKeychainService = "com.automicvault.authorization-history-storage"
+public let authorizationHistoryEncryptionKeychainAccount = "AuthorizationHistoryEncryptionKeyV1"
 private let secretMutationKeychainService = "com.automicvault.secret-mutations"
 private let secretMutationKeychainAccount = "PendingSecretMutationV1"
 private let secretMutationLock = NSLock()
@@ -1624,6 +1626,9 @@ public func loadAccessRequestRecords(
     if let defaults {
         return decodeAccessRequestRecords(defaults.data(forKey: key))
     }
+    if key == accessRequestLogDefaultsKey, service == accessRequestLogKeychainService {
+        return loadAccessRequestRecordsForDisclosure(limit: 50) ?? []
+    }
     switch loadKeychainDataResult(service: service, account: key) {
     case .success(let data):
         return decodeAccessRequestRecords(data)
@@ -1664,6 +1669,9 @@ public func appendAccessRequestRecord(
 ) -> Bool {
     accessRequestLogLock.lock()
     defer { accessRequestLogLock.unlock() }
+    if defaults == nil, key == accessRequestLogDefaultsKey, service == accessRequestLogKeychainService {
+        return productionAuthorizationHistoryStore?.append(record) == true
+    }
     let records = Array(
         ([record] + loadAccessRequestRecords(defaults: defaults, key: key, service: service)).prefix(50)
     )
@@ -1686,6 +1694,93 @@ public func appendAccessRequestRecord(
         else { return false }
         return persisted == data
     }
+}
+
+public func loadAccessRequestRecordsForDisclosure(
+    since: Date? = nil,
+    limit: Int? = nil
+) -> [AccessRequestRecord]? {
+    guard let store = productionAuthorizationHistoryStore else { return nil }
+    return try? store.records(since: since, limit: limit)
+}
+
+private let productionAuthorizationHistoryStore: AuthorizationHistoryStore? = {
+    guard let applicationSupport = FileManager.default.urls(
+              for: .applicationSupportDirectory,
+              in: .userDomainMask
+          ).first
+    else { return nil }
+    let url = applicationSupport
+        .appendingPathComponent("com.automicvault", isDirectory: true)
+        .appendingPathComponent("AuthorizationHistory", isDirectory: true)
+        .appendingPathComponent("History-v1.sqlite3")
+    guard let key = loadOrCreateAuthorizationHistoryEncryptionKey(
+        allowCreation: !FileManager.default.fileExists(atPath: url.path)
+    ) else { return nil }
+    guard let store = try? AuthorizationHistoryStore(url: url, keyData: key) else { return nil }
+    switch loadKeychainDataResult(
+        service: accessRequestLogKeychainService,
+        account: accessRequestLogDefaultsKey
+    ) {
+    case .notFound:
+        return store
+    case .failure:
+        return nil
+    case .success(let data):
+        guard let records = try? JSONDecoder().decode([AccessRequestRecord].self, from: data),
+              (try? store.importRecords(records)) != nil
+        else { return nil }
+        let status = deleteKeychainData(
+            service: accessRequestLogKeychainService,
+            account: accessRequestLogDefaultsKey
+        )
+        return status == errSecSuccess || status == errSecItemNotFound ? store : nil
+    }
+}()
+
+private func loadOrCreateAuthorizationHistoryEncryptionKey(allowCreation: Bool) -> Data? {
+    switch loadKeychainDataResult(
+        service: authorizationHistoryEncryptionKeychainService,
+        account: authorizationHistoryEncryptionKeychainAccount
+    ) {
+    case .success(let key):
+        return key.count == 32 ? key : nil
+    case .failure:
+        return nil
+    case .notFound:
+        guard allowCreation else { return nil }
+        var bytes = [UInt8](repeating: 0, count: 32)
+        guard SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes) == errSecSuccess else {
+            return nil
+        }
+        let generated = Data(bytes)
+        let status = saveKeychainDataIfAbsentOrEqual(
+            generated,
+            service: authorizationHistoryEncryptionKeychainService,
+            account: authorizationHistoryEncryptionKeychainAccount,
+            accessibility: .afterFirstUnlock
+        )
+        if status == errSecSuccess { return generated }
+        guard status == errSecDuplicateItem,
+              case .success(let existing) = loadKeychainDataResult(
+                  service: authorizationHistoryEncryptionKeychainService,
+                  account: authorizationHistoryEncryptionKeychainAccount
+              ),
+              existing.count == 32
+        else { return nil }
+        return existing
+    }
+}
+
+private func deleteKeychainData(service: String, account: String) -> OSStatus {
+    var query: [String: Any] = [
+        kSecClass as String: kSecClassGenericPassword,
+        kSecAttrService as String: service,
+        kSecAttrAccount as String: account,
+        kSecUseDataProtectionKeychain as String: true,
+    ]
+    addCanonicalAccessGroup(to: &query)
+    return SecItemDelete(query as CFDictionary)
 }
 
 private let projectValueAccountPrefix = "AVProjectValueV1:"
@@ -2499,6 +2594,8 @@ public func migrateBackgroundKeychainItems(
     secretNameAccessAccount: String = secretNameAccessKeychainAccount,
     authorizationHistoryAccessService: String = authorizationHistoryAccessKeychainService,
     authorizationHistoryAccessAccount: String = authorizationHistoryAccessKeychainAccount,
+    authorizationHistoryEncryptionService: String = authorizationHistoryEncryptionKeychainService,
+    authorizationHistoryEncryptionAccount: String = authorizationHistoryEncryptionKeychainAccount,
     directAccessService: String = directAccessKeychainService,
     directAccessAccount: String = directAccessKeychainAccount,
     gpgSigningService: String = gpgSigningConfigurationService,
@@ -2509,6 +2606,7 @@ public func migrateBackgroundKeychainItems(
         (accessLogService, accessLogAccount),
         (secretNameAccessService, secretNameAccessAccount),
         (authorizationHistoryAccessService, authorizationHistoryAccessAccount),
+        (authorizationHistoryEncryptionService, authorizationHistoryEncryptionAccount),
         (directAccessService, directAccessAccount),
         (gpgSigningService, gpgSigningAccount),
     ] {

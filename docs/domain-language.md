@@ -671,6 +671,13 @@ A local record of an Authorization Request and its Authorization Decision. It in
 
 Automic Vault persists and verifies a record of allowed Secret Use before releasing a Secret. Failure to persist that required record denies the request. Records of denials and failures are best effort. Authorization History is bounded and local; it is not an append-only, tamper-proof, or complete forensic log.
 
+The Mac retains Authorization History for up to 30 days and 25 MiB of encrypted
+record payloads, whichever bound is reached first. The dashboard and an
+unqualified `av history` show the newest 50 records; `av history --since` may
+request an explicit window up to the retention limit. Retention does not make
+Authorization History complete: same-user compromise or storage failure can
+damage or delete it.
+
 ## Least Authority
 
 Durable trust binds one Authorization Gate to one Verified Launcher. A Direct
