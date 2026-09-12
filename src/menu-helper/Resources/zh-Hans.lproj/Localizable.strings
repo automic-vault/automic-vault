@@ -36,6 +36,7 @@
 "Allow JIT compilation" = "允许 JIT 编译";
 "Allow Signing" = "允许签名";
 "Allow Verified Launcher to List Secret Names" = "允许已验证启动器列出 Secret 名称";
+"Allow Verified Launcher to Read Authorization History" = "允许已验证启动器读取授权历史";
 "Allow Verified Launcher…" = "允许已验证启动器…";
 "Allow Write Access for 10 Minutes…" = "允许写入 10 分钟…";
 "Allow an exact live process execution to retain gate-specific Launcher attribution after its parent chain exits." = "允许一次确定的存活进程执行在父进程链退出后，保留特定关卡的启动器归属。";

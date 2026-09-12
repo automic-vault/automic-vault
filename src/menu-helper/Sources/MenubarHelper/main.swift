@@ -3458,13 +3458,14 @@ private func metadataDisclosureHasAutomaticAccess(
 
 private func authorizationHistoryDisclosureValue(
     record: AccessRequestRecord,
-    records: () -> [AccessRequestRecord] = { loadAccessRequestRecords() },
+    records: () -> [AccessRequestRecord]? = { loadAccessRequestRecordsIfAvailable() },
     onAccessRequest: (AccessRequestRecord) -> Bool
 ) -> String? {
     let encoder = JSONEncoder()
     encoder.dateEncodingStrategy = .iso8601
     encoder.outputFormatting = [.sortedKeys]
-    let disclosedRecords = Array(([record] + records()).prefix(50))
+    guard let records = records() else { return nil }
+    let disclosedRecords = Array(([record] + records).prefix(50))
         .map(\.redactedForDisclosure)
     guard let data = try? encoder.encode(disclosedRecords),
           let value = String(data: data, encoding: .utf8),
@@ -13672,8 +13673,8 @@ private func runSecretMutationSelfCheck() async -> Int32 {
         launcher: nil,
         launcherFallbackPath: "/Applications/Terminal.app",
         canRequestHumanApproval: { true },
-        onAccessRequest: {
-            cancellationRecord = $0
+        onAccessRequest: { record in
+            cancellationRecord = record
             return true
         },
         decision: { _ in .canceled },
@@ -13844,6 +13845,15 @@ private func runMetadataDisclosureSelfCheck() -> Int32 {
         records: { [] },
         onAccessRequest: { _ in false }
     ) == nil else { return 1 }
+    var recordedUnavailableHistory = false
+    guard authorizationHistoryDisclosureValue(
+        record: record,
+        records: { nil },
+        onAccessRequest: { _ in
+            recordedUnavailableHistory = true
+            return true
+        }
+    ) == nil, !recordedUnavailableHistory else { return 1 }
     return 0
 }
 

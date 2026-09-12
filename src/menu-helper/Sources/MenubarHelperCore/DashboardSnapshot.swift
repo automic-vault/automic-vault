@@ -1658,11 +1658,19 @@ public func loadAccessRequestRecords(
     key: String = accessRequestLogDefaultsKey,
     service: String = accessRequestLogKeychainService
 ) -> [AccessRequestRecord] {
+    loadAccessRequestRecordsIfAvailable(defaults: defaults, key: key, service: service) ?? []
+}
+
+public func loadAccessRequestRecordsIfAvailable(
+    defaults: UserDefaults? = nil,
+    key: String = accessRequestLogDefaultsKey,
+    service: String = accessRequestLogKeychainService
+) -> [AccessRequestRecord]? {
     guard case .success(let records) = loadAccessRequestRecordsResult(
         defaults: defaults,
         key: key,
         service: service
-    ) else { return [] }
+    ) else { return nil }
     return records
 }
 

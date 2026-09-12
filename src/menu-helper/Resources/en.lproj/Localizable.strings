@@ -36,6 +36,7 @@
 "Allow JIT compilation" = "Allow JIT compilation";
 "Allow Signing" = "Allow Signing";
 "Allow Verified Launcher to List Secret Names" = "Allow Verified Launcher to List Secret Names";
+"Allow Verified Launcher to Read Authorization History" = "Allow Verified Launcher to Read Authorization History";
 "Allow Verified Launcher…" = "Allow Verified Launcher…";
 "Allow Write Access for 10 Minutes…" = "Allow Write Access for 10 Minutes…";
 "Allow an exact live process execution to retain gate-specific Launcher attribution after its parent chain exits." = "Allow an exact live process execution to retain gate-specific Launcher attribution after its parent chain exits.";
