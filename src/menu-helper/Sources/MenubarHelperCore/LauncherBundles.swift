@@ -191,15 +191,24 @@ public func removeLauncherBundleEnrollment(
 public func removeLauncherBundleAuthorization(
     requirement: String
 ) -> OSStatus {
-    let gateStatus = removeSecretGatePolicies(forLauncherRequirement: requirement)
-    guard gateStatus == errSecSuccess else { return gateStatus }
-    let namesStatus = removeSecretNameAccess(forLauncherRequirement: requirement)
-    guard namesStatus == errSecSuccess else { return namesStatus }
-    let historyStatus = removeAuthorizationHistoryAccess(forLauncherRequirement: requirement)
-    guard historyStatus == errSecSuccess else { return historyStatus }
-    let directStatus = removeDirectAccess(forLauncherRequirement: requirement)
-    guard directStatus == errSecSuccess else { return directStatus }
-    return removeLauncherFromBlessedScripts(requirement: requirement)
+    launcherBundleAuthorizationCleanupStatus([
+        { removeSecretGatePolicies(forLauncherRequirement: requirement) },
+        { removeSecretNameAccess(forLauncherRequirement: requirement) },
+        { removeAuthorizationHistoryAccess(forLauncherRequirement: requirement) },
+        { removeDirectAccess(forLauncherRequirement: requirement) },
+        { removeLauncherFromBlessedScripts(requirement: requirement) },
+    ])
+}
+
+func launcherBundleAuthorizationCleanupStatus(_ removals: [() -> OSStatus]) -> OSStatus {
+    var firstError = errSecSuccess
+    for remove in removals {
+        let status = remove()
+        if firstError == errSecSuccess, status != errSecSuccess {
+            firstError = status
+        }
+    }
+    return firstError
 }
 
 public struct LauncherBundleCodeEvidence: Equatable, Sendable {

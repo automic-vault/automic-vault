@@ -3,6 +3,20 @@ import Security
 import Testing
 @testable import MenubarHelperCore
 
+@Test func launcherBundleAuthorizationCleanupAttemptsEveryRevocation() {
+    var attempted: [String] = []
+    let status = launcherBundleAuthorizationCleanupStatus([
+        { attempted.append("gates"); return errSecSuccess },
+        { attempted.append("names"); return errSecDecode },
+        { attempted.append("history"); return errSecNotAvailable },
+        { attempted.append("direct"); return errSecSuccess },
+        { attempted.append("blessing"); return errSecSuccess },
+    ])
+
+    #expect(attempted == ["gates", "names", "history", "direct", "blessing"])
+    #expect(status == errSecDecode)
+}
+
 @Test func launcherBundleNamesRejectPathsAndControls() {
     #expect(launcherBundleDisplayName(from: "  Acme CLI  ") == "Acme CLI")
     #expect(launcherBundleDisplayName(from: "../Acme") == nil)
