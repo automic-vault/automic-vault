@@ -3436,6 +3436,43 @@ private struct ApprovedFulfillmentMaterial: Sendable {
 
 private let registryHelperProtocolVersion: UInt64 = 3
 
+private enum MetadataDisclosure {
+    case secretNames(globalOnly: Bool)
+    case authorizationHistory
+}
+
+private func metadataDisclosureHasAutomaticAccess(
+    _ kind: MetadataDisclosure,
+    launchers: [LauncherIdentity],
+    secretNameAccessApps: [BlessedScriptLauncher] = loadSecretNameAccessApps(),
+    authorizationHistoryAccessApps: [BlessedScriptLauncher] = loadAuthorizationHistoryAccessApps()
+) -> Bool {
+    let allowedApps = switch kind {
+    case .secretNames: secretNameAccessApps
+    case .authorizationHistory: authorizationHistoryAccessApps
+    }
+    return launchers.contains { candidate in
+        allowedApps.contains { $0.requirement == candidate.designatedRequirement }
+    }
+}
+
+private func authorizationHistoryDisclosureValue(
+    record: AccessRequestRecord,
+    records: () -> [AccessRequestRecord] = { loadAccessRequestRecords() },
+    onAccessRequest: (AccessRequestRecord) -> Bool
+) -> String? {
+    let encoder = JSONEncoder()
+    encoder.dateEncodingStrategy = .iso8601
+    encoder.outputFormatting = [.sortedKeys]
+    let disclosedRecords = Array(([record] + records()).prefix(50))
+        .map(\.redactedForDisclosure)
+    guard let data = try? encoder.encode(disclosedRecords),
+          let value = String(data: data, encoding: .utf8),
+          onAccessRequest(record)
+    else { return nil }
+    return value
+}
+
 private final class ApprovalServer: @unchecked Sendable {
     private let serviceName: String
     private let teamIdentifier: String
@@ -3899,11 +3936,6 @@ private final class ApprovalServer: @unchecked Sendable {
         }
     }
 
-    private enum MetadataDisclosure {
-        case secretNames(globalOnly: Bool)
-        case authorizationHistory
-    }
-
     private func handleMetadataDisclosure(
         _ message: xpc_object_t,
         on peer: xpc_connection_t,
@@ -3921,13 +3953,7 @@ private final class ApprovalServer: @unchecked Sendable {
         if launchers.isEmpty, let caller = launcherIdentity(pid: pid, identity: identity) {
             launchers.append(caller)
         }
-        let allowedApps = switch kind {
-        case .secretNames: loadSecretNameAccessApps()
-        case .authorizationHistory: loadAuthorizationHistoryAccessApps()
-        }
-        let allowedLauncher = launchers.first {
-            candidate in allowedApps.contains { $0.requirement == candidate.designatedRequirement }
-        }
+        let hasAutomaticAccess = metadataDisclosureHasAutomaticAccess(kind, launchers: launchers)
         let launcher = executionOrigin(
             among: launchers,
             callerPID: pid,
@@ -3962,7 +3988,7 @@ private final class ApprovalServer: @unchecked Sendable {
             title: title,
             detail: detail
         )
-        if allowedLauncher != nil
+        if hasAutomaticAccess
         {
             discloseMetadata(
                 request: request,
@@ -4083,31 +4109,22 @@ private final class ApprovalServer: @unchecked Sendable {
             reason: reason,
             launcher: launcher
         )
-        var historyValue: String?
         if case .authorizationHistory = kind {
-            let encoder = JSONEncoder()
-            encoder.dateEncodingStrategy = .iso8601
-            encoder.outputFormatting = [.sortedKeys]
-            let records = Array(([record] + loadAccessRequestRecords()).prefix(50))
-                .map(\.redactedForDisclosure)
-            guard let data = try? encoder.encode(records),
-                  let value = String(data: data, encoding: .utf8)
-            else {
-                reply(peer, to: message, ok: false, error: "Authorization History could not be encoded")
+            guard let value = authorizationHistoryDisclosureValue(
+                record: record,
+                onAccessRequest: onAccessRequest
+            ) else {
+                reply(peer, to: message, ok: false, error: "Authorization History is unavailable")
                 return
             }
-            historyValue = value
+            reply(peer, to: message, ok: true, error: nil, value: value)
+            return
         }
         guard onAccessRequest(record) else {
             reply(peer, to: message, ok: false, error: "Authorization History is unavailable")
             return
         }
-        switch kind {
-        case .secretNames:
-            reply(peer, to: message, ok: true, error: nil, names: names)
-        case .authorizationHistory:
-            reply(peer, to: message, ok: true, error: nil, value: historyValue)
-        }
+        reply(peer, to: message, ok: true, error: nil, names: names)
     }
 
     private func handleInject(
@@ -13773,6 +13790,63 @@ private func runKeychainPersistenceSelfCheck() -> Int32 {
     return 0
 }
 
+private func runMetadataDisclosureSelfCheck() -> Int32 {
+    let requirement = #"identifier "com.apple.Terminal" and anchor apple"#
+    let launcher = LauncherIdentity(
+        pid: 42,
+        path: "/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal",
+        identifier: "com.apple.Terminal",
+        teamIdentifier: "APPLE",
+        designatedRequirement: requirement,
+        runtimeProtection: .hardened
+    )
+    let grant = BlessedScriptLauncher(
+        bundleIdentifier: launcher.identifier,
+        requirement: requirement
+    )
+    guard metadataDisclosureHasAutomaticAccess(
+        .secretNames(globalOnly: false),
+        launchers: [launcher],
+        secretNameAccessApps: [grant],
+        authorizationHistoryAccessApps: []
+    ),
+        !metadataDisclosureHasAutomaticAccess(
+            .authorizationHistory,
+            launchers: [launcher],
+            secretNameAccessApps: [grant],
+            authorizationHistoryAccessApps: []
+        ),
+        metadataDisclosureHasAutomaticAccess(
+            .authorizationHistory,
+            launchers: [launcher],
+            secretNameAccessApps: [],
+            authorizationHistoryAccessApps: [grant]
+        )
+    else { return 1 }
+
+    let record = AccessRequestRecord(
+        date: Date(timeIntervalSince1970: 0),
+        tool: "av",
+        command: "av history",
+        displayCommand: "av history",
+        decision: "Approved",
+        approvalSource: "Manual",
+        reason: "Allowed once in prompt",
+        launcher: "Terminal",
+        callerPath: "/usr/local/bin/av",
+        target: "/usr/local/bin/av",
+        cwd: "/tmp",
+        keys: [],
+        detail: nil
+    )
+    guard authorizationHistoryDisclosureValue(
+        record: record,
+        records: { [] },
+        onAccessRequest: { _ in false }
+    ) == nil else { return 1 }
+    return 0
+}
+
 @MainActor
 private func fileDescriptorInjectionSelfCheck() -> Bool {
     let message = xpc_dictionary_create_empty()
@@ -17407,6 +17481,10 @@ if CommandLine.arguments.contains("--self-check-secret-mutations") {
 
 if CommandLine.arguments.contains("--self-check-keychain-persistence") {
     exit(runKeychainPersistenceSelfCheck())
+}
+
+if CommandLine.arguments.contains("--self-check-metadata-disclosure") {
+    exit(runMetadataDisclosureSelfCheck())
 }
 
 if CommandLine.arguments.contains("--self-check-gh-read-only") {

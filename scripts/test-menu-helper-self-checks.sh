@@ -48,6 +48,7 @@ checks=(
   --self-check-approval-process-execution
   --self-check-standalone-launchers
   --self-check-secret-mutations
+  --self-check-metadata-disclosure
   --self-check-gh-read-only
   --self-check-docker-credentials
   --self-check-terraform-credentials
