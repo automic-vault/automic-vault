@@ -1677,3 +1677,21 @@ private final class AlteredAccessLogDefaults: UserDefaults, @unchecked Sendable 
     )
     #expect(!appendAccessRequestRecord(record, defaults: AlteredAccessLogDefaults()))
 }
+
+@Test func accessRequestLogDoesNotReplaceMalformedHistory() throws {
+    let defaultsName = "com.automicvault.tests.defaults.\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: defaultsName))
+    defer { defaults.removePersistentDomain(forName: defaultsName) }
+    let key = "malformed-access-history"
+    let malformed = Data("not json".utf8)
+    defaults.set(malformed, forKey: key)
+
+    let record = AccessRequestRecord(
+        date: Date(timeIntervalSince1970: 0), tool: "fixture", command: "fixture list",
+        decision: "Approved", approvalSource: "Auto", reason: "Read Only",
+        launcher: "Fixture", callerPath: "/fixture/av", target: "/fixture/tool",
+        cwd: "/fixture", keys: ["SYNTHETIC_TOKEN"], detail: nil
+    )
+    #expect(!appendAccessRequestRecord(record, defaults: defaults, key: key))
+    #expect(defaults.data(forKey: key) == malformed)
+}

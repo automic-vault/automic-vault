@@ -1616,21 +1616,28 @@ private func saveSecretNameAccessApps(
     )
 }
 
-public func loadAccessRequestRecords(
+private enum AccessRequestRecordsLoad {
+    case success([AccessRequestRecord])
+    case failure(OSStatus)
+}
+
+private func loadAccessRequestRecordsResult(
     defaults: UserDefaults? = nil,
     key: String = accessRequestLogDefaultsKey,
     service: String = accessRequestLogKeychainService
-) -> [AccessRequestRecord] {
+) -> AccessRequestRecordsLoad {
     if let defaults {
         return decodeAccessRequestRecords(defaults.data(forKey: key))
     }
     switch loadKeychainDataResult(service: service, account: key) {
     case .success(let data):
         return decodeAccessRequestRecords(data)
-    case .failure:
-        return []
+    case .failure(let status):
+        return .failure(status)
     case .notFound:
-        let legacy = decodeAccessRequestRecords(UserDefaults.standard.data(forKey: key))
+        guard case .success(let legacy) = decodeAccessRequestRecords(
+            UserDefaults.standard.data(forKey: key)
+        ) else { return .failure(errSecDecode) }
         guard !legacy.isEmpty,
               let data = try? JSONEncoder().encode(legacy),
               saveKeychainData(
@@ -1639,20 +1646,31 @@ public func loadAccessRequestRecords(
                   account: key,
                   accessibility: .afterFirstUnlock
               ) == errSecSuccess
-        else { return legacy }
+        else { return .success(legacy) }
         UserDefaults.standard.removeObject(forKey: key)
         _ = UserDefaults.standard.synchronize()
-        return legacy
+        return .success(legacy)
     }
 }
 
-private func decodeAccessRequestRecords(_ data: Data?) -> [AccessRequestRecord] {
-    guard let data,
-          let records = try? JSONDecoder().decode([AccessRequestRecord].self, from: data)
-    else {
-        return []
-    }
-    return Array(records.prefix(50))
+public func loadAccessRequestRecords(
+    defaults: UserDefaults? = nil,
+    key: String = accessRequestLogDefaultsKey,
+    service: String = accessRequestLogKeychainService
+) -> [AccessRequestRecord] {
+    guard case .success(let records) = loadAccessRequestRecordsResult(
+        defaults: defaults,
+        key: key,
+        service: service
+    ) else { return [] }
+    return records
+}
+
+private func decodeAccessRequestRecords(_ data: Data?) -> AccessRequestRecordsLoad {
+    guard let data else { return .success([]) }
+    guard let records = try? JSONDecoder().decode([AccessRequestRecord].self, from: data)
+    else { return .failure(errSecDecode) }
+    return .success(Array(records.prefix(50)))
 }
 
 @discardableResult
@@ -1664,9 +1682,12 @@ public func appendAccessRequestRecord(
 ) -> Bool {
     accessRequestLogLock.lock()
     defer { accessRequestLogLock.unlock() }
-    let records = Array(
-        ([record] + loadAccessRequestRecords(defaults: defaults, key: key, service: service)).prefix(50)
-    )
+    guard case .success(let existing) = loadAccessRequestRecordsResult(
+        defaults: defaults,
+        key: key,
+        service: service
+    ) else { return false }
+    let records = Array(([record] + existing).prefix(50))
     guard let data = try? JSONEncoder().encode(records) else { return false }
     if let defaults {
         defaults.set(data, forKey: key)
