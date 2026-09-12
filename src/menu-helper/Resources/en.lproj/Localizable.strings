@@ -36,6 +36,7 @@
 "Allow JIT compilation" = "Allow JIT compilation";
 "Allow Signing" = "Allow Signing";
 "Allow Verified Launcher to List Secret Names" = "Allow Verified Launcher to List Secret Names";
+"Allow Verified Launcher to Read Authorization History" = "Allow Verified Launcher to Read Authorization History";
 "Allow Verified Launcher…" = "Allow Verified Launcher…";
 "Allow Write Access for 10 Minutes…" = "Allow Write Access for 10 Minutes…";
 "Allow an exact live process execution to retain gate-specific Launcher attribution after its parent chain exits." = "Allow an exact live process execution to retain gate-specific Launcher attribution after its parent chain exits.";
@@ -404,3 +405,8 @@
 "macOS will authenticate you. Recovery disables iPhone Approval, cancels pending requests, rotates the iCloud key, and invalidates every iPhone and other Mac on this account." = "macOS will authenticate you. Recovery disables iPhone Approval, cancels pending requests, rotates the iCloud key, and invalidates every iPhone and other Mac on this account.";
 "via %@" = "via %@";
 "✓ Passed" = "✓ Passed";
+"Authorization History Access" = "Authorization History Access";
+"Manage Verified Launchers that may read Authorization History without Approval." = "Manage Verified Launchers that may read Authorization History without Approval.";
+"No Verified Launchers may read Authorization History without Approval." = "No Verified Launchers may read Authorization History without Approval.";
+"These Verified Launchers may run av history without Approval." = "These Verified Launchers may run av history without Approval.";
+"Verified Launchers allowed to run av history" = "Verified Launchers allowed to run av history";

@@ -3436,6 +3436,44 @@ private struct ApprovedFulfillmentMaterial: Sendable {
 
 private let registryHelperProtocolVersion: UInt64 = 3
 
+private enum MetadataDisclosure {
+    case secretNames(globalOnly: Bool)
+    case authorizationHistory
+}
+
+private func metadataDisclosureHasAutomaticAccess(
+    _ kind: MetadataDisclosure,
+    launchers: [LauncherIdentity],
+    secretNameAccessApps: [BlessedScriptLauncher] = loadSecretNameAccessApps(),
+    authorizationHistoryAccessApps: [BlessedScriptLauncher] = loadAuthorizationHistoryAccessApps()
+) -> Bool {
+    let allowedApps = switch kind {
+    case .secretNames: secretNameAccessApps
+    case .authorizationHistory: authorizationHistoryAccessApps
+    }
+    return launchers.contains { candidate in
+        allowedApps.contains { $0.requirement == candidate.designatedRequirement }
+    }
+}
+
+private func authorizationHistoryDisclosureValue(
+    record: AccessRequestRecord,
+    records: () -> [AccessRequestRecord]? = { loadAccessRequestRecordsIfAvailable() },
+    onAccessRequest: (AccessRequestRecord) -> Bool
+) -> String? {
+    let encoder = JSONEncoder()
+    encoder.dateEncodingStrategy = .iso8601
+    encoder.outputFormatting = [.sortedKeys]
+    guard let records = records() else { return nil }
+    let disclosedRecords = Array(([record] + records).prefix(50))
+        .map(\.redactedForDisclosure)
+    guard let data = try? encoder.encode(disclosedRecords),
+          let value = String(data: data, encoding: .utf8),
+          onAccessRequest(record)
+    else { return nil }
+    return value
+}
+
 private final class ApprovalServer: @unchecked Sendable {
     private let serviceName: String
     private let teamIdentifier: String
@@ -3835,14 +3873,26 @@ private final class ApprovalServer: @unchecked Sendable {
         case .terraformDelete where isTrustedAvCaller(path: callerPath, signing: signing):
             handleTerraformDelete(message, on: peer, cancellation: cancellation, caller: mutationCaller)
         case .list where isTrustedAvCaller(path: callerPath, signing: signing):
-            handleList(
+            handleMetadataDisclosure(
                 message,
                 on: peer,
                 cancellation: cancellation,
                 pid: pid,
                 identity: identity,
                 callerPath: callerPath,
-                signing: signing
+                signing: signing,
+                kind: .secretNames(globalOnly: xpc_dictionary_get_bool(message, "global_only"))
+            )
+        case .history where isTrustedAvCaller(path: callerPath, signing: signing):
+            handleMetadataDisclosure(
+                message,
+                on: peer,
+                cancellation: cancellation,
+                pid: pid,
+                identity: identity,
+                callerPath: callerPath,
+                signing: signing,
+                kind: .authorizationHistory
             )
         case .save where isTrustedAvCaller(path: callerPath, signing: signing):
             handleSave(message, on: peer, cancellation: cancellation, caller: mutationCaller)
@@ -3887,37 +3937,48 @@ private final class ApprovalServer: @unchecked Sendable {
         }
     }
 
-    private func handleList(
+    private func handleMetadataDisclosure(
         _ message: xpc_object_t,
         on peer: xpc_connection_t,
         cancellation: ApprovalCancellation,
         pid: pid_t,
         identity: AVProcessIdentity,
         callerPath: String,
-        signing: SigningInfo
+        signing: SigningInfo,
+        kind: MetadataDisclosure
     ) {
         let cwd = xpc_dictionary_get_string(message, "cwd")
             .map { String(cString: $0) } ?? ""
-        let globalOnly = xpc_dictionary_get_bool(message, "global_only")
         var launchers = launcherIdentities(for: identity)
         let ancestorFallbackPath = launcherFallbackPath(for: identity)
         if launchers.isEmpty, let caller = launcherIdentity(pid: pid, identity: identity) {
             launchers.append(caller)
         }
-        let allowedApps = loadSecretNameAccessApps()
-        let allowedLauncher = launchers.first {
-            candidate in allowedApps.contains { $0.requirement == candidate.designatedRequirement }
-        }
+        let hasAutomaticAccess = metadataDisclosureHasAutomaticAccess(kind, launchers: launchers)
         let launcher = executionOrigin(
             among: launchers,
             callerPID: pid,
             ancestorFallbackPath: ancestorFallbackPath
         )
+        let (operation, title, detail) = switch kind {
+        case .secretNames(let globalOnly): (
+            "list",
+            "List saved secret names?",
+            globalOnly
+                ? "Secret values will remain hidden. av will receive every saved Global Value name."
+                : "Secret values will remain hidden. av will receive every saved Secret Name."
+        )
+        case .authorizationHistory: (
+            "history",
+            "Read Authorization History?",
+            "av will receive the bounded local Authorization History, including Secret Names and request metadata."
+        )
+        }
         let request = ApprovalRequest(
-            op: "list",
+            op: operation,
             keys: [],
             target: callerPath,
-            args: ["list"],
+            args: [operation],
             cwd: cwd,
             replaceExistingEnv: false,
             allowMissingKeys: false,
@@ -3925,14 +3986,12 @@ private final class ApprovalServer: @unchecked Sendable {
             shebangScript: nil,
             scriptData: nil,
             tool: "av",
-            title: "List saved secret names?",
-            detail: globalOnly
-                ? "Secret values will remain hidden. av will receive every saved Global Value name."
-                : "Secret values will remain hidden. av will receive every saved Secret Name."
+            title: title,
+            detail: detail
         )
-        if allowedLauncher != nil
+        if hasAutomaticAccess
         {
-            discloseSecretNames(
+            discloseMetadata(
                 request: request,
                 callerPath: callerPath,
                 launcher: launcher,
@@ -3940,7 +3999,7 @@ private final class ApprovalServer: @unchecked Sendable {
                 reason: "Always allowed in Settings",
                 peer: peer,
                 message: message,
-                globalOnly: globalOnly
+                kind: kind
             )
             return
         }
@@ -3960,7 +4019,7 @@ private final class ApprovalServer: @unchecked Sendable {
                     reason: "User session is inactive",
                     launcher: launcher
                 ))
-                self.reply(peer, to: message, ok: false, error: "list denied while user session is inactive")
+                self.reply(peer, to: message, ok: false, error: "\(request.op) denied while user session is inactive")
                 return
             }
             let decision = await showApprovalAlert(
@@ -3996,10 +4055,10 @@ private final class ApprovalServer: @unchecked Sendable {
                     reason: "Denied in prompt",
                     launcher: launcher
                 ))
-                self.reply(peer, to: message, ok: false, error: "list denied")
+                self.reply(peer, to: message, ok: false, error: "\(request.op) denied")
                 return
             }
-            self.discloseSecretNames(
+            self.discloseMetadata(
                 request: request,
                 callerPath: callerPath,
                 launcher: launcher,
@@ -4007,12 +4066,12 @@ private final class ApprovalServer: @unchecked Sendable {
                 reason: "Allowed once in prompt",
                 peer: peer,
                 message: message,
-                globalOnly: globalOnly
+                kind: kind
             )
         }
     }
 
-    private func discloseSecretNames(
+    private func discloseMetadata(
         request: ApprovalRequest,
         callerPath: String,
         launcher: LauncherIdentity?,
@@ -4020,35 +4079,49 @@ private final class ApprovalServer: @unchecked Sendable {
         reason: String,
         peer: xpc_connection_t,
         message: xpc_object_t,
-        globalOnly: Bool
+        kind: MetadataDisclosure
     ) {
-        let names: [String]
-        switch loadStoredSecretsResult() {
-        case .success(let secrets):
-            names = secrets.compactMap { secret in
-                (!globalOnly || secret.values.contains { $0.source == .global })
-                    ? secret.account : nil
+        var names: [String]?
+        if case .secretNames(let globalOnly) = kind {
+            switch loadStoredSecretsResult() {
+            case .success(let secrets):
+                names = secrets.compactMap { secret in
+                    (!globalOnly || secret.values.contains { $0.source == .global })
+                        ? secret.account : nil
+                }
+            case .failure(let status):
+                _ = onAccessRequest(accessRequestRecord(
+                    request: request,
+                    callerPath: callerPath,
+                    decision: "Failed",
+                    approvalSource: approvalSource,
+                    reason: "Stored Secret names are unavailable: \(status)",
+                    launcher: launcher
+                ))
+                reply(peer, to: message, ok: false, error: "stored Secret names are unavailable: \(status)")
+                return
             }
-        case .failure(let status):
-            _ = onAccessRequest(accessRequestRecord(
-                request: request,
-                callerPath: callerPath,
-                decision: "Failed",
-                approvalSource: approvalSource,
-                reason: "Stored Secret names are unavailable: \(status)",
-                launcher: launcher
-            ))
-            reply(peer, to: message, ok: false, error: "stored Secret names are unavailable: \(status)")
-            return
         }
-        guard onAccessRequest(accessRequestRecord(
+        let record = accessRequestRecord(
             request: request,
             callerPath: callerPath,
             decision: "Approved",
             approvalSource: approvalSource,
             reason: reason,
             launcher: launcher
-        )) else {
+        )
+        if case .authorizationHistory = kind {
+            guard let value = authorizationHistoryDisclosureValue(
+                record: record,
+                onAccessRequest: onAccessRequest
+            ) else {
+                reply(peer, to: message, ok: false, error: "Authorization History is unavailable")
+                return
+            }
+            reply(peer, to: message, ok: true, error: nil, value: value)
+            return
+        }
+        guard onAccessRequest(record) else {
             reply(peer, to: message, ok: false, error: "Authorization History is unavailable")
             return
         }
@@ -12221,7 +12294,8 @@ private func phoneApprovalRisks(
     case .secretDump: return [.secretDisclosure]
     case .unknown: return [.unknown]
     case .readOnly, .localWrite, .update, .mutating: return [.routine]
-    case nil where request.op == "list": return [.secretDisclosure]
+    case nil where ApprovalServiceOperation(rawValue: request.op)?.disclosesProtectedMetadata == true:
+        return [.secretDisclosure]
     case nil where request.op == "inject" || request.op == "inject-fd": return [.unconstrainedSecretApplication]
     case nil: return [.securityWarning]
     }
@@ -13599,8 +13673,8 @@ private func runSecretMutationSelfCheck() async -> Int32 {
         launcher: nil,
         launcherFallbackPath: "/Applications/Terminal.app",
         canRequestHumanApproval: { true },
-        onAccessRequest: {
-            cancellationRecord = $0
+        onAccessRequest: { record in
+            cancellationRecord = record
             return true
         },
         decision: { _ in .canceled },
@@ -13714,6 +13788,90 @@ private func runKeychainPersistenceSelfCheck() -> Int32 {
           deleteStoredSecret(account: account, service: service) == errSecSuccess,
           !storedSecretExists(account: account, service: service)
     else { return 1 }
+    return 0
+}
+
+private func runMetadataDisclosureSelfCheck() -> Int32 {
+    let requirement = #"identifier "com.apple.Terminal" and anchor apple"#
+    let launcher = LauncherIdentity(
+        pid: 42,
+        path: "/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal",
+        identifier: "com.apple.Terminal",
+        teamIdentifier: "APPLE",
+        designatedRequirement: requirement,
+        runtimeProtection: .hardened
+    )
+    let grant = BlessedScriptLauncher(
+        bundleIdentifier: launcher.identifier,
+        requirement: requirement
+    )
+    guard metadataDisclosureHasAutomaticAccess(
+        .secretNames(globalOnly: false),
+        launchers: [launcher],
+        secretNameAccessApps: [grant],
+        authorizationHistoryAccessApps: []
+    ),
+        !metadataDisclosureHasAutomaticAccess(
+            .authorizationHistory,
+            launchers: [launcher],
+            secretNameAccessApps: [grant],
+            authorizationHistoryAccessApps: []
+        ),
+        metadataDisclosureHasAutomaticAccess(
+            .authorizationHistory,
+            launchers: [launcher],
+            secretNameAccessApps: [],
+            authorizationHistoryAccessApps: [grant]
+        )
+    else { return 1 }
+
+    let record = AccessRequestRecord(
+        date: Date(timeIntervalSince1970: 0),
+        tool: "av",
+        command: "av history --token plaintext-credential",
+        displayCommand: "av history --token <redacted>",
+        decision: "Approved",
+        approvalSource: "Manual",
+        reason: "Allowed once in prompt",
+        launcher: "Terminal",
+        callerPath: "/usr/local/bin/av",
+        target: "/usr/local/bin/av",
+        cwd: "/tmp",
+        keys: [],
+        detail: nil
+    )
+    var recordedSuccessfulDisclosure = false
+    guard let disclosure = authorizationHistoryDisclosureValue(
+        record: record,
+        records: { [] },
+        onAccessRequest: { _ in
+            recordedSuccessfulDisclosure = true
+            return true
+        }
+    ), recordedSuccessfulDisclosure,
+        let disclosureData = disclosure.data(using: .utf8)
+    else { return 1 }
+    let decoder = JSONDecoder()
+    decoder.dateDecodingStrategy = .iso8601
+    guard let disclosedRecords = try? decoder.decode([AccessRequestRecord].self, from: disclosureData),
+          disclosedRecords.first?.id == record.id,
+          disclosedRecords.first?.command == record.commandForDisplay,
+          disclosedRecords.first?.command != record.command
+    else { return 1 }
+    guard authorizationHistoryDisclosureValue(
+        record: record,
+        records: { [] },
+        onAccessRequest: { _ in false }
+    ) == nil else { return 1 }
+    var recordedUnavailableHistory = false
+    guard authorizationHistoryDisclosureValue(
+        record: record,
+        records: { nil },
+        onAccessRequest: { _ in
+            recordedUnavailableHistory = true
+            return true
+        }
+    ) == nil, !recordedUnavailableHistory else { return 1 }
     return 0
 }
 
@@ -17351,6 +17509,10 @@ if CommandLine.arguments.contains("--self-check-secret-mutations") {
 
 if CommandLine.arguments.contains("--self-check-keychain-persistence") {
     exit(runKeychainPersistenceSelfCheck())
+}
+
+if CommandLine.arguments.contains("--self-check-metadata-disclosure") {
+    exit(runMetadataDisclosureSelfCheck())
 }
 
 if CommandLine.arguments.contains("--self-check-gh-read-only") {

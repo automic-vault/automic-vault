@@ -8,6 +8,8 @@ public let secretGatePoliciesKeychainService = "com.automicvault.gate-policies"
 public let secretGatePoliciesKeychainAccount = "SecretGatePoliciesV2"
 public let secretNameAccessKeychainService = "com.automicvault.secret-name-access"
 public let secretNameAccessKeychainAccount = "SecretNameAccessV1"
+public let authorizationHistoryAccessKeychainService = "com.automicvault.authorization-history-access"
+public let authorizationHistoryAccessKeychainAccount = "AuthorizationHistoryAccessV1"
 public let directAccessKeychainService = "com.automicvault.direct-secret-access"
 public let directAccessKeychainAccount = "DirectAccessRulesV1"
 public let touchIDApprovalKeychainService = "com.automicvault.touch-id-approval"
@@ -28,6 +30,7 @@ public struct DashboardSnapshot: Equatable, Sendable {
     public var secretGates: [SecretGate]
     public var blessedScripts: [BlessedScript]
     public var secretNameAccessApps: [BlessedScriptLauncher]
+    public var authorizationHistoryAccessApps: [BlessedScriptLauncher]
     public var secrets: [StoredSecret]
     public var accessRequests: [AccessRequestRecord]
     public var doctorIssues: [DoctorIssue]
@@ -40,6 +43,7 @@ public struct DashboardSnapshot: Equatable, Sendable {
         secretGates: [SecretGate],
         blessedScripts: [BlessedScript] = [],
         secretNameAccessApps: [BlessedScriptLauncher] = [],
+        authorizationHistoryAccessApps: [BlessedScriptLauncher] = [],
         secrets: [StoredSecret],
         accessRequests: [AccessRequestRecord] = [],
         doctorIssues: [DoctorIssue] = []
@@ -51,6 +55,7 @@ public struct DashboardSnapshot: Equatable, Sendable {
         self.secretGates = secretGates
         self.blessedScripts = blessedScripts
         self.secretNameAccessApps = secretNameAccessApps
+        self.authorizationHistoryAccessApps = authorizationHistoryAccessApps
         self.secrets = secrets
         self.accessRequests = accessRequests
         self.doctorIssues = doctorIssues
@@ -64,6 +69,7 @@ public struct DashboardSnapshot: Equatable, Sendable {
         secretGates: [],
         blessedScripts: [],
         secretNameAccessApps: [],
+        authorizationHistoryAccessApps: [],
         secrets: [],
         accessRequests: [],
         doctorIssues: []
@@ -106,6 +112,7 @@ public struct DashboardSnapshot: Equatable, Sendable {
             secretGates: loadSecretGates(descriptors: gateDescriptors, service: policyService),
             blessedScripts: loadBlessedScripts(),
             secretNameAccessApps: loadSecretNameAccessApps(),
+            authorizationHistoryAccessApps: loadAuthorizationHistoryAccessApps(),
             secrets: secrets,
             accessRequests: loadAccessRequestRecords(),
             doctorIssues: hardening.doctorIssues
@@ -846,6 +853,28 @@ public struct AccessRequestRecord: Codable, Equatable, Identifiable, Sendable {
         displayCommand ?? "\(tool.isEmpty ? "tool" : tool) <arguments hidden>"
     }
 
+    public var redactedForDisclosure: AccessRequestRecord {
+        AccessRequestRecord(
+            id: id,
+            date: date,
+            tool: tool,
+            command: commandForDisplay,
+            displayCommand: displayCommand,
+            decision: decision,
+            approvalSource: approvalSource,
+            reason: reason,
+            launcher: launcher,
+            launcherIconPath: launcherIconPath,
+            callerPath: callerPath,
+            target: target,
+            targetRuntimeProtection: targetRuntimeProtection,
+            cwd: cwd,
+            keys: keys,
+            detail: detail,
+            secretValueSources: secretValueSources
+        )
+    }
+
     public var approvalSourceLabel: String {
         if let approvalSource, !approvalSource.isEmpty {
             return switch approvalSource.lowercased() {
@@ -1179,12 +1208,14 @@ public func reloadDashboardAuthorizationState(
     from snapshot: DashboardSnapshot,
     blessedScripts: [BlessedScript] = loadBlessedScripts(),
     secretNameAccessApps: [BlessedScriptLauncher] = loadSecretNameAccessApps(),
+    authorizationHistoryAccessApps: [BlessedScriptLauncher] = loadAuthorizationHistoryAccessApps(),
     secrets: [StoredSecret]? = nil,
     reloadGatePolicy: (SecretGate) -> SecretGate = { reloadSecretGatePolicy(for: $0) }
 ) -> DashboardSnapshot {
     var refreshed = snapshot
     refreshed.blessedScripts = blessedScripts
     refreshed.secretNameAccessApps = secretNameAccessApps
+    refreshed.authorizationHistoryAccessApps = authorizationHistoryAccessApps
     refreshed.secrets = secrets ?? loadStoredSecrets(directAccessRules: loadDirectAccessRules())
     refreshed.secretGates = snapshot.secretGates.map(reloadGatePolicy)
     return refreshed
@@ -1450,9 +1481,7 @@ public func loadSecretNameAccessApps(
     service: String = secretNameAccessKeychainService,
     account: String = secretNameAccessKeychainAccount
 ) -> [BlessedScriptLauncher] {
-    guard case .success(let apps) = loadSecretNameAccessAppsResult(service: service, account: account)
-    else { return [] }
-    return apps.sorted { $0.bundleIdentifier.localizedStandardCompare($1.bundleIdentifier) == .orderedAscending }
+    loadLauncherAccessApps(service: service, account: account)
 }
 
 public func allowSecretNameAccess(
@@ -1460,14 +1489,7 @@ public func allowSecretNameAccess(
     service: String = secretNameAccessKeychainService,
     account: String = secretNameAccessKeychainAccount
 ) -> OSStatus {
-    var apps: [BlessedScriptLauncher]
-    switch loadSecretNameAccessAppsResult(service: service, account: account) {
-    case .success(let loaded): apps = loaded
-    case .failure(let status): return status
-    }
-    apps.removeAll { $0.requirement == app.requirement }
-    apps.append(app)
-    return saveSecretNameAccessApps(apps, service: service, account: account)
+    allowLauncherAccess(app, service: service, account: account)
 }
 
 public func removeSecretNameAccess(
@@ -1475,13 +1497,40 @@ public func removeSecretNameAccess(
     service: String = secretNameAccessKeychainService,
     account: String = secretNameAccessKeychainAccount
 ) -> OSStatus {
-    let apps: [BlessedScriptLauncher]
-    switch loadSecretNameAccessAppsResult(service: service, account: account) {
-    case .success(let loaded): apps = loaded
-    case .failure(let status): return status
-    }
-    return saveSecretNameAccessApps(
-        apps.filter { $0.requirement != app.requirement },
+    removeLauncherAccess(app, service: service, account: account)
+}
+
+public func loadAuthorizationHistoryAccessApps(
+    service: String = authorizationHistoryAccessKeychainService,
+    account: String = authorizationHistoryAccessKeychainAccount
+) -> [BlessedScriptLauncher] {
+    loadLauncherAccessApps(service: service, account: account)
+}
+
+public func allowAuthorizationHistoryAccess(
+    _ app: BlessedScriptLauncher,
+    service: String = authorizationHistoryAccessKeychainService,
+    account: String = authorizationHistoryAccessKeychainAccount
+) -> OSStatus {
+    allowLauncherAccess(app, service: service, account: account)
+}
+
+public func removeAuthorizationHistoryAccess(
+    _ app: BlessedScriptLauncher,
+    service: String = authorizationHistoryAccessKeychainService,
+    account: String = authorizationHistoryAccessKeychainAccount
+) -> OSStatus {
+    removeLauncherAccess(app, service: service, account: account)
+}
+
+@discardableResult
+public func removeAuthorizationHistoryAccess(
+    forLauncherRequirement requirement: String,
+    service: String = authorizationHistoryAccessKeychainService,
+    account: String = authorizationHistoryAccessKeychainAccount
+) -> OSStatus {
+    removeLauncherAccess(
+        forRequirement: requirement,
         service: service,
         account: account
     )
@@ -1493,23 +1542,73 @@ public func removeSecretNameAccess(
     service: String = secretNameAccessKeychainService,
     account: String = secretNameAccessKeychainAccount
 ) -> OSStatus {
-    let apps: [BlessedScriptLauncher]
-    switch loadSecretNameAccessAppsResult(service: service, account: account) {
-    case .success(let loaded): apps = loaded.filter { $0.requirement != requirement }
-    case .failure(let status): return status
-    }
-    return saveSecretNameAccessApps(apps, service: service, account: account)
+    removeLauncherAccess(
+        forRequirement: requirement,
+        service: service,
+        account: account
+    )
 }
 
-private enum SecretNameAccessAppsLoad {
+private enum LauncherAccessAppsLoad {
     case success([BlessedScriptLauncher])
     case failure(OSStatus)
 }
 
-private func loadSecretNameAccessAppsResult(
+private func loadLauncherAccessApps(service: String, account: String) -> [BlessedScriptLauncher] {
+    guard case .success(let apps) = loadLauncherAccessAppsResult(service: service, account: account)
+    else { return [] }
+    return apps.sorted { $0.bundleIdentifier.localizedStandardCompare($1.bundleIdentifier) == .orderedAscending }
+}
+
+private func allowLauncherAccess(
+    _ app: BlessedScriptLauncher,
     service: String,
     account: String
-) -> SecretNameAccessAppsLoad {
+) -> OSStatus {
+    var apps: [BlessedScriptLauncher]
+    switch loadLauncherAccessAppsResult(service: service, account: account) {
+    case .success(let loaded): apps = loaded
+    case .failure(let status): return status
+    }
+    apps.removeAll { $0.requirement == app.requirement }
+    apps.append(app)
+    return saveLauncherAccessApps(apps, service: service, account: account)
+}
+
+private func removeLauncherAccess(
+    _ app: BlessedScriptLauncher,
+    service: String,
+    account: String
+) -> OSStatus {
+    let apps: [BlessedScriptLauncher]
+    switch loadLauncherAccessAppsResult(service: service, account: account) {
+    case .success(let loaded): apps = loaded
+    case .failure(let status): return status
+    }
+    return saveLauncherAccessApps(
+        apps.filter { $0.requirement != app.requirement },
+        service: service,
+        account: account
+    )
+}
+
+private func removeLauncherAccess(
+    forRequirement requirement: String,
+    service: String,
+    account: String
+) -> OSStatus {
+    let apps: [BlessedScriptLauncher]
+    switch loadLauncherAccessAppsResult(service: service, account: account) {
+    case .success(let loaded): apps = loaded.filter { $0.requirement != requirement }
+    case .failure(let status): return status
+    }
+    return saveLauncherAccessApps(apps, service: service, account: account)
+}
+
+private func loadLauncherAccessAppsResult(
+    service: String,
+    account: String
+) -> LauncherAccessAppsLoad {
     switch loadKeychainDataResult(service: service, account: account) {
     case .notFound:
         return .success([])
@@ -1522,7 +1621,7 @@ private func loadSecretNameAccessAppsResult(
     }
 }
 
-private func saveSecretNameAccessApps(
+private func saveLauncherAccessApps(
     _ apps: [BlessedScriptLauncher],
     service: String,
     account: String
@@ -1542,21 +1641,28 @@ private func saveSecretNameAccessApps(
     )
 }
 
-public func loadAccessRequestRecords(
+private enum AccessRequestRecordsLoad {
+    case success([AccessRequestRecord])
+    case failure(OSStatus)
+}
+
+private func loadAccessRequestRecordsResult(
     defaults: UserDefaults? = nil,
     key: String = accessRequestLogDefaultsKey,
     service: String = accessRequestLogKeychainService
-) -> [AccessRequestRecord] {
+) -> AccessRequestRecordsLoad {
     if let defaults {
         return decodeAccessRequestRecords(defaults.data(forKey: key))
     }
     switch loadKeychainDataResult(service: service, account: key) {
     case .success(let data):
         return decodeAccessRequestRecords(data)
-    case .failure:
-        return []
+    case .failure(let status):
+        return .failure(status)
     case .notFound:
-        let legacy = decodeAccessRequestRecords(UserDefaults.standard.data(forKey: key))
+        guard case .success(let legacy) = decodeAccessRequestRecords(
+            UserDefaults.standard.data(forKey: key)
+        ) else { return .failure(errSecDecode) }
         guard !legacy.isEmpty,
               let data = try? JSONEncoder().encode(legacy),
               saveKeychainData(
@@ -1565,20 +1671,39 @@ public func loadAccessRequestRecords(
                   account: key,
                   accessibility: .afterFirstUnlock
               ) == errSecSuccess
-        else { return legacy }
+        else { return .success(legacy) }
         UserDefaults.standard.removeObject(forKey: key)
         _ = UserDefaults.standard.synchronize()
-        return legacy
+        return .success(legacy)
     }
 }
 
-private func decodeAccessRequestRecords(_ data: Data?) -> [AccessRequestRecord] {
-    guard let data,
-          let records = try? JSONDecoder().decode([AccessRequestRecord].self, from: data)
-    else {
-        return []
-    }
-    return Array(records.prefix(50))
+public func loadAccessRequestRecords(
+    defaults: UserDefaults? = nil,
+    key: String = accessRequestLogDefaultsKey,
+    service: String = accessRequestLogKeychainService
+) -> [AccessRequestRecord] {
+    loadAccessRequestRecordsIfAvailable(defaults: defaults, key: key, service: service) ?? []
+}
+
+public func loadAccessRequestRecordsIfAvailable(
+    defaults: UserDefaults? = nil,
+    key: String = accessRequestLogDefaultsKey,
+    service: String = accessRequestLogKeychainService
+) -> [AccessRequestRecord]? {
+    guard case .success(let records) = loadAccessRequestRecordsResult(
+        defaults: defaults,
+        key: key,
+        service: service
+    ) else { return nil }
+    return records
+}
+
+private func decodeAccessRequestRecords(_ data: Data?) -> AccessRequestRecordsLoad {
+    guard let data else { return .success([]) }
+    guard let records = try? JSONDecoder().decode([AccessRequestRecord].self, from: data)
+    else { return .failure(errSecDecode) }
+    return .success(Array(records.prefix(50)))
 }
 
 @discardableResult
@@ -1590,9 +1715,12 @@ public func appendAccessRequestRecord(
 ) -> Bool {
     accessRequestLogLock.lock()
     defer { accessRequestLogLock.unlock() }
-    let records = Array(
-        ([record] + loadAccessRequestRecords(defaults: defaults, key: key, service: service)).prefix(50)
-    )
+    guard case .success(let existing) = loadAccessRequestRecordsResult(
+        defaults: defaults,
+        key: key,
+        service: service
+    ) else { return false }
+    let records = Array(([record] + existing).prefix(50))
     guard let data = try? JSONEncoder().encode(records) else { return false }
     if let defaults {
         defaults.set(data, forKey: key)
@@ -2423,6 +2551,8 @@ public func migrateBackgroundKeychainItems(
     accessLogAccount: String = accessRequestLogDefaultsKey,
     secretNameAccessService: String = secretNameAccessKeychainService,
     secretNameAccessAccount: String = secretNameAccessKeychainAccount,
+    authorizationHistoryAccessService: String = authorizationHistoryAccessKeychainService,
+    authorizationHistoryAccessAccount: String = authorizationHistoryAccessKeychainAccount,
     directAccessService: String = directAccessKeychainService,
     directAccessAccount: String = directAccessKeychainAccount,
     gpgSigningService: String = gpgSigningConfigurationService,
@@ -2432,6 +2562,7 @@ public func migrateBackgroundKeychainItems(
         (policyService, policyAccount),
         (accessLogService, accessLogAccount),
         (secretNameAccessService, secretNameAccessAccount),
+        (authorizationHistoryAccessService, authorizationHistoryAccessAccount),
         (directAccessService, directAccessAccount),
         (gpgSigningService, gpgSigningAccount),
     ] {

@@ -13,6 +13,13 @@ import Testing
     #expect(ApprovalServiceOperation.varlock.rawValue == "varlock")
 }
 
+@Test func authorizationHistoryHasADedicatedWireOperation() {
+    #expect(ApprovalServiceOperation.history.rawValue == "history")
+    #expect(ApprovalServiceOperation.history.disclosesProtectedMetadata)
+    #expect(ApprovalServiceOperation.list.disclosesProtectedMetadata)
+    #expect(!ApprovalServiceOperation.inject.disclosesProtectedMetadata)
+}
+
 @Test func terraformCredentialGetHasADedicatedWireOperation() {
     #expect(ApprovalServiceOperation.terraformGet.rawValue == "terraform-get")
 }

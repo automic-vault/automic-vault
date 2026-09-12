@@ -539,6 +539,8 @@ private func secretlessGateMetadata() -> HardenerMetadata {
     }
     let oldLauncher = BlessedScriptLauncher(bundleIdentifier: "old", requirement: "old")
     let newLauncher = BlessedScriptLauncher(bundleIdentifier: "new", requirement: "new")
+    let oldHistoryLauncher = BlessedScriptLauncher(bundleIdentifier: "old-history", requirement: "old-history")
+    let newHistoryLauncher = BlessedScriptLauncher(bundleIdentifier: "new-history", requirement: "new-history")
     let newScript = script("/new")
     let oldGate = SecretGate(
         id: "test",
@@ -554,6 +556,7 @@ private func secretlessGateMetadata() -> HardenerMetadata {
         secretGates: [oldGate],
         blessedScripts: [script("/old")],
         secretNameAccessApps: [oldLauncher],
+        authorizationHistoryAccessApps: [oldHistoryLauncher],
         secrets: [StoredSecret(account: "OLD")],
         doctorIssues: [DoctorIssue(
             hardener: "tool",
@@ -570,6 +573,7 @@ private func secretlessGateMetadata() -> HardenerMetadata {
         from: snapshot,
         blessedScripts: [newScript],
         secretNameAccessApps: [newLauncher],
+        authorizationHistoryAccessApps: [newHistoryLauncher],
         secrets: [newSecret]
     ) { gate in
         SecretGate(
@@ -586,6 +590,7 @@ private func secretlessGateMetadata() -> HardenerMetadata {
     #expect(refreshed.doctorIssues == snapshot.doctorIssues)
     #expect(refreshed.blessedScripts == [newScript])
     #expect(refreshed.secretNameAccessApps == [newLauncher])
+    #expect(refreshed.authorizationHistoryAccessApps == [newHistoryLauncher])
     #expect(refreshed.secrets == [newSecret])
     #expect(refreshed.secretGates[0].defaultProtection == .noAccess)
 }
@@ -670,6 +675,52 @@ func malformedSecretNameAccessPolicyFailsClosedAndIsNotReplaced() throws {
     #expect(loadSecretNameAccessApps(service: service, account: account).isEmpty)
     #expect(allowSecretNameAccess(app, service: service, account: account) == errSecDecode)
     #expect(loadStoredSecret(account: account, service: service) == "not json")
+}
+
+@Test(.enabled(if: dataProtectionKeychainAvailable(), "requires an entitled Keychain test host"))
+func authorizationHistoryAccessIsSeparatePersistedAuthority() throws {
+    let secretNamesService = "com.automicvault.tests.\(UUID().uuidString)"
+    let historyService = "com.automicvault.tests.\(UUID().uuidString)"
+    let account = "launcher-access.\(UUID().uuidString)"
+    defer {
+        _ = deleteStoredSecret(account: account, service: secretNamesService)
+        _ = deleteStoredSecret(account: account, service: historyService)
+    }
+    let terminal = BlessedScriptLauncher(bundleIdentifier: "com.apple.Terminal", requirement: "terminal")
+
+    #expect(allowSecretNameAccess(terminal, service: secretNamesService, account: account) == errSecSuccess)
+    #expect(loadAuthorizationHistoryAccessApps(service: historyService, account: account).isEmpty)
+    #expect(allowAuthorizationHistoryAccess(terminal, service: historyService, account: account) == errSecSuccess)
+    #expect(loadAuthorizationHistoryAccessApps(service: historyService, account: account) == [terminal])
+    #expect(keychainAccessibility(account: account, service: historyService) == kSecAttrAccessibleAfterFirstUnlock as String)
+    #expect(removeAuthorizationHistoryAccess(
+        forLauncherRequirement: terminal.requirement,
+        service: historyService,
+        account: account
+    ) == errSecSuccess)
+    #expect(loadAuthorizationHistoryAccessApps(service: historyService, account: account).isEmpty)
+    #expect(loadSecretNameAccessApps(service: secretNamesService, account: account) == [terminal])
+}
+
+@Test
+func authorizationHistoryDisclosureOmitsExactCommand() {
+    let record = AccessRequestRecord(
+        date: Date(timeIntervalSince1970: 0),
+        tool: "curl",
+        command: "curl --api-key plaintext-credential",
+        displayCommand: "curl --api-key <redacted>",
+        decision: "Approved",
+        reason: "Allowed",
+        launcher: "Terminal",
+        callerPath: "/usr/bin/curl",
+        target: "/usr/bin/curl",
+        cwd: "/tmp",
+        keys: ["API_KEY"],
+        detail: nil
+    )
+
+    #expect(record.redactedForDisclosure.command == "curl --api-key <redacted>")
+    #expect(record.command == "curl --api-key plaintext-credential")
 }
 
 @Test func directAccessRequiresEveryExactSecretAndHardenedRuntime() {
@@ -1436,18 +1487,22 @@ func malformedProjectValueAccountsFailClosed() {
 func backgroundMetadataMigratesWithoutChangingSecretAccessibility() throws {
     let policyService = "com.automicvault.tests.policy.\(UUID().uuidString)"
     let accessLogService = "com.automicvault.tests.log.\(UUID().uuidString)"
+    let historyAccessService = "com.automicvault.tests.history-access.\(UUID().uuidString)"
     let secretService = "com.automicvault.tests.secret.\(UUID().uuidString)"
     let gpgSigningService = "com.automicvault.tests.gpg-config.\(UUID().uuidString)"
     let policyAccount = "policies"
     let accessLogAccount = "access-log"
+    let historyAccessAccount = "history-access"
     let gpgSigningAccount = "configuration"
     defer { _ = deleteStoredSecret(account: policyAccount, service: policyService) }
     defer { _ = deleteStoredSecret(account: accessLogAccount, service: accessLogService) }
+    defer { _ = deleteStoredSecret(account: historyAccessAccount, service: historyAccessService) }
     defer { _ = deleteStoredSecret(account: "API_TOKEN", service: secretService) }
     defer { _ = deleteStoredSecret(account: gpgSigningAccount, service: gpgSigningService) }
 
     #expect(saveStoredSecret(account: policyAccount, value: "[]", service: policyService) == errSecSuccess)
     #expect(saveStoredSecret(account: accessLogAccount, value: "[]", service: accessLogService) == errSecSuccess)
+    #expect(saveStoredSecret(account: historyAccessAccount, value: "[]", service: historyAccessService) == errSecSuccess)
     #expect(saveStoredSecret(account: "API_TOKEN", value: "secret", service: secretService) == errSecSuccess)
     #expect(saveStoredSecret(
         account: gpgSigningAccount,
@@ -1460,11 +1515,14 @@ func backgroundMetadataMigratesWithoutChangingSecretAccessibility() throws {
         policyAccount: policyAccount,
         accessLogService: accessLogService,
         accessLogAccount: accessLogAccount,
+        authorizationHistoryAccessService: historyAccessService,
+        authorizationHistoryAccessAccount: historyAccessAccount,
         gpgSigningService: gpgSigningService,
         gpgSigningAccount: gpgSigningAccount
     ) == errSecSuccess)
     #expect(keychainAccessibility(account: policyAccount, service: policyService) == kSecAttrAccessibleAfterFirstUnlock as String)
     #expect(keychainAccessibility(account: accessLogAccount, service: accessLogService) == kSecAttrAccessibleAfterFirstUnlock as String)
+    #expect(keychainAccessibility(account: historyAccessAccount, service: historyAccessService) == kSecAttrAccessibleAfterFirstUnlock as String)
     #expect(keychainAccessibility(account: gpgSigningAccount, service: gpgSigningService) == kSecAttrAccessibleAfterFirstUnlock as String)
     #expect(keychainAccessibility(account: "API_TOKEN", service: secretService) == kSecAttrAccessibleWhenUnlocked as String)
 }
@@ -1634,4 +1692,22 @@ private final class AlteredAccessLogDefaults: UserDefaults, @unchecked Sendable 
         cwd: "/fixture", keys: ["SYNTHETIC_TOKEN"], detail: nil
     )
     #expect(!appendAccessRequestRecord(record, defaults: AlteredAccessLogDefaults()))
+}
+
+@Test func accessRequestLogDoesNotReplaceMalformedHistory() throws {
+    let defaultsName = "com.automicvault.tests.defaults.\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: defaultsName))
+    defer { defaults.removePersistentDomain(forName: defaultsName) }
+    let key = "malformed-access-history"
+    let malformed = Data("not json".utf8)
+    defaults.set(malformed, forKey: key)
+
+    let record = AccessRequestRecord(
+        date: Date(timeIntervalSince1970: 0), tool: "fixture", command: "fixture list",
+        decision: "Approved", approvalSource: "Auto", reason: "Read Only",
+        launcher: "Fixture", callerPath: "/fixture/av", target: "/fixture/tool",
+        cwd: "/fixture", keys: ["SYNTHETIC_TOKEN"], detail: nil
+    )
+    #expect(!appendAccessRequestRecord(record, defaults: defaults, key: key))
+    #expect(defaults.data(forKey: key) == malformed)
 }

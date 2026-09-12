@@ -10,6 +10,7 @@ pub(crate) mod doctor;
 pub(crate) mod fastly_credential;
 pub(crate) mod goat_credential;
 mod gpg_sign;
+mod history;
 mod inject;
 pub(crate) mod kubectl_credential;
 mod launcher_bundle;
@@ -48,6 +49,7 @@ commands:
   $ av inject --mode=fd +KEY:FD -- <cmd>  # apply secrets through anonymous pipes
   $ av proxy +KEY... [--] <command>       # proxy secret references for a command
   $ av list                               # list saved secret names
+  $ av history [--json]                   # show Authorization History
   $ av save [options] KEY                 # store a global or Project Value
   $ av harden <tool> [-y|--yes]           # harden a tool; migrate credentials
   $ av unharden brew [-y|--yes]           # temporarily restore Homebrew for cask migration
@@ -61,7 +63,7 @@ modes:
 more:
   $ open https://www.automicvault.com/docs/";
 
-pub(crate) const INSTALL_REVISION: u32 = 52;
+pub(crate) const INSTALL_REVISION: u32 = 53;
 
 pub(crate) fn bash_shell_secret_insecurity_reasons() -> Result<Vec<String>, String> {
     shell_secrets::bash_reasons()
@@ -539,6 +541,7 @@ where
         Some("wakatime-credential") => wakatime_credential::run(rest, stdout, stderr),
         Some("rclone-password") => rclone_password::run(rest, stdout, stderr),
         Some("list" | "ls") => list::run(rest, stdout, stderr),
+        Some("history") => history::run(rest, stdout, stderr),
         Some("bless") => bless::run(rest, stderr),
         Some("open") => {
             let Some(secret_gate) = parse_open_args(&rest) else {

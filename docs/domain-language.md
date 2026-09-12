@@ -656,6 +656,15 @@ Permission for one Verified Launcher to execute an exact Blessing with automic a
 
 ## Authorization History
 
+### Authorization History Access
+
+A durable, Keychain-protected grant allowing one exact Verified Launcher to read
+the bounded local Authorization History without Approval. It is distinct from
+Secret Name Access: granting `av list` does not grant `av history`, and granting
+`av history` does not grant `av list`. Without a matching grant, each history
+read requires Approval. Every read is itself recorded before the history is
+returned.
+
 ### Authorization Record
 
 A local record of an Authorization Request and its Authorization Decision. It includes the decision source, Launcher, Gate Client, Target, Secret Names, and operation. For an automically authorized Secret Use, it also records the Target's available Hardened Runtime posture at authorization time. This posture is diagnostic metadata, not Target identity evidence or an authorization input.

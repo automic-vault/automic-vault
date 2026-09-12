@@ -36,6 +36,7 @@
 "Allow JIT compilation" = "允许 JIT 编译";
 "Allow Signing" = "允许签名";
 "Allow Verified Launcher to List Secret Names" = "允许已验证启动器列出 Secret 名称";
+"Allow Verified Launcher to Read Authorization History" = "允许已验证启动器读取授权历史";
 "Allow Verified Launcher…" = "允许已验证启动器…";
 "Allow Write Access for 10 Minutes…" = "允许写入 10 分钟…";
 "Allow an exact live process execution to retain gate-specific Launcher attribution after its parent chain exits." = "允许一次确定的存活进程执行在父进程链退出后，保留特定关卡的启动器归属。";
@@ -404,3 +405,8 @@
 "macOS will authenticate you. Recovery disables iPhone Approval, cancels pending requests, rotates the iCloud key, and invalidates every iPhone and other Mac on this account." = "macOS 将验证你的身份。恢复操作会禁用 iPhone 批准、取消待处理的请求、轮换 iCloud 密钥，并使此账户下所有 iPhone 和其他 Mac 的登记失效。";
 "via %@" = "通过 %@";
 "✓ Passed" = "✓ 通过";
+"Authorization History Access" = "授权历史访问";
+"Manage Verified Launchers that may read Authorization History without Approval." = "管理无需批准即可读取授权历史的已验证启动器。";
+"No Verified Launchers may read Authorization History without Approval." = "没有已验证启动器可以无需批准读取授权历史。";
+"These Verified Launchers may run av history without Approval." = "这些已验证启动器可以运行 av history，无需批准。";
+"Verified Launchers allowed to run av history" = "允许运行 av history 的已验证启动器";

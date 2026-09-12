@@ -94,6 +94,13 @@ authorization policy.
 
 Authorization Gates verify the Launcher, bind the Gate Client and Target, classify the complete operation, apply the gate's Authorization Policy, request Approval when policy cannot allow it, and enforce the Authorization Decision.
 
+`av history` exposes the bounded local Authorization History through the signed
+`av` Gate Client. The service verifies the live Launcher and requires Approval
+unless that exact Verified Launcher has a separate Authorization History Access
+grant in the Data Protection Keychain. Secret Name Access never satisfies this
+grant. The service records the history read before returning the records, and a
+recording failure denies disclosure. See [ADR 0046](adr/0046-cli-authorization-history-access.md).
+
 The Direct Secret Gate handles direct `av inject` requests that do not match a
 Tool-specific gate. It defaults to Approval Required. A user may add a Direct
 Access Rule for one exact Secret Name and Verified Launcher, knowingly allowing

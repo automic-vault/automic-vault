@@ -404,6 +404,12 @@ final class DashboardModel: ObservableObject {
                     detail: String(localized: "Manage Verified Launchers that may list saved Secret Names without Approval.")
                 ),
                 DashboardItem(
+                    id: String(localized: "authorization-history-access"),
+                    title: String(localized: "Authorization History Access"),
+                    subtitle: String(localized: "Verified Launchers allowed to run av history"),
+                    detail: String(localized: "Manage Verified Launchers that may read Authorization History without Approval.")
+                ),
+                DashboardItem(
                     id: String(localized: "about"),
                     title: String(localized: "About"),
                     subtitle: String(localized: "GUI environment details"),
@@ -692,6 +698,29 @@ final class DashboardModel: ObservableObject {
     func removeSecretNameAccessApp(_ app: BlessedScriptLauncher) {
         finishPolicyUpdate(
             removeSecretNameAccess(app),
+            error: "Could not remove \(app.bundleIdentifier)"
+        )
+    }
+
+    func addAuthorizationHistoryAccessApp() {
+        chooseLauncherApp { [weak self] launcher in
+            guard let self, let launcher else { return }
+            self.approveAuthorityChange(
+                action: "authorization-history-access",
+                "Allow \(launcher.bundleIdentifier) to read Authorization History",
+                detail: "The Verified Launcher may read the bounded local Authorization History, including Secret Names and request metadata, without future Approval."
+            ) {
+                self.finishPolicyUpdate(
+                    allowAuthorizationHistoryAccess(launcher),
+                    error: "Could not allow \(launcher.bundleIdentifier)"
+                )
+            }
+        }
+    }
+
+    func removeAuthorizationHistoryAccessApp(_ app: BlessedScriptLauncher) {
+        finishPolicyUpdate(
+            removeAuthorizationHistoryAccess(app),
             error: "Could not remove \(app.bundleIdentifier)"
         )
     }
@@ -1876,6 +1905,7 @@ func runDashboardSearchSelfCheck() -> Int32 {
         "gpg-signing",
         "ssh-agent",
         "secret-name-access",
+        "authorization-history-access",
         "about",
     ],
           model.selectedItemID == "touch-id-approval",
@@ -2069,6 +2099,15 @@ struct DashboardRootView: View {
                         ) { model.addSecretNameAccessApp() }
                         .labelStyle(.titleAndIcon)
                         .help("Allow Verified Launcher to List Secret Names")
+                    }
+                    if model.selectedSection == .settings,
+                       model.selectedItem?.id == "authorization-history-access" {
+                        AuthorityApprovalButton(
+                            title: "Allow Verified Launcher to Read Authorization History",
+                            approval: model.authorityApproval, action: "authorization-history-access"
+                        ) { model.addAuthorizationHistoryAccessApp() }
+                        .labelStyle(.titleAndIcon)
+                        .help("Allow Verified Launcher to Read Authorization History")
                     }
                     if model.isReloading {
                         ProgressView()
@@ -2318,6 +2357,12 @@ private struct DashboardDetailView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                 } else if model.selectedItem?.id == "gpg-signing" {
                     GPGSigningSettingsView(onCredentialSaved: model.reload)
+                        .padding(.horizontal, 22)
+                        .padding(.top, 32)
+                        .padding(.bottom, 28)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                } else if model.selectedItem?.id == "authorization-history-access" {
+                    AuthorizationHistoryAccessSettingsView(model: model)
                         .padding(.horizontal, 22)
                         .padding(.top, 32)
                         .padding(.bottom, 28)
@@ -4071,6 +4116,32 @@ private struct SecretNameAccessSettingsView: View {
                 empty: "No Verified Launchers have Secret Name Access."
             ) {
                 model.removeSecretNameAccessApp($0)
+            }
+            if let error = model.errorMessage {
+                InfoBlock(title: "Error", text: error)
+            }
+        }
+    }
+}
+
+private struct AuthorizationHistoryAccessSettingsView: View {
+    @ObservedObject var model: DashboardModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Authorization History Access")
+                    .font(.system(size: 24, weight: .semibold))
+                Text("These Verified Launchers may run av history without Approval.")
+                    .font(.system(size: 13))
+                    .foregroundStyle(.secondary)
+            }
+            launcherList(
+                model.snapshot.authorizationHistoryAccessApps,
+                title: "Verified Launchers",
+                empty: "No Verified Launchers may read Authorization History without Approval."
+            ) {
+                model.removeAuthorizationHistoryAccessApp($0)
             }
             if let error = model.errorMessage {
                 InfoBlock(title: "Error", text: error)
