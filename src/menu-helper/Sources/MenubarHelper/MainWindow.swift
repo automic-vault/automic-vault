@@ -1905,6 +1905,7 @@ func runDashboardSearchSelfCheck() -> Int32 {
         "gpg-signing",
         "ssh-agent",
         "secret-name-access",
+        "authorization-history-access",
         "about",
     ],
           model.selectedItemID == "touch-id-approval",
