@@ -34,28 +34,25 @@ pub(super) fn run(args: Vec<OsString>, stdout: &mut dyn Write, stderr: &mut dyn 
             return 2;
         }
     };
-    match crate::secrets::authorization_history().and_then(|value| {
-        serde_json::from_str::<Vec<HistoryRecord>>(&value)
-            .map_err(|error| format!("invalid Authorization History response: {error}"))
-    }) {
-        Ok(records) => {
-            let result = if json {
-                serde_json::to_writer_pretty(&mut *stdout, &records)
-                    .map_err(|error| error.to_string())
-                    .and_then(|()| writeln!(stdout).map_err(|error| error.to_string()))
-            } else {
-                write_table(stdout, &records)
-            };
-            if let Err(error) = result {
-                let _ = writeln!(stderr, "av history: {error}");
-                return 1;
-            }
-            0
-        }
+    match crate::secrets::authorization_history()
+        .and_then(|value| write_response(stdout, &value, json))
+    {
+        Ok(()) => 0,
         Err(error) => {
             let _ = writeln!(stderr, "av history: {error}");
             1
         }
+    }
+}
+
+fn write_response(output: &mut dyn Write, value: &str, json: bool) -> Result<(), String> {
+    let records = serde_json::from_str::<Vec<HistoryRecord>>(value)
+        .map_err(|error| format!("invalid Authorization History response: {error}"))?;
+    if json {
+        serde_json::to_writer_pretty(&mut *output, &records).map_err(|error| error.to_string())?;
+        writeln!(output).map_err(|error| error.to_string())
+    } else {
+        write_table(output, &records)
     }
 }
 
@@ -144,17 +141,30 @@ impl HistoryRecord {
 mod tests {
     use super::*;
 
+    const RESPONSE: &str = r#"[{"id":"1","date":"2026-09-12T12:00:00Z","tool":"av","command":"av history --token <redacted>","displayCommand":"av history --token <redacted>","decision":"Approved","approvalSource":"Auto","reason":"Always allowed\nin Settings","launcher":"Terminal","launcherIconPath":null,"callerPath":"/usr/local/bin/av","target":"av\u001b[31m","targetRuntimeProtection":null,"cwd":"","keys":[],"detail":null,"secretValueSources":null}]"#;
+
     #[test]
     fn table_labels_sources_and_escapes_terminal_controls() {
-        let records: Vec<HistoryRecord> = serde_json::from_str(
-            r#"[{"id":"1","date":"2026-09-12T12:00:00Z","tool":"av","command":"history","displayCommand":null,"decision":"Approved","approvalSource":"Auto","reason":"Always allowed\nin Settings","launcher":"Terminal","launcherIconPath":null,"callerPath":"/usr/local/bin/av","target":"av\u001b[31m","targetRuntimeProtection":null,"cwd":"","keys":[],"detail":null,"secretValueSources":null}]"#,
-        ).unwrap();
         let mut output = Vec::new();
-        write_table(&mut output, &records).unwrap();
+        write_response(&mut output, RESPONSE, false).unwrap();
         let output = String::from_utf8(output).unwrap();
         assert!(output.contains("Policy"));
+        assert!(output.contains("av history --token <redacted>"));
         assert!(output.contains(r"Always allowed\nin Settings"));
         assert!(output.contains(r"av\u{1b}[31m"));
         assert!(!output.contains('\u{1b}'));
+    }
+
+    #[test]
+    fn json_decodes_wire_response_and_writes_camel_case_document() {
+        let mut output = Vec::new();
+        write_response(&mut output, RESPONSE, true).unwrap();
+        let document: serde_json::Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(document[0]["date"], "2026-09-12T12:00:00Z");
+        assert_eq!(
+            document[0]["displayCommand"],
+            "av history --token <redacted>"
+        );
+        assert!(document[0].get("display_command").is_none());
     }
 }
