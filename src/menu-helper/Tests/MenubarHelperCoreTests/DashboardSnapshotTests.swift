@@ -672,6 +672,27 @@ func malformedSecretNameAccessPolicyFailsClosedAndIsNotReplaced() throws {
     #expect(loadStoredSecret(account: account, service: service) == "not json")
 }
 
+@Test(.enabled(if: dataProtectionKeychainAvailable(), "requires an entitled Keychain test host"))
+func authorizationHistoryAccessIsSeparatePersistedAuthority() throws {
+    let secretNamesService = "com.automicvault.tests.\(UUID().uuidString)"
+    let historyService = "com.automicvault.tests.\(UUID().uuidString)"
+    let account = "launcher-access.\(UUID().uuidString)"
+    defer {
+        _ = deleteStoredSecret(account: account, service: secretNamesService)
+        _ = deleteStoredSecret(account: account, service: historyService)
+    }
+    let terminal = BlessedScriptLauncher(bundleIdentifier: "com.apple.Terminal", requirement: "terminal")
+
+    #expect(allowSecretNameAccess(terminal, service: secretNamesService, account: account) == errSecSuccess)
+    #expect(loadAuthorizationHistoryAccessApps(service: historyService, account: account).isEmpty)
+    #expect(allowAuthorizationHistoryAccess(terminal, service: historyService, account: account) == errSecSuccess)
+    #expect(loadAuthorizationHistoryAccessApps(service: historyService, account: account) == [terminal])
+    #expect(keychainAccessibility(account: account, service: historyService) == kSecAttrAccessibleAfterFirstUnlock as String)
+    #expect(removeAuthorizationHistoryAccess(terminal, service: historyService, account: account) == errSecSuccess)
+    #expect(loadAuthorizationHistoryAccessApps(service: historyService, account: account).isEmpty)
+    #expect(loadSecretNameAccessApps(service: secretNamesService, account: account) == [terminal])
+}
+
 @Test func directAccessRequiresEveryExactSecretAndHardenedRuntime() {
     let launcher = BlessedScriptLauncher(
         bundleIdentifier: "com.example.launcher",

@@ -3835,14 +3835,26 @@ private final class ApprovalServer: @unchecked Sendable {
         case .terraformDelete where isTrustedAvCaller(path: callerPath, signing: signing):
             handleTerraformDelete(message, on: peer, cancellation: cancellation, caller: mutationCaller)
         case .list where isTrustedAvCaller(path: callerPath, signing: signing):
-            handleList(
+            handleMetadataDisclosure(
                 message,
                 on: peer,
                 cancellation: cancellation,
                 pid: pid,
                 identity: identity,
                 callerPath: callerPath,
-                signing: signing
+                signing: signing,
+                kind: .secretNames(globalOnly: xpc_dictionary_get_bool(message, "global_only"))
+            )
+        case .history where isTrustedAvCaller(path: callerPath, signing: signing):
+            handleMetadataDisclosure(
+                message,
+                on: peer,
+                cancellation: cancellation,
+                pid: pid,
+                identity: identity,
+                callerPath: callerPath,
+                signing: signing,
+                kind: .authorizationHistory
             )
         case .save where isTrustedAvCaller(path: callerPath, signing: signing):
             handleSave(message, on: peer, cancellation: cancellation, caller: mutationCaller)
@@ -3887,24 +3899,32 @@ private final class ApprovalServer: @unchecked Sendable {
         }
     }
 
-    private func handleList(
+    private enum MetadataDisclosure {
+        case secretNames(globalOnly: Bool)
+        case authorizationHistory
+    }
+
+    private func handleMetadataDisclosure(
         _ message: xpc_object_t,
         on peer: xpc_connection_t,
         cancellation: ApprovalCancellation,
         pid: pid_t,
         identity: AVProcessIdentity,
         callerPath: String,
-        signing: SigningInfo
+        signing: SigningInfo,
+        kind: MetadataDisclosure
     ) {
         let cwd = xpc_dictionary_get_string(message, "cwd")
             .map { String(cString: $0) } ?? ""
-        let globalOnly = xpc_dictionary_get_bool(message, "global_only")
         var launchers = launcherIdentities(for: identity)
         let ancestorFallbackPath = launcherFallbackPath(for: identity)
         if launchers.isEmpty, let caller = launcherIdentity(pid: pid, identity: identity) {
             launchers.append(caller)
         }
-        let allowedApps = loadSecretNameAccessApps()
+        let allowedApps = switch kind {
+        case .secretNames: loadSecretNameAccessApps()
+        case .authorizationHistory: loadAuthorizationHistoryAccessApps()
+        }
         let allowedLauncher = launchers.first {
             candidate in allowedApps.contains { $0.requirement == candidate.designatedRequirement }
         }
@@ -3913,11 +3933,25 @@ private final class ApprovalServer: @unchecked Sendable {
             callerPID: pid,
             ancestorFallbackPath: ancestorFallbackPath
         )
+        let (operation, title, detail) = switch kind {
+        case .secretNames(let globalOnly): (
+            "list",
+            "List saved secret names?",
+            globalOnly
+                ? "Secret values will remain hidden. av will receive every saved Global Value name."
+                : "Secret values will remain hidden. av will receive every saved Secret Name."
+        )
+        case .authorizationHistory: (
+            "history",
+            "Read Authorization History?",
+            "av will receive the bounded local Authorization History, including Secret Names and request metadata."
+        )
+        }
         let request = ApprovalRequest(
-            op: "list",
+            op: operation,
             keys: [],
             target: callerPath,
-            args: ["list"],
+            args: [operation],
             cwd: cwd,
             replaceExistingEnv: false,
             allowMissingKeys: false,
@@ -3925,14 +3959,12 @@ private final class ApprovalServer: @unchecked Sendable {
             shebangScript: nil,
             scriptData: nil,
             tool: "av",
-            title: "List saved secret names?",
-            detail: globalOnly
-                ? "Secret values will remain hidden. av will receive every saved Global Value name."
-                : "Secret values will remain hidden. av will receive every saved Secret Name."
+            title: title,
+            detail: detail
         )
         if allowedLauncher != nil
         {
-            discloseSecretNames(
+            discloseMetadata(
                 request: request,
                 callerPath: callerPath,
                 launcher: launcher,
@@ -3940,7 +3972,7 @@ private final class ApprovalServer: @unchecked Sendable {
                 reason: "Always allowed in Settings",
                 peer: peer,
                 message: message,
-                globalOnly: globalOnly
+                kind: kind
             )
             return
         }
@@ -3960,7 +3992,7 @@ private final class ApprovalServer: @unchecked Sendable {
                     reason: "User session is inactive",
                     launcher: launcher
                 ))
-                self.reply(peer, to: message, ok: false, error: "list denied while user session is inactive")
+                self.reply(peer, to: message, ok: false, error: "\(request.op) denied while user session is inactive")
                 return
             }
             let decision = await showApprovalAlert(
@@ -3996,10 +4028,10 @@ private final class ApprovalServer: @unchecked Sendable {
                     reason: "Denied in prompt",
                     launcher: launcher
                 ))
-                self.reply(peer, to: message, ok: false, error: "list denied")
+                self.reply(peer, to: message, ok: false, error: "\(request.op) denied")
                 return
             }
-            self.discloseSecretNames(
+            self.discloseMetadata(
                 request: request,
                 callerPath: callerPath,
                 launcher: launcher,
@@ -4007,12 +4039,12 @@ private final class ApprovalServer: @unchecked Sendable {
                 reason: "Allowed once in prompt",
                 peer: peer,
                 message: message,
-                globalOnly: globalOnly
+                kind: kind
             )
         }
     }
 
-    private func discloseSecretNames(
+    private func discloseMetadata(
         request: ApprovalRequest,
         callerPath: String,
         launcher: LauncherIdentity?,
@@ -4020,39 +4052,61 @@ private final class ApprovalServer: @unchecked Sendable {
         reason: String,
         peer: xpc_connection_t,
         message: xpc_object_t,
-        globalOnly: Bool
+        kind: MetadataDisclosure
     ) {
-        let names: [String]
-        switch loadStoredSecretsResult() {
-        case .success(let secrets):
-            names = secrets.compactMap { secret in
-                (!globalOnly || secret.values.contains { $0.source == .global })
-                    ? secret.account : nil
+        var names: [String]?
+        if case .secretNames(let globalOnly) = kind {
+            switch loadStoredSecretsResult() {
+            case .success(let secrets):
+                names = secrets.compactMap { secret in
+                    (!globalOnly || secret.values.contains { $0.source == .global })
+                        ? secret.account : nil
+                }
+            case .failure(let status):
+                _ = onAccessRequest(accessRequestRecord(
+                    request: request,
+                    callerPath: callerPath,
+                    decision: "Failed",
+                    approvalSource: approvalSource,
+                    reason: "Stored Secret names are unavailable: \(status)",
+                    launcher: launcher
+                ))
+                reply(peer, to: message, ok: false, error: "stored Secret names are unavailable: \(status)")
+                return
             }
-        case .failure(let status):
-            _ = onAccessRequest(accessRequestRecord(
-                request: request,
-                callerPath: callerPath,
-                decision: "Failed",
-                approvalSource: approvalSource,
-                reason: "Stored Secret names are unavailable: \(status)",
-                launcher: launcher
-            ))
-            reply(peer, to: message, ok: false, error: "stored Secret names are unavailable: \(status)")
-            return
         }
-        guard onAccessRequest(accessRequestRecord(
+        let record = accessRequestRecord(
             request: request,
             callerPath: callerPath,
             decision: "Approved",
             approvalSource: approvalSource,
             reason: reason,
             launcher: launcher
-        )) else {
+        )
+        var historyValue: String?
+        if case .authorizationHistory = kind {
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .iso8601
+            encoder.outputFormatting = [.sortedKeys]
+            let records = Array(([record] + loadAccessRequestRecords()).prefix(50))
+            guard let data = try? encoder.encode(records),
+                  let value = String(data: data, encoding: .utf8)
+            else {
+                reply(peer, to: message, ok: false, error: "Authorization History could not be encoded")
+                return
+            }
+            historyValue = value
+        }
+        guard onAccessRequest(record) else {
             reply(peer, to: message, ok: false, error: "Authorization History is unavailable")
             return
         }
-        reply(peer, to: message, ok: true, error: nil, names: names)
+        switch kind {
+        case .secretNames:
+            reply(peer, to: message, ok: true, error: nil, names: names)
+        case .authorizationHistory:
+            reply(peer, to: message, ok: true, error: nil, value: historyValue)
+        }
     }
 
     private func handleInject(
@@ -12221,7 +12275,8 @@ private func phoneApprovalRisks(
     case .secretDump: return [.secretDisclosure]
     case .unknown: return [.unknown]
     case .readOnly, .localWrite, .update, .mutating: return [.routine]
-    case nil where request.op == "list": return [.secretDisclosure]
+    case nil where ApprovalServiceOperation(rawValue: request.op)?.disclosesProtectedMetadata == true:
+        return [.secretDisclosure]
     case nil where request.op == "inject" || request.op == "inject-fd": return [.unconstrainedSecretApplication]
     case nil: return [.securityWarning]
     }

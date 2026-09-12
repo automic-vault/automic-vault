@@ -8,6 +8,8 @@ public let secretGatePoliciesKeychainService = "com.automicvault.gate-policies"
 public let secretGatePoliciesKeychainAccount = "SecretGatePoliciesV2"
 public let secretNameAccessKeychainService = "com.automicvault.secret-name-access"
 public let secretNameAccessKeychainAccount = "SecretNameAccessV1"
+public let authorizationHistoryAccessKeychainService = "com.automicvault.authorization-history-access"
+public let authorizationHistoryAccessKeychainAccount = "AuthorizationHistoryAccessV1"
 public let directAccessKeychainService = "com.automicvault.direct-secret-access"
 public let directAccessKeychainAccount = "DirectAccessRulesV1"
 public let touchIDApprovalKeychainService = "com.automicvault.touch-id-approval"
@@ -28,6 +30,7 @@ public struct DashboardSnapshot: Equatable, Sendable {
     public var secretGates: [SecretGate]
     public var blessedScripts: [BlessedScript]
     public var secretNameAccessApps: [BlessedScriptLauncher]
+    public var authorizationHistoryAccessApps: [BlessedScriptLauncher]
     public var secrets: [StoredSecret]
     public var accessRequests: [AccessRequestRecord]
     public var doctorIssues: [DoctorIssue]
@@ -40,6 +43,7 @@ public struct DashboardSnapshot: Equatable, Sendable {
         secretGates: [SecretGate],
         blessedScripts: [BlessedScript] = [],
         secretNameAccessApps: [BlessedScriptLauncher] = [],
+        authorizationHistoryAccessApps: [BlessedScriptLauncher] = [],
         secrets: [StoredSecret],
         accessRequests: [AccessRequestRecord] = [],
         doctorIssues: [DoctorIssue] = []
@@ -51,6 +55,7 @@ public struct DashboardSnapshot: Equatable, Sendable {
         self.secretGates = secretGates
         self.blessedScripts = blessedScripts
         self.secretNameAccessApps = secretNameAccessApps
+        self.authorizationHistoryAccessApps = authorizationHistoryAccessApps
         self.secrets = secrets
         self.accessRequests = accessRequests
         self.doctorIssues = doctorIssues
@@ -64,6 +69,7 @@ public struct DashboardSnapshot: Equatable, Sendable {
         secretGates: [],
         blessedScripts: [],
         secretNameAccessApps: [],
+        authorizationHistoryAccessApps: [],
         secrets: [],
         accessRequests: [],
         doctorIssues: []
@@ -106,6 +112,7 @@ public struct DashboardSnapshot: Equatable, Sendable {
             secretGates: loadSecretGates(descriptors: gateDescriptors, service: policyService),
             blessedScripts: loadBlessedScripts(),
             secretNameAccessApps: loadSecretNameAccessApps(),
+            authorizationHistoryAccessApps: loadAuthorizationHistoryAccessApps(),
             secrets: secrets,
             accessRequests: loadAccessRequestRecords(),
             doctorIssues: hardening.doctorIssues
@@ -1179,12 +1186,14 @@ public func reloadDashboardAuthorizationState(
     from snapshot: DashboardSnapshot,
     blessedScripts: [BlessedScript] = loadBlessedScripts(),
     secretNameAccessApps: [BlessedScriptLauncher] = loadSecretNameAccessApps(),
+    authorizationHistoryAccessApps: [BlessedScriptLauncher] = loadAuthorizationHistoryAccessApps(),
     secrets: [StoredSecret]? = nil,
     reloadGatePolicy: (SecretGate) -> SecretGate = { reloadSecretGatePolicy(for: $0) }
 ) -> DashboardSnapshot {
     var refreshed = snapshot
     refreshed.blessedScripts = blessedScripts
     refreshed.secretNameAccessApps = secretNameAccessApps
+    refreshed.authorizationHistoryAccessApps = authorizationHistoryAccessApps
     refreshed.secrets = secrets ?? loadStoredSecrets(directAccessRules: loadDirectAccessRules())
     refreshed.secretGates = snapshot.secretGates.map(reloadGatePolicy)
     return refreshed
@@ -1450,9 +1459,7 @@ public func loadSecretNameAccessApps(
     service: String = secretNameAccessKeychainService,
     account: String = secretNameAccessKeychainAccount
 ) -> [BlessedScriptLauncher] {
-    guard case .success(let apps) = loadSecretNameAccessAppsResult(service: service, account: account)
-    else { return [] }
-    return apps.sorted { $0.bundleIdentifier.localizedStandardCompare($1.bundleIdentifier) == .orderedAscending }
+    loadLauncherAccessApps(service: service, account: account)
 }
 
 public func allowSecretNameAccess(
@@ -1460,14 +1467,7 @@ public func allowSecretNameAccess(
     service: String = secretNameAccessKeychainService,
     account: String = secretNameAccessKeychainAccount
 ) -> OSStatus {
-    var apps: [BlessedScriptLauncher]
-    switch loadSecretNameAccessAppsResult(service: service, account: account) {
-    case .success(let loaded): apps = loaded
-    case .failure(let status): return status
-    }
-    apps.removeAll { $0.requirement == app.requirement }
-    apps.append(app)
-    return saveSecretNameAccessApps(apps, service: service, account: account)
+    allowLauncherAccess(app, service: service, account: account)
 }
 
 public func removeSecretNameAccess(
@@ -1475,16 +1475,30 @@ public func removeSecretNameAccess(
     service: String = secretNameAccessKeychainService,
     account: String = secretNameAccessKeychainAccount
 ) -> OSStatus {
-    let apps: [BlessedScriptLauncher]
-    switch loadSecretNameAccessAppsResult(service: service, account: account) {
-    case .success(let loaded): apps = loaded
-    case .failure(let status): return status
-    }
-    return saveSecretNameAccessApps(
-        apps.filter { $0.requirement != app.requirement },
-        service: service,
-        account: account
-    )
+    removeLauncherAccess(app, service: service, account: account)
+}
+
+public func loadAuthorizationHistoryAccessApps(
+    service: String = authorizationHistoryAccessKeychainService,
+    account: String = authorizationHistoryAccessKeychainAccount
+) -> [BlessedScriptLauncher] {
+    loadLauncherAccessApps(service: service, account: account)
+}
+
+public func allowAuthorizationHistoryAccess(
+    _ app: BlessedScriptLauncher,
+    service: String = authorizationHistoryAccessKeychainService,
+    account: String = authorizationHistoryAccessKeychainAccount
+) -> OSStatus {
+    allowLauncherAccess(app, service: service, account: account)
+}
+
+public func removeAuthorizationHistoryAccess(
+    _ app: BlessedScriptLauncher,
+    service: String = authorizationHistoryAccessKeychainService,
+    account: String = authorizationHistoryAccessKeychainAccount
+) -> OSStatus {
+    removeLauncherAccess(app, service: service, account: account)
 }
 
 @discardableResult
@@ -1504,6 +1518,44 @@ public func removeSecretNameAccess(
 private enum SecretNameAccessAppsLoad {
     case success([BlessedScriptLauncher])
     case failure(OSStatus)
+}
+
+private func loadLauncherAccessApps(service: String, account: String) -> [BlessedScriptLauncher] {
+    guard case .success(let apps) = loadSecretNameAccessAppsResult(service: service, account: account)
+    else { return [] }
+    return apps.sorted { $0.bundleIdentifier.localizedStandardCompare($1.bundleIdentifier) == .orderedAscending }
+}
+
+private func allowLauncherAccess(
+    _ app: BlessedScriptLauncher,
+    service: String,
+    account: String
+) -> OSStatus {
+    var apps: [BlessedScriptLauncher]
+    switch loadSecretNameAccessAppsResult(service: service, account: account) {
+    case .success(let loaded): apps = loaded
+    case .failure(let status): return status
+    }
+    apps.removeAll { $0.requirement == app.requirement }
+    apps.append(app)
+    return saveSecretNameAccessApps(apps, service: service, account: account)
+}
+
+private func removeLauncherAccess(
+    _ app: BlessedScriptLauncher,
+    service: String,
+    account: String
+) -> OSStatus {
+    let apps: [BlessedScriptLauncher]
+    switch loadSecretNameAccessAppsResult(service: service, account: account) {
+    case .success(let loaded): apps = loaded
+    case .failure(let status): return status
+    }
+    return saveSecretNameAccessApps(
+        apps.filter { $0.requirement != app.requirement },
+        service: service,
+        account: account
+    )
 }
 
 private func loadSecretNameAccessAppsResult(
@@ -2423,6 +2475,8 @@ public func migrateBackgroundKeychainItems(
     accessLogAccount: String = accessRequestLogDefaultsKey,
     secretNameAccessService: String = secretNameAccessKeychainService,
     secretNameAccessAccount: String = secretNameAccessKeychainAccount,
+    authorizationHistoryAccessService: String = authorizationHistoryAccessKeychainService,
+    authorizationHistoryAccessAccount: String = authorizationHistoryAccessKeychainAccount,
     directAccessService: String = directAccessKeychainService,
     directAccessAccount: String = directAccessKeychainAccount,
     gpgSigningService: String = gpgSigningConfigurationService,
@@ -2432,6 +2486,7 @@ public func migrateBackgroundKeychainItems(
         (policyService, policyAccount),
         (accessLogService, accessLogAccount),
         (secretNameAccessService, secretNameAccessAccount),
+        (authorizationHistoryAccessService, authorizationHistoryAccessAccount),
         (directAccessService, directAccessAccount),
         (gpgSigningService, gpgSigningAccount),
     ] {
