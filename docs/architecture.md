@@ -53,6 +53,13 @@ protected operation.
 
 Hardeners move supported Tools into a declared Hardened State. Doctor verifies the installed intervention and its dependencies. An Isotope supplies an Automic Vault-compatible build or wrapper where upstream behavior cannot support the required boundary. Each Automic Vault-maintained Tool fork produces and publishes its signed Isotope asset. The signed Isotopes Homebrew tap pins the expected fork release URL and digest. When Homebrew is available, the Hardener installs every tap Isotope through its fully qualified formula. Without Homebrew, executable-only Isotopes are verified against that same manifest and installed directly into `/usr/local/bin`; Automic Vault then assumes responsibility for their updates. Multi-file vendor distributions instead use a verified, root-owned package prefix under `/opt/av/<tool>`, as specified by [ADR 0031](adr/0031-isotope-installation-selection.md). The multi-file Wrangler Isotope uses the same protected prefix after its tap formula is installed, as specified by [ADR 0042](adr/0042-wrangler-isotope-runtime.md).
 
+The uv Hardener installs a pinned official signed release under `/opt/av/uv`.
+Its launchers register the complete operation and receive a nonce before exec.
+The private keyring Gate Client must prove that its live original parent is the
+registered uv execution. Each credential lookup then passes through the uv
+Secret Gate and releases only the selected HTTP credential. Registration itself
+grants no Secret Use. See [ADR 0046](adr/0046-uv-registered-keyring-helper.md).
+
 Hardener detection is point-in-time diagnostic state, not runtime authorization
 evidence. Runtime Authorization consumes static Gate definitions and performs
 the required live identity, integrity, request, policy, and recording checks at
@@ -91,6 +98,11 @@ has one availability choice, shared by all its Values and independent of
 authorization policy.
 
 ### Runtime Authorization
+
+The protected `av git` HTTPS path registers a fixed network phase separately
+from local repository operations. Its root-owned Git configuration and exact
+live av/Git/HTTPS/gh chain narrow credential use at the existing gh Secret Gate.
+It is under validation; see [ADR 0047](adr/0047-protected-git-https-transport.md).
 
 Authorization Gates verify the Launcher, bind the Gate Client and Target, classify the complete operation, apply the gate's Authorization Policy, request Approval when policy cannot allow it, and enforce the Authorization Decision.
 
