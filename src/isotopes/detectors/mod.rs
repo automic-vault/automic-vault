@@ -31,6 +31,7 @@ mod civo;
 mod cloudflare_wrangler;
 mod cloudflared;
 mod cloudsmith_cli;
+mod codesign;
 pub(crate) mod codex;
 mod composer;
 mod curl;
@@ -254,6 +255,7 @@ const DETECTORS: &[Detector] = &[
     detector!(cloudflared),
     detector!(cloudsmith_cli),
     detector!(codex),
+    detector!(codesign),
     detector!(composer),
     detector!(curl),
     detector!(databricks),
@@ -663,7 +665,7 @@ mod tests {
 
     #[test]
     fn scan_runs_every_registered_isotope() {
-        assert_eq!(DETECTORS.len(), 159);
+        assert_eq!(DETECTORS.len(), 160);
     }
 
     #[test]
@@ -732,7 +734,10 @@ mod tests {
             .map(|detector| detector.name.as_str())
             .collect::<Vec<_>>();
 
-        assert_eq!(unwatched, ["gh-cli-keychain-access", "macOS", "sip"]);
+        assert_eq!(
+            unwatched,
+            ["codesign", "gh-cli-keychain-access", "macOS", "sip"]
+        );
         assert!(
             metadata
                 .iter()
