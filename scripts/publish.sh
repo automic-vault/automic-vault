@@ -318,7 +318,7 @@ prepare_cask_publish() {
   fi
   origin="$(git -C "$TAP_ROOT" remote get-url origin)"
   case "$origin" in
-    git@github.com:automic-vault/homebrew-isotopes.git | https://github.com/automic-vault/homebrew-isotopes.git) ;;
+    git@github.com:automic-vault/homebrew-isotopes.git | https://github.com/automic-vault/homebrew-isotopes.git | av::https://github.com/automic-vault/homebrew-isotopes.git) ;;
     *)
       echo "error: unexpected Homebrew tap origin: $origin" >&2
       exit 64
@@ -771,7 +771,7 @@ if ! command -v gh >/dev/null 2>&1; then
   exit 64
 fi
 case "$(git -C "$ROOT" remote get-url origin)" in
-  git@github.com:automic-vault/automic-vault.git | https://github.com/automic-vault/automic-vault.git) ;;
+  git@github.com:automic-vault/automic-vault.git | https://github.com/automic-vault/automic-vault.git | av::https://github.com/automic-vault/automic-vault.git) ;;
   *)
     echo "error: publish requires the automic-vault/automic-vault origin" >&2
     exit 64

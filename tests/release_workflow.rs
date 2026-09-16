@@ -498,3 +498,66 @@ fn website_installer_is_transparent_and_verifies_release() {
     assert!(INSTALL_SCRIPT.contains("$app/Contents/MacOS/av"));
     assert!(INSTALL_SCRIPT.find("set -x").unwrap() < INSTALL_SCRIPT.find("/usr/bin/curl").unwrap());
 }
+
+#[test]
+fn publish_origin_checks_accept_only_the_expected_repository() {
+    for (repository, marker) in [
+        (
+            "automic-vault",
+            "case \"$(git -C \"$ROOT\" remote get-url origin)\" in",
+        ),
+        ("homebrew-isotopes", "case \"$origin\" in"),
+    ] {
+        let body = PUBLISH_SCRIPT
+            .split_once(marker)
+            .unwrap()
+            .1
+            .split_once("esac")
+            .unwrap()
+            .0;
+        let script = format!(
+            "set -eu\nROOT=/unused\norigin=$TEST_ORIGIN\ngit() {{ printf '%s\\n' \"$TEST_ORIGIN\"; }}\n{marker}{body}esac"
+        );
+        for (origin, expected_status) in [
+            (format!("git@github.com:automic-vault/{repository}.git"), 0),
+            (
+                format!("https://github.com/automic-vault/{repository}.git"),
+                0,
+            ),
+            (
+                format!("av::https://github.com/automic-vault/{repository}.git"),
+                0,
+            ),
+            (
+                format!("av::http://github.com/automic-vault/{repository}.git"),
+                64,
+            ),
+            (format!("av::https://github.com/other/{repository}.git"), 64),
+            (
+                format!("av::https://github.com.evil.test/automic-vault/{repository}.git"),
+                64,
+            ),
+            (
+                format!("av::https://github.com/automic-vault/{repository}.git/extra"),
+                64,
+            ),
+            (
+                format!("av::https://github.com/automic-vault/{repository}.git?query=1"),
+                64,
+            ),
+            ("av::https://github.com/automic-vault/wrong.git".into(), 64),
+        ] {
+            let output = Command::new("bash")
+                .args(["-c", &script])
+                .env("TEST_ORIGIN", &origin)
+                .output()
+                .unwrap();
+            assert_eq!(
+                output.status.code(),
+                Some(expected_status),
+                "{origin}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+    }
+}
