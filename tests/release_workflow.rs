@@ -458,6 +458,10 @@ fn publication_requires_the_draft_app_to_launch_on_macos_14() {
 
 #[test]
 fn scanner_is_small_signed_and_read_only() {
+    assert!(CARGO_MANIFEST.contains("[profile.release.build-override]\nstrip = \"none\""));
+    assert!(PUBLISH_SCRIPT.contains(
+        "CARGO_PROFILE_RELEASE_BUILD_OVERRIDE_STRIP=none \\\n    \"$source/scripts/build-scanner.sh\""
+    ));
     for setting in [
         "CARGO_PROFILE_RELEASE_OPT_LEVEL=z",
         "CARGO_PROFILE_RELEASE_LTO=fat",

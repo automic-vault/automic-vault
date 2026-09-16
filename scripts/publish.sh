@@ -404,8 +404,10 @@ publish_website_assets() (
   mkdir "$source"
   git -C "$ROOT" archive "$expected_head" | tar -x -C "$source"
 
+  # Also preserve proc-macro metadata when finishing an older immutable release.
   SCANNER_RUST_TOOLCHAIN="$SCANNER_RUST_TOOLCHAIN" \
     SCANNER_CODESIGN_IDENTITY="$SCANNER_CODESIGN_IDENTITY" \
+    CARGO_PROFILE_RELEASE_BUILD_OVERRIDE_STRIP=none \
     "$source/scripts/build-scanner.sh" "$archive"
   if [[ "$(tar -tzf "$archive")" != scanner ]]; then
     echo "error: scanner archive has unexpected contents" >&2
