@@ -1,5 +1,6 @@
 import AppKit
 import Darwin
+import MarkdownUI
 import MenubarHelperCore
 import Security
 import SwiftUI
@@ -3903,6 +3904,7 @@ private struct InfoBlock: View {
             Group {
                 if rendersMarkdown {
                     RenderedMarkdown(markdown: text)
+                        .markdownSoftBreakMode(.lineBreak)
                 } else {
                     Text(text)
                 }
