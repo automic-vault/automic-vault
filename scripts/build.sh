@@ -175,7 +175,7 @@ SWIFT_BIN="$(
   swift build "${swift_build_args[@]}" --show-bin-path
 )"
 
-rm -rf "$APP" "$ICON_BUILD"
+rm -rf "$APP"
 mkdir -p "$MACOS" "$RESOURCES" "$LAUNCH_AGENTS" "$ICON_BUILD"
 cp "$SWIFT_BIN/AutomicVaultMenubar" "$MACOS/AutomicVaultMenubar"
 cp "$SWIFT_BIN/AutomicVaultLauncher" "$RESOURCES/AutomicVaultLauncher"
@@ -195,26 +195,45 @@ for localization in "$MENU_HELPER"/Resources/*.lproj; do
   ditto "$localization" "$RESOURCES/$(basename "$localization")"
 done
 /usr/bin/install -m 0755 "$MENU_HELPER/Resources/install-av-cli.command" "$RESOURCES/install-av-cli.command"
-mkdir -p "$LAUNCHER_ICONSET"
-for size in 16 32 128 256 512; do
-  sips -z "$size" "$size" "$MENU_HELPER/Resources/LauncherBundleIcon.png" \
-    --out "$LAUNCHER_ICONSET/icon_${size}x${size}.png" >/dev/null
-  retina_size=$((size * 2))
-  sips -z "$retina_size" "$retina_size" "$MENU_HELPER/Resources/LauncherBundleIcon.png" \
-    --out "$LAUNCHER_ICONSET/icon_${size}x${size}@2x.png" >/dev/null
-done
-iconutil -c icns "$LAUNCHER_ICONSET" -o "$RESOURCES/LauncherBundleIcon.icns"
-xcrun actool "$MENU_HELPER/Resources/AppIcon.icon" \
-  "$MENU_HELPER/Resources/Assets.xcassets" \
-  --compile "$ICON_BUILD" \
-  --platform macosx \
-  --target-device mac \
-  --minimum-deployment-target "$MACOSX_DEPLOYMENT_TARGET" \
-  --app-icon AppIcon \
-  --accent-color AccentColor \
-  --include-all-app-icons \
-  --enable-on-demand-resources NO \
-  --output-partial-info-plist "$ICON_BUILD/IconInfo.plist" >/dev/null
+# actool embeds changing metadata even for identical inputs. Preserve its outputs
+# until the source assets, build recipe, toolchain, or cached output changes.
+fingerprint() {
+  python3 "$ROOT/scripts/build-sign.py" --fingerprint "$@"
+}
+icon_inputs="$(fingerprint "$MENU_HELPER/Resources/AppIcon.icon" \
+  "$MENU_HELPER/Resources/Assets.xcassets" "$MENU_HELPER/Resources/LauncherBundleIcon.png" \
+  "$ROOT/scripts/build.sh" "$ROOT/scripts/build-sign.py" \
+  "$(xcrun --find actool)" /usr/bin/sips /usr/bin/iconutil)"
+icon_inputs="$icon_inputs:$(xcodebuild -version):$MACOSX_DEPLOYMENT_TARGET"
+if [[ ! -f "$SWIFT_TARGET/icon-inputs" || ! -f "$SWIFT_TARGET/icon-output" ]] ||
+   [[ "$icon_inputs" != "$(cat "$SWIFT_TARGET/icon-inputs")" ]] ||
+   [[ "$(fingerprint "$ICON_BUILD")" != "$(cat "$SWIFT_TARGET/icon-output")" ]]; then
+  rm -rf "$ICON_BUILD"
+  mkdir -p "$ICON_BUILD"
+  mkdir -p "$LAUNCHER_ICONSET"
+  for size in 16 32 128 256 512; do
+    sips -z "$size" "$size" "$MENU_HELPER/Resources/LauncherBundleIcon.png" \
+      --out "$LAUNCHER_ICONSET/icon_${size}x${size}.png" >/dev/null
+    retina_size=$((size * 2))
+    sips -z "$retina_size" "$retina_size" "$MENU_HELPER/Resources/LauncherBundleIcon.png" \
+      --out "$LAUNCHER_ICONSET/icon_${size}x${size}@2x.png" >/dev/null
+  done
+  iconutil -c icns "$LAUNCHER_ICONSET" -o "$ICON_BUILD/LauncherBundleIcon.icns"
+  xcrun actool "$MENU_HELPER/Resources/AppIcon.icon" \
+    "$MENU_HELPER/Resources/Assets.xcassets" \
+    --compile "$ICON_BUILD" \
+    --platform macosx \
+    --target-device mac \
+    --minimum-deployment-target "$MACOSX_DEPLOYMENT_TARGET" \
+    --app-icon AppIcon \
+    --accent-color AccentColor \
+    --include-all-app-icons \
+    --enable-on-demand-resources NO \
+    --output-partial-info-plist "$ICON_BUILD/IconInfo.plist" >/dev/null
+  fingerprint "$ICON_BUILD" >"$SWIFT_TARGET/icon-output"
+  printf '%s\n' "$icon_inputs" >"$SWIFT_TARGET/icon-inputs"
+fi
+cp "$ICON_BUILD/LauncherBundleIcon.icns" "$RESOURCES/LauncherBundleIcon.icns"
 cp "$ICON_BUILD/Assets.car" "$RESOURCES/Assets.car"
 
 identity="$(
@@ -245,28 +264,32 @@ if [[ "$release_artifact" -eq 1 && ! -f "$MENU_HELPER_PROFILE" ]]; then
   echo "error: --release-artifact requires the Developer ID provisioning profile" >&2
   exit 64
 fi
+# Resolve the certificate itself so renewing an identity invalidates cached signatures.
+if [[ "$identity" != "-" ]]; then
+  identity="$(security find-identity -v -p codesigning |
+    awk -F '"' -v name="$identity" '$2 == name { split($1, fields, " "); print fields[2]; exit }')"
+  [[ -n "$identity" ]] || { echo "error: signing identity disappeared" >&2; exit 1; }
+fi
+sign_code() {
+  python3 "$ROOT/scripts/build-sign.py" "$SWIFT_TARGET/signatures" "$@"
+}
+
 codesign_args=(--force --sign "$identity" --options runtime)
 if [[ "$identity" != "-" ]]; then
   codesign_args+=(--timestamp)
 fi
 
-codesign "${codesign_args[@]}" --identifier com.automicvault.av "$ROOT/target/release/av"
-codesign "${codesign_args[@]}" --identifier com.automicvault.av-gpg "$ROOT/target/release/av-gpg"
-codesign "${codesign_args[@]}" --identifier com.automicvault.av-brew-stub "$ROOT/target/release/av-brew-stub"
-codesign "${codesign_args[@]}" --identifier com.automicvault.launcher-bundle-runner "$RESOURCES/AutomicVaultLauncher"
-codesign "${codesign_args[@]}" --identifier com.automicvault.varlock-plugin-helper "$RESOURCES/AutomicVaultVarlockPlugin"
-assert_no_embedded_entitlements "$ROOT/target/release/av"
-assert_no_embedded_entitlements "$ROOT/target/release/av-gpg"
-assert_no_embedded_entitlements "$ROOT/target/release/av-brew-stub"
+sign_code "${codesign_args[@]}" --identifier com.automicvault.launcher-bundle-runner "$RESOURCES/AutomicVaultLauncher"
+sign_code "${codesign_args[@]}" --identifier com.automicvault.varlock-plugin-helper "$RESOURCES/AutomicVaultVarlockPlugin"
 assert_no_embedded_entitlements "$RESOURCES/AutomicVaultVarlockPlugin"
 cp "$ROOT/target/release/av" "$MACOS/av"
 cp "$ROOT/target/release/av-gpg" "$MACOS/av-gpg"
 cp "$ROOT/target/release/av-brew-stub" "$MACOS/av-brew-stub"
 cp "$ROOT/target/release/av-proxy-helper" "$MACOS/av-proxy-helper"
-codesign "${codesign_args[@]}" --identifier com.automicvault.av "$MACOS/av"
-codesign "${codesign_args[@]}" --identifier com.automicvault.av-gpg "$MACOS/av-gpg"
-codesign "${codesign_args[@]}" --identifier com.automicvault.av-brew-stub "$MACOS/av-brew-stub"
-codesign "${codesign_args[@]}" \
+sign_code "${codesign_args[@]}" --identifier com.automicvault.av "$MACOS/av"
+sign_code "${codesign_args[@]}" --identifier com.automicvault.av-gpg "$MACOS/av-gpg"
+sign_code "${codesign_args[@]}" --identifier com.automicvault.av-brew-stub "$MACOS/av-brew-stub"
+sign_code "${codesign_args[@]}" \
   --entitlements "$PROXY_HELPER_ENTITLEMENTS" \
   --identifier com.automicvault.av-proxy-helper \
   "$MACOS/av-proxy-helper"
@@ -292,7 +315,7 @@ if [[ -f "$MENU_HELPER_PROFILE" && "$identity" != "-" ]]; then
     "$MENU_HELPER_ENTITLEMENTS"
   app_codesign_args+=(--entitlements "$MENU_HELPER_ENTITLEMENTS")
 fi
-codesign "${app_codesign_args[@]}" "$APP"
+sign_code "${app_codesign_args[@]}" "$APP"
 codesign --verify --strict "$MACOS/av"
 codesign --verify --strict "$MACOS/av-gpg"
 codesign --verify --strict "$MACOS/av-brew-stub"

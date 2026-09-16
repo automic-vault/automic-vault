@@ -237,15 +237,8 @@ fn release_build_asserts_secret_custody_entitlements() {
         BUILD_SCRIPT
             .contains("APPROVAL_KEYCHAIN_ACCESS_GROUP=\"ZU76A67LGU.com.automicvault.approval\"")
     );
-    assert!(BUILD_SCRIPT.contains("assert_no_embedded_entitlements \"$ROOT/target/release/av\""));
-    assert!(
-        BUILD_SCRIPT.contains("assert_no_embedded_entitlements \"$ROOT/target/release/av-gpg\"")
-    );
-    assert!(
-        BUILD_SCRIPT
-            .contains("assert_no_embedded_entitlements \"$ROOT/target/release/av-brew-stub\"")
-    );
     assert!(BUILD_SCRIPT.contains("assert_no_embedded_entitlements \"$MACOS/av\""));
+    assert!(BUILD_SCRIPT.contains("assert_no_embedded_entitlements \"$MACOS/av-gpg\""));
     assert!(BUILD_SCRIPT.contains("assert_no_embedded_entitlements \"$MACOS/av-brew-stub\""));
     assert!(BUILD_SCRIPT.contains("assert_private_keychain_entitlement \"$APP\""));
     assert!(BUILD_SCRIPT.contains("menu bar app must not have a wildcard Keychain access group"));
@@ -277,10 +270,7 @@ fn macos_app_uses_its_violet_accent() {
 
 #[test]
 fn git_signing_adapter_is_hardened_and_bundled_without_a_privileged_install() {
-    assert!(
-        BUILD_SCRIPT
-            .contains("--identifier com.automicvault.av-gpg \"$ROOT/target/release/av-gpg\"")
-    );
+    assert!(BUILD_SCRIPT.contains("--identifier com.automicvault.av-gpg \"$MACOS/av-gpg\""));
     assert!(BUILD_SCRIPT.contains("cp \"$ROOT/target/release/av-gpg\" \"$MACOS/av-gpg\""));
     assert!(BUILD_SCRIPT.contains("codesign --verify --strict \"$MACOS/av-gpg\""));
     assert!(!INSTALL_SCRIPT.contains("Contents/MacOS/av-gpg"));
@@ -301,7 +291,7 @@ fn proxy_helper_is_sandboxed_signed_inside_out_and_has_no_keychain_authority() {
         .find("--identifier com.automicvault.av-proxy-helper")
         .unwrap();
     let app = BUILD_SCRIPT
-        .find("codesign \"${app_codesign_args[@]}\" \"$APP\"")
+        .find("sign_code \"${app_codesign_args[@]}\" \"$APP\"")
         .unwrap();
     assert!(helper < app);
     assert!(BUILD_SCRIPT.contains("codesign --verify --strict \"$MACOS/av-proxy-helper\""));
