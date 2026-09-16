@@ -25,6 +25,7 @@ pub(crate) mod supabase;
 pub(crate) mod terraform;
 pub(crate) mod terraform_release;
 pub(crate) mod uaa_cli;
+pub(crate) mod uv_cli;
 pub(crate) mod wakatime_cli;
 pub(crate) mod wrangler;
 
@@ -139,7 +140,7 @@ pub(crate) struct RequiredIdentity {
 }
 
 pub(crate) fn write_secret_gate_notice(stdout: &mut dyn std::io::Write, gate_id: &str) {
-    let protection = if gate_id == "kubectl" {
+    let protection = if gate_id == "kubectl" || gate_id == "uv" {
         "Approval Required"
     } else if gate_id == "brew" {
         "Read & Update"
@@ -330,6 +331,7 @@ macro_rules! ungated_hardener {
 const HARDENERS: &[HardenerSpec] = &[
     gated_hardener!(aliyun_cli, "aliyun-cli", &["aliyun"]),
     gated_hardener!(aws_cli, "aws", &[]),
+    gated_hardener!(uv_cli, "uv", &["uvx"]),
     ungated_hardener!(codex, "codex", &[]),
     gated_hardener!(docker, "docker", &["docker-compose", "docker-buildx"]),
     gated_hardener!(goat, "goat", &[]),
@@ -404,6 +406,7 @@ pub(crate) fn secret_gates() -> Vec<SecretGateDescriptor> {
         signing_gate("ssh-agent", "ssh-sign", "AV_SSH_CREDENTIAL"),
         aliyun_cli::secret_gate(),
         aws_cli::secret_gate(),
+        uv_cli::secret_gate(),
         docker::secret_gate(),
         goat::secret_gate(),
         ordercli::secret_gate(),
