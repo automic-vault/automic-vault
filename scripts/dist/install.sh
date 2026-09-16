@@ -32,7 +32,9 @@ set -x
   | /usr/bin/grep -q "^TeamIdentifier=${team_id}$"
 
 /usr/bin/ditto "$app" "/Applications/Automic Vault.app"
-/usr/bin/sudo /bin/mkdir -p /usr/local/bin
-/usr/bin/sudo /usr/bin/install -m 755 \
-  "$app/Contents/MacOS/av" \
-  /usr/local/bin/av
+if ! /usr/bin/cmp -s "$app/Contents/MacOS/av" /usr/local/bin/av; then
+  /usr/bin/sudo /bin/mkdir -p /usr/local/bin
+  /usr/bin/sudo /usr/bin/install -m 755 \
+    "$app/Contents/MacOS/av" \
+    /usr/local/bin/av
+fi
