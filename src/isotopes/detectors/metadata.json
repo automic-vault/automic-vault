@@ -1,0 +1,1333 @@
+{
+  "acli": {
+    "watch_paths": [
+      "~/.config/acli/confluence_config.yaml",
+      "~/.config/acli/jira_config.yaml",
+      "~/.config/acli/assets_config.yaml",
+      "~/.config/acli/rovodev_config.yaml",
+      "~/.config/acli/brie_config.yaml",
+      "~/.config/acli/global_auth_config.yaml",
+      "~/.config/acli/global_config.yaml",
+      "~/.config/acli/admin_config.yaml"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "The retired `acli` hardener moved the detected secret to the macOS Keychain, then recreated `~/.config/acli/confluence_config.yaml` inside a temporary directory for each run. We no longer consider a temporary plaintext file a sufficient security boundary, so this detector remains report-only."
+  },
+  "akamai": {
+    "watch_paths": [
+      "${AKAMAI_EDGERC:-$HOME/.edgerc}"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "Run `av harden akamai`."
+  },
+  "algolia": {
+    "watch_paths": [
+      "${XDG_CONFIG_HOME:-$HOME/.config}/algolia/config.toml"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "Run `av harden algolia`."
+  },
+  "aliyun-cli": {
+    "watch_paths": [
+      "~/.aliyun/config.json"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "Run `av harden aliyun-cli`."
+  },
+  "ansible": {
+    "watch_paths": [
+      "${ANSIBLE_GALAXY_TOKEN_PATH:-$HOME/.ansible/galaxy_token}"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "The retired `ansible` hardener moved the detected secret to the macOS Keychain, then recreated `${ANSIBLE_GALAXY_TOKEN_PATH:-$HOME/.ansible/galaxy_token}` inside a temporary directory for each run. We no longer consider a temporary plaintext file a sufficient security boundary, so this detector remains report-only."
+  },
+  "antigravity-cockpit": {
+    "watch_paths": [
+      "~/.antigravity_cockpit/credentials.json"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "Upgrade Antigravity Cockpit to v2.1.29 or later and remove the leftover `~/.antigravity_cockpit/credentials.json` credential file."
+  },
+  "argocd": {
+    "watch_paths": [
+      "$ARGOCD_CONFIG_DIR/config",
+      "~/.argocd/config",
+      "$XDG_CONFIG_HOME/argocd/config",
+      "~/.config/argocd/config"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "Run `av harden argocd`."
+  },
+  "ast-cli": {
+    "watch_paths": [
+      "$CX_CONFIG_FILE_PATH",
+      "~/.checkmarx/checkmarxcli.yaml"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "Run `av harden ast-cli`."
+  },
+  "astra": {
+    "watch_paths": [
+      "$XDG_CONFIG_HOME/astra/.astrarc",
+      "~/.config/astra/.astrarc"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "The retired `astra` hardener moved the detected secret to the macOS Keychain, then recreated `$XDG_CONFIG_HOME/astra/.astrarc` inside a temporary directory for each run. We no longer consider a temporary plaintext file a sufficient security boundary, so this detector remains report-only."
+  },
+  "atuin": {
+    "watch_paths": [
+      "$XDG_DATA_HOME/atuin/key",
+      "$XDG_DATA_HOME/atuin/session",
+      "~/.local/share/atuin/key",
+      "~/.local/share/atuin/session"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "Atuin keeps the local sync encryption key and server session under the Atuin data directory. Until Automic Vault has a write-safe Atuin integration, this detector reports those plaintext files without changing Atuin behavior."
+  },
+  "aws-cli-credentials-file": {
+    "watch_paths": [
+      "$AWS_SHARED_CREDENTIALS_FILE",
+      "~/.aws/credentials"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "Run `av harden aws`."
+  },
+  "aws-cli-legacy-plugins": {
+    "watch_paths": [
+      "$AWS_CONFIG_FILE",
+      "~/.aws/config"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "Edit your configuration file and delete the legacy plugins section."
+  },
+  "aws-cli-login-cache": {
+    "watch_paths": [
+      "~/.aws/login/cache/*.json"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "AWS CLI owns and refreshes the login cache as part of its authentication flow. Moving individual cache entries would leave mutable session state split between AWS CLI and Automic Vault. A safe hardener needs an upstream credential-provider boundary that avoids copying cached access credentials back to disk."
+  },
+  "aws-sso-cli": {
+    "watch_paths": [
+      "~/.aws/sso/cache/*.json",
+      "~/.aws/cli/cache/*.json"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "aws-sso-cli manages AWS Identity Center flows and can share cache files with AWS CLI and SDK tooling. This detector reports plaintext token and temporary credential cache files without changing that shared state."
+  },
+  "aws-vault": {
+    "watch_paths": [
+      "~/.aws/config",
+      "~/.awsvault/keys/*"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "aws-vault is already a credential manager, so this detector does not move its backend data. It reports AWS config entries that invoke aws-vault and the default file backend directory when present."
+  },
+  "azure-cli": {
+    "watch_paths": [
+      "$AZURE_CONFIG_DIR/msal_token_cache.json",
+      "$AZURE_CONFIG_DIR/service_principal_entries.json",
+      "$AZURE_CONFIG_DIR/accessTokens.json",
+      "~/.azure/msal_token_cache.json",
+      "~/.azure/service_principal_entries.json",
+      "~/.azure/accessTokens.json"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "Azure CLI owns a complex, mutable MSAL token cache. A safe fix needs an upstream default or migration change, or a source isotope that patches the persistence layer."
+  },
+  "bash": {
+    "watch_paths": [
+      "~/.bashrc",
+      "~/.bash_profile",
+      "~/.bash_login",
+      "~/.profile",
+      "$BASH_ENV"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "Bash startup files contain arbitrary user programs and shared environment configuration. Automic Vault cannot rewrite them without changing shell behavior or guessing which commands need each secret. Move the reported value with `av save KEY`, then inject it only into the command that needs it.",
+    "path_solution": "Version managers commonly prepend user-writable tool directories to `PATH`; this is expected, but those directories can still shadow later commands. Remove empty, relative, and unexpected entries. If the ordering is intentional, use absolute paths for security-sensitive commands and keep reusable secrets out of the shell environment with `av inject` or `av proxy`; these reduce exposure but do not make the `PATH` safe."
+  },
+  "bitwarden-cli": {
+    "watch_paths": [
+      "$BITWARDENCLI_APPDATA_DIR/data.json",
+      "~/Library/Application Support/Bitwarden CLI/data.json"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "The retired `bitwarden-cli` hardener moved the detected secret to the macOS Keychain, then recreated `$BITWARDENCLI_APPDATA_DIR/data.json` inside a temporary directory for each run. We no longer consider a temporary plaintext file a sufficient security boundary, so this detector remains report-only."
+  },
+  "buf": {
+    "watch_paths": [
+      "~/.netrc"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "Run `av harden buf`."
+  },
+  "bun": {
+    "watch_paths": [
+      "$XDG_CONFIG_HOME/.bunfig.toml",
+      "~/.bunfig.toml"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "Set `minimumReleaseAge = 86400` under `[install]` in the reported Bun config file."
+  },
+  "cariddi-persisted-output": {
+    "watch_paths": [
+      "~/output-cariddi/secrets/**"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "This finding concerns secret-bearing scan output left behind by cariddi, not a credential that Automic Vault can inject at runtime. Delete the reported output after reviewing it. Preventing persistence requires a change in cariddi's output handling."
+  },
+  "cariddi-shell-history": {
+    "watch_paths": [
+      "~/.zsh_history",
+      "~/.bash_history",
+      "~/.history"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "This finding concerns command text already recorded by the shell. A cariddi wrapper cannot remove existing history safely or control every shell's history policy. Remove the reported entries and avoid passing sensitive scanner arguments on the command line."
+  },
+  "censys": {
+    "watch_paths": [
+      "~/.config/censys/censys.cfg"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "Run `av harden censys`."
+  },
+  "certbot": {
+    "watch_paths": [
+      "~/.config/letsencrypt/**",
+      "~/.letsencrypt/**",
+      "~/Library/Application Support/letsencrypt/**"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "Certbot's ACME account keys and certificate private keys are service deployment state. This detector reports unencrypted user-level keys without attempting to move Certbot's renewal-managed files."
+  },
+  "checkov": {
+    "watch_paths": [
+      "~/.bridgecrew/credentials"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "Run `av harden checkov`."
+  },
+  "circleci": {
+    "watch_paths": [
+      "~/.circleci/cli.yml"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "Run `av harden circleci`."
+  },
+  "civo": {
+    "watch_paths": [
+      "$CIVO_CONFIG",
+      "~/.civo.json"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "Run `av harden civo`."
+  },
+  "cloudflare-wrangler": {
+    "watch_paths": [
+      "~/Library/Preferences/.wrangler/config/*.toml",
+      "~/Library/Preferences/.wrangler/config/*.enc",
+      "~/.wrangler/config/*.toml",
+      "~/.wrangler/config/*.enc",
+      "~/.config/.wrangler/config/*.toml",
+      "~/.config/.wrangler/config/*.enc",
+      "$XDG_CONFIG_HOME/.wrangler/config/*.toml",
+      "$XDG_CONFIG_HOME/.wrangler/config/*.enc"
+    ],
+    "requires_periodic_scan": true,
+    "solution": "Wrangler 4.107.0 added `wrangler login --use-keyring`, which encrypts OAuth credentials on disk and stores the encryption key in the macOS Keychain. Its macOS backend creates and reads that key through `/usr/bin/security`. When the Keychain item authorizes that tool, other software running as the user can ask the same tool for the key and decrypt the credentials without crossing an Authorization Gate."
+  },
+  "cloudflared": {
+    "watch_paths": [
+      "~/.cloudflared/**",
+      "$XDG_CONFIG_HOME/cloudflared/**",
+      "~/.config/cloudflared/**"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "cloudflared tunnel state can include certificate private keys and tunnel credential JSON files. These are service credentials, so this detector reports bounded user-level exposures without changing tunnel configuration."
+  },
+  "cloudsmith-cli": {
+    "watch_paths": [
+      "~/Library/Application Support/cloudsmith/credentials.ini",
+      "~/.cloudsmith/credentials.ini"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "Run `av harden cloudsmith-cli`."
+  },
+  "codex": {
+    "watch_paths": [
+      "${CODEX_HOME:-$HOME/.codex}/auth.json"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "Run `av harden codex`."
+  },
+  "composer": {
+    "watch_paths": [
+      "$COMPOSER_HOME/auth.json",
+      "$XDG_CONFIG_HOME/composer/auth.json",
+      "~/.composer/auth.json",
+      "~/Library/Application Support/Composer/auth.json"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "Run `av harden composer`."
+  },
+  "curl": {
+    "watch_paths": [
+      "~/.netrc",
+      "~/.curlrc"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "curl reads credentials from generic request configuration shared across hosts and protocols. There is no package-owned account store or single environment variable that preserves `.netrc` and `.curlrc` routing semantics."
+  },
+  "databricks": {
+    "watch_paths": [
+      "~/.databrickscfg",
+      "$XDG_CONFIG_HOME/databricks/config",
+      "$XDG_CONFIG_HOME/databricks/databrickscfg",
+      "~/.config/databricks/config",
+      "~/.config/databricks/databrickscfg"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "Databricks CLI can store profile tokens and client secrets in config files even when OAuth token storage uses the OS keyring. This detector reports those plaintext profile secrets without changing the CLI's auth behavior."
+  },
+  "dcos-cli": {
+    "watch_paths": [
+      "$DCOS_DIR/clusters/*/dcos.toml",
+      "~/.dcos/clusters/*/dcos.toml"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "The retired `dcos-cli` hardener moved the detected secret to the macOS Keychain, then recreated `$DCOS_DIR/clusters/*/dcos.toml` inside a temporary directory for each run. We no longer consider a temporary plaintext file a sufficient security boundary, so this detector remains report-only."
+  },
+  "docker-credential-helpers": {
+    "watch_paths": [
+      "$DOCKER_CONFIG/config.json",
+      "~/.docker/config.json"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "Run `av harden docker`."
+  },
+  "docker-registry-credentials": {
+    "watch_paths": [
+      "$DOCKER_CONFIG/config.json",
+      "~/.docker/config.json",
+      "~/.dockercfg"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "Run `docker logout REGISTRY` for each affected registry, then configure a Docker credential helper before signing in again. Remove obsolete `auths` entries from the reported config files."
+  },
+  "docker-credential-helper": {
+    "watch_paths": [
+      "$DOCKER_CONFIG/config.json",
+      "~/.docker/config.json"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "Run `av harden docker`."
+  },
+  "docker-machine": {
+    "watch_paths": [
+      "~/.docker/machine/**"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "Docker Machine can leave host and client TLS private keys in `~/.docker/machine`. This detector reports unencrypted private keys without modifying machine state."
+  },
+  "doctl": {
+    "watch_paths": [
+      "$DIGITALOCEAN_CONFIG",
+      "~/Library/Application Support/doctl/config.yaml",
+      "$XDG_CONFIG_HOME/doctl/config.yaml",
+      "~/.config/doctl/config.yaml"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "Run `av harden doctl`."
+  },
+  "dropbox-uploader": {
+    "watch_paths": [
+      "~/.dropbox_uploader"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "The retired `dropbox-uploader` hardener moved the detected secret to the macOS Keychain, then recreated `~/.dropbox_uploader` inside a temporary directory for each run. We no longer consider a temporary plaintext file a sufficient security boundary, so this detector remains report-only."
+  },
+  "envchain": {
+    "watch_paths": [
+      "~/.zsh_history",
+      "~/.bash_history",
+      "~/.history"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "envchain is itself a keychain-backed environment injector. This detector reports obvious namespace setup from shell history without moving platform keychain or Secret Service entries."
+  },
+  "fastlane": {
+    "watch_paths": [
+      "~/.fastlane/spaceship/**",
+      "~/.spaceship/**"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "fastlane stores Apple account passwords in the system keychain where possible, but Spaceship session cookies can still live in plaintext files. This detector reports those files without changing fastlane's auth flow."
+  },
+  "fastly": {
+    "watch_paths": [
+      "$XDG_CONFIG_HOME/fastly/config.toml",
+      "~/Library/Application Support/fastly/config.toml",
+      "~/.fastly/config.toml"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "Run `av harden fastly-cli`."
+  },
+  "fauna-shell": {
+    "watch_paths": [
+      "~/.fauna/credentials/account_keys",
+      "~/.fauna/credentials/secret_keys"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "The retired `fauna-shell` hardener moved the detected secret to the macOS Keychain, then recreated `~/.fauna/credentials/account_keys` inside a temporary directory for each run. We no longer consider a temporary plaintext file a sufficient security boundary, so this detector remains report-only."
+  },
+  "firebase-cli": {
+    "watch_paths": [
+      "~/.config/configstore/firebase-tools.json"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "The retired `firebase-cli` hardener moved the detected secret to the macOS Keychain, then recreated `~/.config/configstore/firebase-tools.json` inside a temporary directory for each run. We no longer consider a temporary plaintext file a sufficient security boundary, so this detector remains report-only."
+  },
+  "flyctl": {
+    "watch_paths": [
+      "~/.fly/config.yml"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "Run `av harden flyctl`."
+  },
+  "gallery-dl": {
+    "watch_paths": [
+      "$XDG_CONFIG_HOME/gallery-dl/config.json",
+      "~/.config/gallery-dl/config.json",
+      "~/.gallery-dl.conf"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "The retired `gallery-dl` hardener moved the detected secret to the macOS Keychain, then recreated `$XDG_CONFIG_HOME/gallery-dl/config.json` inside a temporary directory for each run. We no longer consider a temporary plaintext file a sufficient security boundary, so this detector remains report-only."
+  },
+  "gcli": {
+    "watch_paths": [
+      "$XDG_CONFIG_HOME/gcli/config",
+      "~/.config/gcli/config"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "The retired `gcli` hardener moved the detected secret to the macOS Keychain, then recreated `$XDG_CONFIG_HOME/gcli/config` inside a temporary directory for each run. We no longer consider a temporary plaintext file a sufficient security boundary, so this detector remains report-only."
+  },
+  "gemini-cli": {
+    "watch_paths": [
+      "~/.gemini/oauth_creds.json"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "Delete `~/.gemini/oauth_creds.json` and authenticate via short-lived access tokens such as `GOOGLE_CLOUD_ACCESS_TOKEN`."
+  },
+  "gh-cli-hosts-token": {
+    "watch_paths": [
+      "$GH_CONFIG_DIR/hosts.yml",
+      "$XDG_CONFIG_HOME/gh/hosts.yml",
+      "~/.config/gh/hosts.yml"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "Run `av harden gh`."
+  },
+  "gh-cli-keychain-access": {
+    "watch_paths": [],
+    "requires_periodic_scan": true,
+    "solution": "Run `av harden gh`."
+  },
+  "git-credential-fill": {
+    "watch_paths": [
+      "~/.gitconfig",
+      "$XDG_CONFIG_HOME/git/config",
+      "~/.config/git/config"
+    ],
+    "requires_periodic_scan": true,
+    "solution": "For an ambient or untrusted helper, remove the affected configuration and any matching cached credential, then move GitHub remotes to SSH. A signed Automic Vault `gh` Isotope may remain when it is the complete effective helper chain."
+  },
+  "git-credential-oauth": {
+    "watch_paths": [
+      "~/.gitconfig",
+      "$XDG_CONFIG_HOME/git/config",
+      "~/.config/git/config"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "Remove the OAuth helper and any plaintext `oauthClientSecret` from the affected Git config, revoke a real client secret, and move repository remotes to SSH."
+  },
+  "git-credentials-file": {
+    "watch_paths": [
+      "~/.git-credentials",
+      "~/.gitconfig",
+      "$XDG_CONFIG_HOME/git/config",
+      "~/.config/git/config"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "Remove credentials from the reported files, disable Git's plaintext `store` helper, and move repository remotes to SSH."
+  },
+  "glab": {
+    "watch_paths": [
+      "$GLAB_CONFIG_DIR/config.yml",
+      "$XDG_CONFIG_HOME/glab-cli/config.yml",
+      "~/.config/glab-cli/config.yml",
+      "~/Library/Application Support/glab-cli/config.yml"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "Run `av harden glab`."
+  },
+  "goat": {
+    "watch_paths": [
+      "$XDG_STATE_HOME/goat/auth-session.json",
+      "~/.local/state/goat/auth-session.json"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "Run `av harden goat`."
+  },
+  "gotify": {
+    "watch_paths": [
+      "$XDG_CONFIG_HOME/gotify/cli.json",
+      "~/.gotify/cli.json"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "Run `av harden gotify`."
+  },
+  "gptcommit": {
+    "watch_paths": [
+      "~/.config/gptcommit/config.toml"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "Run `av harden gptcommit`."
+  },
+  "grafanactl": {
+    "watch_paths": [
+      "$XDG_CONFIG_HOME/grafanactl/config.yaml",
+      "~/.config/grafanactl/config.yaml"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "Run `av harden grafanactl`."
+  },
+  "graphite": {
+    "watch_paths": [
+      "$XDG_CONFIG_HOME/graphite/auth",
+      "$XDG_CONFIG_HOME/graphite/user_config",
+      "~/.config/graphite/auth",
+      "~/.config/graphite/user_config"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "The retired `graphite` hardener moved the detected secret to the macOS Keychain, then recreated `$XDG_CONFIG_HOME/graphite/auth` inside a temporary directory for each run. We no longer consider a temporary plaintext file a sufficient security boundary, so this detector remains report-only."
+  },
+  "hcloud": {
+    "watch_paths": [
+      "$HCLOUD_CONFIG",
+      "$XDG_CONFIG_HOME/hcloud/cli.toml",
+      "~/.config/hcloud/cli.toml"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "Run `av harden hcloud`."
+  },
+  "helm": {
+    "watch_paths": [
+      "$HELM_REPOSITORY_CONFIG",
+      "$HELM_CONFIG_HOME/repositories.yaml",
+      "~/Library/Preferences/helm/repositories.yaml"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "The retired `helm` hardener moved the detected secret to the macOS Keychain, then recreated `$HELM_REPOSITORY_CONFIG` inside a temporary directory for each run. We no longer consider a temporary plaintext file a sufficient security boundary, so this detector remains report-only."
+  },
+  "heroku": {
+    "watch_paths": [
+      "$NETRC",
+      "~/.netrc"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "Run `av harden heroku`."
+  },
+  "homebrew": {
+    "watch_paths": [
+      "/opt/homebrew",
+      "/opt/homebrew/*/"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "Run `av harden brew`."
+  },
+  "httpie": {
+    "watch_paths": [
+      "$XDG_CONFIG_HOME/httpie/sessions/**/default.json",
+      "~/.config/httpie/sessions/**/default.json",
+      "~/.httpie/sessions/**/default.json"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "HTTPie session files are mutable runtime state. A safe fix needs native session-store integration or a source isotope that preserves session updates."
+  },
+  "huggingface-cli": {
+    "watch_paths": [
+      "~/.cache/huggingface/token"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "Run `av harden huggingface-cli`."
+  },
+  "imap-backup": {
+    "watch_paths": [
+      "~/.imap-backup/config.json"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "The retired `imap-backup` hardener moved the detected secret to the macOS Keychain, then recreated `~/.imap-backup/config.json` inside a temporary directory for each run. We no longer consider a temporary plaintext file a sufficient security boundary, so this detector remains report-only."
+  },
+  "jfrog-cli": {
+    "watch_paths": [
+      "~/.jfrog/jfrog-cli.conf.v6"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "Run `av harden jfrog-cli`."
+  },
+  "k6": {
+    "watch_paths": [
+      "~/Library/Application Support/k6/config.json",
+      "~/.config/k6/config.json"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "Run `av harden k6`."
+  },
+  "kubernetes-cli": {
+    "watch_paths": [
+      "$KUBECONFIG",
+      "~/.kube/config"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "Run `av harden kubectl`."
+  },
+  "luarocks": {
+    "watch_paths": [
+      "$XDG_CONFIG_HOME/luarocks/upload_config.lua",
+      "~/.config/luarocks/upload_config.lua",
+      "~/.luarocks/upload_config.lua"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "Run `av harden luarocks`."
+  },
+  "maestro": {
+    "watch_paths": [
+      "~/.mobiledev/authtoken",
+      "~/.mobiledev/openaitoken"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "The retired `maestro` hardener moved the detected secret to the macOS Keychain, then recreated `~/.mobiledev/authtoken` inside a temporary directory for each run. We no longer consider a temporary plaintext file a sufficient security boundary, so this detector remains report-only."
+  },
+  "macOS": {
+    "watch_paths": [],
+    "requires_periodic_scan": true,
+    "solution": "Move protected system directories before user-writable directories in the launchd `PATH`, remove empty and relative entries, then log out and back in. Review LaunchAgents and other software that modifies the launchd environment before changing it; an unexpected entry may indicate persistence."
+  },
+  "mariadb": {
+    "watch_paths": [
+      "~/.my.cnf"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "The retired `mariadb` hardener moved the detected secret to the macOS Keychain, then recreated `~/.my.cnf` inside a temporary directory for each run. We no longer consider a temporary plaintext file a sufficient security boundary, so this detector remains report-only."
+  },
+  "maven": {
+    "watch_paths": [
+      "~/.m2/settings.xml"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "The retired `maven` hardener moved the detected secret to the macOS Keychain, then recreated `~/.m2/settings.xml` inside a temporary directory for each run. We no longer consider a temporary plaintext file a sufficient security boundary, so this detector remains report-only."
+  },
+  "mcp-remote": {
+    "watch_paths": [
+      "$MCP_REMOTE_CONFIG_DIR/**/server_tokens.json",
+      "~/.mcp-auth/**/server_tokens.json"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "The retired `mcp-remote` hardener moved the detected secret to the macOS Keychain, then recreated `$MCP_REMOTE_CONFIG_DIR/**/server_tokens.json` inside a temporary directory for each run. We no longer consider a temporary plaintext file a sufficient security boundary, so this detector remains report-only."
+  },
+  "mercurial": {
+    "watch_paths": [
+      "~/.hgrc",
+      "$XDG_CONFIG_HOME/hg/hgrc",
+      "~/.config/hg/hgrc"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "The retired `mercurial` hardener moved the detected secret to the macOS Keychain, then recreated `~/.hgrc` inside a temporary directory for each run. We no longer consider a temporary plaintext file a sufficient security boundary, so this detector remains report-only."
+  },
+  "midnight-commander": {
+    "watch_paths": [
+      "$XDG_CONFIG_HOME/mc/**",
+      "~/.config/mc/**"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "The retired `midnight-commander` hardener moved the detected secret to the macOS Keychain, then recreated `$XDG_CONFIG_HOME/mc/**` inside a temporary directory for each run. We no longer consider a temporary plaintext file a sufficient security boundary, so this detector remains report-only."
+  },
+  "minio-mc": {
+    "watch_paths": [
+      "~/.mc/config.json"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "Run `av harden minio-mc`."
+  },
+  "mkcert": {
+    "watch_paths": [
+      "$CAROOT/rootCA-key.pem",
+      "~/Library/Application Support/mkcert/rootCA-key.pem"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "The retired `mkcert` hardener moved the detected secret to the macOS Keychain, then recreated `$CAROOT/rootCA-key.pem` inside a temporary directory for each run. We no longer consider a temporary plaintext file a sufficient security boundary, so this detector remains report-only."
+  },
+  "mongodb-atlas-cli": {
+    "watch_paths": [
+      "~/Library/Application Support/atlascli/config.toml",
+      "$XDG_CONFIG_HOME/atlascli/config.toml",
+      "~/.config/atlascli/config.toml"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "MongoDB Atlas CLI already provides an upstream keyring-backed store. A safe remediation must use or repair that store instead of wrapping the CLI."
+  },
+  "mycli": {
+    "watch_paths": [
+      "~/.myclirc",
+      "$XDG_CONFIG_HOME/mycli/myclirc",
+      "~/.config/mycli/myclirc"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "The retired `mycli` hardener moved the detected secret to the macOS Keychain, then recreated `~/.myclirc` inside a temporary directory for each run. We no longer consider a temporary plaintext file a sufficient security boundary, so this detector remains report-only."
+  },
+  "mysql": {
+    "watch_paths": [
+      "~/.my.cnf"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "The retired `mysql` hardener moved the detected secret to the macOS Keychain, then recreated `~/.my.cnf` inside a temporary directory for each run. We no longer consider a temporary plaintext file a sufficient security boundary, so this detector remains report-only."
+  },
+  "mysql-client": {
+    "watch_paths": [
+      "~/.my.cnf"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "The retired `mysql-client` hardener moved the detected secret to the macOS Keychain, then recreated `~/.my.cnf` inside a temporary directory for each run. We no longer consider a temporary plaintext file a sufficient security boundary, so this detector remains report-only."
+  },
+  "mysql@8.0": {
+    "watch_paths": [
+      "~/.my.cnf"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "The retired `mysql@8.0` hardener moved the detected secret to the macOS Keychain, then recreated `~/.my.cnf` inside a temporary directory for each run. We no longer consider a temporary plaintext file a sufficient security boundary, so this detector remains report-only."
+  },
+  "mysql@8.4": {
+    "watch_paths": [
+      "~/.my.cnf"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "The retired `mysql@8.4` hardener moved the detected secret to the macOS Keychain, then recreated `~/.my.cnf` inside a temporary directory for each run. We no longer consider a temporary plaintext file a sufficient security boundary, so this detector remains report-only."
+  },
+  "netlify-cli": {
+    "watch_paths": [
+      "~/Library/Preferences/netlify/config.json",
+      "~/.netlify/config.json"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "Run `av harden netlify-cli`."
+  },
+  "node": {
+    "watch_paths": [
+      "$NPM_CONFIG_USERCONFIG",
+      "~/.npmrc"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "Run `av harden node`."
+  },
+  "node@18": {
+    "watch_paths": [
+      "$NPM_CONFIG_USERCONFIG",
+      "~/.npmrc"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "The retired hardener moved one npm token to the macOS Keychain, rewrote the matching npm config entry to reference `NODE_AUTH_TOKEN`, and wrapped only `npm publish`. The current `node` hardener targets `/opt/node/bin/npm`; it does not manage the versioned `/opt/node@18/bin/npm` installation."
+  },
+  "npm": {
+    "watch_paths": [
+      "$NPM_CONFIG_USERCONFIG",
+      "~/.npmrc"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "Set `min-release-age=1` in the reported npm config file."
+  },
+  "nuget": {
+    "watch_paths": [
+      "$XDG_CONFIG_HOME/NuGet/NuGet.Config",
+      "~/.config/NuGet/NuGet.Config",
+      "~/.nuget/NuGet/NuGet.Config"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "The retired `nuget` hardener moved the detected secret to the macOS Keychain, then recreated `$XDG_CONFIG_HOME/NuGet/NuGet.Config` inside a temporary directory for each run. We no longer consider a temporary plaintext file a sufficient security boundary, so this detector remains report-only."
+  },
+  "oauth2l": {
+    "watch_paths": [
+      "~/.oauth2l"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "oauth2l stores fetched OAuth tokens in `~/.oauth2l` unless caching is disabled or redirected. This detector reports that default plaintext cache without changing oauth2l behavior."
+  },
+  "oci-cli": {
+    "watch_paths": [
+      "$OCI_CLI_CONFIG_FILE",
+      "~/.oci/config"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "The retired `oci-cli` hardener moved the detected secret to the macOS Keychain, then recreated `$OCI_CLI_CONFIG_FILE` inside a temporary directory for each run. We no longer consider a temporary plaintext file a sufficient security boundary, so this detector remains report-only."
+  },
+  "opencode": {
+    "watch_paths": [
+      "$XDG_DATA_HOME/opencode/auth.json",
+      "$XDG_DATA_HOME/opencode/account.json",
+      "~/.local/share/opencode/auth.json",
+      "~/.local/share/opencode/account.json",
+      "~/Library/Application Support/opencode/auth.json",
+      "~/Library/Application Support/opencode/account.json"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "The auth file is mutable application state and sits beside non-secret opencode data. A safe fix needs a source isotope or an upstream keychain-backed account store."
+  },
+  "openhue-cli": {
+    "watch_paths": [
+      "$XDG_CONFIG_HOME/openhue/config.yaml",
+      "~/.openhue/config.yaml"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "Run `av harden openhue-cli`."
+  },
+  "openssh": {
+    "watch_paths": [
+      "~/.ssh/config",
+      "~/.ssh/id_*"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "Encrypt software SSH private keys with a passphrase and let Apple's OpenSSH integration store it in the macOS Keychain. For FIDO security-key handles, a passphrase is optional defense in depth because the signing key remains on the authenticator."
+  },
+  "openssl@3": {
+    "watch_paths": [
+      "~/.ssl/**",
+      "~/.certs/**",
+      "~/certs/**",
+      "~/.config/openssl/**"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "OpenSSL private keys are arbitrary user-managed PKI assets, not state owned by one command or account. Automic Vault cannot move or wrap them without knowing which applications consume each key. Encrypt the reported key and update its consumers to unlock it through their native mechanism."
+  },
+  "openstackclient": {
+    "watch_paths": [
+      "~/.config/openstack/clouds.yaml",
+      "~/.config/openstack/secure.yaml"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "The retired `openstackclient` hardener moved the detected secret to the macOS Keychain, then recreated `~/.config/openstack/clouds.yaml` inside a temporary directory for each run. We no longer consider a temporary plaintext file a sufficient security boundary, so this detector remains report-only."
+  },
+  "opentofu": {
+    "watch_paths": [
+      "~/.terraform.d/credentials.tfrc.json"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "Run `av harden opentofu`."
+  },
+  "openvpn": {
+    "watch_paths": [
+      "~/.openvpn/**",
+      "$XDG_CONFIG_HOME/openvpn/**",
+      "~/.config/openvpn/**",
+      "~/Library/Application Support/OpenVPN/**",
+      "~/Library/Application Support/Tunnelblick/Configurations/**"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "OpenVPN profiles can contain private keys or reference plaintext `auth-user-pass` files. This detector reports those local files without changing VPN profile semantics."
+  },
+  "ordercli": {
+    "watch_paths": [
+      "~/Library/Application Support/ordercli/config.json",
+      "~/Library/Application Support/foodcli/config.json",
+      "~/Library/Application Support/foodoracli/config.json"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "Run `sudo av harden ordercli`."
+  },
+  "ossutil": {
+    "watch_paths": [
+      "~/.ossutilconfig"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "The retired `ossutil` hardener moved the detected secret to the macOS Keychain, then recreated `~/.ossutilconfig` inside a temporary directory for each run. We no longer consider a temporary plaintext file a sufficient security boundary, so this detector remains report-only."
+  },
+  "oxide-cli": {
+    "watch_paths": [
+      "~/.config/oxide/credentials.toml"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "Run `av harden oxide-cli`."
+  },
+  "perl": {
+    "watch_paths": [
+      "~/.cpan/CPAN/MyConfig.pm",
+      "~/.cpan/CPAN/Config.pm",
+      "~/.cpan/CPAN/Config_local.pm"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "CPAN configuration can hold multiple repository identities alongside unrelated Perl settings. Perl does not provide a narrow credential-provider boundary that Automic Vault can replace without rewriting shared user configuration."
+  },
+  "phylum-cli": {
+    "watch_paths": [
+      "$XDG_CONFIG_HOME/phylum/settings.yaml",
+      "~/.config/phylum/settings.yaml"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "The retired `phylum-cli` hardener moved the detected secret to the macOS Keychain, then recreated `$XDG_CONFIG_HOME/phylum/settings.yaml` inside a temporary directory for each run. We no longer consider a temporary plaintext file a sufficient security boundary, so this detector remains report-only."
+  },
+  "pianobar": {
+    "watch_paths": [
+      "$XDG_CONFIG_HOME/pianobar/config",
+      "~/.config/pianobar/config",
+      "~/.pianobar/config"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "pianobar does not expose a narrow credential interface that preserves normal config behavior."
+  },
+  "plumber": {
+    "watch_paths": [
+      "~/.batchsh/plumber.json"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "Run `av harden plumber`."
+  },
+  "pnpm-auth-token": {
+    "watch_paths": [
+      "$NPM_CONFIG_USERCONFIG",
+      "~/.npmrc"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "Run `av harden pnpm`."
+  },
+  "pnpm-minimum-release-age": {
+    "watch_paths": [
+      "$NPM_CONFIG_USERCONFIG",
+      "~/.npmrc",
+      "$XDG_CONFIG_HOME/pnpm/rc",
+      "~/.config/pnpm/rc",
+      "~/Library/Preferences/pnpm/rc"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "Set `minimum-release-age=1440` in the reported pnpm config file."
+  },
+  "podman": {
+    "watch_paths": [
+      "$REGISTRY_AUTH_FILE",
+      "$XDG_RUNTIME_DIR/containers/auth.json",
+      "$XDG_CONFIG_HOME/containers/auth.json",
+      "~/.config/containers/auth.json"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "Run `av harden podman`."
+  },
+  "poetry": {
+    "watch_paths": [
+      "$XDG_CONFIG_HOME/pypoetry/auth.toml",
+      "~/.config/pypoetry/auth.toml",
+      "~/Library/Application Support/pypoetry/auth.toml",
+      "~/Library/Preferences/pypoetry/auth.toml"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "Poetry can store repository passwords and PyPI tokens in `auth.toml` when a usable system keyring is unavailable. This detector reports those fallback credentials without changing Poetry's keyring behavior."
+  },
+  "pulumi": {
+    "watch_paths": [
+      "$PULUMI_CREDENTIALS_PATH",
+      "$PULUMI_HOME/credentials.json",
+      "~/.pulumi/credentials.json"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "Run `av harden pulumi`."
+  },
+  "qwen-code": {
+    "watch_paths": [
+      "~/.qwen/settings.json"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "Run `av harden qwen-code`."
+  },
+  "railway": {
+    "watch_paths": [
+      "~/.railway/config.json",
+      "~/.railway/config-staging.json",
+      "~/.railway/config-dev.json"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "Run `sudo av harden railway`."
+  },
+  "rclone": {
+    "watch_paths": [
+      "$RCLONE_CONFIG",
+      "$XDG_CONFIG_HOME/rclone/rclone.conf",
+      "~/.config/rclone/rclone.conf",
+      "~/.rclone.conf"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "Run `av harden rclone`."
+  },
+  "rsync": {
+    "watch_paths": [
+      "~/.rsync_pass",
+      "~/.rsync-password",
+      "~/.rsync.pass",
+      "~/.rsyncd.conf",
+      "~/.config/rsync/rsyncd.conf"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "rsync password files are selected per invocation and may serve unrelated remote modules. A hardener cannot map one stored secret to the correct invocation without owning that command's host and module policy. Prefer SSH transport or inject `RSYNC_PASSWORD` explicitly for a known command."
+  },
+  "ruby": {
+    "watch_paths": [
+      "~/.gem/credentials"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "RubyGems can store keys for multiple gem servers in one credentials file. The CLI has no credential-provider interface that lets Automic Vault preserve that server-to-key mapping without recreating the file."
+  },
+  "runpodctl": {
+    "watch_paths": [
+      "~/.runpod/config.toml",
+      "~/.runpod.yaml"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "Run `av harden runpodctl`."
+  },
+  "rust": {
+    "watch_paths": [
+      "$CARGO_HOME/credentials.toml",
+      "$CARGO_HOME/credentials",
+      "~/.cargo/credentials.toml",
+      "~/.cargo/credentials"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "The retired hardener moved the registry token to the macOS Keychain and changed Cargo's credential-provider configuration to call `av credential-helper cargo`. The current `av` CLI does not ship that credential-helper route. We need to review Cargo's subprocess and approval boundaries before restoring it."
+  },
+  "s3cmd": {
+    "watch_paths": [
+      "~/.s3cfg"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "Run `av harden s3cmd`."
+  },
+  "sbt": {
+    "watch_paths": [
+      "~/.sbt/.credentials"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "The retired `sbt` hardener moved the detected secret to the macOS Keychain, then recreated `~/.sbt/.credentials` inside a temporary directory for each run. We no longer consider a temporary plaintext file a sufficient security boundary, so this detector remains report-only."
+  },
+  "secretlint-persisted-report": {
+    "watch_paths": [
+      "~/secretlint-report.json",
+      "~/secretlint-output.json"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "This finding concerns a report that may already contain copied secrets, not a credential that Automic Vault can inject. Delete the report after reviewing it. Preventing persistence requires Secretlint to redact findings or keep the report in memory."
+  },
+  "secretlint-shell-history": {
+    "watch_paths": [
+      "~/.zsh_history",
+      "~/.bash_history",
+      "~/.history"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "This finding concerns command text already recorded by the shell. A Secretlint wrapper cannot remove existing history safely or control every shell's history policy. Remove the reported entries and avoid unmasked secret output in shell commands."
+  },
+  "sentry-cli": {
+    "watch_paths": [
+      "~/.sentryclirc"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "Run `av harden sentry-cli`."
+  },
+  "shodan": {
+    "watch_paths": [
+      "~/.shodan/api_key",
+      "$XDG_CONFIG_HOME/shodan/api_key",
+      "~/.config/shodan/api_key"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "The retired `shodan` hardener moved the detected secret to the macOS Keychain, then recreated `~/.shodan/api_key` inside a temporary directory for each run. We no longer consider a temporary plaintext file a sufficient security boundary, so this detector remains report-only."
+  },
+  "sip": {
+    "watch_paths": [],
+    "requires_periodic_scan": true,
+    "solution": "Boot into macOS Recovery, open Terminal, and run:"
+  },
+  "skopeo": {
+    "watch_paths": [
+      "$XDG_CONFIG_HOME/containers/auth.json",
+      "~/.config/containers/auth.json"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "The retired `skopeo` hardener moved the detected secret to the macOS Keychain, then recreated `$XDG_CONFIG_HOME/containers/auth.json` inside a temporary directory for each run. We no longer consider a temporary plaintext file a sufficient security boundary, so this detector remains report-only."
+  },
+  "snowflake-cli": {
+    "watch_paths": [
+      "~/.snowflake/config.toml",
+      "~/.snowflake/connections.toml",
+      "~/Library/Application Support/snowflake/config.toml",
+      "~/Library/Application Support/snowflake/connections.toml",
+      "~/.config/snowflake/config.toml",
+      "~/.config/snowflake/connections.toml"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "Run `av harden snowflake-cli`."
+  },
+  "snyk": {
+    "watch_paths": [
+      "$XDG_CONFIG_HOME/configstore/snyk.json",
+      "~/.config/configstore/snyk.json"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "Run `av harden snyk`."
+  },
+  "soracom-cli": {
+    "watch_paths": [
+      "~/.soracom/default.json"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "The retired `soracom-cli` hardener moved the detected secret to the macOS Keychain, then recreated `~/.soracom/default.json` inside a temporary directory for each run. We no longer consider a temporary plaintext file a sufficient security boundary, so this detector remains report-only."
+  },
+  "sqlcmd": {
+    "watch_paths": [
+      "~/.sqlcmd/sqlconfig"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "Run `av harden sqlcmd`."
+  },
+  "sshpass": {
+    "watch_paths": [
+      "~/.zsh_history",
+      "~/.bash_history",
+      "~/.history"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "sshpass can place SSH passwords in command history, process arguments, or environment variables. This detector reports obvious shell history use and does not try to migrate password-based SSH workflows."
+  },
+  "sslmate": {
+    "watch_paths": [
+      "~/.sslmate"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "The retired `sslmate` hardener moved the detected secret to the macOS Keychain, then recreated `~/.sslmate` inside a temporary directory for each run. We no longer consider a temporary plaintext file a sufficient security boundary, so this detector remains report-only."
+  },
+  "stripe-cli": {
+    "watch_paths": [
+      "$XDG_CONFIG_HOME/stripe/config.toml",
+      "~/.config/stripe/config.toml"
+    ],
+    "requires_periodic_scan": true,
+    "solution": "Run `av harden stripe`."
+  },
+  "sudo": {
+    "watch_paths": [
+      "/etc/pam.d/sudo",
+      "/etc/pam.d/sudo_local"
+    ],
+    "requires_periodic_scan": true,
+    "solution": "Run `av harden sudo`."
+  },
+  "supabase": {
+    "watch_paths": [
+      "$SUPABASE_HOME/access-token",
+      "~/.supabase/access-token"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "Run `av harden supabase`."
+  },
+  "tailscale": {
+    "watch_paths": [
+      "/Library/Tailscale/tailscaled.state",
+      "~/.local/share/tailscale/tailscaled.state",
+      "/opt/homebrew/var/lib/tailscale/tailscaled.state",
+      "/usr/local/var/lib/tailscale/tailscaled.state",
+      "$XDG_DATA_HOME/tailscale/tailscaled.state"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "The Homebrew `tailscale` package installs both `tailscale` and `tailscaled`. The sensitive identity state belongs to `tailscaled`, not the CLI. Upstream macOS app builds can use Keychain-backed state, but the Homebrew/self-compiled daemon path is treated as plaintext state."
+  },
+  "talosctl": {
+    "watch_paths": [
+      "$TALOSCONFIG",
+      "$TALOS_HOME/config",
+      "~/.talos/config"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "The retired `talosctl` hardener moved the detected secret to the macOS Keychain, then recreated `$TALOSCONFIG` inside a temporary directory for each run. We no longer consider a temporary plaintext file a sufficient security boundary, so this detector remains report-only."
+  },
+  "terraform": {
+    "watch_paths": [
+      "~/.terraform.d/credentials.tfrc.json"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "Run `av harden terraform`."
+  },
+  "terraform-core": {
+    "watch_paths": [
+      "~/.terraform.d/credentials.tfrc.json"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "Run `av harden terraform`."
+  },
+  "todoist-cli": {
+    "watch_paths": [
+      "$XDG_CONFIG_HOME/todoist/config.json",
+      "$XDG_CACHE_HOME/todoist/cache.json",
+      "~/.config/todoist/config.json",
+      "~/.cache/todoist/cache.json"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "The retired `todoist-cli` hardener moved the detected secret to the macOS Keychain, then recreated `$XDG_CONFIG_HOME/todoist/config.json` inside a temporary directory for each run. We no longer consider a temporary plaintext file a sufficient security boundary, so this detector remains report-only."
+  },
+  "transifex-cli": {
+    "watch_paths": [
+      "~/.transifexrc"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "Run `av harden transifex-cli`."
+  },
+  "travis": {
+    "watch_paths": [
+      "~/.travis/config.yml"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "Run `av harden travis`."
+  },
+  "twine": {
+    "watch_paths": [
+      "~/.pypirc"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "Run `av harden twine`."
+  },
+  "uaa-cli": {
+    "watch_paths": [
+      "~/.uaa/config.json"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "Run `av harden uaa-cli`."
+  },
+  "uv": {
+    "watch_paths": [
+      "$UV_CREDENTIALS_DIR/credentials.toml",
+      "$XDG_DATA_HOME/uv/credentials/credentials.toml",
+      "~/.local/share/uv/credentials/credentials.toml"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "Run `av harden uv`."
+  },
+  "vagrant": {
+    "watch_paths": [
+      "$VAGRANT_HOME/data/vagrant_login_token",
+      "~/.vagrant.d/data/vagrant_login_token"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "Run `av harden vagrant`."
+  },
+  "vault": {
+    "watch_paths": [
+      "~/.vault-token"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "Run `av harden vault`."
+  },
+  "vercel-cli": {
+    "watch_paths": [
+      "~/Library/Application Support/com.vercel.cli/auth.json",
+      "~/.local/share/com.vercel.cli/auth.json",
+      "~/.now/auth.json",
+      "~/Library/Application Support/now/auth.json",
+      "~/.local/share/now/auth.json",
+      "~/.vercel/auth.json",
+      "$XDG_DATA_HOME/com.vercel.cli/auth.json",
+      "$XDG_DATA_HOME/now/auth.json"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "Current Vercel CLI reads and writes `auth.json` in the global config directory. That file can contain both an access token and a refresh token, and the CLI updates it after token refreshes or reauthentication."
+  },
+  "virustotal-cli": {
+    "watch_paths": [
+      "~/.vt.toml"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "Run `av harden virustotal-cli`."
+  },
+  "vultr": {
+    "watch_paths": [
+      "~/Library/Application Support/vultr-cli.yaml",
+      "~/.vultr-cli.yaml"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "Run `av harden vultr`."
+  },
+  "wakatime-cli": {
+    "watch_paths": [
+      "~/.wakatime.cfg"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "Run `av harden wakatime-cli`."
+  },
+  "wget": {
+    "watch_paths": [
+      "~/.netrc",
+      "~/.wgetrc"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "Wget can consume credentials from `~/.netrc` and from password options in `~/.wgetrc`. Those are generic user config files rather than a stable package-owned secret store."
+  },
+  "wget2": {
+    "watch_paths": [
+      "~/.netrc",
+      "~/.wget2rc",
+      "$XDG_CONFIG_HOME/wget/wget2rc",
+      "$XDG_CONFIG_HOME/wget2/wget2rc",
+      "~/.config/wget/wget2rc",
+      "~/.config/wget2/wget2rc"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "Wget2 can consume credentials from `~/.netrc` and from password options in user configuration files such as `~/.wget2rc`."
+  },
+  "wsk": {
+    "watch_paths": [
+      "~/.wskprops"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "Run `av harden wsk`."
+  },
+  "yarn": {
+    "watch_paths": [
+      "~/.yarnrc.yml"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "Set `npmMinimalAgeGate: 1d` in the reported Yarn config file."
+  },
+  "yt-dlp": {
+    "watch_paths": [
+      "~/.netrc",
+      "$XDG_CONFIG_HOME/yt-dlp/config",
+      "$XDG_CONFIG_HOME/yt-dlp.conf",
+      "~/.config/yt-dlp/config",
+      "~/.config/yt-dlp.conf",
+      "~/.yt-dlp.conf"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "These auth inputs are generic request state rather than a narrow package-owned credential store."
+  },
+  "zsh": {
+    "watch_paths": [
+      "$ZDOTDIR/.zshenv",
+      "$ZDOTDIR/.zprofile",
+      "$ZDOTDIR/.zshrc",
+      "$ZDOTDIR/.zlogin",
+      "$ZDOTDIR/.zlogout",
+      "~/.zshenv",
+      "~/.zprofile",
+      "~/.zshrc",
+      "~/.zlogin",
+      "~/.zlogout"
+    ],
+    "requires_periodic_scan": false,
+    "solution": "Zsh startup files contain arbitrary user programs and shared environment configuration. Automic Vault cannot rewrite them without changing shell behavior or guessing which commands need each secret. Move the reported value with `av save KEY`, then inject it only into the command that needs it.",
+    "path_solution": "Version managers commonly prepend user-writable tool directories to `PATH`; this is expected, but those directories can still shadow later commands. Remove empty, relative, and unexpected entries. If the ordering is intentional, use absolute paths for security-sensitive commands and keep reusable secrets out of the shell environment with `av inject` or `av proxy`; these reduce exposure but do not make the `PATH` safe."
+  }
+}

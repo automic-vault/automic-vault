@@ -49,6 +49,12 @@ that cannot apply or disclose a Secret. When passive evidence cannot establish
 runtime behavior, the Detector reports a Hazard rather than performing the
 protected operation.
 
+[`src/isotopes/detectors/metadata.json`](../src/isotopes/detectors/metadata.json)
+defines each Detector's watch paths, periodic-scan requirement, and remediation
+text, keyed by its registered name. The catalog is embedded in the executable.
+Detector Markdown is presentation-only; changing its headings or formatting
+cannot change monitoring coverage or machine-readable remediation.
+
 ### Tool Hardening
 
 Hardeners move supported Tools into a declared Hardened State. Doctor verifies
