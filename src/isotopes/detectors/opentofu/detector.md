@@ -1,4 +1,11 @@
-# opentofu Detector
+# opentofu
+
+```sh
+cat "$HOME/.terraform.d/credentials.tfrc.json"
+```
+
+This prints the file, including any OpenTofu API tokens it contains. Software
+running as you with read access can copy the same material.
 
 > ### What we check
 >
@@ -8,7 +15,7 @@
 >
 > - `~/.terraform.d/credentials.tfrc.json`
 
-## Hardening
+## Mitigation
 
 Run `av harden opentofu` to install this repository's signed, Hardened Runtime
 OpenTofu Isotope, migrate host tokens into Secret Custody, and configure the

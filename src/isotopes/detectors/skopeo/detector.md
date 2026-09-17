@@ -1,4 +1,12 @@
-# skopeo Detector
+# skopeo
+
+```sh
+cat "$HOME/.config/containers/auth.json"
+```
+
+This prints the file, including any registry credentials it contains. Software
+running as you with read access can copy the same material. Base64-encoded
+registry credentials can be decoded; encoding does not restrict access.
 
 > ### What we check
 >
@@ -9,7 +17,7 @@
 > - `$XDG_CONFIG_HOME/containers/auth.json`
 > - `~/.config/containers/auth.json`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 The retired `skopeo` hardener moved the detected secret to the macOS Keychain,
 then recreated `$XDG_CONFIG_HOME/containers/auth.json` inside a temporary

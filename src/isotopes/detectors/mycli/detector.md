@@ -1,4 +1,11 @@
-# mycli Detector
+# mycli
+
+```sh
+cat "$HOME/.myclirc"
+```
+
+This prints the file, including any database or SSH passwords it contains.
+Software running as you with read access can copy the same material.
 
 > ### What we check
 >
@@ -12,7 +19,7 @@
 > - `$XDG_CONFIG_HOME/mycli/myclirc`
 > - `~/.config/mycli/myclirc`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 The retired `mycli` hardener moved the detected secret to the macOS Keychain,
 then recreated `~/.myclirc` inside a temporary directory for each run. We no

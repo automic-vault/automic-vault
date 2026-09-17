@@ -1,4 +1,11 @@
-# stripe-cli Detector
+# stripe-cli
+
+```sh
+cat "$HOME/.config/stripe/config.toml"
+```
+
+This prints the file, including any Stripe API keys it contains. Software
+running as you with read access can copy the same material.
 
 > ### What we check
 >
@@ -16,3 +23,5 @@
 ```sh
 av harden stripe
 ```
+
+See the [hardening reference](../../hardeners/stripe_cli.md) for setup and coverage.

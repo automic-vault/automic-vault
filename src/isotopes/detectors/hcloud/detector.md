@@ -1,4 +1,11 @@
-# hcloud Detector
+# hcloud
+
+```sh
+cat "$HOME/.config/hcloud/cli.toml"
+```
+
+This prints the file, including any Hetzner Cloud API tokens it contains.
+Software running as you with read access can copy the same material.
 
 > ### What we check
 >

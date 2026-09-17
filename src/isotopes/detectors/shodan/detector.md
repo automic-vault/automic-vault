@@ -1,4 +1,11 @@
-# shodan Detector
+# shodan
+
+```sh
+cat "$HOME/.shodan/api_key"
+```
+
+This prints the file, including any Shodan API keys it contains. Software
+running as you with read access can copy the same material.
 
 > ### What we check
 >
@@ -10,7 +17,7 @@
 > - `$XDG_CONFIG_HOME/shodan/api_key`
 > - `~/.config/shodan/api_key`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 The retired `shodan` hardener moved the detected secret to the macOS Keychain,
 then recreated `~/.shodan/api_key` inside a temporary directory for each run. We

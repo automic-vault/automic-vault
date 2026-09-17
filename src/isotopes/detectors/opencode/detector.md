@@ -1,4 +1,11 @@
-# opencode Detector
+# opencode
+
+```sh
+cat "$HOME/.local/share/opencode/auth.json"
+```
+
+This prints the file, including any OpenCode account credentials it contains.
+Software running as you with read access can copy the same material.
 
 > ### What we check
 >
@@ -13,7 +20,7 @@
 > - `~/Library/Application Support/opencode/auth.json`
 > - `~/Library/Application Support/opencode/account.json`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 The auth file is mutable application state and sits beside non-secret opencode
 data. A safe fix needs a source isotope or an upstream keychain-backed account

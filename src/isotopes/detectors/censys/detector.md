@@ -1,4 +1,11 @@
-# censys Detector
+# censys
+
+```sh
+cat "$HOME/.config/censys/censys.cfg"
+```
+
+This prints the file, including any Censys API credentials it contains. Software
+running as you with read access can copy the same material.
 
 > ### What we check
 >

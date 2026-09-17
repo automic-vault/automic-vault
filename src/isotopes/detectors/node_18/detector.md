@@ -1,4 +1,11 @@
-# node@18 Detector
+# node@18
+
+```sh
+cat "$HOME/.npmrc"
+```
+
+This prints the file, including any npm registry tokens it contains. Software
+running as you with read access can copy the same material.
 
 > ### What we check
 >
@@ -9,7 +16,7 @@
 > - `$NPM_CONFIG_USERCONFIG`
 > - `~/.npmrc`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 The retired hardener moved one npm token to the macOS Keychain, rewrote the
 matching npm config entry to reference `NODE_AUTH_TOKEN`, and wrapped only

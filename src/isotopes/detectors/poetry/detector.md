@@ -1,4 +1,11 @@
-# poetry Detector
+# poetry
+
+```sh
+cat "$HOME/.config/pypoetry/auth.toml"
+```
+
+This prints the file, including any repository passwords or PyPI tokens it
+contains. Software running as you with read access can copy the same material.
 
 > ### What we check
 >
@@ -11,7 +18,7 @@
 > - `~/Library/Application Support/pypoetry/auth.toml`
 > - `~/Library/Preferences/pypoetry/auth.toml`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 Poetry can store repository passwords and PyPI tokens in `auth.toml` when a
 usable system keyring is unavailable. This detector reports those fallback

@@ -1,4 +1,11 @@
-# gemini-cli Detector
+# gemini-cli
+
+```sh
+cat "$HOME/.gemini/oauth_creds.json"
+```
+
+This prints the file, including any Gemini OAuth access and refresh tokens it
+contains. Software running as you with read access can copy the same material.
 
 > ### What we check
 >
@@ -8,14 +15,6 @@
 > #### Sensitive Files
 >
 > - `~/.gemini/oauth_creds.json`
-
-## Why This Matters
-
-Gemini CLI caches OAuth credentials in `~/.gemini/oauth_creds.json` with
-permissions mode `0600`. The file contains plaintext `access_token`,
-`refresh_token`, and `id_token` values. Live refresh tokens survive access-token
-expiry, allowing unauthorized processes running under the same user account to
-mint new access tokens and call Gemini services without authentication prompts.
 
 ## Mitigation
 
@@ -30,6 +29,16 @@ set. This fallback derives its AES key entirely from static metadata (the
 application name, hostname, and username). Any process running under the user's
 account can reconstruct the key and decrypt the credentials. Do not rely on
 encrypted-file storage alone to resolve same-user Exposure.
+
+---
+
+## Why This Matters
+
+Gemini CLI caches OAuth credentials in `~/.gemini/oauth_creds.json` with
+permissions mode `0600`. The file contains plaintext `access_token`,
+`refresh_token`, and `id_token` values. Live refresh tokens survive access-token
+expiry, allowing unauthorized processes running under the same user account to
+mint new access tokens and call Gemini services without authentication prompts.
 
 ## Why This is not Yet Hardened
 

@@ -1,4 +1,11 @@
-# flyctl Detector
+# flyctl
+
+```sh
+cat "$HOME/.fly/config.yml"
+```
+
+This prints the file, including any Fly.io access tokens it contains. Software
+running as you with read access can copy the same material.
 
 > ### What we check
 >

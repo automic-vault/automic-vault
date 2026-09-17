@@ -1,4 +1,11 @@
-# gptcommit Detector
+# gptcommit
+
+```sh
+cat "$HOME/.config/gptcommit/config.toml"
+```
+
+This prints the file, including any gptcommit API keys it contains. Software
+running as you with read access can copy the same material.
 
 > ### What we check
 >

@@ -1,4 +1,11 @@
-# todoist-cli Detector
+# todoist-cli
+
+```sh
+cat "$HOME/.config/todoist/config.json"
+```
+
+This prints the file, including any Todoist API tokens it contains. Software
+running as you with read access can copy the same material.
 
 > ### What we check
 >
@@ -12,7 +19,7 @@
 > - `~/.config/todoist/config.json`
 > - `~/.cache/todoist/cache.json`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 The retired `todoist-cli` hardener moved the detected secret to the macOS
 Keychain, then recreated `$XDG_CONFIG_HOME/todoist/config.json` inside a

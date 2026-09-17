@@ -1,4 +1,11 @@
-# git-credentials-file Detector
+# git-credentials-file
+
+```sh
+cat "$HOME/.git-credentials"
+```
+
+This prints the file, including any Git credentials it contains. Software
+running as you with read access can copy the same material.
 
 > ### What we check
 >
@@ -17,6 +24,8 @@
 
 Remove credentials from the reported files, disable Git's plaintext `store`
 helper, and move repository remotes to SSH.
+
+---
 
 ## Inspect the Reported Store
 

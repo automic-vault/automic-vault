@@ -1,4 +1,11 @@
-# rsync Detector
+# rsync
+
+```sh
+cat "$HOME/.rsync_pass"
+```
+
+This prints the file, including any rsync passwords it contains. Software
+running as you with read access can copy the same material.
 
 > ### What we check
 >
@@ -13,7 +20,7 @@
 > - `~/.config/rsync/rsyncd.conf`
 > - `secrets files referenced by scanned rsync config`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 rsync password files are selected per invocation and may serve unrelated remote
 modules. A hardener cannot map one stored secret to the correct invocation

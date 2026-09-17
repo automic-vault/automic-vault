@@ -1,4 +1,11 @@
-# fauna-shell Detector
+# fauna-shell
+
+```sh
+cat "$HOME/.fauna/credentials/account_keys"
+```
+
+This prints the file, including any Fauna account or secret keys it contains.
+Software running as you with read access can copy the same material.
 
 > ### What we check
 >
@@ -9,7 +16,7 @@
 > - `~/.fauna/credentials/account_keys`
 > - `~/.fauna/credentials/secret_keys`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 The retired `fauna-shell` hardener moved the detected secret to the macOS
 Keychain, then recreated `~/.fauna/credentials/account_keys` inside a temporary

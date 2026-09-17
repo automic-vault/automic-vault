@@ -1,4 +1,11 @@
-# openstackclient Detector
+# openstackclient
+
+```sh
+cat "$HOME/.config/openstack/clouds.yaml"
+```
+
+This prints the file, including any OpenStack credentials it contains. Software
+running as you with read access can copy the same material.
 
 > ### What we check
 >
@@ -9,7 +16,7 @@
 > - `~/.config/openstack/clouds.yaml`
 > - `~/.config/openstack/secure.yaml`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 The retired `openstackclient` hardener moved the detected secret to the macOS
 Keychain, then recreated `~/.config/openstack/clouds.yaml` inside a temporary

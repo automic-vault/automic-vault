@@ -1,4 +1,12 @@
-# aws-cli-login-cache Detector
+# aws-cli-login-cache
+
+```sh
+cat "$HOME/.aws/login/cache/REPORTED_FILE.json"
+```
+
+Use the path reported by the Scan in place of this example path. This prints the
+file, including any cached AWS access credentials it contains. Software running
+as you with read access can copy the same material.
 
 > ### What we check
 >
@@ -8,7 +16,7 @@
 >
 > - `~/.aws/login/cache/*.json`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 AWS CLI owns and refreshes the login cache as part of its authentication flow.
 Moving individual cache entries would leave mutable session state split between

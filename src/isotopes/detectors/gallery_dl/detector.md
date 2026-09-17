@@ -1,4 +1,11 @@
-# gallery-dl Detector
+# gallery-dl
+
+```sh
+cat "$HOME/.config/gallery-dl/config.json"
+```
+
+This prints the file, including any gallery-dl account credentials it contains.
+Software running as you with read access can copy the same material.
 
 > ### What we check
 >
@@ -10,7 +17,7 @@
 > - `~/.config/gallery-dl/config.json`
 > - `~/.gallery-dl.conf`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 The retired `gallery-dl` hardener moved the detected secret to the macOS
 Keychain, then recreated `$XDG_CONFIG_HOME/gallery-dl/config.json` inside a

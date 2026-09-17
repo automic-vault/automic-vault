@@ -1,4 +1,11 @@
-# aws-cli-credentials-file Detector
+# aws-cli-credentials-file
+
+```sh
+cat "$HOME/.aws/credentials"
+```
+
+This prints the file, including any AWS access keys it contains. Software
+running as you with read access can copy the same material.
 
 > ### What we check
 >
@@ -14,3 +21,5 @@
 ```sh
 av harden aws
 ```
+
+See the [hardening reference](../../hardeners/aws_cli.md) for setup and coverage.

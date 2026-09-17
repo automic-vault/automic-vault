@@ -1,4 +1,11 @@
-# ansible Detector
+# ansible
+
+```sh
+cat "${ANSIBLE_GALAXY_TOKEN_PATH:-$HOME/.ansible/galaxy_token}"
+```
+
+This prints the file, including any Ansible Galaxy tokens it contains. Software
+running as you with read access can copy the same material.
 
 > ### What we check
 >
@@ -8,7 +15,7 @@
 >
 > - `${ANSIBLE_GALAXY_TOKEN_PATH:-$HOME/.ansible/galaxy_token}`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 The retired `ansible` hardener moved the detected secret to the macOS Keychain,
 then recreated `${ANSIBLE_GALAXY_TOKEN_PATH:-$HOME/.ansible/galaxy_token}`

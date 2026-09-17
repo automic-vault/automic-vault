@@ -1,4 +1,12 @@
-# midnight-commander Detector
+# midnight-commander
+
+```sh
+cat "$HOME/.config/mc/REPORTED_FILE"
+```
+
+Use the path reported by the Scan in place of this example path. This prints the
+file, including any VFS credentials it contains. Software running as you with
+read access can copy the same material.
 
 > ### What we check
 >
@@ -9,7 +17,7 @@
 > - `$XDG_CONFIG_HOME/mc/**`
 > - `~/.config/mc/**`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 The retired `midnight-commander` hardener moved the detected secret to the macOS
 Keychain, then recreated `$XDG_CONFIG_HOME/mc/**` inside a temporary directory

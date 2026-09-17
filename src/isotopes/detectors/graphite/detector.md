@@ -1,4 +1,11 @@
-# graphite Detector
+# graphite
+
+```sh
+cat "$HOME/.config/graphite/auth"
+```
+
+This prints the file, including any Graphite tokens it contains. Software
+running as you with read access can copy the same material.
 
 > ### What we check
 >
@@ -11,7 +18,7 @@
 > - `~/.config/graphite/auth`
 > - `~/.config/graphite/user_config`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 The retired `graphite` hardener moved the detected secret to the macOS Keychain,
 then recreated `$XDG_CONFIG_HOME/graphite/auth` inside a temporary directory for

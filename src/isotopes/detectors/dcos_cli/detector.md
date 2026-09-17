@@ -1,4 +1,12 @@
-# dcos-cli Detector
+# dcos-cli
+
+```sh
+cat "$HOME/.dcos/clusters/CLUSTER/dcos.toml"
+```
+
+Use the path reported by the Scan in place of this example path. This prints the
+file, including any DC/OS ACS tokens it contains. Software running as you with
+read access can copy the same material.
 
 > ### What we check
 >
@@ -9,7 +17,7 @@
 > - `$DCOS_DIR/clusters/*/dcos.toml`
 > - `~/.dcos/clusters/*/dcos.toml`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 The retired `dcos-cli` hardener moved the detected secret to the macOS Keychain,
 then recreated `$DCOS_DIR/clusters/*/dcos.toml` inside a temporary directory for

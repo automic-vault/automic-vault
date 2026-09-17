@@ -1,4 +1,11 @@
-# rust Detector
+# rust
+
+```sh
+cat "$HOME/.cargo/credentials.toml"
+```
+
+This prints the file, including any Cargo registry tokens it contains. Software
+running as you with read access can copy the same material.
 
 > ### What we check
 >
@@ -11,7 +18,7 @@
 > - `~/.cargo/credentials.toml`
 > - `~/.cargo/credentials`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 The retired hardener moved the registry token to the macOS Keychain and changed
 Cargo's credential-provider configuration to call `av credential-helper cargo`.

@@ -1,4 +1,13 @@
-# openssh Detector
+# openssh
+
+```sh
+cat "$HOME/.ssh/id_ed25519"
+```
+
+This prints the private-key file at a common location. If a software key lacks
+passphrase encryption, software with read access can copy and use it. FIDO
+security-key files instead contain a handle; the signing key remains on the
+hardware authenticator.
 
 > ### What we check
 >
@@ -11,7 +20,7 @@
 > - `~/.ssh/id_*`
 > - `identity files referenced by ~/.ssh/config`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 Encrypt software SSH private keys with a passphrase and let Apple's OpenSSH
 integration store it in the macOS Keychain. For FIDO security-key handles, a

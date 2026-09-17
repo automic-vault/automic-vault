@@ -1,4 +1,11 @@
-# acli Detector
+# acli
+
+```sh
+cat "$HOME/.config/acli/confluence_config.yaml"
+```
+
+This prints the file, including any Atlassian credentials it contains. Software
+running as you with read access can copy the same material.
 
 > ### What we check
 >
@@ -15,7 +22,7 @@
 > - `~/.config/acli/global_config.yaml`
 > - `~/.config/acli/admin_config.yaml`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 The retired `acli` hardener moved the detected secret to the macOS Keychain,
 then recreated `~/.config/acli/confluence_config.yaml` inside a temporary

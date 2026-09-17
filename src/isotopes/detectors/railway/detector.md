@@ -1,4 +1,11 @@
-# railway Detector
+# railway
+
+```sh
+cat "$HOME/.railway/config.json"
+```
+
+This prints the file, including any Railway session credentials it contains.
+Software running as you with read access can copy the same material.
 
 > ### What we check
 >
@@ -10,7 +17,7 @@
 > - `~/.railway/config-staging.json`
 > - `~/.railway/config-dev.json`
 
-## Hardener Coverage
+## Mitigation
 
 Run `sudo av harden railway` to replace the supported Railway CLI with the
 signed Railway Isotope and move stored legacy or OAuth credentials behind the
@@ -22,3 +29,5 @@ Explicit `RAILWAY_TOKEN` and `RAILWAY_API_TOKEN` environment variables remain
 outside this hardener's stored-session boundary.
 
 [Learn about Hardeners](https://github.com/automic-vault/automic-vault#hardeners).
+
+See the [hardening reference](../../hardeners/railway.md) for setup and coverage.

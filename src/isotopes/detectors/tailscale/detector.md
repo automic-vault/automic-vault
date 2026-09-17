@@ -1,4 +1,11 @@
-# tailscale Detector
+# tailscale
+
+```sh
+cat "$HOME/.local/share/tailscale/tailscaled.state"
+```
+
+This prints the file, including any Tailscale node identity state it contains.
+Software running as you with read access can copy the same material.
 
 > ### What we check
 >
@@ -12,7 +19,7 @@
 > - `/usr/local/var/lib/tailscale/tailscaled.state`
 > - `$XDG_DATA_HOME/tailscale/tailscaled.state`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 The Homebrew `tailscale` package installs both `tailscale` and `tailscaled`. The
 sensitive identity state belongs to `tailscaled`, not the CLI. Upstream macOS

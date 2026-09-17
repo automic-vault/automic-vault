@@ -1,4 +1,11 @@
-# oauth2l Detector
+# oauth2l
+
+```sh
+cat "$HOME/.oauth2l"
+```
+
+This prints the file, including any cached OAuth tokens it contains. Software
+running as you with read access can copy the same material.
 
 > ### What we check
 >
@@ -8,7 +15,7 @@
 >
 > - `~/.oauth2l`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 oauth2l stores fetched OAuth tokens in `~/.oauth2l` unless caching is disabled
 or redirected. This detector reports that default plaintext cache without

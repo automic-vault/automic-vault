@@ -1,4 +1,11 @@
-# imap-backup Detector
+# imap-backup
+
+```sh
+cat "$HOME/.imap-backup/config.json"
+```
+
+This prints the file, including any IMAP account passwords it contains. Software
+running as you with read access can copy the same material.
 
 > ### What we check
 >
@@ -8,7 +15,7 @@
 >
 > - `~/.imap-backup/config.json`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 The retired `imap-backup` hardener moved the detected secret to the macOS
 Keychain, then recreated `~/.imap-backup/config.json` inside a temporary

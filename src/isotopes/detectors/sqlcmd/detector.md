@@ -1,4 +1,11 @@
-# sqlcmd Detector
+# sqlcmd
+
+```sh
+cat "$HOME/.sqlcmd/sqlconfig"
+```
+
+This prints the file, including any database passwords it contains. Software
+running as you with read access can copy the same material.
 
 > ### What we check
 >
@@ -8,7 +15,7 @@
 >
 > - `~/.sqlcmd/sqlconfig`
 
-## Hardened State
+## Mitigation
 
 Run `av harden sqlcmd` to install the reviewed, signed sqlcmd Isotope and move
 supported basic-auth passwords into Automic Vault custody. The default
@@ -21,3 +28,5 @@ authentication, malformed markers, and missing Secret Values fail closed.
 
 Legacy flags, environment passwords, certificates, and credentials supplied
 outside the default modern sqlconfig remain outside this Hardener's coverage.
+
+See the [hardening reference](../../hardeners/sqlcmd.md) for setup and coverage.

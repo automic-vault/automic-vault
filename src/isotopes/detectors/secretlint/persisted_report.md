@@ -1,4 +1,11 @@
-# secretlint-persisted-report Detector
+# secretlint-persisted-report
+
+```sh
+cat "$HOME/secretlint-report.json"
+```
+
+This prints the file, including any secrets copied into a Secretlint report it
+contains. Software running as you with read access can copy the same material.
 
 > ### What we check
 >
@@ -11,7 +18,7 @@
 > - `./secretlint-report.json`
 > - `./secretlint-output.json`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 This finding concerns a report that may already contain copied secrets, not a
 credential that Automic Vault can inject. Delete the report after reviewing it.

@@ -1,4 +1,11 @@
-# luarocks Detector
+# luarocks
+
+```sh
+cat "$HOME/.config/luarocks/upload_config.lua"
+```
+
+This prints the file, including any LuaRocks upload API keys it contains.
+Software running as you with read access can copy the same material.
 
 > ### What we check
 >

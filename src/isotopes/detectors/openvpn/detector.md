@@ -1,4 +1,12 @@
-# openvpn Detector
+# openvpn
+
+```sh
+cat "/path/to/reported/profile.ovpn"
+```
+
+Use the path reported by the Scan in place of this example path. This prints the
+file, including any VPN passwords or unencrypted private keys it contains.
+Software running as you with read access can copy the same material.
 
 > ### What we check
 >
@@ -14,7 +22,7 @@
 > - `~/Library/Application Support/Tunnelblick/Configurations/**`
 > - `auth-user-pass files referenced by scanned profiles`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 OpenVPN profiles can contain private keys or reference plaintext
 `auth-user-pass` files. This detector reports those local files without changing

@@ -1,4 +1,11 @@
-# bitwarden-cli Detector
+# bitwarden-cli
+
+```sh
+cat "$HOME/Library/Application Support/Bitwarden CLI/data.json"
+```
+
+This prints the file, including any Bitwarden token state it contains. Software
+running as you with read access can copy the same material.
 
 > ### What we check
 >
@@ -9,7 +16,7 @@
 > - `$BITWARDENCLI_APPDATA_DIR/data.json`
 > - `~/Library/Application Support/Bitwarden CLI/data.json`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 The retired `bitwarden-cli` hardener moved the detected secret to the macOS
 Keychain, then recreated `$BITWARDENCLI_APPDATA_DIR/data.json` inside a

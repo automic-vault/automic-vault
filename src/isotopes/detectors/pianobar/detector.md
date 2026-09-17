@@ -1,4 +1,11 @@
-# pianobar Detector
+# pianobar
+
+```sh
+cat "$HOME/.config/pianobar/config"
+```
+
+This prints the file, including any Pandora passwords it contains. Software
+running as you with read access can copy the same material.
 
 > ### What we check
 >
@@ -10,7 +17,7 @@
 > - `~/.config/pianobar/config`
 > - `~/.pianobar/config`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 pianobar does not expose a narrow credential interface that preserves normal
 config behavior.

@@ -1,4 +1,13 @@
-# macOS Detector
+# macOS
+
+```sh
+launchctl getenv PATH
+```
+
+This shows the command-search path inherited by GUI applications. A writable
+directory before protected system directories can supply a replacement command
+that an app runs under your account. The command prints configuration, not
+credentials.
 
 > ### What we check
 >

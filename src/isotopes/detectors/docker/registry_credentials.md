@@ -1,4 +1,13 @@
-# docker-registry-credentials Detector
+# docker-registry-credentials
+
+```sh
+cat "$HOME/.docker/config.json"
+```
+
+This prints the file, including any inline registry credentials it contains.
+Software running as you with read access can copy the same material.
+Base64-encoded registry credentials can be decoded; encoding does not restrict
+access.
 
 > ### What we check
 >

@@ -1,4 +1,11 @@
-# travis Detector
+# travis
+
+```sh
+cat "$HOME/.travis/config.yml"
+```
+
+This prints the file, including any Travis access tokens it contains. Software
+running as you with read access can copy the same material.
 
 > ### What we check
 >

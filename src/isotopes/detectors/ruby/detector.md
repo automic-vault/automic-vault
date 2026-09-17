@@ -1,4 +1,11 @@
-# ruby Detector
+# ruby
+
+```sh
+cat "$HOME/.gem/credentials"
+```
+
+This prints the file, including any RubyGems API keys it contains. Software
+running as you with read access can copy the same material.
 
 > ### What we check
 >
@@ -8,7 +15,7 @@
 >
 > - `~/.gem/credentials`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 RubyGems can store keys for multiple gem servers in one credentials file. The
 CLI has no credential-provider interface that lets Automic Vault preserve that

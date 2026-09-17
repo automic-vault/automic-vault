@@ -1,4 +1,11 @@
-# supabase Detector
+# supabase
+
+```sh
+cat "$HOME/.supabase/access-token"
+```
+
+This prints the file, including any Supabase access tokens it contains. Software
+running as you with read access can copy the same material.
 
 > ### What we check
 >
@@ -14,3 +21,5 @@
 ```sh
 av harden supabase
 ```
+
+See the [hardening reference](../../hardeners/supabase.md) for setup and coverage.

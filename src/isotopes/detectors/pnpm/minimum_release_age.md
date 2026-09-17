@@ -1,4 +1,9 @@
-# pnpm-minimum-release-age Detector
+# pnpm-minimum-release-age
+
+A short package release-age delay allows newly published dependencies into your
+installation sooner, leaving less time to discover a malicious release. This
+check concerns package-installation policy; the pnpm token detector separately
+checks stored authentication tokens.
 
 > ### What we check
 >

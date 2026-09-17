@@ -1,4 +1,11 @@
-# vault Detector
+# vault
+
+```sh
+cat "$HOME/.vault-token"
+```
+
+This prints the file, including any Vault tokens it contains. Software running
+as you with read access can copy the same material.
 
 > ### What we check
 >

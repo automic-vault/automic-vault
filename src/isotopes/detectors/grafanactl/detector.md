@@ -1,4 +1,11 @@
-# grafanactl Detector
+# grafanactl
+
+```sh
+cat "$HOME/.config/grafanactl/config.yaml"
+```
+
+This prints the file, including any Grafana credentials it contains. Software
+running as you with read access can copy the same material.
 
 > ### What we check
 >

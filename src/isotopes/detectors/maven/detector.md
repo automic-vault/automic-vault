@@ -1,4 +1,11 @@
-# maven Detector
+# maven
+
+```sh
+cat "$HOME/.m2/settings.xml"
+```
+
+This prints the file, including any Maven server credentials it contains.
+Software running as you with read access can copy the same material.
 
 > ### What we check
 >
@@ -8,7 +15,7 @@
 >
 > - `~/.m2/settings.xml`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 The retired `maven` hardener moved the detected secret to the macOS Keychain,
 then recreated `~/.m2/settings.xml` inside a temporary directory for each run.

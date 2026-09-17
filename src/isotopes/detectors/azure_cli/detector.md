@@ -1,4 +1,11 @@
-# azure-cli Detector
+# azure-cli
+
+```sh
+cat "$HOME/.azure/msal_token_cache.json"
+```
+
+This prints the file, including any Azure authentication tokens it contains.
+Software running as you with read access can copy the same material.
 
 > ### What we check
 >
@@ -15,7 +22,7 @@
 > - `~/.azure/service_principal_entries.json`
 > - `~/.azure/accessTokens.json`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 Azure CLI owns a complex, mutable MSAL token cache. A safe fix needs an upstream
 default or migration change, or a source isotope that patches the persistence

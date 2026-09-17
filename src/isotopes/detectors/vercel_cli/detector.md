@@ -1,4 +1,11 @@
-# vercel-cli Detector
+# vercel-cli
+
+```sh
+cat "$HOME/Library/Application Support/com.vercel.cli/auth.json"
+```
+
+This prints the file, including any Vercel access or refresh tokens it contains.
+Software running as you with read access can copy the same material.
 
 > ### What we check
 >
@@ -15,7 +22,7 @@
 > - `$XDG_DATA_HOME/com.vercel.cli/auth.json`
 > - `$XDG_DATA_HOME/now/auth.json`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 Current Vercel CLI reads and writes `auth.json` in the global config directory.
 That file can contain both an access token and a refresh token, and the CLI

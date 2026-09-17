@@ -1,4 +1,11 @@
-# wget2 Detector
+# wget2
+
+```sh
+cat "$HOME/.netrc"
+```
+
+This prints the file, including any stored request credentials it contains.
+Software running as you with read access can copy the same material.
 
 > ### What we check
 >
@@ -14,7 +21,7 @@
 > - `~/.config/wget/wget2rc`
 > - `~/.config/wget2/wget2rc`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 Wget2 can consume credentials from `~/.netrc` and from password options in user
 configuration files such as `~/.wget2rc`.

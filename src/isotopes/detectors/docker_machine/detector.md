@@ -1,4 +1,12 @@
-# docker-machine Detector
+# docker-machine
+
+```sh
+cat "$HOME/.docker/machine/REPORTED_KEY.pem"
+```
+
+Use the path reported by the Scan in place of this example path. This prints the
+file, including any unencrypted Docker Machine private keys it contains.
+Software running as you with read access can copy the same material.
 
 > ### What we check
 >
@@ -8,7 +16,7 @@
 >
 > - `~/.docker/machine/**`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 Docker Machine can leave host and client TLS private keys in
 `~/.docker/machine`. This detector reports unencrypted private keys without

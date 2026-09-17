@@ -1,4 +1,11 @@
-# glab Detector
+# glab
+
+```sh
+cat "$HOME/.config/glab-cli/config.yml"
+```
+
+This prints the file, including any GitLab tokens it contains. Software running
+as you with read access can copy the same material.
 
 > ### What we check
 >

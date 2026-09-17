@@ -1,4 +1,12 @@
-# bash Detector
+# bash
+
+```sh
+cat "$HOME/.bashrc"
+```
+
+A credential assignment in this file is readable by software running as you.
+Exporting it also makes it available to child processes. A separate PATH hazard
+arises when a writable directory can supply a replacement for a later command.
 
 > ### What we check
 >
@@ -21,6 +29,8 @@ Bash startup files contain arbitrary user programs and shared environment
 configuration. Automic Vault cannot rewrite them without changing shell
 behavior or guessing which commands need each secret. Move the reported value
 with `av save KEY`, then inject it only into the command that needs it.
+
+---
 
 ## PATH Mitigation
 

@@ -1,4 +1,11 @@
-# node Detector
+# node
+
+```sh
+cat "$HOME/.npmrc"
+```
+
+This prints the file, including any npm registry tokens it contains. Software
+running as you with read access can copy the same material.
 
 > ### What we check
 >

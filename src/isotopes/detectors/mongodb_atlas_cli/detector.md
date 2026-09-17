@@ -1,4 +1,11 @@
-# mongodb-atlas-cli Detector
+# mongodb-atlas-cli
+
+```sh
+cat "$HOME/Library/Application Support/atlascli/config.toml"
+```
+
+This prints the file, including any MongoDB Atlas credentials it contains.
+Software running as you with read access can copy the same material.
 
 > ### What we check
 >
@@ -10,7 +17,7 @@
 > - `$XDG_CONFIG_HOME/atlascli/config.toml`
 > - `~/.config/atlascli/config.toml`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 MongoDB Atlas CLI already provides an upstream keyring-backed store. A safe
 remediation must use or repair that store instead of wrapping the CLI.

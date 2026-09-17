@@ -1,4 +1,12 @@
-# fastlane Detector
+# fastlane
+
+```sh
+cat "$HOME/.fastlane/spaceship/ACCOUNT/cookie"
+```
+
+Use the path reported by the Scan in place of this example path. This prints the
+file, including any Spaceship session cookies it contains. Software running as
+you with read access can copy the same material.
 
 > ### What we check
 >
@@ -9,7 +17,7 @@
 > - `~/.fastlane/spaceship/**`
 > - `~/.spaceship/**`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 fastlane stores Apple account passwords in the system keychain where possible,
 but Spaceship session cookies can still live in plaintext files. This detector

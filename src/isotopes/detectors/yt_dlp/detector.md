@@ -1,4 +1,11 @@
-# yt-dlp Detector
+# yt-dlp
+
+```sh
+cat "$HOME/.netrc"
+```
+
+This prints the file, including any stored account credentials it contains.
+Software running as you with read access can copy the same material.
 
 > ### What we check
 >
@@ -14,7 +21,7 @@
 > - `~/.config/yt-dlp.conf`
 > - `~/.yt-dlp.conf`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 These auth inputs are generic request state rather than a narrow package-owned
 credential store.

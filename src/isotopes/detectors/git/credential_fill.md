@@ -1,4 +1,13 @@
-# git-credential-fill Detector
+# git-credential-fill
+
+```sh
+printf 'protocol=https\nhost=github.com\n\n' | git credential fill
+```
+
+This asks Git's configured helpers for a GitHub credential and can print a
+usable token. Other software running as you can make the same request. With a
+hardened helper, this is Secret Disclosure and remains subject to its Secret
+Gate. Automic Vault never runs this command during a Scan.
 
 > ### What we check
 >
@@ -45,6 +54,8 @@
 For an ambient or untrusted helper, remove the affected configuration and any
 matching cached credential, then move GitHub remotes to SSH. A signed Automic
 Vault `gh` Isotope may remain when it is the complete effective helper chain.
+
+---
 
 ## Confirm the Finding
 

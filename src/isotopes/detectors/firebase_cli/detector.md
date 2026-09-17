@@ -1,4 +1,11 @@
-# firebase-cli Detector
+# firebase-cli
+
+```sh
+cat "$HOME/.config/configstore/firebase-tools.json"
+```
+
+This prints the file, including any Firebase tokens it contains. Software
+running as you with read access can copy the same material.
 
 > ### What we check
 >
@@ -8,7 +15,7 @@
 >
 > - `~/.config/configstore/firebase-tools.json`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 The retired `firebase-cli` hardener moved the detected secret to the macOS
 Keychain, then recreated `~/.config/configstore/firebase-tools.json` inside a

@@ -1,4 +1,11 @@
-# doctl Detector
+# doctl
+
+```sh
+cat "$HOME/Library/Application Support/doctl/config.yaml"
+```
+
+This prints the file, including any DigitalOcean tokens it contains. Software
+running as you with read access can copy the same material.
 
 > ### What we check
 >

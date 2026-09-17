@@ -1,4 +1,9 @@
-# sudo Detector
+# sudo
+
+Without Touch ID configured for sudo, you may need to type your account
+password into a terminal prompt. A forged prompt or misplaced keyboard focus
+can expose that password. This check concerns the authentication setup rather
+than a stored token.
 
 > ### What we check
 >
@@ -14,6 +19,10 @@
 ```sh
 av harden sudo
 ```
+
+See the [hardening reference](../../hardeners/sudo.md) for setup and coverage.
+
+---
 
 ## Recommended Further Action
 

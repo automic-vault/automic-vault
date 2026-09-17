@@ -1,4 +1,11 @@
-# astra Detector
+# astra
+
+```sh
+cat "$HOME/.config/astra/.astrarc"
+```
+
+This prints the file, including any Astra application tokens it contains.
+Software running as you with read access can copy the same material.
 
 > ### What we check
 >
@@ -9,7 +16,7 @@
 > - `$XDG_CONFIG_HOME/astra/.astrarc`
 > - `~/.config/astra/.astrarc`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 The retired `astra` hardener moved the detected secret to the macOS Keychain,
 then recreated `$XDG_CONFIG_HOME/astra/.astrarc` inside a temporary directory

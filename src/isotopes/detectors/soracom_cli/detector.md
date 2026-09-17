@@ -1,4 +1,11 @@
-# soracom-cli Detector
+# soracom-cli
+
+```sh
+cat "$HOME/.soracom/default.json"
+```
+
+This prints the file, including any SORACOM credentials it contains. Software
+running as you with read access can copy the same material.
 
 > ### What we check
 >
@@ -8,7 +15,7 @@
 >
 > - `~/.soracom/default.json`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 The retired `soracom-cli` hardener moved the detected secret to the macOS
 Keychain, then recreated `~/.soracom/default.json` inside a temporary directory

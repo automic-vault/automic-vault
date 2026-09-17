@@ -1,4 +1,11 @@
-# composer Detector
+# composer
+
+```sh
+cat "$HOME/.composer/auth.json"
+```
+
+This prints the file, including any Composer repository credentials it contains.
+Software running as you with read access can copy the same material.
 
 > ### What we check
 >

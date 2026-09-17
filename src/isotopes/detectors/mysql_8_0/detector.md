@@ -1,4 +1,11 @@
-# mysql@8.0 Detector
+# mysql@8.0
+
+```sh
+cat "$HOME/.my.cnf"
+```
+
+This prints the file, including any database passwords it contains. Software
+running as you with read access can copy the same material.
 
 > ### What we check
 >
@@ -8,7 +15,7 @@
 >
 > - `~/.my.cnf`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 The retired `mysql@8.0` hardener moved the detected secret to the macOS
 Keychain, then recreated `~/.my.cnf` inside a temporary directory for each run.

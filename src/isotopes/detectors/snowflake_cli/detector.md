@@ -1,4 +1,11 @@
-# snowflake-cli Detector
+# snowflake-cli
+
+```sh
+cat "$HOME/.snowflake/config.toml"
+```
+
+This prints the file, including any Snowflake credentials it contains. Software
+running as you with read access can copy the same material.
 
 > ### What we check
 >

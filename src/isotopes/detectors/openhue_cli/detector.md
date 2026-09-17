@@ -1,4 +1,11 @@
-# openhue-cli Detector
+# openhue-cli
+
+```sh
+cat "$HOME/.openhue/config.yaml"
+```
+
+This prints the file, including any Hue application keys it contains. Software
+running as you with read access can copy the same material.
 
 > ### What we check
 >
@@ -9,7 +16,7 @@
 > - `$XDG_CONFIG_HOME/openhue/config.yaml`
 > - `~/.openhue/config.yaml`
 
-## Remediation
+## Mitigation
 
 Run `av harden openhue-cli`. The hardener installs the signed OpenHue CLI
 Isotope and migrates the Hue application key into Automic Vault custody while
@@ -24,3 +31,5 @@ XPC operations. The Detector covers a non-empty `key` scalar in the active
 The residual gap is other users' configs, backups, and the inactive config
 root when `XDG_CONFIG_HOME` selects the other location. Unsupported YAML is
 refused by the hardener rather than silently rewritten.
+
+See the [hardening reference](../../hardeners/openhue_cli.md) for setup and coverage.

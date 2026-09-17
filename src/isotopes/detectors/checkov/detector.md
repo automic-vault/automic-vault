@@ -1,4 +1,11 @@
-# checkov Detector
+# checkov
+
+```sh
+cat "$HOME/.bridgecrew/credentials"
+```
+
+This prints the file, including any Checkov API keys it contains. Software
+running as you with read access can copy the same material.
 
 > ### What we check
 >

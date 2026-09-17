@@ -1,4 +1,11 @@
-# ossutil Detector
+# ossutil
+
+```sh
+cat "$HOME/.ossutilconfig"
+```
+
+This prints the file, including any Object Storage Service credentials it
+contains. Software running as you with read access can copy the same material.
 
 > ### What we check
 >
@@ -8,7 +15,7 @@
 >
 > - `~/.ossutilconfig`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 The retired `ossutil` hardener moved the detected secret to the macOS Keychain,
 then recreated `~/.ossutilconfig` inside a temporary directory for each run. We

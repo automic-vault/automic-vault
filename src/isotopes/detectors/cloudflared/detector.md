@@ -1,4 +1,12 @@
-# cloudflared Detector
+# cloudflared
+
+```sh
+cat "$HOME/.cloudflared/REPORTED_FILE"
+```
+
+Use the path reported by the Scan in place of this example path. This prints the
+file, including any tunnel credentials or unencrypted private keys it contains.
+Software running as you with read access can copy the same material.
 
 > ### What we check
 >
@@ -11,7 +19,7 @@
 > - `$XDG_CONFIG_HOME/cloudflared/**`
 > - `~/.config/cloudflared/**`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 cloudflared tunnel state can include certificate private keys and tunnel
 credential JSON files. These are service credentials, so this detector reports

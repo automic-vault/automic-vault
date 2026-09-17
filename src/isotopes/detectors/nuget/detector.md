@@ -1,4 +1,11 @@
-# nuget Detector
+# nuget
+
+```sh
+cat "$HOME/.config/NuGet/NuGet.Config"
+```
+
+This prints the file, including any NuGet package credentials it contains.
+Software running as you with read access can copy the same material.
 
 > ### What we check
 >
@@ -10,7 +17,7 @@
 > - `~/.config/NuGet/NuGet.Config`
 > - `~/.nuget/NuGet/NuGet.Config`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 The retired `nuget` hardener moved the detected secret to the macOS Keychain,
 then recreated `$XDG_CONFIG_HOME/NuGet/NuGet.Config` inside a temporary

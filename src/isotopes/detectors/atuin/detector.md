@@ -1,4 +1,11 @@
-# atuin Detector
+# atuin
+
+```sh
+cat "$HOME/.local/share/atuin/key"
+```
+
+This prints the file, including any Atuin sync secrets it contains. Software
+running as you with read access can copy the same material.
 
 > ### What we check
 >
@@ -11,7 +18,7 @@
 > - `~/.local/share/atuin/key`
 > - `~/.local/share/atuin/session`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 Atuin keeps the local sync encryption key and server session under the Atuin
 data directory. Until Automic Vault has a write-safe Atuin integration, this

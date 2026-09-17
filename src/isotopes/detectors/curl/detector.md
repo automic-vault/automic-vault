@@ -1,4 +1,11 @@
-# curl Detector
+# curl
+
+```sh
+cat "$HOME/.netrc"
+```
+
+This prints the file, including any stored request credentials it contains.
+Software running as you with read access can copy the same material.
 
 > ### What we check
 >
@@ -10,7 +17,7 @@
 > - `~/.netrc`
 > - `~/.curlrc`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 curl reads credentials from generic request configuration shared across hosts
 and protocols. There is no package-owned account store or single environment

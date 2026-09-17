@@ -1,4 +1,12 @@
-# httpie Detector
+# httpie
+
+```sh
+cat "$HOME/.config/httpie/sessions/HOST/default.json"
+```
+
+Use the path reported by the Scan in place of this example path. This prints the
+file, including any HTTPie session credentials it contains. Software running as
+you with read access can copy the same material.
 
 > ### What we check
 >
@@ -10,7 +18,7 @@
 > - `~/.config/httpie/sessions/**/default.json`
 > - `~/.httpie/sessions/**/default.json`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 HTTPie session files are mutable runtime state. A safe fix needs native
 session-store integration or a source isotope that preserves session updates.

@@ -1,4 +1,12 @@
-# oci-cli Detector
+# oci-cli
+
+```sh
+cat "${OCI_CLI_CONFIG_FILE:-$HOME/.oci/config}"
+```
+
+OCI configuration can expose inline credential material or identify a separate
+private-key file. Reading a key path does not itself disclose the key; software
+that can also read an unencrypted key file can copy that credential.
 
 > ### What we check
 >
@@ -9,7 +17,7 @@
 > - `$OCI_CLI_CONFIG_FILE`
 > - `~/.oci/config`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 The retired `oci-cli` hardener moved the detected secret to the macOS Keychain,
 then recreated `$OCI_CLI_CONFIG_FILE` inside a temporary directory for each run.

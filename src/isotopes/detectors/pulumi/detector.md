@@ -1,4 +1,11 @@
-# pulumi Detector
+# pulumi
+
+```sh
+cat "$HOME/.pulumi/credentials.json"
+```
+
+This prints the file, including any Pulumi access tokens it contains. Software
+running as you with read access can copy the same material.
 
 > ### What we check
 >

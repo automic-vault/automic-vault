@@ -1,4 +1,11 @@
-# dropbox-uploader Detector
+# dropbox-uploader
+
+```sh
+cat "$HOME/.dropbox_uploader"
+```
+
+This prints the file, including any Dropbox OAuth credentials it contains.
+Software running as you with read access can copy the same material.
 
 > ### What we check
 >
@@ -8,7 +15,7 @@
 >
 > - `~/.dropbox_uploader`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 The retired `dropbox-uploader` hardener moved the detected secret to the macOS
 Keychain, then recreated `~/.dropbox_uploader` inside a temporary directory for

@@ -1,4 +1,11 @@
-# cloudsmith-cli Detector
+# cloudsmith-cli
+
+```sh
+cat "$HOME/Library/Application Support/cloudsmith/credentials.ini"
+```
+
+This prints the file, including any Cloudsmith API keys it contains. Software
+running as you with read access can copy the same material.
 
 > ### What we check
 >

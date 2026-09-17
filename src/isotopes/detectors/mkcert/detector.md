@@ -1,4 +1,11 @@
-# mkcert Detector
+# mkcert
+
+```sh
+cat "$HOME/Library/Application Support/mkcert/rootCA-key.pem"
+```
+
+This prints the file, including any the unencrypted root CA private key it
+contains. Software running as you with read access can copy the same material.
 
 > ### What we check
 >
@@ -9,7 +16,7 @@
 > - `$CAROOT/rootCA-key.pem`
 > - `~/Library/Application Support/mkcert/rootCA-key.pem`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 The retired `mkcert` hardener moved the detected secret to the macOS Keychain,
 then recreated `$CAROOT/rootCA-key.pem` inside a temporary directory for each

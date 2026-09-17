@@ -1,4 +1,11 @@
-# sslmate Detector
+# sslmate
+
+```sh
+cat "$HOME/.sslmate"
+```
+
+This prints the file, including any SSLMate API keys it contains. Software
+running as you with read access can copy the same material.
 
 > ### What we check
 >
@@ -8,7 +15,7 @@
 >
 > - `~/.sslmate`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 The retired `sslmate` hardener moved the detected secret to the macOS Keychain,
 then recreated `~/.sslmate` inside a temporary directory for each run. We no

@@ -1,4 +1,14 @@
-# uv Detector
+# uv
+
+```sh
+UV_PREVIEW_FEATURES=native-auth uv auth token SERVICE
+```
+
+Replace `SERVICE` with the service whose credential you stored. In the tested
+upstream release described below, this prints its token even when native
+Keychain storage is enabled. Other software running as you can invoke the same
+command. For a password credential, supply `--username USERNAME` as well.
+Automic Vault never runs this command during a Scan.
 
 > ### What we check
 >
@@ -9,6 +19,17 @@
 > - `$UV_CREDENTIALS_DIR/credentials.toml`
 > - `$XDG_DATA_HOME/uv/credentials/credentials.toml`
 > - `~/.local/share/uv/credentials/credentials.toml`
+
+## Mitigation
+
+`av harden uv` migrates supported plaintext HTTP Basic credentials into AV
+custody and installs the official signed distributable with a registered
+keyring helper. See the [uv Hardener](../../hardeners/uv_cli.md) for setup,
+supported commands, and limitations. Native Keychain and other credential
+sources require separate migration; an empty plaintext store does not certify
+their absence.
+
+---
 
 ## Native Keychain Does Not Close the Exposure
 
@@ -67,12 +88,3 @@ Review the tagged upstream
 and [token command](https://github.com/astral-sh/uv/blob/0.12.12/crates/uv/src/commands/auth/token.rs)
 when reassessing a newer release. The `native-auth` preview is distinct from the
 external `--keyring-provider subprocess` integration.
-
-## Hardening
-
-`av harden uv` migrates supported plaintext HTTP Basic credentials into AV
-custody and installs the official signed distributable with a registered
-keyring helper. See the [uv Hardener](../../hardeners/uv_cli.md) for setup,
-supported commands, and limitations. Native Keychain and other credential
-sources require separate migration; an empty plaintext store does not certify
-their absence.

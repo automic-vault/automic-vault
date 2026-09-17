@@ -1,4 +1,12 @@
-# cariddi-shell-history Detector
+# cariddi-shell-history
+
+```sh
+rg -n 'cariddi' "$HOME/.zsh_history" "$HOME/.bash_history" "$HOME/.history"
+```
+
+Saved scanner commands can include authorization headers or other sensitive
+arguments. This example prints matching history entries, including any secrets
+in them; software with access to the history files can read the same text.
 
 > ### What we check
 >
@@ -10,7 +18,7 @@
 > - `~/.bash_history`
 > - `~/.history`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 This finding concerns command text already recorded by the shell. A cariddi
 wrapper cannot remove existing history safely or control every shell's history

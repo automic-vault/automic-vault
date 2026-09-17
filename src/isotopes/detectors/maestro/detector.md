@@ -1,4 +1,11 @@
-# maestro Detector
+# maestro
+
+```sh
+cat "$HOME/.mobiledev/authtoken"
+```
+
+This prints the file, including any Maestro Cloud tokens it contains. Software
+running as you with read access can copy the same material.
 
 > ### What we check
 >
@@ -10,7 +17,7 @@
 > - `~/.mobiledev/authtoken`
 > - `~/.mobiledev/openaitoken`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 The retired `maestro` hardener moved the detected secret to the macOS Keychain,
 then recreated `~/.mobiledev/authtoken` inside a temporary directory for each

@@ -1,4 +1,12 @@
-# cloudflare-wrangler Detector
+# cloudflare-wrangler
+
+```sh
+cat "$HOME/.wrangler/config/default.toml"
+```
+
+Use the path reported by the Scan in place of this example path. This prints the
+file, including any Cloudflare OAuth tokens it contains. Software running as you
+with read access can copy the same material.
 
 > ### What we check
 >
@@ -18,7 +26,7 @@
 > - `$XDG_CONFIG_HOME/.wrangler/config/*.toml`
 > - `$XDG_CONFIG_HOME/.wrangler/config/*.enc`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 Wrangler 4.107.0 added `wrangler login --use-keyring`, which encrypts OAuth
 credentials on disk and stores the encryption key in the macOS Keychain. Its
