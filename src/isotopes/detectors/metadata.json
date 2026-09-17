@@ -260,7 +260,7 @@
       "${CODEX_HOME:-$HOME/.codex}/auth.json"
     ],
     "requires_periodic_scan": false,
-    "solution": "Run `av harden codex`."
+    "solution": "Run `av harden codex`. Codex inside the ChatGPT desktop app shares this configuration and may require sign-in again; OpenAI does not document whether this CLI setting affects its existing session."
   },
   "composer": {
     "watch_paths": [
@@ -1051,7 +1051,7 @@
   "sip": {
     "watch_paths": [],
     "requires_periodic_scan": true,
-    "solution": "Boot into macOS Recovery, open Terminal, and run:"
+    "solution": "Boot into macOS Recovery, open Terminal, run `csrutil enable`, then restart."
   },
   "skopeo": {
     "watch_paths": [
@@ -1214,7 +1214,7 @@
       "~/.local/share/uv/credentials/credentials.toml"
     ],
     "requires_periodic_scan": false,
-    "solution": "Run `av harden uv`."
+    "solution": "Run `av harden uv` to move supported plaintext HTTP Basic credentials into Automic Vault and install the official uv credential helper. Native Keychain and other credential sources require separate migration."
   },
   "vagrant": {
     "watch_paths": [

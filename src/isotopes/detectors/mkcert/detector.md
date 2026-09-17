@@ -6,7 +6,7 @@ It is trivial for anything on your computer to exfiltrate mkcert’s secret:
 cat "$HOME/Library/Application Support/mkcert/rootCA-key.pem"
 ```
 
-This prints the file, including any the unencrypted root CA private key it
+This prints the file, including the unencrypted root CA private key it
 contains. Software running as you with read access can copy the same material.
 
 > ### What we check

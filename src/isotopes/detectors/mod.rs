@@ -755,6 +755,25 @@ mod tests {
         );
     }
 
+    #[test]
+    fn catalog_remediation_preserves_required_steps_and_scope() {
+        for (name, details) in [
+            ("sip", vec!["macOS Recovery", "csrutil enable", "restart"]),
+            ("codex", vec!["ChatGPT desktop app", "sign-in again"]),
+            (
+                "uv",
+                vec!["supported plaintext HTTP Basic", "separate migration"],
+            ),
+        ] {
+            for detail in details {
+                assert!(
+                    detector_config(name).solution.contains(detail),
+                    "{name} remediation must include {detail}"
+                );
+            }
+        }
+    }
+
     fn shell_path_finding(shell: &'static str, path: &str) -> Finding {
         let explanation = format!(
             "{} PATH has a user-writable directory before protected system directories: {path}",
