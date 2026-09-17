@@ -480,7 +480,17 @@ mod tests {
         assert!(output.contains(r#""name":"git-credential-fill""#));
         assert!(output.contains(r#""name":"git-credential-oauth""#));
         assert!(output.contains(r#""name":"git-credentials-file""#));
-        assert!(output.contains(r##""documentation":"# git-credential-fill Detector"##));
+        let report: serde_json::Value = serde_json::from_str(&output).unwrap();
+        let detector = report["detectors"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|detector| detector["name"] == "git-credential-fill")
+            .unwrap();
+        assert_eq!(
+            detector["documentation"],
+            include_str!("../isotopes/detectors/git/credential_fill.md")
+        );
         assert!(output.contains(r#""watch_scopes":[{"path":"#));
     }
 
