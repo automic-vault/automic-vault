@@ -1,5 +1,7 @@
 # GitHub CLI
 
+It is trivial for anything on your computer to exfiltrate GitHub CLI’s secret:
+
 ```sh
 gh auth token
 ```
@@ -11,6 +13,8 @@ its existing permissions.
 Storing the token in Keychain does not necessarily prevent extraction. If its
 access list permits `/usr/bin/security` to read it without confirmation,
 software can retrieve it directly:
+
+It is trivial for anything on your computer to exfiltrate GitHub CLI’s secret:
 
 ```sh
 /usr/bin/security find-generic-password -s 'gh:github.com' -w

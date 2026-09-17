@@ -1,5 +1,7 @@
 # aws-sso-cli
 
+It is trivial for anything on your computer to exfiltrate aws-sso-cli’s secret:
+
 ```sh
 cat "$HOME/.aws/sso/cache/REPORTED_FILE.json"
 ```

@@ -1,5 +1,7 @@
 # ruby
 
+It is trivial for anything on your computer to exfiltrate ruby’s secret:
+
 ```sh
 cat "$HOME/.gem/credentials"
 ```

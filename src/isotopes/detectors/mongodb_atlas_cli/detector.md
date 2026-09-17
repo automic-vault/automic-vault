@@ -1,5 +1,7 @@
 # mongodb-atlas-cli
 
+It is trivial for anything on your computer to exfiltrate mongodb-atlas-cli’s secret:
+
 ```sh
 cat "$HOME/Library/Application Support/atlascli/config.toml"
 ```

@@ -1,5 +1,7 @@
 # git-credentials-file
 
+It is trivial for anything on your computer to exfiltrate Git’s secret:
+
 ```sh
 cat "$HOME/.git-credentials"
 ```

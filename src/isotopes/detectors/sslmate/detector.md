@@ -1,5 +1,7 @@
 # sslmate
 
+It is trivial for anything on your computer to exfiltrate sslmate’s secret:
+
 ```sh
 cat "$HOME/.sslmate"
 ```

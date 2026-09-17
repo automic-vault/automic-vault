@@ -1,5 +1,7 @@
 # flyctl
 
+It is trivial for anything on your computer to exfiltrate flyctl’s secret:
+
 ```sh
 cat "$HOME/.fly/config.yml"
 ```

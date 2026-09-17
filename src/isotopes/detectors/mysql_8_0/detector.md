@@ -1,5 +1,7 @@
 # mysql@8.0
 
+It is trivial for anything on your computer to exfiltrate mysql@8.0’s secret:
+
 ```sh
 cat "$HOME/.my.cnf"
 ```

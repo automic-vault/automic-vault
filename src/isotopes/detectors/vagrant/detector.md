@@ -1,5 +1,7 @@
 # vagrant
 
+It is trivial for anything on your computer to exfiltrate vagrant’s secret:
+
 ```sh
 cat "$HOME/.vagrant.d/data/vagrant_login_token"
 ```

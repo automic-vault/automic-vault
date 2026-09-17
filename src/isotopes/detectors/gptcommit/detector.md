@@ -1,5 +1,7 @@
 # gptcommit
 
+It is trivial for anything on your computer to exfiltrate gptcommit’s secret:
+
 ```sh
 cat "$HOME/.config/gptcommit/config.toml"
 ```

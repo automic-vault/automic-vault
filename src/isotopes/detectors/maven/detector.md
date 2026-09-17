@@ -1,5 +1,7 @@
 # maven
 
+It is trivial for anything on your computer to exfiltrate maven’s secret:
+
 ```sh
 cat "$HOME/.m2/settings.xml"
 ```

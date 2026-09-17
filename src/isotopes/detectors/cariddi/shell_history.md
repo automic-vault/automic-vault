@@ -1,5 +1,7 @@
 # cariddi-shell-history
 
+It is trivial for anything on your computer to exfiltrate cariddi’s secret:
+
 ```sh
 rg -n 'cariddi' "$HOME/.zsh_history" "$HOME/.bash_history" "$HOME/.history"
 ```

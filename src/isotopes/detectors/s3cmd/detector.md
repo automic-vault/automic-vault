@@ -1,5 +1,7 @@
 # s3cmd
 
+It is trivial for anything on your computer to exfiltrate s3cmd’s secret:
+
 ```sh
 cat "$HOME/.s3cfg"
 ```

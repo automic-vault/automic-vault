@@ -1,5 +1,7 @@
 # transifex-cli
 
+It is trivial for anything on your computer to exfiltrate transifex-cli’s secret:
+
 ```sh
 cat "$HOME/.transifexrc"
 ```

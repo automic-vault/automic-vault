@@ -1,5 +1,7 @@
 # ansible
 
+It is trivial for anything on your computer to exfiltrate ansible’s secret:
+
 ```sh
 cat "${ANSIBLE_GALAXY_TOKEN_PATH:-$HOME/.ansible/galaxy_token}"
 ```

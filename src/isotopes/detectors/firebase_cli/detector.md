@@ -1,5 +1,7 @@
 # firebase-cli
 
+It is trivial for anything on your computer to exfiltrate firebase-cli’s secret:
+
 ```sh
 cat "$HOME/.config/configstore/firebase-tools.json"
 ```

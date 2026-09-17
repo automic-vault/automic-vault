@@ -1,5 +1,7 @@
 # terraform-core
 
+It is trivial for anything on your computer to exfiltrate terraform-core’s secret:
+
 ```sh
 cat "$HOME/.terraform.d/credentials.tfrc.json"
 ```

@@ -1,5 +1,7 @@
 # oauth2l
 
+It is trivial for anything on your computer to exfiltrate oauth2l’s secret:
+
 ```sh
 cat "$HOME/.oauth2l"
 ```

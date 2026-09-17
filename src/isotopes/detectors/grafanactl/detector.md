@@ -1,5 +1,7 @@
 # grafanactl
 
+It is trivial for anything on your computer to exfiltrate grafanactl’s secret:
+
 ```sh
 cat "$HOME/.config/grafanactl/config.yaml"
 ```

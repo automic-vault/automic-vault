@@ -1,5 +1,7 @@
 # cariddi-persisted-output
 
+It is trivial for anything on your computer to exfiltrate cariddi’s secret:
+
 ```sh
 cat "$HOME/output-cariddi/secrets/REPORTED_FILE"
 ```

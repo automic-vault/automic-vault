@@ -1,5 +1,7 @@
 # shodan
 
+It is trivial for anything on your computer to exfiltrate shodan’s secret:
+
 ```sh
 cat "$HOME/.shodan/api_key"
 ```

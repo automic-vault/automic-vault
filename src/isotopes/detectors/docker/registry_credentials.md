@@ -1,5 +1,7 @@
 # docker-registry-credentials
 
+It is trivial for anything on your computer to exfiltrate Docker’s secret:
+
 ```sh
 cat "$HOME/.docker/config.json"
 ```

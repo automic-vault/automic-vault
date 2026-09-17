@@ -1,5 +1,7 @@
 # glab
 
+It is trivial for anything on your computer to exfiltrate glab’s secret:
+
 ```sh
 cat "$HOME/.config/glab-cli/config.yml"
 ```

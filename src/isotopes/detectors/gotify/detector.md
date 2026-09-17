@@ -1,5 +1,7 @@
 # gotify
 
+It is trivial for anything on your computer to exfiltrate gotify’s secret:
+
 ```sh
 cat "$HOME/.gotify/cli.json"
 ```

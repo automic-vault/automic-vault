@@ -1,5 +1,7 @@
 # perl
 
+It is trivial for anything on your computer to exfiltrate perl’s secret:
+
 ```sh
 cat "$HOME/.cpan/CPAN/MyConfig.pm"
 ```

@@ -1,5 +1,7 @@
 # railway
 
+It is trivial for anything on your computer to exfiltrate railway’s secret:
+
 ```sh
 cat "$HOME/.railway/config.json"
 ```

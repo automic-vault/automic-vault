@@ -1,5 +1,7 @@
 # tailscale
 
+It is trivial for anything on your computer to exfiltrate tailscale’s secret:
+
 ```sh
 cat "$HOME/.local/share/tailscale/tailscaled.state"
 ```

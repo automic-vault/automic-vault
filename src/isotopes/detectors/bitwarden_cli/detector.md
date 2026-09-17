@@ -1,5 +1,7 @@
 # bitwarden-cli
 
+It is trivial for anything on your computer to exfiltrate bitwarden-cli’s secret:
+
 ```sh
 cat "$HOME/Library/Application Support/Bitwarden CLI/data.json"
 ```

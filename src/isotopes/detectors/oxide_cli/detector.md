@@ -1,5 +1,7 @@
 # oxide-cli
 
+It is trivial for anything on your computer to exfiltrate oxide-cli’s secret:
+
 ```sh
 cat "$HOME/.config/oxide/credentials.toml"
 ```

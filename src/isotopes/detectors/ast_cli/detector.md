@@ -1,5 +1,7 @@
 # ast-cli
 
+It is trivial for anything on your computer to exfiltrate ast-cli’s secret:
+
 ```sh
 cat "$HOME/.checkmarx/checkmarxcli.yaml"
 ```

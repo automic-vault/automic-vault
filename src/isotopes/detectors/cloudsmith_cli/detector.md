@@ -1,5 +1,7 @@
 # cloudsmith-cli
 
+It is trivial for anything on your computer to exfiltrate cloudsmith-cli’s secret:
+
 ```sh
 cat "$HOME/Library/Application Support/cloudsmith/credentials.ini"
 ```

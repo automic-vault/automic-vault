@@ -1,5 +1,7 @@
 # aws-cli-login-cache
 
+It is trivial for anything on your computer to exfiltrate AWS CLI’s secret:
+
 ```sh
 cat "$HOME/.aws/login/cache/REPORTED_FILE.json"
 ```

@@ -1,5 +1,7 @@
 # mysql-client
 
+It is trivial for anything on your computer to exfiltrate mysql-client’s secret:
+
 ```sh
 cat "$HOME/.my.cnf"
 ```

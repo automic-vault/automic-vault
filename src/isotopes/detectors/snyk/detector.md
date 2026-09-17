@@ -1,5 +1,7 @@
 # snyk
 
+It is trivial for anything on your computer to exfiltrate snyk’s secret:
+
 ```sh
 cat "$HOME/.config/configstore/snyk.json"
 ```

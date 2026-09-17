@@ -1,5 +1,7 @@
 # gcli
 
+It is trivial for anything on your computer to exfiltrate gcli’s secret:
+
 ```sh
 cat "$HOME/.config/gcli/config"
 ```

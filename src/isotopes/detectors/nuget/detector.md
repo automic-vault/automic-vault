@@ -1,5 +1,7 @@
 # nuget
 
+It is trivial for anything on your computer to exfiltrate nuget’s secret:
+
 ```sh
 cat "$HOME/.config/NuGet/NuGet.Config"
 ```

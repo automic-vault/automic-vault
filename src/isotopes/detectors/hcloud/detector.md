@@ -1,5 +1,7 @@
 # hcloud
 
+It is trivial for anything on your computer to exfiltrate hcloud’s secret:
+
 ```sh
 cat "$HOME/.config/hcloud/cli.toml"
 ```

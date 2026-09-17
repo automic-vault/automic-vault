@@ -1,5 +1,7 @@
 # podman
 
+It is trivial for anything on your computer to exfiltrate podman’s secret:
+
 ```sh
 cat "$HOME/.config/containers/auth.json"
 ```

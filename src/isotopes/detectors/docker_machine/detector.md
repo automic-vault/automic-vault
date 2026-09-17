@@ -1,5 +1,7 @@
 # docker-machine
 
+It is trivial for anything on your computer to exfiltrate docker-machine’s secret:
+
 ```sh
 cat "$HOME/.docker/machine/REPORTED_KEY.pem"
 ```

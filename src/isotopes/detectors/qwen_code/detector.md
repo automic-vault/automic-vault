@@ -1,5 +1,7 @@
 # qwen-code
 
+It is trivial for anything on your computer to exfiltrate qwen-code’s secret:
+
 ```sh
 cat "$HOME/.qwen/settings.json"
 ```

@@ -1,5 +1,7 @@
 # opencode
 
+It is trivial for anything on your computer to exfiltrate opencode’s secret:
+
 ```sh
 cat "$HOME/.local/share/opencode/auth.json"
 ```

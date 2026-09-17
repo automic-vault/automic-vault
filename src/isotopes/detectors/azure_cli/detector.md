@@ -1,5 +1,7 @@
 # azure-cli
 
+It is trivial for anything on your computer to exfiltrate azure-cli’s secret:
+
 ```sh
 cat "$HOME/.azure/msal_token_cache.json"
 ```

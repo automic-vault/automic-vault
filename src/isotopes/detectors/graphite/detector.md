@@ -1,5 +1,7 @@
 # graphite
 
+It is trivial for anything on your computer to exfiltrate graphite’s secret:
+
 ```sh
 cat "$HOME/.config/graphite/auth"
 ```

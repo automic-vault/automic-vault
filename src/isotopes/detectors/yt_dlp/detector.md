@@ -1,5 +1,7 @@
 # yt-dlp
 
+It is trivial for anything on your computer to exfiltrate yt-dlp’s secret:
+
 ```sh
 cat "$HOME/.netrc"
 ```

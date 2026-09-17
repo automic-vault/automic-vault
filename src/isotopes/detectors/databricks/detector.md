@@ -1,5 +1,7 @@
 # databricks
 
+It is trivial for anything on your computer to exfiltrate databricks’s secret:
+
 ```sh
 cat "$HOME/.databrickscfg"
 ```

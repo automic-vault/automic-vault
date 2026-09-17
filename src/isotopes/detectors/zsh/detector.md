@@ -1,5 +1,7 @@
 # zsh
 
+It is trivial for anything on your computer to exfiltrate zsh’s secret:
+
 ```sh
 cat "${ZDOTDIR:-$HOME}/.zshrc"
 ```

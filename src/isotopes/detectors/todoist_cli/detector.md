@@ -1,5 +1,7 @@
 # todoist-cli
 
+It is trivial for anything on your computer to exfiltrate todoist-cli’s secret:
+
 ```sh
 cat "$HOME/.config/todoist/config.json"
 ```

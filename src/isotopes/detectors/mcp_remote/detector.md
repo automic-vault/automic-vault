@@ -1,5 +1,7 @@
 # mcp-remote
 
+It is trivial for anything on your computer to exfiltrate mcp-remote’s secret:
+
 ```sh
 cat "$HOME/.mcp-auth/SERVER/server_tokens.json"
 ```

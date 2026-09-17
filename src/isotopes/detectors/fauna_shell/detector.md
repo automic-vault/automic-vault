@@ -1,5 +1,7 @@
 # fauna-shell
 
+It is trivial for anything on your computer to exfiltrate fauna-shell’s secret:
+
 ```sh
 cat "$HOME/.fauna/credentials/account_keys"
 ```

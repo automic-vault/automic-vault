@@ -1,5 +1,7 @@
 # opentofu
 
+It is trivial for anything on your computer to exfiltrate opentofu’s secret:
+
 ```sh
 cat "$HOME/.terraform.d/credentials.tfrc.json"
 ```

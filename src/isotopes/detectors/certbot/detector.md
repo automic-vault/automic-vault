@@ -1,5 +1,7 @@
 # certbot
 
+It is trivial for anything on your computer to exfiltrate certbot’s secret:
+
 ```sh
 cat "/path/to/reported/private-key.pem"
 ```

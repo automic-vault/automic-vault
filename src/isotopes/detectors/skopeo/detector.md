@@ -1,5 +1,7 @@
 # skopeo
 
+It is trivial for anything on your computer to exfiltrate skopeo’s secret:
+
 ```sh
 cat "$HOME/.config/containers/auth.json"
 ```

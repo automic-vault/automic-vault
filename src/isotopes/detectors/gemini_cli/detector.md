@@ -1,5 +1,7 @@
 # gemini-cli
 
+It is trivial for anything on your computer to exfiltrate gemini-cli’s secret:
+
 ```sh
 cat "$HOME/.gemini/oauth_creds.json"
 ```

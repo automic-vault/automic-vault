@@ -1,5 +1,7 @@
 # poetry
 
+It is trivial for anything on your computer to exfiltrate poetry’s secret:
+
 ```sh
 cat "$HOME/.config/pypoetry/auth.toml"
 ```

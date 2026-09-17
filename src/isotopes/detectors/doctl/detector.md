@@ -1,5 +1,7 @@
 # doctl
 
+It is trivial for anything on your computer to exfiltrate doctl’s secret:
+
 ```sh
 cat "$HOME/Library/Application Support/doctl/config.yaml"
 ```

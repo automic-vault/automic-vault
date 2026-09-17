@@ -1,5 +1,7 @@
 # mycli
 
+It is trivial for anything on your computer to exfiltrate mycli’s secret:
+
 ```sh
 cat "$HOME/.myclirc"
 ```

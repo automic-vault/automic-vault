@@ -1,5 +1,7 @@
 # openssl@3
 
+It is trivial for anything on your computer to exfiltrate openssl@3’s secret:
+
 ```sh
 cat "/path/to/reported/private-key.pem"
 ```

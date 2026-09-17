@@ -1,5 +1,7 @@
 # aliyun-cli
 
+It is trivial for anything on your computer to exfiltrate aliyun-cli’s secret:
+
 ```sh
 cat "$HOME/.aliyun/config.json"
 ```

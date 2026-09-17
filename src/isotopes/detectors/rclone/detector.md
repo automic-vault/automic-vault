@@ -1,5 +1,7 @@
 # rclone
 
+It is trivial for anything on your computer to exfiltrate rclone’s secret:
+
 ```sh
 cat "${RCLONE_CONFIG:-$HOME/.config/rclone/rclone.conf}"
 ```

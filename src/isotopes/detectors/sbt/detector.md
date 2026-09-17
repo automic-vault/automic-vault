@@ -1,5 +1,7 @@
 # sbt
 
+It is trivial for anything on your computer to exfiltrate sbt’s secret:
+
 ```sh
 cat "$HOME/.sbt/.credentials"
 ```

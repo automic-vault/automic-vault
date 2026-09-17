@@ -1,5 +1,7 @@
 # snowflake-cli
 
+It is trivial for anything on your computer to exfiltrate snowflake-cli’s secret:
+
 ```sh
 cat "$HOME/.snowflake/config.toml"
 ```

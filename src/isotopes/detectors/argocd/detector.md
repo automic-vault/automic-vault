@@ -1,5 +1,7 @@
 # argocd
 
+It is trivial for anything on your computer to exfiltrate argocd’s secret:
+
 ```sh
 cat "$HOME/.argocd/config"
 ```

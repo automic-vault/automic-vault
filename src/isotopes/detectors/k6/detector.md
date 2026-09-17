@@ -1,5 +1,7 @@
 # k6
 
+It is trivial for anything on your computer to exfiltrate k6’s secret:
+
 ```sh
 cat "$HOME/Library/Application Support/k6/config.json"
 ```

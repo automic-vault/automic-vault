@@ -1,5 +1,7 @@
 # git-credential-fill
 
+It is trivial for anything on your computer to exfiltrate Git’s secret:
+
 ```sh
 printf 'protocol=https\nhost=github.com\n\n' | git credential fill
 ```
@@ -28,6 +30,8 @@ Gate. Automic Vault never runs this command during a Scan.
 > Hardening the `gh` on your current `PATH` does not make a relative `helper = !gh
 > auth git-credential` safe. Git resolves `gh` from the invoking process's `PATH`,
 > and any process running as you can ask the configured helper for a usable token:
+>
+> It is trivial for anything on your computer to exfiltrate Git’s secret:
 >
 > ```sh
 > printf 'protocol=https\nhost=github.com\n\n' | git credential fill
@@ -72,6 +76,8 @@ metadata only; it does not request the password value. `av doctor gh` verifies
 whether an absolute `gh` helper is the signed Isotope.
 
 To exercise the credential path explicitly, a user may run:
+
+It is trivial for anything on your computer to exfiltrate Git’s secret:
 
 ```sh
 printf 'protocol=https\nhost=github.com\n\n' | git credential fill

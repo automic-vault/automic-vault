@@ -1,5 +1,7 @@
 # sqlcmd
 
+It is trivial for anything on your computer to exfiltrate sqlcmd’s secret:
+
 ```sh
 cat "$HOME/.sqlcmd/sqlconfig"
 ```

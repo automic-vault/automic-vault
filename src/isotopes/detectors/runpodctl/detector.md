@@ -1,5 +1,7 @@
 # runpodctl
 
+It is trivial for anything on your computer to exfiltrate runpodctl’s secret:
+
 ```sh
 cat "$HOME/.runpod/config.toml"
 ```

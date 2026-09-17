@@ -1,5 +1,7 @@
 # supabase
 
+It is trivial for anything on your computer to exfiltrate supabase’s secret:
+
 ```sh
 cat "$HOME/.supabase/access-token"
 ```

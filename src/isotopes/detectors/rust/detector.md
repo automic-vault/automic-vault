@@ -1,5 +1,7 @@
 # rust
 
+It is trivial for anything on your computer to exfiltrate rust’s secret:
+
 ```sh
 cat "$HOME/.cargo/credentials.toml"
 ```

@@ -1,5 +1,7 @@
 # ossutil
 
+It is trivial for anything on your computer to exfiltrate ossutil’s secret:
+
 ```sh
 cat "$HOME/.ossutilconfig"
 ```

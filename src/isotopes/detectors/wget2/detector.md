@@ -1,5 +1,7 @@
 # wget2
 
+It is trivial for anything on your computer to exfiltrate wget2’s secret:
+
 ```sh
 cat "$HOME/.netrc"
 ```

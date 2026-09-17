@@ -1,5 +1,7 @@
 # vault
 
+It is trivial for anything on your computer to exfiltrate vault’s secret:
+
 ```sh
 cat "$HOME/.vault-token"
 ```

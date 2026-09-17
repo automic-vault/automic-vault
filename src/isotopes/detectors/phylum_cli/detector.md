@@ -1,5 +1,7 @@
 # phylum-cli
 
+It is trivial for anything on your computer to exfiltrate phylum-cli’s secret:
+
 ```sh
 cat "$HOME/.config/phylum/settings.yaml"
 ```

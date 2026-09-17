@@ -1,5 +1,7 @@
 # openhue-cli
 
+It is trivial for anything on your computer to exfiltrate openhue-cli’s secret:
+
 ```sh
 cat "$HOME/.openhue/config.yaml"
 ```

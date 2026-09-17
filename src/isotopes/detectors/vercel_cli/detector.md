@@ -1,5 +1,7 @@
 # vercel-cli
 
+It is trivial for anything on your computer to exfiltrate vercel-cli’s secret:
+
 ```sh
 cat "$HOME/Library/Application Support/com.vercel.cli/auth.json"
 ```

@@ -1,5 +1,7 @@
 # astra
 
+It is trivial for anything on your computer to exfiltrate astra’s secret:
+
 ```sh
 cat "$HOME/.config/astra/.astrarc"
 ```

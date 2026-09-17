@@ -1,5 +1,7 @@
 # acli
 
+It is trivial for anything on your computer to exfiltrate acli’s secret:
+
 ```sh
 cat "$HOME/.config/acli/confluence_config.yaml"
 ```

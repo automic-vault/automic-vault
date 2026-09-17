@@ -1,5 +1,7 @@
 # twine
 
+It is trivial for anything on your computer to exfiltrate twine’s secret:
+
 ```sh
 cat "$HOME/.pypirc"
 ```

@@ -1,5 +1,7 @@
 # mkcert
 
+It is trivial for anything on your computer to exfiltrate mkcert’s secret:
+
 ```sh
 cat "$HOME/Library/Application Support/mkcert/rootCA-key.pem"
 ```

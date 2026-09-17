@@ -1,5 +1,7 @@
 # gallery-dl
 
+It is trivial for anything on your computer to exfiltrate gallery-dl’s secret:
+
 ```sh
 cat "$HOME/.config/gallery-dl/config.json"
 ```

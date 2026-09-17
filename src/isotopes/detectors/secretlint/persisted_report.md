@@ -1,5 +1,7 @@
 # secretlint-persisted-report
 
+It is trivial for anything on your computer to exfiltrate Secretlint’s secret:
+
 ```sh
 cat "$HOME/secretlint-report.json"
 ```

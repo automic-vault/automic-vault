@@ -1,5 +1,7 @@
 # wsk
 
+It is trivial for anything on your computer to exfiltrate wsk’s secret:
+
 ```sh
 cat "$HOME/.wskprops"
 ```

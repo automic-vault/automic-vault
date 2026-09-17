@@ -1,5 +1,7 @@
 # stripe-cli
 
+It is trivial for anything on your computer to exfiltrate stripe-cli’s secret:
+
 ```sh
 cat "$HOME/.config/stripe/config.toml"
 ```

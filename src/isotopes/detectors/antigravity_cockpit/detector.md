@@ -1,5 +1,7 @@
 # antigravity-cockpit
 
+It is trivial for anything on your computer to exfiltrate antigravity-cockpit’s secret:
+
 ```sh
 cat "$HOME/.antigravity_cockpit/credentials.json"
 ```

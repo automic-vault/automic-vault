@@ -1,5 +1,7 @@
 # dropbox-uploader
 
+It is trivial for anything on your computer to exfiltrate dropbox-uploader’s secret:
+
 ```sh
 cat "$HOME/.dropbox_uploader"
 ```

@@ -1,5 +1,7 @@
 # composer
 
+It is trivial for anything on your computer to exfiltrate composer’s secret:
+
 ```sh
 cat "$HOME/.composer/auth.json"
 ```

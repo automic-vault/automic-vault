@@ -1,5 +1,7 @@
 # oci-cli
 
+It is trivial for anything on your computer to exfiltrate oci-cli’s secret:
+
 ```sh
 cat "${OCI_CLI_CONFIG_FILE:-$HOME/.oci/config}"
 ```

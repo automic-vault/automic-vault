@@ -1,5 +1,7 @@
 # dcos-cli
 
+It is trivial for anything on your computer to exfiltrate dcos-cli’s secret:
+
 ```sh
 cat "$HOME/.dcos/clusters/CLUSTER/dcos.toml"
 ```

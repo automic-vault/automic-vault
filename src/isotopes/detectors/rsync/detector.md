@@ -1,5 +1,7 @@
 # rsync
 
+It is trivial for anything on your computer to exfiltrate rsync’s secret:
+
 ```sh
 cat "$HOME/.rsync_pass"
 ```

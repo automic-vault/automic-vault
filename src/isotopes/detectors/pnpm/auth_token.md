@@ -1,5 +1,7 @@
 # pnpm-auth-token
 
+It is trivial for anything on your computer to exfiltrate pnpm’s secret:
+
 ```sh
 cat "$HOME/.npmrc"
 ```

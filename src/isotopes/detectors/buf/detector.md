@@ -1,5 +1,7 @@
 # buf
 
+It is trivial for anything on your computer to exfiltrate buf’s secret:
+
 ```sh
 cat "$HOME/.netrc"
 ```

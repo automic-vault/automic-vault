@@ -1,5 +1,7 @@
 # netlify-cli
 
+It is trivial for anything on your computer to exfiltrate netlify-cli’s secret:
+
 ```sh
 cat "$HOME/Library/Preferences/netlify/config.json"
 ```

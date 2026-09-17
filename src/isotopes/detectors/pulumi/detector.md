@@ -1,5 +1,7 @@
 # pulumi
 
+It is trivial for anything on your computer to exfiltrate pulumi’s secret:
+
 ```sh
 cat "$HOME/.pulumi/credentials.json"
 ```

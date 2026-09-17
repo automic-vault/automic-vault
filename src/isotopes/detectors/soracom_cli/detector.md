@@ -1,5 +1,7 @@
 # soracom-cli
 
+It is trivial for anything on your computer to exfiltrate soracom-cli’s secret:
+
 ```sh
 cat "$HOME/.soracom/default.json"
 ```

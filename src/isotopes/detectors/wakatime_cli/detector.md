@@ -1,5 +1,7 @@
 # wakatime-cli
 
+It is trivial for anything on your computer to exfiltrate wakatime-cli’s secret:
+
 ```sh
 cat "$HOME/.wakatime.cfg"
 ```

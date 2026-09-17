@@ -1,5 +1,7 @@
 # uaa-cli
 
+It is trivial for anything on your computer to exfiltrate uaa-cli’s secret:
+
 ```sh
 cat "$HOME/.uaa/config.json"
 ```

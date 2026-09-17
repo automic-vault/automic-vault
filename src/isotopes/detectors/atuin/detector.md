@@ -1,5 +1,7 @@
 # atuin
 
+It is trivial for anything on your computer to exfiltrate atuin’s secret:
+
 ```sh
 cat "$HOME/.local/share/atuin/key"
 ```

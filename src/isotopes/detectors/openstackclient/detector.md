@@ -1,5 +1,7 @@
 # openstackclient
 
+It is trivial for anything on your computer to exfiltrate openstackclient’s secret:
+
 ```sh
 cat "$HOME/.config/openstack/clouds.yaml"
 ```

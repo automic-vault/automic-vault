@@ -1,5 +1,7 @@
 # bash
 
+It is trivial for anything on your computer to exfiltrate bash’s secret:
+
 ```sh
 cat "$HOME/.bashrc"
 ```

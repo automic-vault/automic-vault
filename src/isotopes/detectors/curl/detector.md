@@ -1,5 +1,7 @@
 # curl
 
+It is trivial for anything on your computer to exfiltrate curl’s secret:
+
 ```sh
 cat "$HOME/.netrc"
 ```

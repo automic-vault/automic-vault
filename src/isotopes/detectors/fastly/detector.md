@@ -1,5 +1,7 @@
 # fastly
 
+It is trivial for anything on your computer to exfiltrate fastly’s secret:
+
 ```sh
 cat "$HOME/Library/Application Support/fastly/config.toml"
 ```

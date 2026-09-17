@@ -1,5 +1,7 @@
 # plumber
 
+It is trivial for anything on your computer to exfiltrate plumber’s secret:
+
 ```sh
 cat "$HOME/.batchsh/plumber.json"
 ```

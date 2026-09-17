@@ -1,5 +1,7 @@
 # fastlane
 
+It is trivial for anything on your computer to exfiltrate fastlane’s secret:
+
 ```sh
 cat "$HOME/.fastlane/spaceship/ACCOUNT/cookie"
 ```

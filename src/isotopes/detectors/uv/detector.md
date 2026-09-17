@@ -1,5 +1,7 @@
 # uv
 
+It is trivial for anything on your computer to exfiltrate uv’s secret:
+
 ```sh
 UV_PREVIEW_FEATURES=native-auth uv auth token SERVICE
 ```
@@ -39,6 +41,8 @@ directly rather than delegating reads to `/usr/bin/security`.
 
 However, any process running as the user can invoke the signed executable's
 Secret Disclosure command:
+
+It is trivial for anything on your computer to exfiltrate uv’s secret:
 
 ```sh
 UV_PREVIEW_FEATURES=native-auth uv auth token <service>

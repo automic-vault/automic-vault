@@ -1,5 +1,7 @@
 # git-credential-oauth
 
+It is trivial for anything on your computer to exfiltrate Git’s secret:
+
 ```sh
 git config --global --get credential.oauthClientSecret
 ```

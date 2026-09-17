@@ -1,5 +1,7 @@
 # minio-mc
 
+It is trivial for anything on your computer to exfiltrate minio-mc’s secret:
+
 ```sh
 cat "$HOME/.mc/config.json"
 ```

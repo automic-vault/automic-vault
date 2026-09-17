@@ -1,5 +1,7 @@
 # node@18
 
+It is trivial for anything on your computer to exfiltrate node@18’s secret:
+
 ```sh
 cat "$HOME/.npmrc"
 ```

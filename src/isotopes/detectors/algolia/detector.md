@@ -1,5 +1,7 @@
 # algolia
 
+It is trivial for anything on your computer to exfiltrate algolia’s secret:
+
 ```sh
 cat "${XDG_CONFIG_HOME:-$HOME/.config}/algolia/config.toml"
 ```

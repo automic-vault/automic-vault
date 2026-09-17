@@ -1,5 +1,7 @@
 # akamai
 
+It is trivial for anything on your computer to exfiltrate akamai’s secret:
+
 ```sh
 cat "${AKAMAI_EDGERC:-$HOME/.edgerc}"
 ```

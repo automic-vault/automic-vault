@@ -1,5 +1,7 @@
 # midnight-commander
 
+It is trivial for anything on your computer to exfiltrate midnight-commander’s secret:
+
 ```sh
 cat "$HOME/.config/mc/REPORTED_FILE"
 ```

@@ -1,5 +1,7 @@
 # ordercli
 
+It is trivial for anything on your computer to exfiltrate ordercli’s secret:
+
 ```sh
 cat "$HOME/Library/Application Support/ordercli/config.json"
 ```

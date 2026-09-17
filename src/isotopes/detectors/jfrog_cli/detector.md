@@ -1,5 +1,7 @@
 # jfrog-cli
 
+It is trivial for anything on your computer to exfiltrate jfrog-cli’s secret:
+
 ```sh
 cat "$HOME/.jfrog/jfrog-cli.conf.v6"
 ```

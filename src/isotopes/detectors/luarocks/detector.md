@@ -1,5 +1,7 @@
 # luarocks
 
+It is trivial for anything on your computer to exfiltrate luarocks’s secret:
+
 ```sh
 cat "$HOME/.config/luarocks/upload_config.lua"
 ```

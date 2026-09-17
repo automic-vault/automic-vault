@@ -1,5 +1,7 @@
 # heroku
 
+It is trivial for anything on your computer to exfiltrate heroku’s secret:
+
 ```sh
 cat "$HOME/.netrc"
 ```

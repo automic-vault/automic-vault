@@ -1,5 +1,7 @@
 # sentry-cli
 
+It is trivial for anything on your computer to exfiltrate sentry-cli’s secret:
+
 ```sh
 cat "$HOME/.sentryclirc"
 ```

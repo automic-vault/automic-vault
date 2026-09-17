@@ -1,5 +1,7 @@
 # pianobar
 
+It is trivial for anything on your computer to exfiltrate pianobar’s secret:
+
 ```sh
 cat "$HOME/.config/pianobar/config"
 ```

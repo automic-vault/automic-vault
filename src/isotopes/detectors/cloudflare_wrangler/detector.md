@@ -1,5 +1,7 @@
 # cloudflare-wrangler
 
+It is trivial for anything on your computer to exfiltrate cloudflare-wrangler’s secret:
+
 ```sh
 cat "$HOME/.wrangler/config/default.toml"
 ```

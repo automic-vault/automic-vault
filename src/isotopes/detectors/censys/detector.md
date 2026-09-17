@@ -1,5 +1,7 @@
 # censys
 
+It is trivial for anything on your computer to exfiltrate censys’s secret:
+
 ```sh
 cat "$HOME/.config/censys/censys.cfg"
 ```

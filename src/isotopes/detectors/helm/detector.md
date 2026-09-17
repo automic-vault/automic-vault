@@ -1,5 +1,7 @@
 # helm
 
+It is trivial for anything on your computer to exfiltrate helm’s secret:
+
 ```sh
 cat "$HOME/Library/Preferences/helm/repositories.yaml"
 ```

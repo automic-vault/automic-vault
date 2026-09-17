@@ -1,5 +1,7 @@
 # travis
 
+It is trivial for anything on your computer to exfiltrate travis’s secret:
+
 ```sh
 cat "$HOME/.travis/config.yml"
 ```

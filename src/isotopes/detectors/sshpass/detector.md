@@ -1,5 +1,7 @@
 # sshpass
 
+It is trivial for anything on your computer to exfiltrate sshpass’s secret:
+
 ```sh
 rg -n 'sshpass' "$HOME/.zsh_history" "$HOME/.bash_history" "$HOME/.history"
 ```

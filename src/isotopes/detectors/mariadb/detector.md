@@ -1,5 +1,7 @@
 # mariadb
 
+It is trivial for anything on your computer to exfiltrate mariadb’s secret:
+
 ```sh
 cat "$HOME/.my.cnf"
 ```

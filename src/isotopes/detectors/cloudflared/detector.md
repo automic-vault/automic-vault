@@ -1,5 +1,7 @@
 # cloudflared
 
+It is trivial for anything on your computer to exfiltrate cloudflared’s secret:
+
 ```sh
 cat "$HOME/.cloudflared/REPORTED_FILE"
 ```

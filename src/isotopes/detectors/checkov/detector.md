@@ -1,5 +1,7 @@
 # checkov
 
+It is trivial for anything on your computer to exfiltrate checkov’s secret:
+
 ```sh
 cat "$HOME/.bridgecrew/credentials"
 ```

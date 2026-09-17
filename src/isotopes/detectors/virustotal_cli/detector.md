@@ -1,5 +1,7 @@
 # virustotal-cli
 
+It is trivial for anything on your computer to exfiltrate virustotal-cli’s secret:
+
 ```sh
 cat "$HOME/.vt.toml"
 ```

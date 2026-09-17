@@ -1,5 +1,7 @@
 # mercurial
 
+It is trivial for anything on your computer to exfiltrate mercurial’s secret:
+
 ```sh
 cat "$HOME/.hgrc"
 ```

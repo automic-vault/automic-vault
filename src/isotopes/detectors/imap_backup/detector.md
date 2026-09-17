@@ -1,5 +1,7 @@
 # imap-backup
 
+It is trivial for anything on your computer to exfiltrate imap-backup’s secret:
+
 ```sh
 cat "$HOME/.imap-backup/config.json"
 ```

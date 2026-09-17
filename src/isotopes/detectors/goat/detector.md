@@ -1,5 +1,7 @@
 # goat
 
+It is trivial for anything on your computer to exfiltrate goat’s secret:
+
 ```sh
 cat "$HOME/.local/state/goat/auth-session.json"
 ```

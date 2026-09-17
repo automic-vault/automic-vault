@@ -1,5 +1,7 @@
 # codex
 
+It is trivial for anything on your computer to exfiltrate codex’s secret:
+
 ```sh
 cat "${CODEX_HOME:-$HOME/.codex}/auth.json"
 ```

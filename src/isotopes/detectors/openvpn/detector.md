@@ -1,5 +1,7 @@
 # openvpn
 
+It is trivial for anything on your computer to exfiltrate openvpn’s secret:
+
 ```sh
 cat "/path/to/reported/profile.ovpn"
 ```

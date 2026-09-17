@@ -1,5 +1,7 @@
 # vultr
 
+It is trivial for anything on your computer to exfiltrate vultr’s secret:
+
 ```sh
 cat "$HOME/Library/Application Support/vultr-cli.yaml"
 ```

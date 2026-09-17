@@ -1,5 +1,7 @@
 # circleci
 
+It is trivial for anything on your computer to exfiltrate circleci’s secret:
+
 ```sh
 cat "$HOME/.circleci/cli.yml"
 ```

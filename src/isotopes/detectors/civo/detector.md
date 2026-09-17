@@ -1,5 +1,7 @@
 # civo
 
+It is trivial for anything on your computer to exfiltrate civo’s secret:
+
 ```sh
 cat "$HOME/.civo.json"
 ```

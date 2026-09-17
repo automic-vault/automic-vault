@@ -1,5 +1,7 @@
 # maestro
 
+It is trivial for anything on your computer to exfiltrate maestro’s secret:
+
 ```sh
 cat "$HOME/.mobiledev/authtoken"
 ```

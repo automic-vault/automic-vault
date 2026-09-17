@@ -1,5 +1,7 @@
 # openssh
 
+It is trivial for anything on your computer to exfiltrate openssh’s secret:
+
 ```sh
 cat "$HOME/.ssh/id_ed25519"
 ```
