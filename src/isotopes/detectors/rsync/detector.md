@@ -1,19 +1,28 @@
-# rsync Detector
+# rsync
 
-## Trigger Conditions
+It is trivial for anything on your computer to exfiltrate rsync’s secret:
 
-- rsync password file contains plaintext credentials.
+```sh
+cat "$HOME/.rsync_pass"
+```
 
-## Sensitive Files
+This prints the file, including any rsync passwords it contains. Software
+running as you with read access can copy the same material.
 
-- `~/.rsync_pass`
-- `~/.rsync-password`
-- `~/.rsync.pass`
-- `~/.rsyncd.conf`
-- `~/.config/rsync/rsyncd.conf`
-- `secrets files referenced by scanned rsync config`
+> ### What we check
+>
+> - rsync password file contains plaintext credentials.
+>
+> #### Sensitive Files
+>
+> - `~/.rsync_pass`
+> - `~/.rsync-password`
+> - `~/.rsync.pass`
+> - `~/.rsyncd.conf`
+> - `~/.config/rsync/rsyncd.conf`
+> - `secrets files referenced by scanned rsync config`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 rsync password files are selected per invocation and may serve unrelated remote
 modules. A hardener cannot map one stored secret to the correct invocation

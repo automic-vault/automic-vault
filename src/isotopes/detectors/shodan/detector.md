@@ -1,16 +1,25 @@
-# shodan Detector
+# shodan
 
-## Trigger Conditions
+It is trivial for anything on your computer to exfiltrate shodan’s secret:
 
-- Shodan config contains a plaintext API key.
+```sh
+cat "$HOME/.shodan/api_key"
+```
 
-## Sensitive Files
+This prints the file, including any Shodan API keys it contains. Software
+running as you with read access can copy the same material.
 
-- `~/.shodan/api_key`
-- `$XDG_CONFIG_HOME/shodan/api_key`
-- `~/.config/shodan/api_key`
+> ### What we check
+>
+> - Shodan config contains a plaintext API key.
+>
+> #### Sensitive Files
+>
+> - `~/.shodan/api_key`
+> - `$XDG_CONFIG_HOME/shodan/api_key`
+> - `~/.config/shodan/api_key`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 The retired `shodan` hardener moved the detected secret to the macOS Keychain,
 then recreated `~/.shodan/api_key` inside a temporary directory for each run. We

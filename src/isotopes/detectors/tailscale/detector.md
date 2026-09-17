@@ -1,18 +1,27 @@
-# tailscale Detector
+# tailscale
 
-## Trigger Conditions
+It is trivial for anything on your computer to exfiltrate tailscale’s secret:
 
-- Tailscale state file contains plaintext node identity state.
+```sh
+cat "$HOME/.local/share/tailscale/tailscaled.state"
+```
 
-## Sensitive Files
+This prints the file, including any Tailscale node identity state it contains.
+Software running as you with read access can copy the same material.
 
-- `/Library/Tailscale/tailscaled.state`
-- `~/.local/share/tailscale/tailscaled.state`
-- `/opt/homebrew/var/lib/tailscale/tailscaled.state`
-- `/usr/local/var/lib/tailscale/tailscaled.state`
-- `$XDG_DATA_HOME/tailscale/tailscaled.state`
+> ### What we check
+>
+> - Tailscale state file contains plaintext node identity state.
+>
+> #### Sensitive Files
+>
+> - `/Library/Tailscale/tailscaled.state`
+> - `~/.local/share/tailscale/tailscaled.state`
+> - `/opt/homebrew/var/lib/tailscale/tailscaled.state`
+> - `/usr/local/var/lib/tailscale/tailscaled.state`
+> - `$XDG_DATA_HOME/tailscale/tailscaled.state`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 The Homebrew `tailscale` package installs both `tailscale` and `tailscaled`. The
 sensitive identity state belongs to `tailscaled`, not the CLI. Upstream macOS

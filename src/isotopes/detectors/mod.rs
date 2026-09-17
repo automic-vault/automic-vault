@@ -1,5 +1,6 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
 
 use crate::Finding;
 use crate::path_security::USER_WRITABLE_PATH_REASON;
@@ -182,6 +183,26 @@ struct Detector {
     findings: fn(&Path) -> Vec<Finding>,
     docs_url: &'static str,
     documentation: &'static str,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DetectorConfig {
+    watch_paths: Vec<String>,
+    requires_periodic_scan: bool,
+    solution: String,
+    path_solution: Option<String>,
+}
+
+static DETECTOR_CONFIG: LazyLock<HashMap<String, DetectorConfig>> = LazyLock::new(|| {
+    serde_json::from_str(include_str!("metadata.json"))
+        .expect("embedded detector metadata must be valid")
+});
+
+fn detector_config(name: &str) -> &'static DetectorConfig {
+    DETECTOR_CONFIG
+        .get(name)
+        .expect("every registered detector must have metadata")
 }
 
 #[cfg(test)]
@@ -415,13 +436,12 @@ pub(crate) fn findings_for(
         if !selected.is_empty() && !selected.contains(candidate.as_str()) {
             continue;
         }
+        let config = detector_config(&candidate);
         let mut detected = (detector.findings)(home);
         for finding in &mut detected {
             finding.homepage = detector.docs_url;
             finding.docs_url = detector.docs_url;
-            if let Some(solution) = documented_solution(detector.documentation) {
-                finding.solution = solution;
-            }
+            finding.solution = config.solution.clone();
         }
         findings.extend(detected.into_iter().map(|finding| DetectorResult {
             detectors: vec![candidate.clone()],
@@ -434,7 +454,7 @@ pub(crate) fn findings_for(
 fn merge_duplicate_owned_shell_path_findings(findings: Vec<DetectorResult>) -> Vec<DetectorResult> {
     let mut merged: Vec<DetectorResult> = Vec::with_capacity(findings.len());
     for mut finding in findings {
-        // Shell docs cover credential assignments and PATH hazards, but each
+        // Shell detectors cover credential assignments and PATH hazards, but each
         // finding needs only the mitigation for the condition it reports.
         if shell_path_entry(&finding.finding).is_some() {
             finding.finding.solution = shell_path_solution(finding.finding.source);
@@ -495,15 +515,10 @@ fn shell_path_entry(finding: &Finding) -> Option<&str> {
 }
 
 fn shell_path_solution(source: &str) -> String {
-    let documentation = DETECTORS
-        .iter()
-        .find(|detector| detector.module == source)
-        .expect("shell PATH findings have a registered detector")
-        .documentation;
-    documented_section(documentation, "## PATH Mitigation")
-        .map(first_paragraph)
-        .filter(|solution| !solution.is_empty())
-        .expect("shell detector documentation has a PATH mitigation")
+    detector_config(source)
+        .path_solution
+        .clone()
+        .expect("shell detector metadata must have a PATH mitigation")
 }
 
 fn merge_shell_path_finding(existing: &mut Finding) {
@@ -515,46 +530,12 @@ fn merge_shell_path_finding(existing: &mut Finding) {
     existing.source = MERGED_SHELL_PATH_SOURCE;
 }
 
-pub(crate) fn documented_solution(documentation: &str) -> Option<String> {
-    if let Some(mitigation) = documented_section(documentation, "## Mitigation") {
-        if let Some(command) = mitigation.lines().find(|line| line.contains("av harden ")) {
-            return Some(format!("Run `{}`.", command.trim()));
-        }
-        let paragraph = first_paragraph(mitigation);
-        if !paragraph.is_empty() {
-            return Some(paragraph);
-        }
-    }
-    documentation
-        .split_once("## Why This is not Yet Hardened")
-        .map(|(_, section)| section)
-        .and_then(|section| section.split("\n## ").next())
-        .map(first_paragraph)
-        .filter(|solution| !solution.is_empty())
-}
-
-fn documented_section<'a>(documentation: &'a str, heading: &str) -> Option<&'a str> {
-    documentation
-        .split_once(heading)
-        .map(|(_, section)| section)
-        .and_then(|section| section.split("\n## ").next())
-}
-
-fn first_paragraph(section: &str) -> String {
-    section
-        .lines()
-        .skip_while(|line| line.trim().is_empty())
-        .take_while(|line| !line.trim().is_empty())
-        .map(str::trim)
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
 pub(crate) fn metadata(home: &Path) -> Vec<DetectorMetadata> {
     DETECTORS
         .iter()
         .map(|detector| {
             let name = detector_name(detector.module);
+            let config = detector_config(&name);
             DetectorMetadata {
                 documentation: detector.documentation,
                 homepage: detector.docs_url.to_string(),
@@ -562,35 +543,18 @@ pub(crate) fn metadata(home: &Path) -> Vec<DetectorMetadata> {
                 // Keychain metadata, launchd environment, and system state can
                 // change without writing any declared watch scope. Opt in even
                 // while clean, so the first exposure is discovered too.
-                requires_periodic_scan: matches!(
-                    name.as_str(),
-                    "cloudflare-wrangler"
-                        | "gh-cli-keychain-access"
-                        | "git-credential-fill"
-                        | "macOS"
-                        | "sip"
-                        | "stripe-cli"
-                        | "sudo"
-                ),
+                requires_periodic_scan: config.requires_periodic_scan,
                 name,
-                watch_scopes: sensitive_file_scopes(detector.documentation, home),
+                watch_scopes: watch_scopes(&config.watch_paths, home),
             }
         })
         .collect()
 }
 
-fn sensitive_file_scopes(documentation: &str, home: &Path) -> Vec<DetectorWatchScope> {
-    let Some(section) = documentation
-        .split_once("## Sensitive Files")
-        .map(|(_, section)| section)
-        .and_then(|section| section.split("\n## ").next())
-    else {
-        return Vec::new();
-    };
+fn watch_scopes(patterns: &[String], home: &Path) -> Vec<DetectorWatchScope> {
     let mut seen = HashSet::new();
-    section
-        .lines()
-        .filter_map(|line| line.trim().strip_prefix("- `")?.strip_suffix('`'))
+    patterns
+        .iter()
         .filter_map(|path| resolve_sensitive_path(path, home))
         .filter(|scope| seen.insert((scope.path.clone(), scope.recursive)))
         .collect()
@@ -708,9 +672,14 @@ mod tests {
     }
 
     #[test]
-    fn sensitive_files_resolve_to_narrow_absolute_watch_scopes() {
-        let scopes = sensitive_file_scopes(
-            "## Sensitive Files\n\n- `~/.aws/credentials`\n- `~/.aws/login/cache/*.json`\n- `./project.json`\n- Directories listed in `$PATH`\n",
+    fn configured_paths_resolve_to_narrow_absolute_watch_scopes() {
+        let scopes = watch_scopes(
+            &[
+                "~/.aws/credentials".into(),
+                "~/.aws/login/cache/*.json".into(),
+                "./project.json".into(),
+                "/Users/tester".into(),
+            ],
             Path::new("/Users/tester"),
         );
 
@@ -720,6 +689,45 @@ mod tests {
         assert_eq!(scopes[1].path, "/Users/tester/.aws/login/cache");
         assert!(scopes[1].recursive);
         assert!(scopes.iter().all(|scope| scope.path != "/Users/tester"));
+    }
+
+    #[test]
+    fn json_catalog_covers_exactly_the_registered_detectors() {
+        let registered = DETECTORS
+            .iter()
+            .map(|detector| detector_name(detector.module))
+            .collect::<HashSet<_>>();
+        assert_eq!(registered, DETECTOR_CONFIG.keys().cloned().collect());
+        for (name, config) in DETECTOR_CONFIG.iter() {
+            assert!(!config.solution.trim().is_empty(), "{name}");
+            assert!(
+                config.watch_paths.iter().all(|path| {
+                    path.starts_with("~/") || path.starts_with('/') || path.starts_with('$')
+                }),
+                "{name}"
+            );
+            assert_eq!(
+                config.path_solution.is_some(),
+                matches!(name.as_str(), "bash" | "zsh")
+            );
+        }
+        let periodic = DETECTOR_CONFIG
+            .iter()
+            .filter(|(_, config)| config.requires_periodic_scan)
+            .map(|(name, _)| name.as_str())
+            .collect::<HashSet<_>>();
+        assert_eq!(
+            periodic,
+            HashSet::from([
+                "cloudflare-wrangler",
+                "gh-cli-keychain-access",
+                "git-credential-fill",
+                "macOS",
+                "sip",
+                "stripe-cli",
+                "sudo",
+            ])
+        );
     }
 
     #[test]
@@ -748,21 +756,22 @@ mod tests {
     }
 
     #[test]
-    fn documentation_supplies_hardening_or_deferred_solution() {
-        assert_eq!(
-            documented_solution("## Mitigation\n\n```sh\nsudo av harden foo\n```"),
-            Some("Run `sudo av harden foo`.".to_string())
-        );
-        assert_eq!(
-            documented_solution("## Mitigation\n\nRemove the reported token.\nThen log in again."),
-            Some("Remove the reported token. Then log in again.".to_string())
-        );
-        assert_eq!(
-            documented_solution(
-                "## Why This is not Yet Hardened\n\nFoo needs a temporary secret file.\nThat is not sufficient.\n\n## Sensitive Files"
+    fn catalog_remediation_preserves_required_steps_and_scope() {
+        for (name, details) in [
+            ("sip", vec!["macOS Recovery", "csrutil enable", "restart"]),
+            ("codex", vec!["ChatGPT desktop app", "sign-in again"]),
+            (
+                "uv",
+                vec!["supported plaintext HTTP Basic", "separate migration"],
             ),
-            Some("Foo needs a temporary secret file. That is not sufficient.".to_string())
-        );
+        ] {
+            for detail in details {
+                assert!(
+                    detector_config(name).solution.contains(detail),
+                    "{name} remediation must include {detail}"
+                );
+            }
+        }
     }
 
     fn shell_path_finding(shell: &'static str, path: &str) -> Finding {
@@ -770,11 +779,6 @@ mod tests {
             "{} PATH has a user-writable directory before protected system directories: {path}",
             if shell == "bash" { "Bash" } else { "Zsh" },
         );
-        let documentation = if shell == "bash" {
-            include_str!("bash/detector.md")
-        } else {
-            include_str!("zsh/detector.md")
-        };
         Finding {
             source: shell,
             homepage: "https://example.test/",
@@ -783,7 +787,7 @@ mod tests {
             // empty entries have no affected path here either.
             affected: super::radioisotope::affected(&explanation),
             explanation,
-            solution: documented_solution(documentation).unwrap(),
+            solution: detector_config(shell).solution.clone(),
             docs_url: "https://example.test/docs.md",
         }
     }

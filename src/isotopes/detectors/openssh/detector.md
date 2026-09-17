@@ -1,17 +1,28 @@
-# openssh Detector
+# openssh
 
-## Trigger Conditions
+It is trivial for anything on your computer to exfiltrate openssh’s secret:
 
-- SSH private key is stored without passphrase encryption.
-- SSH security-key handle is stored without passphrase encryption (medium severity).
+```sh
+cat "$HOME/.ssh/id_ed25519"
+```
 
-## Sensitive Files
+This prints the private-key file at a common location. If a software key lacks
+passphrase encryption, software with read access can copy and use it. FIDO
+security-key files instead contain a handle; the signing key remains on the
+hardware authenticator.
 
-- `~/.ssh/config`
-- `~/.ssh/id_*`
-- `identity files referenced by ~/.ssh/config`
+> ### What we check
+>
+> - SSH private key is stored without passphrase encryption.
+> - SSH security-key handle is stored without passphrase encryption (medium severity).
+>
+> #### Sensitive Files
+>
+> - `~/.ssh/config`
+> - `~/.ssh/id_*`
+> - `identity files referenced by ~/.ssh/config`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 Encrypt software SSH private keys with a passphrase and let Apple's OpenSSH
 integration store it in the macOS Keychain. For FIDO security-key handles, a

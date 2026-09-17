@@ -1,8 +1,24 @@
-# argocd Detector
+# argocd
 
-## Trigger Conditions
+It is trivial for anything on your computer to exfiltrate argocd’s secret:
 
-- Argo CD config file contains plaintext tokens.
+```sh
+cat "$HOME/.argocd/config"
+```
+
+This prints the file, including any Argo CD tokens it contains. Software running
+as you with read access can copy the same material.
+
+> ### What we check
+>
+> - Argo CD config file contains plaintext tokens.
+>
+> #### Sensitive Files
+>
+> - `$ARGOCD_CONFIG_DIR/config`
+> - `~/.argocd/config`
+> - `$XDG_CONFIG_HOME/argocd/config`
+> - `~/.config/argocd/config`
 
 ## Mitigation
 
@@ -23,10 +39,3 @@ av harden argocd
 
 The first command temporarily restores the plaintext token. Do not leave the
 recovered config unhardened.
-
-## Sensitive Files
-
-- `$ARGOCD_CONFIG_DIR/config`
-- `~/.argocd/config`
-- `$XDG_CONFIG_HOME/argocd/config`
-- `~/.config/argocd/config`

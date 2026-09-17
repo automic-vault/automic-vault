@@ -1,14 +1,23 @@
-# oxide-cli Detector
+# oxide-cli
 
-## Trigger Conditions
+It is trivial for anything on your computer to exfiltrate oxide-cli’s secret:
 
-- Oxide CLI credentials contain plaintext access tokens.
+```sh
+cat "$HOME/.config/oxide/credentials.toml"
+```
 
-## Sensitive Files
+This prints the file, including any Oxide access tokens it contains. Software
+running as you with read access can copy the same material.
 
-- `~/.config/oxide/credentials.toml`
+> ### What we check
+>
+> - Oxide CLI credentials contain plaintext access tokens.
+>
+> #### Sensitive Files
+>
+> - `~/.config/oxide/credentials.toml`
 
-## Hardener Coverage
+## Mitigation
 
 `av harden oxide-cli` installs the signed Oxide Isotope and migrates supported
 profile tokens into Automic Vault. The config retains non-secret profile
@@ -18,3 +27,5 @@ through authenticated XPC operations instead of recreating plaintext files.
 Unknown credential fields are refused so a future upstream schema cannot be
 silently discarded. The patched Target refuses `OXIDE_TOKEN`; process
 environments are outside this detector's file-scanning boundary.
+
+See the [hardening reference](../../hardeners/oxide_cli.md) for setup and coverage.

@@ -1,15 +1,24 @@
-# openstackclient Detector
+# openstackclient
 
-## Trigger Conditions
+It is trivial for anything on your computer to exfiltrate openstackclient’s secret:
 
-- OpenStack config contains plaintext credentials.
+```sh
+cat "$HOME/.config/openstack/clouds.yaml"
+```
 
-## Sensitive Files
+This prints the file, including any OpenStack credentials it contains. Software
+running as you with read access can copy the same material.
 
-- `~/.config/openstack/clouds.yaml`
-- `~/.config/openstack/secure.yaml`
+> ### What we check
+>
+> - OpenStack config contains plaintext credentials.
+>
+> #### Sensitive Files
+>
+> - `~/.config/openstack/clouds.yaml`
+> - `~/.config/openstack/secure.yaml`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 The retired `openstackclient` hardener moved the detected secret to the macOS
 Keychain, then recreated `~/.config/openstack/clouds.yaml` inside a temporary

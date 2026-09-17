@@ -1,17 +1,26 @@
-# poetry Detector
+# poetry
 
-## Trigger Conditions
+It is trivial for anything on your computer to exfiltrate poetry’s secret:
 
-- Poetry auth.toml contains plaintext repository credentials.
+```sh
+cat "$HOME/.config/pypoetry/auth.toml"
+```
 
-## Sensitive Files
+This prints the file, including any repository passwords or PyPI tokens it
+contains. Software running as you with read access can copy the same material.
 
-- `$XDG_CONFIG_HOME/pypoetry/auth.toml`
-- `~/.config/pypoetry/auth.toml`
-- `~/Library/Application Support/pypoetry/auth.toml`
-- `~/Library/Preferences/pypoetry/auth.toml`
+> ### What we check
+>
+> - Poetry auth.toml contains plaintext repository credentials.
+>
+> #### Sensitive Files
+>
+> - `$XDG_CONFIG_HOME/pypoetry/auth.toml`
+> - `~/.config/pypoetry/auth.toml`
+> - `~/Library/Application Support/pypoetry/auth.toml`
+> - `~/Library/Preferences/pypoetry/auth.toml`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 Poetry can store repository passwords and PyPI tokens in `auth.toml` when a
 usable system keyring is unavailable. This detector reports those fallback

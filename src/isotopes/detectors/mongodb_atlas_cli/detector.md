@@ -1,16 +1,25 @@
-# mongodb-atlas-cli Detector
+# mongodb-atlas-cli
 
-## Trigger Conditions
+It is trivial for anything on your computer to exfiltrate mongodb-atlas-cli’s secret:
 
-- MongoDB Atlas CLI config contains plaintext credentials.
+```sh
+cat "$HOME/Library/Application Support/atlascli/config.toml"
+```
 
-## Sensitive Files
+This prints the file, including any MongoDB Atlas credentials it contains.
+Software running as you with read access can copy the same material.
 
-- `~/Library/Application Support/atlascli/config.toml`
-- `$XDG_CONFIG_HOME/atlascli/config.toml`
-- `~/.config/atlascli/config.toml`
+> ### What we check
+>
+> - MongoDB Atlas CLI config contains plaintext credentials.
+>
+> #### Sensitive Files
+>
+> - `~/Library/Application Support/atlascli/config.toml`
+> - `$XDG_CONFIG_HOME/atlascli/config.toml`
+> - `~/.config/atlascli/config.toml`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 MongoDB Atlas CLI already provides an upstream keyring-backed store. A safe
 remediation must use or repair that store instead of wrapping the CLI.

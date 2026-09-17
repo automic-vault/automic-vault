@@ -1,16 +1,25 @@
-# maestro Detector
+# maestro
 
-## Trigger Conditions
+It is trivial for anything on your computer to exfiltrate maestro’s secret:
 
-- Maestro Cloud token is stored in a plaintext token file.
-- Maestro Studio OpenAI token is stored in a plaintext token file.
+```sh
+cat "$HOME/.mobiledev/authtoken"
+```
 
-## Sensitive Files
+This prints the file, including any Maestro Cloud tokens it contains. Software
+running as you with read access can copy the same material.
 
-- `~/.mobiledev/authtoken`
-- `~/.mobiledev/openaitoken`
+> ### What we check
+>
+> - Maestro Cloud token is stored in a plaintext token file.
+> - Maestro Studio OpenAI token is stored in a plaintext token file.
+>
+> #### Sensitive Files
+>
+> - `~/.mobiledev/authtoken`
+> - `~/.mobiledev/openaitoken`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 The retired `maestro` hardener moved the detected secret to the macOS Keychain,
 then recreated `~/.mobiledev/authtoken` inside a temporary directory for each

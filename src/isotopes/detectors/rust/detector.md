@@ -1,17 +1,26 @@
-# rust Detector
+# rust
 
-## Trigger Conditions
+It is trivial for anything on your computer to exfiltrate rust’s secret:
 
-- Cargo credentials contain a plaintext registry token.
+```sh
+cat "$HOME/.cargo/credentials.toml"
+```
 
-## Sensitive Files
+This prints the file, including any Cargo registry tokens it contains. Software
+running as you with read access can copy the same material.
 
-- `$CARGO_HOME/credentials.toml`
-- `$CARGO_HOME/credentials`
-- `~/.cargo/credentials.toml`
-- `~/.cargo/credentials`
+> ### What we check
+>
+> - Cargo credentials contain a plaintext registry token.
+>
+> #### Sensitive Files
+>
+> - `$CARGO_HOME/credentials.toml`
+> - `$CARGO_HOME/credentials`
+> - `~/.cargo/credentials.toml`
+> - `~/.cargo/credentials`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 The retired hardener moved the registry token to the macOS Keychain and changed
 Cargo's credential-provider configuration to call `av credential-helper cargo`.

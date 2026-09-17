@@ -1,16 +1,25 @@
-# gallery-dl Detector
+# gallery-dl
 
-## Trigger Conditions
+It is trivial for anything on your computer to exfiltrate gallery-dl’s secret:
 
-- gallery-dl config contains credentials.
+```sh
+cat "$HOME/.config/gallery-dl/config.json"
+```
 
-## Sensitive Files
+This prints the file, including any gallery-dl account credentials it contains.
+Software running as you with read access can copy the same material.
 
-- `$XDG_CONFIG_HOME/gallery-dl/config.json`
-- `~/.config/gallery-dl/config.json`
-- `~/.gallery-dl.conf`
+> ### What we check
+>
+> - gallery-dl config contains credentials.
+>
+> #### Sensitive Files
+>
+> - `$XDG_CONFIG_HOME/gallery-dl/config.json`
+> - `~/.config/gallery-dl/config.json`
+> - `~/.gallery-dl.conf`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 The retired `gallery-dl` hardener moved the detected secret to the macOS
 Keychain, then recreated `$XDG_CONFIG_HOME/gallery-dl/config.json` inside a

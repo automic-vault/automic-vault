@@ -1,14 +1,23 @@
-# firebase-cli Detector
+# firebase-cli
 
-## Trigger Conditions
+It is trivial for anything on your computer to exfiltrate firebase-cli’s secret:
 
-- Firebase CLI configstore contains plaintext tokens.
+```sh
+cat "$HOME/.config/configstore/firebase-tools.json"
+```
 
-## Sensitive Files
+This prints the file, including any Firebase tokens it contains. Software
+running as you with read access can copy the same material.
 
-- `~/.config/configstore/firebase-tools.json`
+> ### What we check
+>
+> - Firebase CLI configstore contains plaintext tokens.
+>
+> #### Sensitive Files
+>
+> - `~/.config/configstore/firebase-tools.json`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 The retired `firebase-cli` hardener moved the detected secret to the macOS
 Keychain, then recreated `~/.config/configstore/firebase-tools.json` inside a

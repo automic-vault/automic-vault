@@ -1,14 +1,23 @@
-# ossutil Detector
+# ossutil
 
-## Trigger Conditions
+It is trivial for anything on your computer to exfiltrate ossutil’s secret:
 
-- ossutil config contains plaintext credentials.
+```sh
+cat "$HOME/.ossutilconfig"
+```
 
-## Sensitive Files
+This prints the file, including any Object Storage Service credentials it
+contains. Software running as you with read access can copy the same material.
 
-- `~/.ossutilconfig`
+> ### What we check
+>
+> - ossutil config contains plaintext credentials.
+>
+> #### Sensitive Files
+>
+> - `~/.ossutilconfig`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 The retired `ossutil` hardener moved the detected secret to the macOS Keychain,
 then recreated `~/.ossutilconfig` inside a temporary directory for each run. We

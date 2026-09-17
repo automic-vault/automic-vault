@@ -1,16 +1,25 @@
-# wget Detector
+# wget
 
-## Trigger Conditions
+It is trivial for anything on your computer to exfiltrate wget’s secret:
 
-- Wget netrc file contains plaintext credentials.
-- Wget config contains plaintext password options.
+```sh
+cat "$HOME/.netrc"
+```
 
-## Sensitive Files
+This prints the file, including any stored request credentials it contains.
+Software running as you with read access can copy the same material.
 
-- `~/.netrc`
-- `~/.wgetrc`
+> ### What we check
+>
+> - Wget netrc file contains plaintext credentials.
+> - Wget config contains plaintext password options.
+>
+> #### Sensitive Files
+>
+> - `~/.netrc`
+> - `~/.wgetrc`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 Wget can consume credentials from `~/.netrc` and from password options in
 `~/.wgetrc`. Those are generic user config files rather than a stable

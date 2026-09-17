@@ -1,15 +1,25 @@
-# skopeo Detector
+# skopeo
 
-## Trigger Conditions
+It is trivial for anything on your computer to exfiltrate skopeo’s secret:
 
-- skopeo registry credentials are stored in plaintext auth file.
+```sh
+cat "$HOME/.config/containers/auth.json"
+```
 
-## Sensitive Files
+This prints the file, including any registry credentials it contains. Software
+running as you with read access can copy the same material. Base64-encoded
+registry credentials can be decoded; encoding does not restrict access.
 
-- `$XDG_CONFIG_HOME/containers/auth.json`
-- `~/.config/containers/auth.json`
+> ### What we check
+>
+> - skopeo registry credentials are stored in plaintext auth file.
+>
+> #### Sensitive Files
+>
+> - `$XDG_CONFIG_HOME/containers/auth.json`
+> - `~/.config/containers/auth.json`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 The retired `skopeo` hardener moved the detected secret to the macOS Keychain,
 then recreated `$XDG_CONFIG_HOME/containers/auth.json` inside a temporary

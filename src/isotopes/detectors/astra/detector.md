@@ -1,15 +1,24 @@
-# astra Detector
+# astra
 
-## Trigger Conditions
+It is trivial for anything on your computer to exfiltrate astra’s secret:
 
-- astra config contains plaintext application tokens.
+```sh
+cat "$HOME/.config/astra/.astrarc"
+```
 
-## Sensitive Files
+This prints the file, including any Astra application tokens it contains.
+Software running as you with read access can copy the same material.
 
-- `$XDG_CONFIG_HOME/astra/.astrarc`
-- `~/.config/astra/.astrarc`
+> ### What we check
+>
+> - astra config contains plaintext application tokens.
+>
+> #### Sensitive Files
+>
+> - `$XDG_CONFIG_HOME/astra/.astrarc`
+> - `~/.config/astra/.astrarc`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 The retired `astra` hardener moved the detected secret to the macOS Keychain,
 then recreated `$XDG_CONFIG_HOME/astra/.astrarc` inside a temporary directory

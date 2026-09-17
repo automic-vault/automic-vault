@@ -1,22 +1,33 @@
-# git-credentials-file Detector
+# git-credentials-file
 
-## Trigger Conditions
+It is trivial for anything on your computer to exfiltrate Git’s secret:
 
-- Git credential store contains plaintext credentials.
-- Git config enables a plaintext Git credential-store file.
+```sh
+cat "$HOME/.git-credentials"
+```
 
-## Sensitive Files
+This prints the file, including any Git credentials it contains. Software
+running as you with read access can copy the same material.
 
-- `~/.git-credentials`
-- `~/.gitconfig`
-- `$XDG_CONFIG_HOME/git/config`
-- `~/.config/git/config`
-- `credential-store files referenced by global Git config`
+> ### What we check
+>
+> - Git credential store contains plaintext credentials.
+> - Git config enables a plaintext Git credential-store file.
+>
+> #### Sensitive Files
+>
+> - `~/.git-credentials`
+> - `~/.gitconfig`
+> - `$XDG_CONFIG_HOME/git/config`
+> - `~/.config/git/config`
+> - `credential-store files referenced by global Git config`
 
 ## Mitigation
 
 Remove credentials from the reported files, disable Git's plaintext `store`
 helper, and move repository remotes to SSH.
+
+---
 
 ## Inspect the Reported Store
 

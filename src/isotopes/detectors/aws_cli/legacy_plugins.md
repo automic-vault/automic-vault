@@ -1,18 +1,23 @@
-# aws-cli-legacy-plugins Detector
+# aws-cli-legacy-plugins
 
-## Trigger Conditions
+Legacy AWS CLI plugins run code inside credential-bearing CLI processes.
+An unexpected plugin can use that access to copy your AWS credentials.
 
-- AWS CLI legacy plugins are configured.
-
-## Rationale
-
-Legacy plugins are a trivial hook for malware to use to steal your keys.
+> ### What we check
+>
+> - AWS CLI legacy plugins are configured.
+>
+> #### Sensitive Files
+>
+> - `$AWS_CONFIG_FILE`
+> - `~/.aws/config`
 
 ## Mitigation
 
 Edit your configuration file and delete the legacy plugins section.
 
-## Sensitive Files
+---
 
-- `$AWS_CONFIG_FILE`
-- `~/.aws/config`
+## Rationale
+
+Legacy plugins are a trivial hook for malware to use to steal your keys.

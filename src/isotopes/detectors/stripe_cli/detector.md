@@ -1,18 +1,29 @@
-# stripe-cli Detector
+# stripe-cli
 
-## Trigger Conditions
+It is trivial for anything on your computer to exfiltrate stripe-cli’s secret:
 
-- Stripe CLI config contains plaintext API keys.
-- Stripe CLI Keychain credentials can be extracted non-interactively through
-  `/usr/bin/security`.
+```sh
+cat "$HOME/.config/stripe/config.toml"
+```
 
-## Sensitive Files
+This prints the file, including any Stripe API keys it contains. Software
+running as you with read access can copy the same material.
 
-- `$XDG_CONFIG_HOME/stripe/config.toml`
-- `~/.config/stripe/config.toml`
+> ### What we check
+>
+> - Stripe CLI config contains plaintext API keys.
+> - Stripe CLI Keychain credentials can be extracted non-interactively through
+>   `/usr/bin/security`.
+>
+> #### Sensitive Files
+>
+> - `$XDG_CONFIG_HOME/stripe/config.toml`
+> - `~/.config/stripe/config.toml`
 
 ## Mitigation
 
 ```sh
 av harden stripe
 ```
+
+See the [hardening reference](../../hardeners/stripe_cli.md) for setup and coverage.

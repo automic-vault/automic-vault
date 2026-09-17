@@ -1,14 +1,23 @@
-# soracom-cli Detector
+# soracom-cli
 
-## Trigger Conditions
+It is trivial for anything on your computer to exfiltrate soracom-cli’s secret:
 
-- soracom-cli default profile contains plaintext local credentials.
+```sh
+cat "$HOME/.soracom/default.json"
+```
 
-## Sensitive Files
+This prints the file, including any SORACOM credentials it contains. Software
+running as you with read access can copy the same material.
 
-- `~/.soracom/default.json`
+> ### What we check
+>
+> - soracom-cli default profile contains plaintext local credentials.
+>
+> #### Sensitive Files
+>
+> - `~/.soracom/default.json`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 The retired `soracom-cli` hardener moved the detected secret to the macOS
 Keychain, then recreated `~/.soracom/default.json` inside a temporary directory

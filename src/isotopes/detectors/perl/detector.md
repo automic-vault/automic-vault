@@ -1,16 +1,25 @@
-# perl Detector
+# perl
 
-## Trigger Conditions
+It is trivial for anything on your computer to exfiltrate perl’s secret:
 
-- CPAN config contains plaintext credentials.
+```sh
+cat "$HOME/.cpan/CPAN/MyConfig.pm"
+```
 
-## Sensitive Files
+This prints the file, including any CPAN repository credentials it contains.
+Software running as you with read access can copy the same material.
 
-- `~/.cpan/CPAN/MyConfig.pm`
-- `~/.cpan/CPAN/Config.pm`
-- `~/.cpan/CPAN/Config_local.pm`
+> ### What we check
+>
+> - CPAN config contains plaintext credentials.
+>
+> #### Sensitive Files
+>
+> - `~/.cpan/CPAN/MyConfig.pm`
+> - `~/.cpan/CPAN/Config.pm`
+> - `~/.cpan/CPAN/Config_local.pm`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 CPAN configuration can hold multiple repository identities alongside unrelated
 Perl settings. Perl does not provide a narrow credential-provider boundary that

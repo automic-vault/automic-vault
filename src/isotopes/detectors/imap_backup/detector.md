@@ -1,14 +1,23 @@
-# imap-backup Detector
+# imap-backup
 
-## Trigger Conditions
+It is trivial for anything on your computer to exfiltrate imap-backup’s secret:
 
-- imap-backup config contains plaintext account passwords.
+```sh
+cat "$HOME/.imap-backup/config.json"
+```
 
-## Sensitive Files
+This prints the file, including any IMAP account passwords it contains. Software
+running as you with read access can copy the same material.
 
-- `~/.imap-backup/config.json`
+> ### What we check
+>
+> - imap-backup config contains plaintext account passwords.
+>
+> #### Sensitive Files
+>
+> - `~/.imap-backup/config.json`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 The retired `imap-backup` hardener moved the detected secret to the macOS
 Keychain, then recreated `~/.imap-backup/config.json` inside a temporary

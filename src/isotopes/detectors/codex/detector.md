@@ -1,23 +1,25 @@
-# codex Detector
+# codex
 
-## Trigger Conditions
+It is trivial for anything on your computer to exfiltrate codex’s secret:
 
-- Codex CLI auth file contains a plaintext API key, personal access token,
-  ChatGPT token set, Bedrock API key, or agent identity.
-- Codex CLI auth file exists but cannot be read or parsed.
+```sh
+cat "${CODEX_HOME:-$HOME/.codex}/auth.json"
+```
 
-## Sensitive Files
+This prints the file, including any Codex login credentials it contains.
+Software running as you with read access can copy the same material.
 
-- `${CODEX_HOME:-$HOME/.codex}/auth.json`
+> ### What we check
+>
+> - Codex CLI auth file contains a plaintext API key, personal access token,
+>   ChatGPT token set, Bedrock API key, or agent identity.
+> - Codex CLI auth file exists but cannot be read or parsed.
+>
+> #### Sensitive Files
+>
+> - `${CODEX_HOME:-$HOME/.codex}/auth.json`
 
-## Why This Matters
-
-Codex caches login credentials in a plaintext file by default on every platform,
-including macOS. The file is created mode `0600`, which stops other users but not
-anything running as you. It holds a refresh token alongside any API key, so a
-copy keeps working after the access token expires.
-
-## Hardening
+## Mitigation
 
 Run the configuration-only hardener:
 
@@ -47,6 +49,17 @@ already on disk, so the plaintext copy survives until you delete it.
 
 Prefer `keyring` over `auto` on a workstation. `auto` falls back to the plaintext
 file when no keyring is available, while `keyring` fails loudly.
+
+See the [hardening reference](../../hardeners/codex.md) for setup and coverage.
+
+---
+
+## Why This Matters
+
+Codex caches login credentials in a plaintext file by default on every platform,
+including macOS. The file is created mode `0600`, which stops other users but not
+anything running as you. It holds a refresh token alongside any API key, so a
+copy keeps working after the access token expires.
 
 ## ChatGPT Desktop Impact
 

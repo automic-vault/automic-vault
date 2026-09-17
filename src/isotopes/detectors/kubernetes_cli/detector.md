@@ -1,15 +1,24 @@
-# kubernetes-cli Detector
+# kubernetes-cli
 
-## Trigger Conditions
+It is trivial for anything on your computer to exfiltrate kubernetes-cli’s secret:
 
-- kubeconfig contains plaintext cluster credentials.
+```sh
+cat "$HOME/.kube/config"
+```
 
-## Sensitive Files
+This prints the file, including any Kubernetes cluster credentials it contains.
+Software running as you with read access can copy the same material.
 
-- `$KUBECONFIG`
-- `~/.kube/config`
+> ### What we check
+>
+> - kubeconfig contains plaintext cluster credentials.
+>
+> #### Sensitive Files
+>
+> - `$KUBECONFIG`
+> - `~/.kube/config`
 
-## Hardening
+## Mitigation
 
 Run `av harden kubectl`. The hardener supports one kubeconfig containing inline
 bearer tokens or complete inline client certificate/key pairs. It stores each
@@ -17,3 +26,5 @@ credential as a Global Value and configures Kubernetes' native `ExecCredential`
 protocol to request it from Automic Vault.
 
 Unsupported, ambiguous, or unsafe kubeconfigs fail closed without being rewritten.
+
+See the [hardening reference](../../hardeners/kubectl.md) for setup and coverage.

@@ -1,18 +1,27 @@
-# mycli Detector
+# mycli
 
-## Trigger Conditions
+It is trivial for anything on your computer to exfiltrate mycli’s secret:
 
-- A mycli config contains a non-empty `password`, `passwd`, or `ssh_password`
-  field.
-- A mycli DSN contains a password in its URL user information.
+```sh
+cat "$HOME/.myclirc"
+```
 
-## Sensitive Files
+This prints the file, including any database or SSH passwords it contains.
+Software running as you with read access can copy the same material.
 
-- `~/.myclirc`
-- `$XDG_CONFIG_HOME/mycli/myclirc`
-- `~/.config/mycli/myclirc`
+> ### What we check
+>
+> - A mycli config contains a non-empty `password`, `passwd`, or `ssh_password`
+>   field.
+> - A mycli DSN contains a password in its URL user information.
+>
+> #### Sensitive Files
+>
+> - `~/.myclirc`
+> - `$XDG_CONFIG_HOME/mycli/myclirc`
+> - `~/.config/mycli/myclirc`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 The retired `mycli` hardener moved the detected secret to the macOS Keychain,
 then recreated `~/.myclirc` inside a temporary directory for each run. We no

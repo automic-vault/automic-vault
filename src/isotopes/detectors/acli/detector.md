@@ -1,21 +1,30 @@
-# acli Detector
+# acli
 
-## Trigger Conditions
+It is trivial for anything on your computer to exfiltrate acli’s secret:
 
-- Atlassian CLI credentials are stored in plaintext config.
+```sh
+cat "$HOME/.config/acli/confluence_config.yaml"
+```
 
-## Sensitive Files
+This prints the file, including any Atlassian credentials it contains. Software
+running as you with read access can copy the same material.
 
-- `~/.config/acli/confluence_config.yaml`
-- `~/.config/acli/jira_config.yaml`
-- `~/.config/acli/assets_config.yaml`
-- `~/.config/acli/rovodev_config.yaml`
-- `~/.config/acli/brie_config.yaml`
-- `~/.config/acli/global_auth_config.yaml`
-- `~/.config/acli/global_config.yaml`
-- `~/.config/acli/admin_config.yaml`
+> ### What we check
+>
+> - Atlassian CLI credentials are stored in plaintext config.
+>
+> #### Sensitive Files
+>
+> - `~/.config/acli/confluence_config.yaml`
+> - `~/.config/acli/jira_config.yaml`
+> - `~/.config/acli/assets_config.yaml`
+> - `~/.config/acli/rovodev_config.yaml`
+> - `~/.config/acli/brie_config.yaml`
+> - `~/.config/acli/global_auth_config.yaml`
+> - `~/.config/acli/global_config.yaml`
+> - `~/.config/acli/admin_config.yaml`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 The retired `acli` hardener moved the detected secret to the macOS Keychain,
 then recreated `~/.config/acli/confluence_config.yaml` inside a temporary

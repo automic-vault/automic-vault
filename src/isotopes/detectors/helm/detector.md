@@ -1,16 +1,25 @@
-# helm Detector
+# helm
 
-## Trigger Conditions
+It is trivial for anything on your computer to exfiltrate helm’s secret:
 
-- Helm repositories.yaml contains plaintext credentials.
+```sh
+cat "$HOME/Library/Preferences/helm/repositories.yaml"
+```
 
-## Sensitive Files
+This prints the file, including any Helm repository credentials it contains.
+Software running as you with read access can copy the same material.
 
-- `$HELM_REPOSITORY_CONFIG`
-- `$HELM_CONFIG_HOME/repositories.yaml`
-- `~/Library/Preferences/helm/repositories.yaml`
+> ### What we check
+>
+> - Helm repositories.yaml contains plaintext credentials.
+>
+> #### Sensitive Files
+>
+> - `$HELM_REPOSITORY_CONFIG`
+> - `$HELM_CONFIG_HOME/repositories.yaml`
+> - `~/Library/Preferences/helm/repositories.yaml`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 The retired `helm` hardener moved the detected secret to the macOS Keychain,
 then recreated `$HELM_REPOSITORY_CONFIG` inside a temporary directory for each

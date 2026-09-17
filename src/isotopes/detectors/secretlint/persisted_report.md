@@ -1,17 +1,26 @@
-# secretlint-persisted-report Detector
+# secretlint-persisted-report
 
-## Trigger Conditions
+It is trivial for anything on your computer to exfiltrate Secretlint’s secret:
 
-- Secretlint report may contain persisted secret findings.
+```sh
+cat "$HOME/secretlint-report.json"
+```
 
-## Sensitive Files
+This prints the file, including any secrets copied into a Secretlint report it
+contains. Software running as you with read access can copy the same material.
 
-- `~/secretlint-report.json`
-- `~/secretlint-output.json`
-- `./secretlint-report.json`
-- `./secretlint-output.json`
+> ### What we check
+>
+> - Secretlint report may contain persisted secret findings.
+>
+> #### Sensitive Files
+>
+> - `~/secretlint-report.json`
+> - `~/secretlint-output.json`
+> - `./secretlint-report.json`
+> - `./secretlint-output.json`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 This finding concerns a report that may already contain copied secrets, not a
 credential that Automic Vault can inject. Delete the report after reviewing it.

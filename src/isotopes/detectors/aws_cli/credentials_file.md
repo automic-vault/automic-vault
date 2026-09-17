@@ -1,8 +1,22 @@
-# aws-cli-credentials-file Detector
+# aws-cli-credentials-file
 
-## Trigger Conditions
+It is trivial for anything on your computer to exfiltrate AWS CLI’s secret:
 
-- AWS shared credentials file contains plaintext access keys.
+```sh
+cat "$HOME/.aws/credentials"
+```
+
+This prints the file, including any AWS access keys it contains. Software
+running as you with read access can copy the same material.
+
+> ### What we check
+>
+> - AWS shared credentials file contains plaintext access keys.
+>
+> #### Sensitive Files
+>
+> - `$AWS_SHARED_CREDENTIALS_FILE`
+> - `~/.aws/credentials`
 
 ## Mitigation
 
@@ -10,7 +24,4 @@
 av harden aws
 ```
 
-## Sensitive Files
-
-- `$AWS_SHARED_CREDENTIALS_FILE`
-- `~/.aws/credentials`
+See the [hardening reference](../../hardeners/aws_cli.md) for setup and coverage.

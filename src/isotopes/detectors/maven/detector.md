@@ -1,14 +1,23 @@
-# maven Detector
+# maven
 
-## Trigger Conditions
+It is trivial for anything on your computer to exfiltrate maven’s secret:
 
-- Maven settings.xml contains plaintext server credentials.
+```sh
+cat "$HOME/.m2/settings.xml"
+```
 
-## Sensitive Files
+This prints the file, including any Maven server credentials it contains.
+Software running as you with read access can copy the same material.
 
-- `~/.m2/settings.xml`
+> ### What we check
+>
+> - Maven settings.xml contains plaintext server credentials.
+>
+> #### Sensitive Files
+>
+> - `~/.m2/settings.xml`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 The retired `maven` hardener moved the detected secret to the macOS Keychain,
 then recreated `~/.m2/settings.xml` inside a temporary directory for each run.

@@ -1,15 +1,24 @@
-# mkcert Detector
+# mkcert
 
-## Trigger Conditions
+It is trivial for anything on your computer to exfiltrate mkcert’s secret:
 
-- mkcert CAROOT contains a plaintext root CA private key.
+```sh
+cat "$HOME/Library/Application Support/mkcert/rootCA-key.pem"
+```
 
-## Sensitive Files
+This prints the file, including the unencrypted root CA private key it
+contains. Software running as you with read access can copy the same material.
 
-- `$CAROOT/rootCA-key.pem`
-- `~/Library/Application Support/mkcert/rootCA-key.pem`
+> ### What we check
+>
+> - mkcert CAROOT contains a plaintext root CA private key.
+>
+> #### Sensitive Files
+>
+> - `$CAROOT/rootCA-key.pem`
+> - `~/Library/Application Support/mkcert/rootCA-key.pem`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 The retired `mkcert` hardener moved the detected secret to the macOS Keychain,
 then recreated `$CAROOT/rootCA-key.pem` inside a temporary directory for each

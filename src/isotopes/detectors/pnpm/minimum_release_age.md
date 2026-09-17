@@ -1,16 +1,21 @@
-# pnpm-minimum-release-age Detector
+# pnpm-minimum-release-age
 
-## Trigger Conditions
+A short package release-age delay allows newly published dependencies into your
+installation sooner, leaving less time to discover a malicious release. This
+check concerns package-installation policy; the pnpm token detector separately
+checks stored authentication tokens.
 
-- pnpm config sets a package minimum release age below 24 hours.
-
-## Sensitive Files
-
-- `$NPM_CONFIG_USERCONFIG`
-- `~/.npmrc`
-- `$XDG_CONFIG_HOME/pnpm/rc`
-- `~/.config/pnpm/rc`
-- `~/Library/Preferences/pnpm/rc`
+> ### What we check
+>
+> - pnpm config sets a package minimum release age below 24 hours.
+>
+> #### Sensitive Files
+>
+> - `$NPM_CONFIG_USERCONFIG`
+> - `~/.npmrc`
+> - `$XDG_CONFIG_HOME/pnpm/rc`
+> - `~/.config/pnpm/rc`
+> - `~/Library/Preferences/pnpm/rc`
 
 ## Mitigation
 

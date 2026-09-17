@@ -1,14 +1,23 @@
-# uaa-cli Detector
+# uaa-cli
 
-## Trigger Conditions
+It is trivial for anything on your computer to exfiltrate uaa-cli’s secret:
 
-- UAA CLI config contains plaintext OAuth tokens.
+```sh
+cat "$HOME/.uaa/config.json"
+```
 
-## Sensitive Files
+This prints the file, including any UAA OAuth tokens it contains. Software
+running as you with read access can copy the same material.
 
-- `~/.uaa/config.json`
+> ### What we check
+>
+> - UAA CLI config contains plaintext OAuth tokens.
+>
+> #### Sensitive Files
+>
+> - `~/.uaa/config.json`
 
-## Remediation
+## Mitigation
 
 Run `av harden uaa-cli`. The hardener installs the signed UAA CLI Isotope and
 migrates saved OAuth tokens into Automic Vault custody while leaving only
@@ -22,3 +31,5 @@ Detector covers every non-empty access or refresh token in the active
 
 The residual gap is other users' configs, backups, and inactive alternate
 config roots that are not selected by the current `HOME` or `UAA_HOME`.
+
+See the [hardening reference](../../hardeners/uaa_cli.md) for setup and coverage.

@@ -1,15 +1,25 @@
-# aws-sso-cli Detector
+# aws-sso-cli
 
-## Trigger Conditions
+It is trivial for anything on your computer to exfiltrate aws-sso-cli’s secret:
 
-- AWS SSO cache contains plaintext token or role credentials.
+```sh
+cat "$HOME/.aws/sso/cache/REPORTED_FILE.json"
+```
 
-## Sensitive Files
+Use the path reported by the Scan in place of this example path. This prints the
+file, including any AWS SSO tokens or temporary credentials it contains.
+Software running as you with read access can copy the same material.
 
-- `~/.aws/sso/cache/*.json`
-- `~/.aws/cli/cache/*.json`
+> ### What we check
+>
+> - AWS SSO cache contains plaintext token or role credentials.
+>
+> #### Sensitive Files
+>
+> - `~/.aws/sso/cache/*.json`
+> - `~/.aws/cli/cache/*.json`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 aws-sso-cli manages AWS Identity Center flows and can share cache files with AWS
 CLI and SDK tooling. This detector reports plaintext token and temporary

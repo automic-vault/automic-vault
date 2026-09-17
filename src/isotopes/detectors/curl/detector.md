@@ -1,16 +1,25 @@
-# curl Detector
+# curl
 
-## Trigger Conditions
+It is trivial for anything on your computer to exfiltrate curl’s secret:
 
-- curl netrc file contains plaintext credentials.
-- curl config contains plaintext auth material.
+```sh
+cat "$HOME/.netrc"
+```
 
-## Sensitive Files
+This prints the file, including any stored request credentials it contains.
+Software running as you with read access can copy the same material.
 
-- `~/.netrc`
-- `~/.curlrc`
+> ### What we check
+>
+> - curl netrc file contains plaintext credentials.
+> - curl config contains plaintext auth material.
+>
+> #### Sensitive Files
+>
+> - `~/.netrc`
+> - `~/.curlrc`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 curl reads credentials from generic request configuration shared across hosts
 and protocols. There is no package-owned account store or single environment

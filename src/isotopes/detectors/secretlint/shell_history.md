@@ -1,16 +1,24 @@
-# secretlint-shell-history Detector
+# secretlint-shell-history
 
-## Trigger Conditions
+```sh
+rg -n 'secretlint' "$HOME/.zsh_history" "$HOME/.bash_history" "$HOME/.history"
+```
 
-- Shell history contains Secretlint invocations that can expose unmasked secrets.
+These history entries can show invocations that expose unmasked secrets. The
+command prints saved command text; a matching invocation alone does not prove
+that its output contained a credential.
 
-## Sensitive Files
+> ### What we check
+>
+> - Shell history contains Secretlint invocations that can expose unmasked secrets.
+>
+> #### Sensitive Files
+>
+> - `~/.zsh_history`
+> - `~/.bash_history`
+> - `~/.history`
 
-- `~/.zsh_history`
-- `~/.bash_history`
-- `~/.history`
-
-## Why This is not Yet Hardened
+## Mitigation
 
 This finding concerns command text already recorded by the shell. A Secretlint
 wrapper cannot remove existing history safely or control every shell's history

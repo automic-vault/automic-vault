@@ -1,13 +1,33 @@
-# antigravity-cockpit Detector
+# antigravity-cockpit
 
-## Trigger Conditions
+It is trivial for anything on your computer to exfiltrate antigravity-cockpit’s secret:
 
-- Antigravity Cockpit credentials contain plaintext tokens.
-- Antigravity Cockpit credentials exist but cannot be read or parsed.
+```sh
+cat "$HOME/.antigravity_cockpit/credentials.json"
+```
 
-## Sensitive Files
+This prints the file, including any Antigravity Cockpit access and refresh
+tokens it contains. Software running as you with read access can copy the same
+material.
 
-- `~/.antigravity_cockpit/credentials.json`
+> ### What we check
+>
+> - Antigravity Cockpit credentials contain plaintext tokens.
+> - Antigravity Cockpit credentials exist but cannot be read or parsed.
+>
+> #### Sensitive Files
+>
+> - `~/.antigravity_cockpit/credentials.json`
+
+## Mitigation
+
+Upgrade Antigravity Cockpit to v2.1.29 or later and remove the leftover
+`~/.antigravity_cockpit/credentials.json` credential file.
+
+After deleting the unencrypted residue file, consider revoking any tokens
+previously stored in plaintext to invalidate exposed refresh credentials.
+
+---
 
 ## Why This Matters
 
@@ -21,14 +41,6 @@ Cockpit disabled this shared unencrypted credential export in v2.1.29 in favor
 of VS Code's native `SecretStorage` backed by the OS Keychain. However, leftover
 credential files created by earlier versions are not automatically deleted upon
 upgrading and remain exposed on disk.
-
-## Mitigation
-
-Upgrade Antigravity Cockpit to v2.1.29 or later and remove the leftover
-`~/.antigravity_cockpit/credentials.json` credential file.
-
-After deleting the unencrypted residue file, consider revoking any tokens
-previously stored in plaintext to invalidate exposed refresh credentials.
 
 ## Why Automic Vault Does Not Provide a Hardener
 

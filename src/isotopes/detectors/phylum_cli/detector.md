@@ -1,15 +1,24 @@
-# phylum-cli Detector
+# phylum-cli
 
-## Trigger Conditions
+It is trivial for anything on your computer to exfiltrate phylum-cli’s secret:
 
-- Phylum config contains a plaintext API token.
+```sh
+cat "$HOME/.config/phylum/settings.yaml"
+```
 
-## Sensitive Files
+This prints the file, including any Phylum API tokens it contains. Software
+running as you with read access can copy the same material.
 
-- `$XDG_CONFIG_HOME/phylum/settings.yaml`
-- `~/.config/phylum/settings.yaml`
+> ### What we check
+>
+> - Phylum config contains a plaintext API token.
+>
+> #### Sensitive Files
+>
+> - `$XDG_CONFIG_HOME/phylum/settings.yaml`
+> - `~/.config/phylum/settings.yaml`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 The retired `phylum-cli` hardener moved the detected secret to the macOS
 Keychain, then recreated `$XDG_CONFIG_HOME/phylum/settings.yaml` inside a

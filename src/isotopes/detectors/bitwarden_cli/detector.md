@@ -1,15 +1,24 @@
-# bitwarden-cli Detector
+# bitwarden-cli
 
-## Trigger Conditions
+It is trivial for anything on your computer to exfiltrate bitwarden-cli’s secret:
 
-- Bitwarden CLI token state is stored in plaintext data.json.
+```sh
+cat "$HOME/Library/Application Support/Bitwarden CLI/data.json"
+```
 
-## Sensitive Files
+This prints the file, including any Bitwarden token state it contains. Software
+running as you with read access can copy the same material.
 
-- `$BITWARDENCLI_APPDATA_DIR/data.json`
-- `~/Library/Application Support/Bitwarden CLI/data.json`
+> ### What we check
+>
+> - Bitwarden CLI token state is stored in plaintext data.json.
+>
+> #### Sensitive Files
+>
+> - `$BITWARDENCLI_APPDATA_DIR/data.json`
+> - `~/Library/Application Support/Bitwarden CLI/data.json`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 The retired `bitwarden-cli` hardener moved the detected secret to the macOS
 Keychain, then recreated `$BITWARDENCLI_APPDATA_DIR/data.json` inside a

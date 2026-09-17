@@ -1,14 +1,23 @@
-# ruby Detector
+# ruby
 
-## Trigger Conditions
+It is trivial for anything on your computer to exfiltrate ruby’s secret:
 
-- RubyGems credentials file contains plaintext API keys.
+```sh
+cat "$HOME/.gem/credentials"
+```
 
-## Sensitive Files
+This prints the file, including any RubyGems API keys it contains. Software
+running as you with read access can copy the same material.
 
-- `~/.gem/credentials`
+> ### What we check
+>
+> - RubyGems credentials file contains plaintext API keys.
+>
+> #### Sensitive Files
+>
+> - `~/.gem/credentials`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 RubyGems can store keys for multiple gem servers in one credentials file. The
 CLI has no credential-provider interface that lets Automic Vault preserve that

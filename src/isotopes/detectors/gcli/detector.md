@@ -1,15 +1,24 @@
-# gcli Detector
+# gcli
 
-## Trigger Conditions
+It is trivial for anything on your computer to exfiltrate gcli’s secret:
 
-- gcli config contains plaintext API tokens.
+```sh
+cat "$HOME/.config/gcli/config"
+```
 
-## Sensitive Files
+This prints the file, including any gcli API tokens it contains. Software
+running as you with read access can copy the same material.
 
-- `$XDG_CONFIG_HOME/gcli/config`
-- `~/.config/gcli/config`
+> ### What we check
+>
+> - gcli config contains plaintext API tokens.
+>
+> #### Sensitive Files
+>
+> - `$XDG_CONFIG_HOME/gcli/config`
+> - `~/.config/gcli/config`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 The retired `gcli` hardener moved the detected secret to the macOS Keychain,
 then recreated `$XDG_CONFIG_HOME/gcli/config` inside a temporary directory for

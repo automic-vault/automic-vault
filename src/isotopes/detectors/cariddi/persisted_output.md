@@ -1,15 +1,25 @@
-# cariddi-persisted-output Detector
+# cariddi-persisted-output
 
-## Trigger Conditions
+It is trivial for anything on your computer to exfiltrate cariddi’s secret:
 
-- cariddi default output can contain discovered secrets.
+```sh
+cat "$HOME/output-cariddi/secrets/REPORTED_FILE"
+```
 
-## Sensitive Files
+Use the path reported by the Scan in place of this example path. This prints the
+file, including any secrets discovered by cariddi it contains. Software running
+as you with read access can copy the same material.
 
-- `~/output-cariddi/secrets/**`
-- `./output-cariddi/secrets/**`
+> ### What we check
+>
+> - cariddi default output can contain discovered secrets.
+>
+> #### Sensitive Files
+>
+> - `~/output-cariddi/secrets/**`
+> - `./output-cariddi/secrets/**`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 This finding concerns secret-bearing scan output left behind by cariddi, not a
 credential that Automic Vault can inject at runtime. Delete the reported output

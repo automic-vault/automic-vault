@@ -1,16 +1,26 @@
-# cariddi-shell-history Detector
+# cariddi-shell-history
 
-## Trigger Conditions
+It is trivial for anything on your computer to exfiltrate cariddi’s secret:
 
-- Shell history contains cariddi header or custom secret-scanner arguments.
+```sh
+rg -n 'cariddi' "$HOME/.zsh_history" "$HOME/.bash_history" "$HOME/.history"
+```
 
-## Sensitive Files
+Saved scanner commands can include authorization headers or other sensitive
+arguments. This example prints matching history entries, including any secrets
+in them; software with access to the history files can read the same text.
 
-- `~/.zsh_history`
-- `~/.bash_history`
-- `~/.history`
+> ### What we check
+>
+> - Shell history contains cariddi header or custom secret-scanner arguments.
+>
+> #### Sensitive Files
+>
+> - `~/.zsh_history`
+> - `~/.bash_history`
+> - `~/.history`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 This finding concerns command text already recorded by the shell. A cariddi
 wrapper cannot remove existing history safely or control every shell's history

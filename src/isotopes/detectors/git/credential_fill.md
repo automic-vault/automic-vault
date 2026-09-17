@@ -1,50 +1,65 @@
-# git-credential-fill Detector
+# git-credential-fill
 
-## Trigger Conditions
-
-- The effective GitHub helper chain contains an ambient credential helper.
-- Git config delegates GitHub credentials to an untrusted `gh auth
-  git-credential` helper.
-- `osxkeychain` is effective and Keychain metadata confirms an Internet password
-  for `github.com`.
-- A signed Automic Vault `gh` helper is configured without first resetting
-  inherited helpers.
-- Git cannot safely resolve the effective helper configuration.
-
-A GitHub helper is not a Finding when an empty helper first resets inherited
-helpers and every effective helper is an absolute path to the signed Automic
-Vault `gh` Isotope. That helper requests the token through the `gh` Secret Gate
-instead of making it ambient authority.
-
-Hardening the `gh` on your current `PATH` does not make a relative `helper = !gh
-auth git-credential` safe. Git resolves `gh` from the invoking process's `PATH`,
-and any process running as you can ask the configured helper for a usable token:
+It is trivial for anything on your computer to exfiltrate Git’s secret:
 
 ```sh
 printf 'protocol=https\nhost=github.com\n\n' | git credential fill
 ```
 
-The configuration is exempt only when the helper chain has the reset and
-absolute signed-Isotope path described above. The `gh` Secret Gate must still
-authorize the resulting Secret Disclosure.
+This asks Git's configured helpers for a GitHub credential and can print a
+usable token. Other software running as you can make the same request. With a
+hardened helper, this is Secret Disclosure and remains subject to its Secret
+Gate. Automic Vault never runs this command during a Scan.
 
-The Detector resolves includes and configuration precedence with
-`/usr/bin/git config`. It never runs `git credential fill` or invokes a
-configured helper.
-
-## Sensitive Files
-
-- `~/.gitconfig`
-- `$XDG_CONFIG_HOME/git/config`
-- `~/.config/git/config`
-- Included Git config files reported by `git config --show-origin`
-- GitHub Internet-password metadata in the macOS Keychain
+> ### What we check
+>
+> - The effective GitHub helper chain contains an ambient credential helper.
+> - Git config delegates GitHub credentials to an untrusted `gh auth
+>   git-credential` helper.
+> - `osxkeychain` is effective and Keychain metadata confirms an Internet password
+>   for `github.com`.
+> - A signed Automic Vault `gh` helper is configured without first resetting
+>   inherited helpers.
+> - Git cannot safely resolve the effective helper configuration.
+>
+> A GitHub helper is not a Finding when an empty helper first resets inherited
+> helpers and every effective helper is an absolute path to the signed Automic
+> Vault `gh` Isotope. That helper requests the token through the `gh` Secret Gate
+> instead of making it ambient authority.
+>
+> Hardening the `gh` on your current `PATH` does not make a relative `helper = !gh
+> auth git-credential` safe. Git resolves `gh` from the invoking process's `PATH`,
+> and any process running as you can ask the configured helper for a usable token:
+>
+> It is trivial for anything on your computer to exfiltrate Git’s secret:
+>
+> ```sh
+> printf 'protocol=https\nhost=github.com\n\n' | git credential fill
+> ```
+>
+> The configuration is exempt only when the helper chain has the reset and
+> absolute signed-Isotope path described above. The `gh` Secret Gate must still
+> authorize the resulting Secret Disclosure.
+>
+> The Detector resolves includes and configuration precedence with
+> `/usr/bin/git config`. It never runs `git credential fill` or invokes a
+> configured helper.
+>
+> #### Sensitive Files
+>
+> - `~/.gitconfig`
+> - `$XDG_CONFIG_HOME/git/config`
+> - `~/.config/git/config`
+> - Included Git config files reported by `git config --show-origin`
+> - GitHub Internet-password metadata in the macOS Keychain
 
 ## Mitigation
 
 For an ambient or untrusted helper, remove the affected configuration and any
 matching cached credential, then move GitHub remotes to SSH. A signed Automic
 Vault `gh` Isotope may remain when it is the complete effective helper chain.
+
+---
 
 ## Confirm the Finding
 
@@ -61,6 +76,8 @@ metadata only; it does not request the password value. `av doctor gh` verifies
 whether an absolute `gh` helper is the signed Isotope.
 
 To exercise the credential path explicitly, a user may run:
+
+It is trivial for anything on your computer to exfiltrate Git’s secret:
 
 ```sh
 printf 'protocol=https\nhost=github.com\n\n' | git credential fill

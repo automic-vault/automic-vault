@@ -1,17 +1,27 @@
-# cloudflared Detector
+# cloudflared
 
-## Trigger Conditions
+It is trivial for anything on your computer to exfiltrate cloudflared’s secret:
 
-- cloudflared certificate contains a plaintext private key.
-- cloudflared tunnel credentials are stored in plaintext.
+```sh
+cat "$HOME/.cloudflared/REPORTED_FILE"
+```
 
-## Sensitive Files
+Use the path reported by the Scan in place of this example path. This prints the
+file, including any tunnel credentials or unencrypted private keys it contains.
+Software running as you with read access can copy the same material.
 
-- `~/.cloudflared/**`
-- `$XDG_CONFIG_HOME/cloudflared/**`
-- `~/.config/cloudflared/**`
+> ### What we check
+>
+> - cloudflared certificate contains a plaintext private key.
+> - cloudflared tunnel credentials are stored in plaintext.
+>
+> #### Sensitive Files
+>
+> - `~/.cloudflared/**`
+> - `$XDG_CONFIG_HOME/cloudflared/**`
+> - `~/.config/cloudflared/**`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 cloudflared tunnel state can include certificate private keys and tunnel
 credential JSON files. These are service credentials, so this detector reports

@@ -1,16 +1,25 @@
-# nuget Detector
+# nuget
 
-## Trigger Conditions
+It is trivial for anything on your computer to exfiltrate nuget’s secret:
 
-- NuGet user config contains package credentials.
+```sh
+cat "$HOME/.config/NuGet/NuGet.Config"
+```
 
-## Sensitive Files
+This prints the file, including any NuGet package credentials it contains.
+Software running as you with read access can copy the same material.
 
-- `$XDG_CONFIG_HOME/NuGet/NuGet.Config`
-- `~/.config/NuGet/NuGet.Config`
-- `~/.nuget/NuGet/NuGet.Config`
+> ### What we check
+>
+> - NuGet user config contains package credentials.
+>
+> #### Sensitive Files
+>
+> - `$XDG_CONFIG_HOME/NuGet/NuGet.Config`
+> - `~/.config/NuGet/NuGet.Config`
+> - `~/.nuget/NuGet/NuGet.Config`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 The retired `nuget` hardener moved the detected secret to the macOS Keychain,
 then recreated `$XDG_CONFIG_HOME/NuGet/NuGet.Config` inside a temporary

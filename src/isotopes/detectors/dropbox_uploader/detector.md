@@ -1,14 +1,23 @@
-# dropbox-uploader Detector
+# dropbox-uploader
 
-## Trigger Conditions
+It is trivial for anything on your computer to exfiltrate dropbox-uploader’s secret:
 
-- Dropbox Uploader config contains plaintext OAuth credentials.
+```sh
+cat "$HOME/.dropbox_uploader"
+```
 
-## Sensitive Files
+This prints the file, including any Dropbox OAuth credentials it contains.
+Software running as you with read access can copy the same material.
 
-- `~/.dropbox_uploader`
+> ### What we check
+>
+> - Dropbox Uploader config contains plaintext OAuth credentials.
+>
+> #### Sensitive Files
+>
+> - `~/.dropbox_uploader`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 The retired `dropbox-uploader` hardener moved the detected secret to the macOS
 Keychain, then recreated `~/.dropbox_uploader` inside a temporary directory for

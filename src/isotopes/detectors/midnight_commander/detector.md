@@ -1,15 +1,25 @@
-# midnight-commander Detector
+# midnight-commander
 
-## Trigger Conditions
+It is trivial for anything on your computer to exfiltrate midnight-commander’s secret:
 
-- Midnight Commander profile file contains VFS credentials.
+```sh
+cat "$HOME/.config/mc/REPORTED_FILE"
+```
 
-## Sensitive Files
+Use the path reported by the Scan in place of this example path. This prints the
+file, including any VFS credentials it contains. Software running as you with
+read access can copy the same material.
 
-- `$XDG_CONFIG_HOME/mc/**`
-- `~/.config/mc/**`
+> ### What we check
+>
+> - Midnight Commander profile file contains VFS credentials.
+>
+> #### Sensitive Files
+>
+> - `$XDG_CONFIG_HOME/mc/**`
+> - `~/.config/mc/**`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 The retired `midnight-commander` hardener moved the detected secret to the macOS
 Keychain, then recreated `$XDG_CONFIG_HOME/mc/**` inside a temporary directory

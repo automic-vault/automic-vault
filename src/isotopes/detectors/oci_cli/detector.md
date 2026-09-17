@@ -1,15 +1,25 @@
-# oci-cli Detector
+# oci-cli
 
-## Trigger Conditions
+It is trivial for anything on your computer to exfiltrate oci-cli’s secret:
 
-- OCI CLI config references plaintext credential material.
+```sh
+cat "${OCI_CLI_CONFIG_FILE:-$HOME/.oci/config}"
+```
 
-## Sensitive Files
+OCI configuration can expose inline credential material or identify a separate
+private-key file. Reading a key path does not itself disclose the key; software
+that can also read an unencrypted key file can copy that credential.
 
-- `$OCI_CLI_CONFIG_FILE`
-- `~/.oci/config`
+> ### What we check
+>
+> - OCI CLI config references plaintext credential material.
+>
+> #### Sensitive Files
+>
+> - `$OCI_CLI_CONFIG_FILE`
+> - `~/.oci/config`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 The retired `oci-cli` hardener moved the detected secret to the macOS Keychain,
 then recreated `$OCI_CLI_CONFIG_FILE` inside a temporary directory for each run.

@@ -1,4 +1,33 @@
-# Homebrew Detector
+# Homebrew
+
+Software running as you can replace CLI executables in a Homebrew installation
+that you can modify. The next invocation can then run the replacement with your
+credentials and permissions. This finding concerns writable executable code,
+even when no Secret is stored in the Homebrew prefix.
+
+> ### What we check
+>
+> - Homebrew exists at `/opt/homebrew/bin/brew`.
+> - The current user can modify `/opt/homebrew` or an immediate child directory.
+>
+> #### Sensitive Files
+>
+> - `/opt/homebrew`
+> - `/opt/homebrew/*/`
+
+## Mitigation
+
+```sh
+av harden brew
+```
+
+The hardener requests elevation when needed and offers to replace direct
+`/opt/homebrew/bin/brew` references in common shell startup files with the
+hardened `/usr/local/bin/brew` launcher.
+
+See the [hardening reference](../../hardeners/homebrew.md) for setup and coverage.
+
+---
 
 ## Rationale
 
@@ -34,25 +63,3 @@ macOS has numerous protections to prevent same user processes from modifying
 
 > If you have issues with Homebrew while Automic Vault hardening is enabled
 > please report the bug to *us* first.
-
-# Detection Details
-
-## Trigger Conditions
-
-- Homebrew exists at `/opt/homebrew/bin/brew`.
-- The current user can modify `/opt/homebrew` or an immediate child directory.
-
-## Mitigation
-
-```sh
-av harden brew
-```
-
-The hardener requests elevation when needed and offers to replace direct
-`/opt/homebrew/bin/brew` references in common shell startup files with the
-hardened `/usr/local/bin/brew` launcher.
-
-## Sensitive Files
-
-- `/opt/homebrew`
-- `/opt/homebrew/*/`

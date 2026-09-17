@@ -1,14 +1,23 @@
-# oauth2l Detector
+# oauth2l
 
-## Trigger Conditions
+It is trivial for anything on your computer to exfiltrate oauth2l’s secret:
 
-- oauth2l default cache contains plaintext OAuth tokens.
+```sh
+cat "$HOME/.oauth2l"
+```
 
-## Sensitive Files
+This prints the file, including any cached OAuth tokens it contains. Software
+running as you with read access can copy the same material.
 
-- `~/.oauth2l`
+> ### What we check
+>
+> - oauth2l default cache contains plaintext OAuth tokens.
+>
+> #### Sensitive Files
+>
+> - `~/.oauth2l`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 oauth2l stores fetched OAuth tokens in `~/.oauth2l` unless caching is disabled
 or redirected. This detector reports that default plaintext cache without

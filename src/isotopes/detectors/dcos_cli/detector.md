@@ -1,15 +1,25 @@
-# dcos-cli Detector
+# dcos-cli
 
-## Trigger Conditions
+It is trivial for anything on your computer to exfiltrate dcos-cli’s secret:
 
-- dcos-cli cluster config contains a plaintext ACS token.
+```sh
+cat "$HOME/.dcos/clusters/CLUSTER/dcos.toml"
+```
 
-## Sensitive Files
+Use the path reported by the Scan in place of this example path. This prints the
+file, including any DC/OS ACS tokens it contains. Software running as you with
+read access can copy the same material.
 
-- `$DCOS_DIR/clusters/*/dcos.toml`
-- `~/.dcos/clusters/*/dcos.toml`
+> ### What we check
+>
+> - dcos-cli cluster config contains a plaintext ACS token.
+>
+> #### Sensitive Files
+>
+> - `$DCOS_DIR/clusters/*/dcos.toml`
+> - `~/.dcos/clusters/*/dcos.toml`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 The retired `dcos-cli` hardener moved the detected secret to the macOS Keychain,
 then recreated `$DCOS_DIR/clusters/*/dcos.toml` inside a temporary directory for

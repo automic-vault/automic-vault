@@ -1,14 +1,23 @@
-# sbt Detector
+# sbt
 
-## Trigger Conditions
+It is trivial for anything on your computer to exfiltrate sbt’s secret:
 
-- sbt credentials file contains plaintext passwords.
+```sh
+cat "$HOME/.sbt/.credentials"
+```
 
-## Sensitive Files
+This prints the file, including any repository passwords it contains. Software
+running as you with read access can copy the same material.
 
-- `~/.sbt/.credentials`
+> ### What we check
+>
+> - sbt credentials file contains plaintext passwords.
+>
+> #### Sensitive Files
+>
+> - `~/.sbt/.credentials`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 The retired `sbt` hardener moved the detected secret to the macOS Keychain, then
 recreated `~/.sbt/.credentials` inside a temporary directory for each run. We no

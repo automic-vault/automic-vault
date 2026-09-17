@@ -1,15 +1,25 @@
-# mcp-remote Detector
+# mcp-remote
 
-## Trigger Conditions
+It is trivial for anything on your computer to exfiltrate mcp-remote’s secret:
 
-- mcp-remote auth file contains plaintext OAuth credentials.
+```sh
+cat "$HOME/.mcp-auth/SERVER/server_tokens.json"
+```
 
-## Sensitive Files
+Use the path reported by the Scan in place of this example path. This prints the
+file, including any MCP OAuth credentials it contains. Software running as you
+with read access can copy the same material.
 
-- `$MCP_REMOTE_CONFIG_DIR/**/server_tokens.json`
-- `~/.mcp-auth/**/server_tokens.json`
+> ### What we check
+>
+> - mcp-remote auth file contains plaintext OAuth credentials.
+>
+> #### Sensitive Files
+>
+> - `$MCP_REMOTE_CONFIG_DIR/**/server_tokens.json`
+> - `~/.mcp-auth/**/server_tokens.json`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 The retired `mcp-remote` hardener moved the detected secret to the macOS
 Keychain, then recreated `$MCP_REMOTE_CONFIG_DIR/**/server_tokens.json` inside a

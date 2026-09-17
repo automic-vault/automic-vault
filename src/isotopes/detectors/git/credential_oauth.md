@@ -1,17 +1,27 @@
-# git-credential-oauth Detector
+# git-credential-oauth
 
-## Trigger Conditions
+It is trivial for anything on your computer to exfiltrate Git’s secret:
 
-- Git config enables git-credential-oauth as an ambient credential helper.
-- Git config contains a plaintext OAuth client secret.
+```sh
+git config --global --get credential.oauthClientSecret
+```
 
-## Sensitive Files
+If your global Git config contains an OAuth client secret, this prints it.
+Software running as you can also invoke a configured OAuth credential helper.
+The Detector inspects configuration without executing the helper.
 
-- `~/.gitconfig`
-- `$XDG_CONFIG_HOME/git/config`
-- `~/.config/git/config`
+> ### What we check
+>
+> - Git config enables git-credential-oauth as an ambient credential helper.
+> - Git config contains a plaintext OAuth client secret.
+>
+> #### Sensitive Files
+>
+> - `~/.gitconfig`
+> - `$XDG_CONFIG_HOME/git/config`
+> - `~/.config/git/config`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 Remove the OAuth helper and any plaintext `oauthClientSecret` from the affected
 Git config, revoke a real client secret, and move repository remotes to SSH.
@@ -21,6 +31,8 @@ credential helper rather than an application-owned secret store, and rewriting
 the helper chain could break other Git authentication.
 
 [Open an issue to discuss a safer integration](https://github.com/automic-vault/automic-vault/issues).
+
+---
 
 ## Remove the OAuth Helper
 

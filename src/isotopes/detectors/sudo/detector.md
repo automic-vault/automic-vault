@@ -1,8 +1,18 @@
-# sudo Detector
+# sudo
 
-## Trigger Conditions
+Without Touch ID configured for sudo, you may need to type your account
+password into a terminal prompt. A forged prompt or misplaced keyboard focus
+can expose that password. This check concerns the authentication setup rather
+than a stored token.
 
-- sudo is not configured to offer Touch ID through `pam_tid.so`.
+> ### What we check
+>
+> - sudo is not configured to offer Touch ID through `pam_tid.so`.
+>
+> #### Sensitive Files
+>
+> - `/etc/pam.d/sudo`
+> - `/etc/pam.d/sudo_local`
 
 ## Mitigation
 
@@ -10,10 +20,9 @@
 av harden sudo
 ```
 
-## Sensitive Files
+See the [hardening reference](../../hardeners/sudo.md) for setup and coverage.
 
-- `/etc/pam.d/sudo`
-- `/etc/pam.d/sudo_local`
+---
 
 ## Recommended Further Action
 

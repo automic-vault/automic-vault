@@ -1,18 +1,27 @@
-# todoist-cli Detector
+# todoist-cli
 
-## Trigger Conditions
+It is trivial for anything on your computer to exfiltrate todoist-cli’s secret:
 
-- Todoist config contains a plaintext API token.
-- Todoist cache contains a plaintext API token.
+```sh
+cat "$HOME/.config/todoist/config.json"
+```
 
-## Sensitive Files
+This prints the file, including any Todoist API tokens it contains. Software
+running as you with read access can copy the same material.
 
-- `$XDG_CONFIG_HOME/todoist/config.json`
-- `$XDG_CACHE_HOME/todoist/cache.json`
-- `~/.config/todoist/config.json`
-- `~/.cache/todoist/cache.json`
+> ### What we check
+>
+> - Todoist config contains a plaintext API token.
+> - Todoist cache contains a plaintext API token.
+>
+> #### Sensitive Files
+>
+> - `$XDG_CONFIG_HOME/todoist/config.json`
+> - `$XDG_CACHE_HOME/todoist/cache.json`
+> - `~/.config/todoist/config.json`
+> - `~/.cache/todoist/cache.json`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 The retired `todoist-cli` hardener moved the detected secret to the macOS
 Keychain, then recreated `$XDG_CONFIG_HOME/todoist/config.json` inside a

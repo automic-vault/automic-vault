@@ -1,17 +1,26 @@
-# graphite Detector
+# graphite
 
-## Trigger Conditions
+It is trivial for anything on your computer to exfiltrate graphite’s secret:
 
-- Graphite CLI auth token is stored in plaintext config.
+```sh
+cat "$HOME/.config/graphite/auth"
+```
 
-## Sensitive Files
+This prints the file, including any Graphite tokens it contains. Software
+running as you with read access can copy the same material.
 
-- `$XDG_CONFIG_HOME/graphite/auth`
-- `$XDG_CONFIG_HOME/graphite/user_config`
-- `~/.config/graphite/auth`
-- `~/.config/graphite/user_config`
+> ### What we check
+>
+> - Graphite CLI auth token is stored in plaintext config.
+>
+> #### Sensitive Files
+>
+> - `$XDG_CONFIG_HOME/graphite/auth`
+> - `$XDG_CONFIG_HOME/graphite/user_config`
+> - `~/.config/graphite/auth`
+> - `~/.config/graphite/user_config`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 The retired `graphite` hardener moved the detected secret to the macOS Keychain,
 then recreated `$XDG_CONFIG_HOME/graphite/auth` inside a temporary directory for

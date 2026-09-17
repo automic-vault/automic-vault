@@ -1,16 +1,25 @@
-# talosctl Detector
+# talosctl
 
-## Trigger Conditions
+It is trivial for anything on your computer to exfiltrate talosctl’s secret:
 
-- talosctl config contains client credentials.
+```sh
+cat "$HOME/.talos/config"
+```
 
-## Sensitive Files
+This prints the file, including any Talos client credentials it contains.
+Software running as you with read access can copy the same material.
 
-- `$TALOSCONFIG`
-- `$TALOS_HOME/config`
-- `~/.talos/config`
+> ### What we check
+>
+> - talosctl config contains client credentials.
+>
+> #### Sensitive Files
+>
+> - `$TALOSCONFIG`
+> - `$TALOS_HOME/config`
+> - `~/.talos/config`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 The retired `talosctl` hardener moved the detected secret to the macOS Keychain,
 then recreated `$TALOSCONFIG` inside a temporary directory for each run. We no

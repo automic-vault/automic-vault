@@ -1,14 +1,23 @@
-# opentofu Detector
+# opentofu
 
-## Trigger Conditions
+It is trivial for anything on your computer to exfiltrate opentofu’s secret:
 
-- OpenTofu credentials file contains plaintext API tokens.
+```sh
+cat "$HOME/.terraform.d/credentials.tfrc.json"
+```
 
-## Sensitive Files
+This prints the file, including any OpenTofu API tokens it contains. Software
+running as you with read access can copy the same material.
 
-- `~/.terraform.d/credentials.tfrc.json`
+> ### What we check
+>
+> - OpenTofu credentials file contains plaintext API tokens.
+>
+> #### Sensitive Files
+>
+> - `~/.terraform.d/credentials.tfrc.json`
 
-## Hardening
+## Mitigation
 
 Run `av harden opentofu` to install this repository's signed, Hardened Runtime
 OpenTofu Isotope, migrate host tokens into Secret Custody, and configure the

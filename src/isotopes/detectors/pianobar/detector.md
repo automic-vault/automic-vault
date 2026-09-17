@@ -1,16 +1,25 @@
-# pianobar Detector
+# pianobar
 
-## Trigger Conditions
+It is trivial for anything on your computer to exfiltrate pianobar’s secret:
 
-- pianobar config contains a plaintext password.
+```sh
+cat "$HOME/.config/pianobar/config"
+```
 
-## Sensitive Files
+This prints the file, including any Pandora passwords it contains. Software
+running as you with read access can copy the same material.
 
-- `$XDG_CONFIG_HOME/pianobar/config`
-- `~/.config/pianobar/config`
-- `~/.pianobar/config`
+> ### What we check
+>
+> - pianobar config contains a plaintext password.
+>
+> #### Sensitive Files
+>
+> - `$XDG_CONFIG_HOME/pianobar/config`
+> - `~/.config/pianobar/config`
+> - `~/.pianobar/config`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 pianobar does not expose a narrow credential interface that preserves normal
 config behavior.

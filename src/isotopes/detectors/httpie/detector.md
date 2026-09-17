@@ -1,16 +1,26 @@
-# httpie Detector
+# httpie
 
-## Trigger Conditions
+It is trivial for anything on your computer to exfiltrate httpie’s secret:
 
-- HTTPie session contains plaintext auth material.
+```sh
+cat "$HOME/.config/httpie/sessions/HOST/default.json"
+```
 
-## Sensitive Files
+Use the path reported by the Scan in place of this example path. This prints the
+file, including any HTTPie session credentials it contains. Software running as
+you with read access can copy the same material.
 
-- `$XDG_CONFIG_HOME/httpie/sessions/**/default.json`
-- `~/.config/httpie/sessions/**/default.json`
-- `~/.httpie/sessions/**/default.json`
+> ### What we check
+>
+> - HTTPie session contains plaintext auth material.
+>
+> #### Sensitive Files
+>
+> - `$XDG_CONFIG_HOME/httpie/sessions/**/default.json`
+> - `~/.config/httpie/sessions/**/default.json`
+> - `~/.httpie/sessions/**/default.json`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 HTTPie session files are mutable runtime state. A safe fix needs native
 session-store integration or a source isotope that preserves session updates.

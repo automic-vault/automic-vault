@@ -1,9 +1,32 @@
-# System Integrity Protection (SIP) Detector
+# System Integrity Protection (SIP)
 
-## Trigger Conditions
+```sh
+csrutil status
+```
 
-- `csrutil status` reports that System Integrity Protection is disabled or has
-  a custom configuration instead of being fully enabled.
+Disabled or reduced System Integrity Protection lets privileged code modify
+parts of macOS that its default policy protects. This command reports that
+system policy; it does not inspect a credential.
+
+> ### What we check
+>
+> - `csrutil status` reports that System Integrity Protection is disabled or has
+>   a custom configuration instead of being fully enabled.
+
+## Mitigation
+
+Boot into macOS Recovery, open Terminal, and run:
+
+```sh
+csrutil enable
+```
+
+Restart macOS, then verify that `csrutil status` reports `System Integrity
+Protection status: enabled.` If SIP was disabled for legacy software or a
+specialized development workflow, prefer updating or replacing that dependency
+over leaving a machine-wide protection reduced.
+
+---
 
 ## Rationale
 
@@ -28,19 +51,6 @@ Gatekeeper, or application sandboxing. Its value is that a failure in one of
 those layers does not automatically grant permission to rewrite protected macOS
 content. Because turning SIP off requires Recovery OS, finding it disabled also
 usually indicates an intentional security-policy change that should be reviewed.
-
-## Mitigation
-
-Boot into macOS Recovery, open Terminal, and run:
-
-```sh
-csrutil enable
-```
-
-Restart macOS, then verify that `csrutil status` reports `System Integrity
-Protection status: enabled.` If SIP was disabled for legacy software or a
-specialized development workflow, prefer updating or replacing that dependency
-over leaving a machine-wide protection reduced.
 
 ## References
 

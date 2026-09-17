@@ -1,16 +1,25 @@
-# mercurial Detector
+# mercurial
 
-## Trigger Conditions
+It is trivial for anything on your computer to exfiltrate mercurial’s secret:
 
-- Mercurial hgrc contains credentials.
+```sh
+cat "$HOME/.hgrc"
+```
 
-## Sensitive Files
+This prints the file, including any Mercurial credentials it contains. Software
+running as you with read access can copy the same material.
 
-- `~/.hgrc`
-- `$XDG_CONFIG_HOME/hg/hgrc`
-- `~/.config/hg/hgrc`
+> ### What we check
+>
+> - Mercurial hgrc contains credentials.
+>
+> #### Sensitive Files
+>
+> - `~/.hgrc`
+> - `$XDG_CONFIG_HOME/hg/hgrc`
+> - `~/.config/hg/hgrc`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 The retired `mercurial` hardener moved the detected secret to the macOS
 Keychain, then recreated `~/.hgrc` inside a temporary directory for each run. We

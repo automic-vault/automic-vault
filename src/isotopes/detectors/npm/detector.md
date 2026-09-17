@@ -1,13 +1,18 @@
-# npm Detector
+# npm
 
-## Trigger Conditions
+A short package release-age delay allows newly published dependencies into your
+installation sooner, leaving less time to discover a malicious release. This
+check concerns package-installation policy; the Node detector separately checks
+npm's stored authentication tokens.
 
-- npm config sets a package minimum release age below 24 hours.
-
-## Sensitive Files
-
-- `$NPM_CONFIG_USERCONFIG`
-- `~/.npmrc`
+> ### What we check
+>
+> - npm config sets a package minimum release age below 24 hours.
+>
+> #### Sensitive Files
+>
+> - `$NPM_CONFIG_USERCONFIG`
+> - `~/.npmrc`
 
 ## Mitigation
 

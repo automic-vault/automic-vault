@@ -1,15 +1,24 @@
-# fauna-shell Detector
+# fauna-shell
 
-## Trigger Conditions
+It is trivial for anything on your computer to exfiltrate fauna-shell’s secret:
 
-- fauna-shell credential file contains plaintext local credentials.
+```sh
+cat "$HOME/.fauna/credentials/account_keys"
+```
 
-## Sensitive Files
+This prints the file, including any Fauna account or secret keys it contains.
+Software running as you with read access can copy the same material.
 
-- `~/.fauna/credentials/account_keys`
-- `~/.fauna/credentials/secret_keys`
+> ### What we check
+>
+> - fauna-shell credential file contains plaintext local credentials.
+>
+> #### Sensitive Files
+>
+> - `~/.fauna/credentials/account_keys`
+> - `~/.fauna/credentials/secret_keys`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 The retired `fauna-shell` hardener moved the detected secret to the macOS
 Keychain, then recreated `~/.fauna/credentials/account_keys` inside a temporary

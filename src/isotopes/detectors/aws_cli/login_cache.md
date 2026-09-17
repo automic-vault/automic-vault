@@ -1,14 +1,24 @@
-# aws-cli-login-cache Detector
+# aws-cli-login-cache
 
-## Trigger Conditions
+It is trivial for anything on your computer to exfiltrate AWS CLI’s secret:
 
-- AWS login cache contains cached access credentials.
+```sh
+cat "$HOME/.aws/login/cache/REPORTED_FILE.json"
+```
 
-## Sensitive Files
+Use the path reported by the Scan in place of this example path. This prints the
+file, including any cached AWS access credentials it contains. Software running
+as you with read access can copy the same material.
 
-- `~/.aws/login/cache/*.json`
+> ### What we check
+>
+> - AWS login cache contains cached access credentials.
+>
+> #### Sensitive Files
+>
+> - `~/.aws/login/cache/*.json`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 AWS CLI owns and refreshes the login cache as part of its authentication flow.
 Moving individual cache entries would leave mutable session state split between

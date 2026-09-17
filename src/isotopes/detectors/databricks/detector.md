@@ -1,18 +1,28 @@
-# databricks Detector
+# databricks
 
-## Trigger Conditions
+It is trivial for anything on your computer to exfiltrate databricks’s secret:
 
-- Databricks config contains plaintext profile credentials.
+```sh
+cat "$HOME/.databrickscfg"
+```
 
-## Sensitive Files
+This prints the file, including any Databricks profile tokens or client secrets
+it contains. Software running as you with read access can copy the same
+material.
 
-- `~/.databrickscfg`
-- `$XDG_CONFIG_HOME/databricks/config`
-- `$XDG_CONFIG_HOME/databricks/databrickscfg`
-- `~/.config/databricks/config`
-- `~/.config/databricks/databrickscfg`
+> ### What we check
+>
+> - Databricks config contains plaintext profile credentials.
+>
+> #### Sensitive Files
+>
+> - `~/.databrickscfg`
+> - `$XDG_CONFIG_HOME/databricks/config`
+> - `$XDG_CONFIG_HOME/databricks/databrickscfg`
+> - `~/.config/databricks/config`
+> - `~/.config/databricks/databrickscfg`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 Databricks CLI can store profile tokens and client secrets in config files even
 when OAuth token storage uses the OS keyring. This detector reports those

@@ -1,16 +1,26 @@
-# sshpass Detector
+# sshpass
 
-## Trigger Conditions
+It is trivial for anything on your computer to exfiltrate sshpass’s secret:
 
-- Shell history contains sshpass password material.
+```sh
+rg -n 'sshpass' "$HOME/.zsh_history" "$HOME/.bash_history" "$HOME/.history"
+```
 
-## Sensitive Files
+A password passed to sshpass can survive in shell history. This example prints
+matching entries, including any recorded password; software with access to the
+history file can retrieve it too.
 
-- `~/.zsh_history`
-- `~/.bash_history`
-- `~/.history`
+> ### What we check
+>
+> - Shell history contains sshpass password material.
+>
+> #### Sensitive Files
+>
+> - `~/.zsh_history`
+> - `~/.bash_history`
+> - `~/.history`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 sshpass can place SSH passwords in command history, process arguments, or
 environment variables. This detector reports obvious shell history use and does

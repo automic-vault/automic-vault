@@ -1,24 +1,34 @@
-# cloudflare-wrangler Detector
+# cloudflare-wrangler
 
-## Trigger Conditions
+It is trivial for anything on your computer to exfiltrate cloudflare-wrangler’s secret:
 
-- Wrangler auth config contains plaintext Cloudflare tokens.
-- Wrangler encrypted auth config uses a Keychain encryption key that
-  `/usr/bin/security` can retrieve non-interactively.
-- Access to that Keychain encryption key cannot be inspected.
+```sh
+cat "$HOME/.wrangler/config/default.toml"
+```
 
-## Sensitive Files
+Use the path reported by the Scan in place of this example path. This prints the
+file, including any Cloudflare OAuth tokens it contains. Software running as you
+with read access can copy the same material.
 
-- `~/Library/Preferences/.wrangler/config/*.toml`
-- `~/Library/Preferences/.wrangler/config/*.enc`
-- `~/.wrangler/config/*.toml`
-- `~/.wrangler/config/*.enc`
-- `~/.config/.wrangler/config/*.toml`
-- `~/.config/.wrangler/config/*.enc`
-- `$XDG_CONFIG_HOME/.wrangler/config/*.toml`
-- `$XDG_CONFIG_HOME/.wrangler/config/*.enc`
+> ### What we check
+>
+> - Wrangler auth config contains plaintext Cloudflare tokens.
+> - Wrangler encrypted auth config uses a Keychain encryption key that
+>   `/usr/bin/security` can retrieve non-interactively.
+> - Access to that Keychain encryption key cannot be inspected.
+>
+> #### Sensitive Files
+>
+> - `~/Library/Preferences/.wrangler/config/*.toml`
+> - `~/Library/Preferences/.wrangler/config/*.enc`
+> - `~/.wrangler/config/*.toml`
+> - `~/.wrangler/config/*.enc`
+> - `~/.config/.wrangler/config/*.toml`
+> - `~/.config/.wrangler/config/*.enc`
+> - `$XDG_CONFIG_HOME/.wrangler/config/*.toml`
+> - `$XDG_CONFIG_HOME/.wrangler/config/*.enc`
 
-## Why This is not Yet Hardened
+## Mitigation
 
 Wrangler 4.107.0 added `wrangler login --use-keyring`, which encrypts OAuth
 credentials on disk and stores the encryption key in the macOS Keychain. Its

@@ -1,19 +1,29 @@
-# bash Detector
+# bash
 
-## Trigger Conditions
+It is trivial for anything on your computer to exfiltrate bash’s secret:
 
-- Bash startup file contains plaintext-looking credential assignment.
-- Bash `PATH` places a user-writable directory before protected system
-  directories.
+```sh
+cat "$HOME/.bashrc"
+```
 
-## Sensitive Files
+A credential assignment in this file is readable by software running as you.
+Exporting it also makes it available to child processes. A separate PATH hazard
+arises when a writable directory can supply a replacement for a later command.
 
-- `~/.bashrc`
-- `~/.bash_profile`
-- `~/.bash_login`
-- `~/.profile`
-- `$BASH_ENV`
-- Directories listed in `$PATH`
+> ### What we check
+>
+> - Bash startup file contains plaintext-looking credential assignment.
+> - Bash `PATH` places a user-writable directory before protected system
+>   directories.
+>
+> #### Sensitive Files
+>
+> - `~/.bashrc`
+> - `~/.bash_profile`
+> - `~/.bash_login`
+> - `~/.profile`
+> - `$BASH_ENV`
+> - Directories listed in `$PATH`
 
 ## Mitigation
 
@@ -21,6 +31,8 @@ Bash startup files contain arbitrary user programs and shared environment
 configuration. Automic Vault cannot rewrite them without changing shell
 behavior or guessing which commands need each secret. Move the reported value
 with `av save KEY`, then inject it only into the command that needs it.
+
+---
 
 ## PATH Mitigation
 
