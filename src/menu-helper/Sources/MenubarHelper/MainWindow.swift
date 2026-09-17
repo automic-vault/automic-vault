@@ -2425,20 +2425,15 @@ struct DashboardRootView: View {
                         .labelStyle(.titleAndIcon)
                         .help("Allow Verified Launcher to Read Authorization History")
                     }
-                    if model.isReloading {
-                        ProgressView()
-                            .controlSize(.small)
-                            .accessibilityLabel("Refresh")
-                    } else {
-                        Button {
-                            requestScan()
-                            model.reload()
-                        } label: {
-                            Image(systemName: "arrow.clockwise")
-                        }
-                        .help("Refresh")
-                        .accessibilityLabel("Refresh")
+                    Button {
+                        requestScan()
+                        model.reload()
+                    } label: {
+                        Image(systemName: "arrow.clockwise")
                     }
+                    .disabled(model.isReloading)
+                    .help(model.isReloading ? "Refresh in Progress" : "Refresh")
+                    .accessibilityLabel("Refresh")
                 }
         }
         .searchable(text: $model.searchText, placement: .sidebar, prompt: "Search")
