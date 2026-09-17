@@ -1,13 +1,13 @@
 # openstackclient Detector
 
-## Trigger Conditions
-
-- OpenStack config contains plaintext credentials.
-
-## Sensitive Files
-
-- `~/.config/openstack/clouds.yaml`
-- `~/.config/openstack/secure.yaml`
+> ### What we check
+>
+> - OpenStack config contains plaintext credentials.
+>
+> #### Sensitive Files
+>
+> - `~/.config/openstack/clouds.yaml`
+> - `~/.config/openstack/secure.yaml`
 
 ## Why This is not Yet Hardened
 

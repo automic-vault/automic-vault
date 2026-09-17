@@ -1,19 +1,19 @@
 # bash Detector
 
-## Trigger Conditions
-
-- Bash startup file contains plaintext-looking credential assignment.
-- Bash `PATH` places a user-writable directory before protected system
-  directories.
-
-## Sensitive Files
-
-- `~/.bashrc`
-- `~/.bash_profile`
-- `~/.bash_login`
-- `~/.profile`
-- `$BASH_ENV`
-- Directories listed in `$PATH`
+> ### What we check
+>
+> - Bash startup file contains plaintext-looking credential assignment.
+> - Bash `PATH` places a user-writable directory before protected system
+>   directories.
+>
+> #### Sensitive Files
+>
+> - `~/.bashrc`
+> - `~/.bash_profile`
+> - `~/.bash_login`
+> - `~/.profile`
+> - `$BASH_ENV`
+> - Directories listed in `$PATH`
 
 ## Mitigation
 

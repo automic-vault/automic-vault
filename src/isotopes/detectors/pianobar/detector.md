@@ -1,14 +1,14 @@
 # pianobar Detector
 
-## Trigger Conditions
-
-- pianobar config contains a plaintext password.
-
-## Sensitive Files
-
-- `$XDG_CONFIG_HOME/pianobar/config`
-- `~/.config/pianobar/config`
-- `~/.pianobar/config`
+> ### What we check
+>
+> - pianobar config contains a plaintext password.
+>
+> #### Sensitive Files
+>
+> - `$XDG_CONFIG_HOME/pianobar/config`
+> - `~/.config/pianobar/config`
+> - `~/.pianobar/config`
 
 ## Why This is not Yet Hardened
 

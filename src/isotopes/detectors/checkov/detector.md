@@ -1,15 +1,15 @@
 # checkov Detector
 
-## Trigger Conditions
-
-- Checkov API key is stored in plaintext credentials file.
+> ### What we check
+>
+> - Checkov API key is stored in plaintext credentials file.
+>
+> #### Sensitive Files
+>
+> - `~/.bridgecrew/credentials`
 
 ## Mitigation
 
 ```sh
 av harden checkov
 ```
-
-## Sensitive Files
-
-- `~/.bridgecrew/credentials`

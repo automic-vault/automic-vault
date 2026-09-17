@@ -1,15 +1,15 @@
 # sentry-cli Detector
 
-## Trigger Conditions
-
-- Sentry CLI config contains a plaintext auth token.
+> ### What we check
+>
+> - Sentry CLI config contains a plaintext auth token.
+>
+> #### Sensitive Files
+>
+> - `~/.sentryclirc`
 
 ## Mitigation
 
 ```sh
 av harden sentry-cli
 ```
-
-## Sensitive Files
-
-- `~/.sentryclirc`

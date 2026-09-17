@@ -1,15 +1,15 @@
 # transifex-cli Detector
 
-## Trigger Conditions
-
-- Transifex root config contains plaintext credentials.
+> ### What we check
+>
+> - Transifex root config contains plaintext credentials.
+>
+> #### Sensitive Files
+>
+> - `~/.transifexrc`
 
 ## Mitigation
 
 ```sh
 av harden transifex-cli
 ```
-
-## Sensitive Files
-
-- `~/.transifexrc`

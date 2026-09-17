@@ -1,19 +1,19 @@
 # sudo Detector
 
-## Trigger Conditions
-
-- sudo is not configured to offer Touch ID through `pam_tid.so`.
+> ### What we check
+>
+> - sudo is not configured to offer Touch ID through `pam_tid.so`.
+>
+> #### Sensitive Files
+>
+> - `/etc/pam.d/sudo`
+> - `/etc/pam.d/sudo_local`
 
 ## Mitigation
 
 ```sh
 av harden sudo
 ```
-
-## Sensitive Files
-
-- `/etc/pam.d/sudo`
-- `/etc/pam.d/sudo_local`
 
 ## Recommended Further Action
 

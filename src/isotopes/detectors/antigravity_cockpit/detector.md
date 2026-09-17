@@ -1,13 +1,13 @@
 # antigravity-cockpit Detector
 
-## Trigger Conditions
-
-- Antigravity Cockpit credentials contain plaintext tokens.
-- Antigravity Cockpit credentials exist but cannot be read or parsed.
-
-## Sensitive Files
-
-- `~/.antigravity_cockpit/credentials.json`
+> ### What we check
+>
+> - Antigravity Cockpit credentials contain plaintext tokens.
+> - Antigravity Cockpit credentials exist but cannot be read or parsed.
+>
+> #### Sensitive Files
+>
+> - `~/.antigravity_cockpit/credentials.json`
 
 ## Why This Matters
 

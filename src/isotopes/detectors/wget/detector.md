@@ -1,14 +1,14 @@
 # wget Detector
 
-## Trigger Conditions
-
-- Wget netrc file contains plaintext credentials.
-- Wget config contains plaintext password options.
-
-## Sensitive Files
-
-- `~/.netrc`
-- `~/.wgetrc`
+> ### What we check
+>
+> - Wget netrc file contains plaintext credentials.
+> - Wget config contains plaintext password options.
+>
+> #### Sensitive Files
+>
+> - `~/.netrc`
+> - `~/.wgetrc`
 
 ## Why This is not Yet Hardened
 

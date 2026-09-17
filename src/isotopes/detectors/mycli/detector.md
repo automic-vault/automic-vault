@@ -1,16 +1,16 @@
 # mycli Detector
 
-## Trigger Conditions
-
-- A mycli config contains a non-empty `password`, `passwd`, or `ssh_password`
-  field.
-- A mycli DSN contains a password in its URL user information.
-
-## Sensitive Files
-
-- `~/.myclirc`
-- `$XDG_CONFIG_HOME/mycli/myclirc`
-- `~/.config/mycli/myclirc`
+> ### What we check
+>
+> - A mycli config contains a non-empty `password`, `passwd`, or `ssh_password`
+>   field.
+> - A mycli DSN contains a password in its URL user information.
+>
+> #### Sensitive Files
+>
+> - `~/.myclirc`
+> - `$XDG_CONFIG_HOME/mycli/myclirc`
+> - `~/.config/mycli/myclirc`
 
 ## Why This is not Yet Hardened
 

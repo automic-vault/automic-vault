@@ -1,12 +1,12 @@
 # mysql Detector
 
-## Trigger Conditions
-
-- MySQL option file contains plaintext passwords.
-
-## Sensitive Files
-
-- `~/.my.cnf`
+> ### What we check
+>
+> - MySQL option file contains plaintext passwords.
+>
+> #### Sensitive Files
+>
+> - `~/.my.cnf`
 
 ## Why This is not Yet Hardened
 

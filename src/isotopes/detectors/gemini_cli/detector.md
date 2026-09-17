@@ -1,13 +1,13 @@
 # gemini-cli Detector
 
-## Trigger Conditions
-
-- Gemini CLI OAuth credentials contain plaintext tokens.
-- Gemini CLI OAuth credentials exist but cannot be read or parsed.
-
-## Sensitive Files
-
-- `~/.gemini/oauth_creds.json`
+> ### What we check
+>
+> - Gemini CLI OAuth credentials contain plaintext tokens.
+> - Gemini CLI OAuth credentials exist but cannot be read or parsed.
+>
+> #### Sensitive Files
+>
+> - `~/.gemini/oauth_creds.json`
 
 ## Why This Matters
 

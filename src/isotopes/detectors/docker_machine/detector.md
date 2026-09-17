@@ -1,12 +1,12 @@
 # docker-machine Detector
 
-## Trigger Conditions
-
-- Docker Machine private key is stored without passphrase encryption.
-
-## Sensitive Files
-
-- `~/.docker/machine/**`
+> ### What we check
+>
+> - Docker Machine private key is stored without passphrase encryption.
+>
+> #### Sensitive Files
+>
+> - `~/.docker/machine/**`
 
 ## Why This is not Yet Hardened
 

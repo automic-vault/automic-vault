@@ -1,15 +1,15 @@
 # openssh Detector
 
-## Trigger Conditions
-
-- SSH private key is stored without passphrase encryption.
-- SSH security-key handle is stored without passphrase encryption (medium severity).
-
-## Sensitive Files
-
-- `~/.ssh/config`
-- `~/.ssh/id_*`
-- `identity files referenced by ~/.ssh/config`
+> ### What we check
+>
+> - SSH private key is stored without passphrase encryption.
+> - SSH security-key handle is stored without passphrase encryption (medium severity).
+>
+> #### Sensitive Files
+>
+> - `~/.ssh/config`
+> - `~/.ssh/id_*`
+> - `identity files referenced by ~/.ssh/config`
 
 ## Why This is not Yet Hardened
 

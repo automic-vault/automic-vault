@@ -1,24 +1,24 @@
 # zsh Detector
 
-## Trigger Conditions
-
-- Zsh startup file contains plaintext-looking credential assignment.
-- Zsh `PATH` places a user-writable directory before protected system
-  directories.
-
-## Sensitive Files
-
-- `$ZDOTDIR/.zshenv`
-- `$ZDOTDIR/.zprofile`
-- `$ZDOTDIR/.zshrc`
-- `$ZDOTDIR/.zlogin`
-- `$ZDOTDIR/.zlogout`
-- `~/.zshenv`
-- `~/.zprofile`
-- `~/.zshrc`
-- `~/.zlogin`
-- `~/.zlogout`
-- Directories listed in `$PATH`
+> ### What we check
+>
+> - Zsh startup file contains plaintext-looking credential assignment.
+> - Zsh `PATH` places a user-writable directory before protected system
+>   directories.
+>
+> #### Sensitive Files
+>
+> - `$ZDOTDIR/.zshenv`
+> - `$ZDOTDIR/.zprofile`
+> - `$ZDOTDIR/.zshrc`
+> - `$ZDOTDIR/.zlogin`
+> - `$ZDOTDIR/.zlogout`
+> - `~/.zshenv`
+> - `~/.zprofile`
+> - `~/.zshrc`
+> - `~/.zlogin`
+> - `~/.zlogout`
+> - Directories listed in `$PATH`
 
 ## Mitigation
 

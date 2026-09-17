@@ -35,12 +35,15 @@ macOS has numerous protections to prevent same user processes from modifying
 > If you have issues with Homebrew while Automic Vault hardening is enabled
 > please report the bug to *us* first.
 
-# Detection Details
-
-## Trigger Conditions
-
-- Homebrew exists at `/opt/homebrew/bin/brew`.
-- The current user can modify `/opt/homebrew` or an immediate child directory.
+> ### What we check
+>
+> - Homebrew exists at `/opt/homebrew/bin/brew`.
+> - The current user can modify `/opt/homebrew` or an immediate child directory.
+>
+> #### Sensitive Files
+>
+> - `/opt/homebrew`
+> - `/opt/homebrew/*/`
 
 ## Mitigation
 
@@ -51,8 +54,3 @@ av harden brew
 The hardener requests elevation when needed and offers to replace direct
 `/opt/homebrew/bin/brew` references in common shell startup files with the
 hardened `/usr/local/bin/brew` launcher.
-
-## Sensitive Files
-
-- `/opt/homebrew`
-- `/opt/homebrew/*/`

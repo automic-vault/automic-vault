@@ -1,13 +1,13 @@
 # node@18 Detector
 
-## Trigger Conditions
-
-- npm user config contains a plaintext auth token.
-
-## Sensitive Files
-
-- `$NPM_CONFIG_USERCONFIG`
-- `~/.npmrc`
+> ### What we check
+>
+> - npm user config contains a plaintext auth token.
+>
+> #### Sensitive Files
+>
+> - `$NPM_CONFIG_USERCONFIG`
+> - `~/.npmrc`
 
 ## Why This is not Yet Hardened
 

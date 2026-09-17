@@ -1,16 +1,16 @@
 # ast-cli Detector
 
-## Trigger Conditions
-
-- Checkmarx AST config contains plaintext credentials.
+> ### What we check
+>
+> - Checkmarx AST config contains plaintext credentials.
+>
+> #### Sensitive Files
+>
+> - `$CX_CONFIG_FILE_PATH`
+> - `~/.checkmarx/checkmarxcli.yaml`
 
 ## Mitigation
 
 ```sh
 av harden ast-cli
 ```
-
-## Sensitive Files
-
-- `$CX_CONFIG_FILE_PATH`
-- `~/.checkmarx/checkmarxcli.yaml`

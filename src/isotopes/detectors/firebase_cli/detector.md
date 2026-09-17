@@ -1,12 +1,12 @@
 # firebase-cli Detector
 
-## Trigger Conditions
-
-- Firebase CLI configstore contains plaintext tokens.
-
-## Sensitive Files
-
-- `~/.config/configstore/firebase-tools.json`
+> ### What we check
+>
+> - Firebase CLI configstore contains plaintext tokens.
+>
+> #### Sensitive Files
+>
+> - `~/.config/configstore/firebase-tools.json`
 
 ## Why This is not Yet Hardened
 

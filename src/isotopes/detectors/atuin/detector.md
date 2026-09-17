@@ -1,15 +1,15 @@
 # atuin Detector
 
-## Trigger Conditions
-
-- Atuin sync secret is stored in plaintext.
-
-## Sensitive Files
-
-- `$XDG_DATA_HOME/atuin/key`
-- `$XDG_DATA_HOME/atuin/session`
-- `~/.local/share/atuin/key`
-- `~/.local/share/atuin/session`
+> ### What we check
+>
+> - Atuin sync secret is stored in plaintext.
+>
+> #### Sensitive Files
+>
+> - `$XDG_DATA_HOME/atuin/key`
+> - `$XDG_DATA_HOME/atuin/session`
+> - `~/.local/share/atuin/key`
+> - `~/.local/share/atuin/session`
 
 ## Why This is not Yet Hardened
 

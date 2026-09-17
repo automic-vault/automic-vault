@@ -1,15 +1,15 @@
 # virustotal-cli Detector
 
-## Trigger Conditions
-
-- VirusTotal config contains a plaintext API key.
+> ### What we check
+>
+> - VirusTotal config contains a plaintext API key.
+>
+> #### Sensitive Files
+>
+> - `~/.vt.toml`
 
 ## Mitigation
 
 ```sh
 av harden virustotal-cli
 ```
-
-## Sensitive Files
-
-- `~/.vt.toml`

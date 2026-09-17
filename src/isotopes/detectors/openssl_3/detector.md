@@ -1,15 +1,15 @@
 # openssl@3 Detector
 
-## Trigger Conditions
-
-- OpenSSL private key is stored without passphrase encryption.
-
-## Sensitive Files
-
-- `~/.ssl/**`
-- `~/.certs/**`
-- `~/certs/**`
-- `~/.config/openssl/**`
+> ### What we check
+>
+> - OpenSSL private key is stored without passphrase encryption.
+>
+> #### Sensitive Files
+>
+> - `~/.ssl/**`
+> - `~/.certs/**`
+> - `~/certs/**`
+> - `~/.config/openssl/**`
 
 ## Why This is not Yet Hardened
 

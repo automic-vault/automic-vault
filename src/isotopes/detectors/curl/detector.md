@@ -1,14 +1,14 @@
 # curl Detector
 
-## Trigger Conditions
-
-- curl netrc file contains plaintext credentials.
-- curl config contains plaintext auth material.
-
-## Sensitive Files
-
-- `~/.netrc`
-- `~/.curlrc`
+> ### What we check
+>
+> - curl netrc file contains plaintext credentials.
+> - curl config contains plaintext auth material.
+>
+> #### Sensitive Files
+>
+> - `~/.netrc`
+> - `~/.curlrc`
 
 ## Why This is not Yet Hardened
 

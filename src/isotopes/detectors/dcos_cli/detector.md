@@ -1,13 +1,13 @@
 # dcos-cli Detector
 
-## Trigger Conditions
-
-- dcos-cli cluster config contains a plaintext ACS token.
-
-## Sensitive Files
-
-- `$DCOS_DIR/clusters/*/dcos.toml`
-- `~/.dcos/clusters/*/dcos.toml`
+> ### What we check
+>
+> - dcos-cli cluster config contains a plaintext ACS token.
+>
+> #### Sensitive Files
+>
+> - `$DCOS_DIR/clusters/*/dcos.toml`
+> - `~/.dcos/clusters/*/dcos.toml`
 
 ## Why This is not Yet Hardened
 

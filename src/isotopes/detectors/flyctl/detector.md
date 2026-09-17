@@ -1,15 +1,15 @@
 # flyctl Detector
 
-## Trigger Conditions
-
-- flyctl config file contains a plaintext access token.
+> ### What we check
+>
+> - flyctl config file contains a plaintext access token.
+>
+> #### Sensitive Files
+>
+> - `~/.fly/config.yml`
 
 ## Mitigation
 
 ```sh
 av harden flyctl
 ```
-
-## Sensitive Files
-
-- `~/.fly/config.yml`

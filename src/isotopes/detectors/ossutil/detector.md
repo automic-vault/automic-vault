@@ -1,12 +1,12 @@
 # ossutil Detector
 
-## Trigger Conditions
-
-- ossutil config contains plaintext credentials.
-
-## Sensitive Files
-
-- `~/.ossutilconfig`
+> ### What we check
+>
+> - ossutil config contains plaintext credentials.
+>
+> #### Sensitive Files
+>
+> - `~/.ossutilconfig`
 
 ## Why This is not Yet Hardened
 

@@ -1,14 +1,14 @@
 # sshpass Detector
 
-## Trigger Conditions
-
-- Shell history contains sshpass password material.
-
-## Sensitive Files
-
-- `~/.zsh_history`
-- `~/.bash_history`
-- `~/.history`
+> ### What we check
+>
+> - Shell history contains sshpass password material.
+>
+> #### Sensitive Files
+>
+> - `~/.zsh_history`
+> - `~/.bash_history`
+> - `~/.history`
 
 ## Why This is not Yet Hardened
 

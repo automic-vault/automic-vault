@@ -1,12 +1,12 @@
 # sslmate Detector
 
-## Trigger Conditions
-
-- SSLMate config contains a plaintext API key.
-
-## Sensitive Files
-
-- `~/.sslmate`
+> ### What we check
+>
+> - SSLMate config contains a plaintext API key.
+>
+> #### Sensitive Files
+>
+> - `~/.sslmate`
 
 ## Why This is not Yet Hardened
 

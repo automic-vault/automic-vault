@@ -1,13 +1,13 @@
 # oci-cli Detector
 
-## Trigger Conditions
-
-- OCI CLI config references plaintext credential material.
-
-## Sensitive Files
-
-- `$OCI_CLI_CONFIG_FILE`
-- `~/.oci/config`
+> ### What we check
+>
+> - OCI CLI config references plaintext credential material.
+>
+> #### Sensitive Files
+>
+> - `$OCI_CLI_CONFIG_FILE`
+> - `~/.oci/config`
 
 ## Why This is not Yet Hardened
 

@@ -1,15 +1,15 @@
 # s3cmd Detector
 
-## Trigger Conditions
-
-- s3cmd config contains plaintext credentials.
+> ### What we check
+>
+> - s3cmd config contains plaintext credentials.
+>
+> #### Sensitive Files
+>
+> - `~/.s3cfg`
 
 ## Mitigation
 
 ```sh
 av harden s3cmd
 ```
-
-## Sensitive Files
-
-- `~/.s3cfg`

@@ -580,16 +580,13 @@ pub(crate) fn metadata(home: &Path) -> Vec<DetectorMetadata> {
 }
 
 fn sensitive_file_scopes(documentation: &str, home: &Path) -> Vec<DetectorWatchScope> {
-    let Some(section) = documentation
-        .split_once("## Sensitive Files")
-        .map(|(_, section)| section)
-        .and_then(|section| section.split("\n## ").next())
-    else {
-        return Vec::new();
-    };
     let mut seen = HashSet::new();
-    section
+    documentation
         .lines()
+        .map(|line| line.strip_prefix("> ").unwrap_or(line).trim())
+        .skip_while(|line| !matches!(*line, "## Sensitive Files" | "#### Sensitive Files"))
+        .skip(1)
+        .take_while(|line| !line.starts_with('#'))
         .filter_map(|line| line.trim().strip_prefix("- `")?.strip_suffix('`'))
         .filter_map(|path| resolve_sensitive_path(path, home))
         .filter(|scope| seen.insert((scope.path.clone(), scope.recursive)))
@@ -720,6 +717,27 @@ mod tests {
         assert_eq!(scopes[1].path, "/Users/tester/.aws/login/cache");
         assert!(scopes[1].recursive);
         assert!(scopes.iter().all(|scope| scope.path != "/Users/tester"));
+    }
+
+    #[test]
+    fn quoted_sensitive_files_preserve_watch_scopes_and_section_boundary() {
+        let scopes = sensitive_file_scopes(
+            "> ### What we check\n>\n> - Plaintext credentials.\n>\n> #### Sensitive Files\n>\n> - `~/.aws/credentials`\n> - `~/.aws/login/cache/*.json`\n> - `./project.json`\n\n## Mitigation\n\n- `~/.unrelated`\n",
+            Path::new("/Users/tester"),
+        );
+
+        assert_eq!(scopes.len(), 2);
+        assert_eq!(scopes[0].path, "/Users/tester/.aws/credentials");
+        assert!(!scopes[0].recursive);
+        assert_eq!(scopes[1].path, "/Users/tester/.aws/login/cache");
+        assert!(scopes[1].recursive);
+        assert!(
+            sensitive_file_scopes(
+                "> ### What we check\n>\n> - Keychain metadata only.\n",
+                Path::new("/Users/tester"),
+            )
+            .is_empty()
+        );
     }
 
     #[test]

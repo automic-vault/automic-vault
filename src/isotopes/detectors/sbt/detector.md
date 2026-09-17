@@ -1,12 +1,12 @@
 # sbt Detector
 
-## Trigger Conditions
-
-- sbt credentials file contains plaintext passwords.
-
-## Sensitive Files
-
-- `~/.sbt/.credentials`
+> ### What we check
+>
+> - sbt credentials file contains plaintext passwords.
+>
+> #### Sensitive Files
+>
+> - `~/.sbt/.credentials`
 
 ## Why This is not Yet Hardened
 

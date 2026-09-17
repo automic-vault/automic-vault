@@ -1,13 +1,13 @@
 # fastlane Detector
 
-## Trigger Conditions
-
-- fastlane Spaceship session cookie is stored in plaintext.
-
-## Sensitive Files
-
-- `~/.fastlane/spaceship/**`
-- `~/.spaceship/**`
+> ### What we check
+>
+> - fastlane Spaceship session cookie is stored in plaintext.
+>
+> #### Sensitive Files
+>
+> - `~/.fastlane/spaceship/**`
+> - `~/.spaceship/**`
 
 ## Why This is not Yet Hardened
 

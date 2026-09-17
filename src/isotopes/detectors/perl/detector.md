@@ -1,14 +1,14 @@
 # perl Detector
 
-## Trigger Conditions
-
-- CPAN config contains plaintext credentials.
-
-## Sensitive Files
-
-- `~/.cpan/CPAN/MyConfig.pm`
-- `~/.cpan/CPAN/Config.pm`
-- `~/.cpan/CPAN/Config_local.pm`
+> ### What we check
+>
+> - CPAN config contains plaintext credentials.
+>
+> #### Sensitive Files
+>
+> - `~/.cpan/CPAN/MyConfig.pm`
+> - `~/.cpan/CPAN/Config.pm`
+> - `~/.cpan/CPAN/Config_local.pm`
 
 ## Why This is not Yet Hardened
 

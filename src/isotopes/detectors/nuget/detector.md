@@ -1,14 +1,14 @@
 # nuget Detector
 
-## Trigger Conditions
-
-- NuGet user config contains package credentials.
-
-## Sensitive Files
-
-- `$XDG_CONFIG_HOME/NuGet/NuGet.Config`
-- `~/.config/NuGet/NuGet.Config`
-- `~/.nuget/NuGet/NuGet.Config`
+> ### What we check
+>
+> - NuGet user config contains package credentials.
+>
+> #### Sensitive Files
+>
+> - `$XDG_CONFIG_HOME/NuGet/NuGet.Config`
+> - `~/.config/NuGet/NuGet.Config`
+> - `~/.nuget/NuGet/NuGet.Config`
 
 ## Why This is not Yet Hardened
 

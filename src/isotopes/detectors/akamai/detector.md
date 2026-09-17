@@ -1,15 +1,15 @@
 # akamai Detector
 
-## Trigger Conditions
-
-- Akamai CLI .edgerc contains plaintext EdgeGrid credentials.
+> ### What we check
+>
+> - Akamai CLI .edgerc contains plaintext EdgeGrid credentials.
+>
+> #### Sensitive Files
+>
+> - `${AKAMAI_EDGERC:-$HOME/.edgerc}`
 
 ## Mitigation
 
 ```sh
 av harden akamai
 ```
-
-## Sensitive Files
-
-- `${AKAMAI_EDGERC:-$HOME/.edgerc}`

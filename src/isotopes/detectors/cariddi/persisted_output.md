@@ -1,13 +1,13 @@
 # cariddi-persisted-output Detector
 
-## Trigger Conditions
-
-- cariddi default output can contain discovered secrets.
-
-## Sensitive Files
-
-- `~/output-cariddi/secrets/**`
-- `./output-cariddi/secrets/**`
+> ### What we check
+>
+> - cariddi default output can contain discovered secrets.
+>
+> #### Sensitive Files
+>
+> - `~/output-cariddi/secrets/**`
+> - `./output-cariddi/secrets/**`
 
 ## Why This is not Yet Hardened
 

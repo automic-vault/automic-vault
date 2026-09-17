@@ -1,12 +1,12 @@
 # ruby Detector
 
-## Trigger Conditions
-
-- RubyGems credentials file contains plaintext API keys.
-
-## Sensitive Files
-
-- `~/.gem/credentials`
+> ### What we check
+>
+> - RubyGems credentials file contains plaintext API keys.
+>
+> #### Sensitive Files
+>
+> - `~/.gem/credentials`
 
 ## Why This is not Yet Hardened
 

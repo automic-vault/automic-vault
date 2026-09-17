@@ -1,14 +1,14 @@
 # talosctl Detector
 
-## Trigger Conditions
-
-- talosctl config contains client credentials.
-
-## Sensitive Files
-
-- `$TALOSCONFIG`
-- `$TALOS_HOME/config`
-- `~/.talos/config`
+> ### What we check
+>
+> - talosctl config contains client credentials.
+>
+> #### Sensitive Files
+>
+> - `$TALOSCONFIG`
+> - `$TALOS_HOME/config`
+> - `~/.talos/config`
 
 ## Why This is not Yet Hardened
 

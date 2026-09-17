@@ -1,8 +1,15 @@
 # argocd Detector
 
-## Trigger Conditions
-
-- Argo CD config file contains plaintext tokens.
+> ### What we check
+>
+> - Argo CD config file contains plaintext tokens.
+>
+> #### Sensitive Files
+>
+> - `$ARGOCD_CONFIG_DIR/config`
+> - `~/.argocd/config`
+> - `$XDG_CONFIG_HOME/argocd/config`
+> - `~/.config/argocd/config`
 
 ## Mitigation
 
@@ -23,10 +30,3 @@ av harden argocd
 
 The first command temporarily restores the plaintext token. Do not leave the
 recovered config unhardened.
-
-## Sensitive Files
-
-- `$ARGOCD_CONFIG_DIR/config`
-- `~/.argocd/config`
-- `$XDG_CONFIG_HOME/argocd/config`
-- `~/.config/argocd/config`

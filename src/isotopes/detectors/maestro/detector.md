@@ -1,14 +1,14 @@
 # maestro Detector
 
-## Trigger Conditions
-
-- Maestro Cloud token is stored in a plaintext token file.
-- Maestro Studio OpenAI token is stored in a plaintext token file.
-
-## Sensitive Files
-
-- `~/.mobiledev/authtoken`
-- `~/.mobiledev/openaitoken`
+> ### What we check
+>
+> - Maestro Cloud token is stored in a plaintext token file.
+> - Maestro Studio OpenAI token is stored in a plaintext token file.
+>
+> #### Sensitive Files
+>
+> - `~/.mobiledev/authtoken`
+> - `~/.mobiledev/openaitoken`
 
 ## Why This is not Yet Hardened
 

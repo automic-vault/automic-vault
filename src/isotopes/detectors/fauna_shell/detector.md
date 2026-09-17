@@ -1,13 +1,13 @@
 # fauna-shell Detector
 
-## Trigger Conditions
-
-- fauna-shell credential file contains plaintext local credentials.
-
-## Sensitive Files
-
-- `~/.fauna/credentials/account_keys`
-- `~/.fauna/credentials/secret_keys`
+> ### What we check
+>
+> - fauna-shell credential file contains plaintext local credentials.
+>
+> #### Sensitive Files
+>
+> - `~/.fauna/credentials/account_keys`
+> - `~/.fauna/credentials/secret_keys`
 
 ## Why This is not Yet Hardened
 

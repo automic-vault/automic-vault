@@ -1,44 +1,44 @@
 # git-credential-fill Detector
 
-## Trigger Conditions
-
-- The effective GitHub helper chain contains an ambient credential helper.
-- Git config delegates GitHub credentials to an untrusted `gh auth
-  git-credential` helper.
-- `osxkeychain` is effective and Keychain metadata confirms an Internet password
-  for `github.com`.
-- A signed Automic Vault `gh` helper is configured without first resetting
-  inherited helpers.
-- Git cannot safely resolve the effective helper configuration.
-
-A GitHub helper is not a Finding when an empty helper first resets inherited
-helpers and every effective helper is an absolute path to the signed Automic
-Vault `gh` Isotope. That helper requests the token through the `gh` Secret Gate
-instead of making it ambient authority.
-
-Hardening the `gh` on your current `PATH` does not make a relative `helper = !gh
-auth git-credential` safe. Git resolves `gh` from the invoking process's `PATH`,
-and any process running as you can ask the configured helper for a usable token:
-
-```sh
-printf 'protocol=https\nhost=github.com\n\n' | git credential fill
-```
-
-The configuration is exempt only when the helper chain has the reset and
-absolute signed-Isotope path described above. The `gh` Secret Gate must still
-authorize the resulting Secret Disclosure.
-
-The Detector resolves includes and configuration precedence with
-`/usr/bin/git config`. It never runs `git credential fill` or invokes a
-configured helper.
-
-## Sensitive Files
-
-- `~/.gitconfig`
-- `$XDG_CONFIG_HOME/git/config`
-- `~/.config/git/config`
-- Included Git config files reported by `git config --show-origin`
-- GitHub Internet-password metadata in the macOS Keychain
+> ### What we check
+>
+> - The effective GitHub helper chain contains an ambient credential helper.
+> - Git config delegates GitHub credentials to an untrusted `gh auth
+>   git-credential` helper.
+> - `osxkeychain` is effective and Keychain metadata confirms an Internet password
+>   for `github.com`.
+> - A signed Automic Vault `gh` helper is configured without first resetting
+>   inherited helpers.
+> - Git cannot safely resolve the effective helper configuration.
+>
+> A GitHub helper is not a Finding when an empty helper first resets inherited
+> helpers and every effective helper is an absolute path to the signed Automic
+> Vault `gh` Isotope. That helper requests the token through the `gh` Secret Gate
+> instead of making it ambient authority.
+>
+> Hardening the `gh` on your current `PATH` does not make a relative `helper = !gh
+> auth git-credential` safe. Git resolves `gh` from the invoking process's `PATH`,
+> and any process running as you can ask the configured helper for a usable token:
+>
+> ```sh
+> printf 'protocol=https\nhost=github.com\n\n' | git credential fill
+> ```
+>
+> The configuration is exempt only when the helper chain has the reset and
+> absolute signed-Isotope path described above. The `gh` Secret Gate must still
+> authorize the resulting Secret Disclosure.
+>
+> The Detector resolves includes and configuration precedence with
+> `/usr/bin/git config`. It never runs `git credential fill` or invokes a
+> configured helper.
+>
+> #### Sensitive Files
+>
+> - `~/.gitconfig`
+> - `$XDG_CONFIG_HOME/git/config`
+> - `~/.config/git/config`
+> - Included Git config files reported by `git config --show-origin`
+> - GitHub Internet-password metadata in the macOS Keychain
 
 ## Mitigation
 

@@ -1,12 +1,12 @@
 # aws-cli-login-cache Detector
 
-## Trigger Conditions
-
-- AWS login cache contains cached access credentials.
-
-## Sensitive Files
-
-- `~/.aws/login/cache/*.json`
+> ### What we check
+>
+> - AWS login cache contains cached access credentials.
+>
+> #### Sensitive Files
+>
+> - `~/.aws/login/cache/*.json`
 
 ## Why This is not Yet Hardened
 

@@ -1,12 +1,12 @@
 # sqlcmd Detector
 
-## Trigger Conditions
-
-- sqlcmd sqlconfig contains stored passwords.
-
-## Sensitive Files
-
-- `~/.sqlcmd/sqlconfig`
+> ### What we check
+>
+> - sqlcmd sqlconfig contains stored passwords.
+>
+> #### Sensitive Files
+>
+> - `~/.sqlcmd/sqlconfig`
 
 ## Hardened State
 

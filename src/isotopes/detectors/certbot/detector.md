@@ -1,14 +1,14 @@
 # certbot Detector
 
-## Trigger Conditions
-
-- Certbot key material is stored without passphrase encryption.
-
-## Sensitive Files
-
-- `~/.config/letsencrypt/**`
-- `~/.letsencrypt/**`
-- `~/Library/Application Support/letsencrypt/**`
+> ### What we check
+>
+> - Certbot key material is stored without passphrase encryption.
+>
+> #### Sensitive Files
+>
+> - `~/.config/letsencrypt/**`
+> - `~/.letsencrypt/**`
+> - `~/Library/Application Support/letsencrypt/**`
 
 ## Why This is not Yet Hardened
 

@@ -1,14 +1,14 @@
 # envchain Detector
 
-## Trigger Conditions
-
-- Shell history shows envchain namespaces storing environment secrets.
-
-## Sensitive Files
-
-- `~/.zsh_history`
-- `~/.bash_history`
-- `~/.history`
+> ### What we check
+>
+> - Shell history shows envchain namespaces storing environment secrets.
+>
+> #### Sensitive Files
+>
+> - `~/.zsh_history`
+> - `~/.bash_history`
+> - `~/.history`
 
 ## Why This is not Yet Hardened
 

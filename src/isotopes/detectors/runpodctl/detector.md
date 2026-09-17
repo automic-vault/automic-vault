@@ -1,16 +1,16 @@
 # runpodctl Detector
 
-## Trigger Conditions
-
-- runpodctl config contains a plaintext API key.
+> ### What we check
+>
+> - runpodctl config contains a plaintext API key.
+>
+> #### Sensitive Files
+>
+> - `~/.runpod/config.toml`
+> - `~/.runpod.yaml`
 
 ## Mitigation
 
 ```sh
 av harden runpodctl
 ```
-
-## Sensitive Files
-
-- `~/.runpod/config.toml`
-- `~/.runpod.yaml`

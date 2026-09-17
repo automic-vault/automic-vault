@@ -1,12 +1,12 @@
 # plumber Detector
 
-## Trigger Conditions
-
-- Plumber local config contains a non-empty plaintext credential field.
-
-## Sensitive Files
-
-- `~/.batchsh/plumber.json`
+> ### What we check
+>
+> - Plumber local config contains a non-empty plaintext credential field.
+>
+> #### Sensitive Files
+>
+> - `~/.batchsh/plumber.json`
 
 ## Remediation
 

@@ -1,16 +1,16 @@
 # cloudsmith-cli Detector
 
-## Trigger Conditions
-
-- cloudsmith credentials contain a plaintext API key.
+> ### What we check
+>
+> - cloudsmith credentials contain a plaintext API key.
+>
+> #### Sensitive Files
+>
+> - `~/Library/Application Support/cloudsmith/credentials.ini`
+> - `~/.cloudsmith/credentials.ini`
 
 ## Mitigation
 
 ```sh
 av harden cloudsmith-cli
 ```
-
-## Sensitive Files
-
-- `~/Library/Application Support/cloudsmith/credentials.ini`
-- `~/.cloudsmith/credentials.ini`

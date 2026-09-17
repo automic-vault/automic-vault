@@ -1,15 +1,15 @@
 # buf Detector
 
-## Trigger Conditions
-
-- Buf registry token is stored in plaintext netrc.
+> ### What we check
+>
+> - Buf registry token is stored in plaintext netrc.
+>
+> #### Sensitive Files
+>
+> - `~/.netrc`
 
 ## Mitigation
 
 ```sh
 av harden buf
 ```
-
-## Sensitive Files
-
-- `~/.netrc`

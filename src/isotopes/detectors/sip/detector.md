@@ -1,9 +1,9 @@
 # System Integrity Protection (SIP) Detector
 
-## Trigger Conditions
-
-- `csrutil status` reports that System Integrity Protection is disabled or has
-  a custom configuration instead of being fully enabled.
+> ### What we check
+>
+> - `csrutil status` reports that System Integrity Protection is disabled or has
+>   a custom configuration instead of being fully enabled.
 
 ## Rationale
 

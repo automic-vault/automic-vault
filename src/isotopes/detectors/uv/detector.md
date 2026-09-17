@@ -1,14 +1,14 @@
 # uv Detector
 
-## Trigger Conditions
-
-- uv credentials store contains plaintext credentials.
-
-## Sensitive Files
-
-- `$UV_CREDENTIALS_DIR/credentials.toml`
-- `$XDG_DATA_HOME/uv/credentials/credentials.toml`
-- `~/.local/share/uv/credentials/credentials.toml`
+> ### What we check
+>
+> - uv credentials store contains plaintext credentials.
+>
+> #### Sensitive Files
+>
+> - `$UV_CREDENTIALS_DIR/credentials.toml`
+> - `$XDG_DATA_HOME/uv/credentials/credentials.toml`
+> - `~/.local/share/uv/credentials/credentials.toml`
 
 ## Native Keychain Does Not Close the Exposure
 

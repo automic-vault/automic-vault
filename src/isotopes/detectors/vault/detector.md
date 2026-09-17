@@ -1,15 +1,15 @@
 # vault Detector
 
-## Trigger Conditions
-
-- Vault token helper file contains a plaintext token.
+> ### What we check
+>
+> - Vault token helper file contains a plaintext token.
+>
+> #### Sensitive Files
+>
+> - `~/.vault-token`
 
 ## Mitigation
 
 ```sh
 av harden vault
 ```
-
-## Sensitive Files
-
-- `~/.vault-token`

@@ -1,12 +1,12 @@
 # ansible Detector
 
-## Trigger Conditions
-
-- Ansible Galaxy token file contains a plaintext token.
-
-## Sensitive Files
-
-- `${ANSIBLE_GALAXY_TOKEN_PATH:-$HOME/.ansible/galaxy_token}`
+> ### What we check
+>
+> - Ansible Galaxy token file contains a plaintext token.
+>
+> #### Sensitive Files
+>
+> - `${ANSIBLE_GALAXY_TOKEN_PATH:-$HOME/.ansible/galaxy_token}`
 
 ## Why This is not Yet Hardened
 

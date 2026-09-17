@@ -1,12 +1,12 @@
 # mariadb Detector
 
-## Trigger Conditions
-
-- MariaDB/MySQL option file contains plaintext passwords.
-
-## Sensitive Files
-
-- `~/.my.cnf`
+> ### What we check
+>
+> - MariaDB/MySQL option file contains plaintext passwords.
+>
+> #### Sensitive Files
+>
+> - `~/.my.cnf`
 
 ## Why This is not Yet Hardened
 
