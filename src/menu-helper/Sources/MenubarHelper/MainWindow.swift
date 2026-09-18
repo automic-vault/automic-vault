@@ -2331,7 +2331,11 @@ struct DashboardRootView: View {
             DashboardListView(model: model)
                 .navigationSplitViewColumnWidth(min: 168, ideal: 255)
                 .toolbar {
-                   if model.selectedSection == .allSecrets {
+                    if #available(macOS 27, *),
+                       model.selectedSection == .allSecrets || model.selectedSection == .launcherBundles {
+                        ToolbarSpacer(.flexible)
+                    }
+                    if model.selectedSection == .allSecrets {
                         ToolbarItem {
                             Button {
                                 model.isAddingSecret = true
