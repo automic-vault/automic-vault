@@ -160,9 +160,9 @@ final class AutomicVaultMainWindowController: NSHostingController<DashboardRootV
         model.showAccessRequest(id: id)
     }
 
-    func showHistory() {
+    func showSection(_ section: DashboardSection) {
         model.searchText = ""
-        model.selectSection(.secretUsage)
+        model.selectSection(section)
     }
 
     func showSecretGate(id: String) {
@@ -1652,7 +1652,7 @@ private func blessedScriptItem(_ script: BlessedScript) -> DashboardItem {
     )
 }
 
-private func blessedScriptStatus(_ script: BlessedScript) -> String {
+func blessedScriptStatus(_ script: BlessedScript) -> String {
     var info = stat()
     if script.path.withCString({ lstat($0, &info) != 0 && errno == ENOENT }) { return "Gone" }
     guard let data = try? readBlessedScript(path: script.path),
@@ -1828,6 +1828,13 @@ func runUpdateToolbarSelfCheck() -> Int32 {
 
 @MainActor
 func runDashboardSearchSelfCheck() -> Int32 {
+    let controller = AutomicVaultMainWindowController(checkForUpdates: {}, requestScan: {})
+    for section in [DashboardSection.detectors, .doctor, .blessedScripts, .secretUsage] {
+        controller.rootView.model.searchText = "previous filter"
+        controller.showSection(section)
+        guard controller.rootView.model.selectedSection == section,
+              controller.rootView.model.searchText.isEmpty else { return 1 }
+    }
     guard authorityApprovalStateSelfCheck() else {
         print("authority Approval pending-state self-check failed")
         return 1

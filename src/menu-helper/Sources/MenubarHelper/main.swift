@@ -54,12 +54,9 @@ private func makeUpdater(
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private static let visibleAutoApprovalCount = 5
     private lazy var statusItem = NSStatusBar.system.statusItem(withLength: 15)
-    private lazy var scanStatusItem = makeStatusMenuItem(title: String(localized: "Scan pending"))
-    private lazy var doctorStatusItem: NSMenuItem = {
-        let item = makeStatusMenuItem(title: "")
-        item.isHidden = true
-        return item
-    }()
+    private lazy var scanStatusItem = NSMenuItem(title: String(localized: "Scan pending"), action: nil, keyEquivalent: "")
+    private lazy var doctorStatusItem = makeSectionMenuItem(title: "", section: .doctor)
+    private lazy var reblessingStatusItem = makeSectionMenuItem(title: "", section: .blessedScripts)
     private lazy var checkForUpdatesItem = NSMenuItem(
         title: String(localized: "Check for Updates…"),
         action: #selector(checkForUpdates),
@@ -227,6 +224,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let menu = NSMenu()
         menu.addItem(scanStatusItem)
         menu.addItem(doctorStatusItem)
+        menu.addItem(reblessingStatusItem)
         menu.addItem(.separator())
         checkForUpdatesItem.target = self
         menu.addItem(checkForUpdatesItem)
@@ -234,6 +232,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let openItem = NSMenuItem(title: String(localized: "Open Automic Vault"), action: #selector(openMainWindow), keyEquivalent: "")
         setVersionBadge(appVersion(), on: openItem)
         openItem.target = self
+        openItem.image = openAppMenuImage()
         menu.addItem(openItem)
         installCLIItem.target = self
         installCLIItem.isHidden = FileManager.default.fileExists(atPath: installedAVCLIPath)
@@ -303,6 +302,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 visibleDuringStartup: []
             )
             doctorStatusItem.isHidden = doctorStatusItem.title.isEmpty
+            reblessingStatusItem.isHidden = reblessingStatusItem.title.isEmpty
             installCLIItem.isHidden = FileManager.default.fileExists(atPath: installedAVCLIPath)
         }
         statusItem.button?.image = brandImage()
@@ -315,6 +315,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         refreshTemporaryAccessGrants()
         refreshLiveSecretUses()
         refreshCLIInstallState()
+        refreshDoctorStatus()
         do {
             let approval = try ApprovalServer(
                 serviceName: approvalServiceName,
@@ -622,10 +623,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         showMainWindow(secretGateID: nil)
     }
 
-    @MainActor @objc private func openHistory() {
-        guard !isStartingUp, !isUpdating else { return }
+    @MainActor @objc private func openSection(_ sender: NSMenuItem) {
+        guard !isStartingUp, !isUpdating,
+              let rawValue = sender.representedObject as? String,
+              let section = DashboardSection(rawValue: rawValue) else { return }
         showMainWindow(secretGateID: nil)
-        (mainWindow?.contentViewController as? AutomicVaultMainWindowController)?.showHistory()
+        (mainWindow?.contentViewController as? AutomicVaultMainWindowController)?.showSection(section)
+    }
+
+    private func makeSectionMenuItem(title: String, section: DashboardSection) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: #selector(openSection), keyEquivalent: "")
+        item.target = self
+        item.representedObject = section.rawValue
+        item.image = openAppMenuImage()
+        item.isHidden = title.isEmpty
+        return item
     }
 
     @MainActor private func showMainWindow(secretGateID: String?) {
@@ -907,6 +919,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func applyScanResult(_ result: ScanResult) {
         isScanRunning = false
         guard !servicesStopped else { return }
+        refreshDoctorStatus()
         switch result {
         case .success(let findings, let detectors):
             if let detectors {
@@ -949,7 +962,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 setBaseStatusImage(image)
                 setScanStatus(
                     vulnerabilityStatusTitle(count: count),
-                    image: shieldImage(color: level.color)
+                    image: shieldImage(color: level.color),
+                    section: .detectors
                 )
             }
         case .failed(let detectors):
@@ -974,9 +988,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .updateDetectorFindings(findings)
     }
 
-    private func setScanStatus(_ title: String, image: NSImage?) {
+    private func setScanStatus(_ title: String, image: NSImage?, section: DashboardSection? = nil) {
+        scanStatusItem.action = section == nil ? nil : #selector(openSection)
+        scanStatusItem.target = self
+        scanStatusItem.representedObject = section?.rawValue
+        scanStatusItem.isEnabled = section != nil
         setStatusMenuItemTitle(title, on: scanStatusItem)
-        scanStatusItem.image = image
+        scanStatusItem.image = section == nil ? image : openAppMenuImage()
     }
 
     private func setDoctorStatus(count: Int) {
@@ -986,18 +1004,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         setStatusMenuItemTitle(title, on: doctorStatusItem)
-        doctorStatusItem.image = shieldImage(
-            symbolName: "stethoscope",
-            accessibilityDescription: "Doctor"
-        )
         doctorStatusItem.isHidden = false
+    }
+
+    private func setReblessingStatus(count: Int) {
+        guard !isStatusMenuOpen else { return }
+        reblessingStatusItem.title = reblessingStatusTitle(count: count) ?? ""
+        reblessingStatusItem.isHidden = count == 0
     }
 
     private func refreshDoctorStatus() {
         scanQueue.async { [weak self] in
             let count = loadDoctorIssues(avExecutableURL: avExecutableURL()).count
+            let reblessingCount = loadBlessedScripts().filter { blessedScriptStatus($0) == "Changed" }.count
             Task { @MainActor in
                 self?.setDoctorStatus(count: count)
+                self?.setReblessingStatus(count: reblessingCount)
             }
         }
     }
@@ -1133,8 +1155,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let groups = groupedAutoApprovals(autoApprovals)
         autoApprovalItems = groups.prefix(Self.visibleAutoApprovalCount).map(autoApprovalMenuItem)
         if groups.count > Self.visibleAutoApprovalCount {
-            let moreItem = NSMenuItem(title: String(localized: "More"), action: #selector(openHistory), keyEquivalent: "")
-            moreItem.target = self
+            let moreItem = makeSectionMenuItem(title: String(localized: "More"), section: .secretUsage)
             autoApprovalItems.append(moreItem)
         }
         let insertionIndex = temporaryAccessGrantMenuItemCount + liveSecretUseMenuItemCount
@@ -1545,6 +1566,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         item.target = self
         item.representedObject = record.accessRequestID.uuidString
+        item.image = openAppMenuImage()
         return item
     }
 
@@ -1552,6 +1574,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         installStatusMenu()
         defer { NSStatusBar.system.removeStatusItem(statusItem) }
         guard let menu = statusItem.menu else { return false }
+
+        setDoctorStatus(count: 2)
+        setReblessingStatus(count: 1)
+        setScanStatus(vulnerabilityStatusTitle(count: 1), image: nil, section: .detectors)
+        for (item, section) in [(scanStatusItem, DashboardSection.detectors),
+                                (doctorStatusItem, .doctor), (reblessingStatusItem, .blessedScripts)] {
+            guard !item.isHidden, !item.isSectionHeader, item.isEnabled,
+                  item.action == #selector(openSection), item.target === self,
+                  item.representedObject as? String == section.rawValue,
+                  item.image != nil else { return false }
+        }
+        guard menu.index(of: reblessingStatusItem) == menu.index(of: doctorStatusItem) + 1,
+              menu.items.first(where: { $0.action == #selector(openMainWindow) })?.image != nil
+        else { return false }
+        let moreItem = makeSectionMenuItem(title: "More", section: .secretUsage)
+        guard moreItem.action == #selector(openSection), moreItem.image != nil,
+              moreItem.representedObject as? String == DashboardSection.secretUsage.rawValue
+        else { return false }
+        setDoctorStatus(count: 0)
+        setReblessingStatus(count: 0)
+        setScanStatus("No Vulnerabilities Detected", image: nil)
+        guard doctorStatusItem.isHidden, reblessingStatusItem.isHidden,
+              scanStatusItem.action == nil, !scanStatusItem.isEnabled else { return false }
 
         menuWillOpen(menu)
         let presentedItems = menu.items
@@ -1658,6 +1703,10 @@ private func configureUpdatingAlert(_ alert: NSAlert) {
 
 private func setStatusMenuItemTitle(_ title: String, on item: NSMenuItem) {
     item.title = title
+    guard item.action == nil else {
+        item.attributedTitle = nil
+        return
+    }
     item.attributedTitle = NSAttributedString(
         string: title,
         attributes: [
@@ -1956,6 +2005,20 @@ private func boundedScanDelay(
 private func doctorStatusTitle(count: Int) -> String? {
     guard count > 0 else { return nil }
     return "\(spelledOut(count)) Doctor \(count == 1 ? "Report" : "Reports")"
+}
+
+private func reblessingStatusTitle(count: Int) -> String? {
+    guard count > 0 else { return nil }
+    return count == 1
+        ? String(localized: "One Blessed Script Needs Reblessing")
+        : String(localized: "\(spelledOut(count)) Blessed Scripts Need Reblessing")
+}
+
+private func openAppMenuImage() -> NSImage? {
+    let image = NSImage(systemSymbolName: "arrow.up.forward.app", accessibilityDescription: String(localized: "Open Automic Vault"))
+    image?.size = NSSize(width: 16, height: 16)
+    image?.isTemplate = true
+    return image
 }
 
 private func vulnerabilityStatusTitle(count: Int) -> String {
@@ -17942,6 +18005,9 @@ private func runMenuStatusSelfCheck() -> Int32 {
           doctorStatusTitle(count: 0) == nil,
           doctorStatusTitle(count: 1) == "One Doctor Report",
           doctorStatusTitle(count: 2) == "Two Doctor Reports",
+          reblessingStatusTitle(count: 0) == nil,
+          reblessingStatusTitle(count: 1) == "One Blessed Script Needs Reblessing",
+          reblessingStatusTitle(count: 2) == "Two Blessed Scripts Need Reblessing",
           vulnerabilityStatusTitle(count: 1) == "One Vulnerability Detected",
           vulnerabilityStatusTitle(count: 2) == "Two Vulnerabilities Detected",
           groupedMenuRecords.map(\.count) == [2, 1, 1],
@@ -17949,6 +18015,7 @@ private func runMenuStatusSelfCheck() -> Int32 {
           groupedMenuItem.representedObject == nil,
           groupedMenuItem.submenu?.items.compactMap({ $0.representedObject as? String })
               == groupedMenuRecords[0].records.map({ $0.accessRequestID.uuidString }),
+          groupedMenuItem.submenu?.items.allSatisfy({ $0.image != nil }) == true,
           groupedCommandStart > 0,
           groupedSubmenuTitle.string.hasSuffix(groupedCommand),
           !groupedSubmenuTitle.string.contains("\\"),

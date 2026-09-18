@@ -2,6 +2,9 @@
 // Canonical concepts: Secret stays Secret; Approval = 批准 (human), authorization = 授权.
 // Access Levels describe existing policy; never translate commands, paths, or Secret Names.
 
+"One Blessed Script Needs Reblessing" = "One Blessed Script Needs Reblessing";
+"%@ Blessed Scripts Need Reblessing" = "%@ Blessed Scripts Need Reblessing";
+
 "%@ requires Approval on iPhone." = "%@ requires Approval on iPhone.";
 "%@, waiting for Approval" = "%@, waiting for Approval";
 "%@, waiting for Approval on iPhone" = "%@, waiting for Approval on iPhone";
