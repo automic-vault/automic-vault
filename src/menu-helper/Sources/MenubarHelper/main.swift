@@ -1538,6 +1538,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             action: nil,
             keyEquivalent: ""
         )
+        styleHistoryMenuTitle(item, activity: "\(autoApprovalText(group.record)) \u{00D7}\(group.count)")
         let submenu = NSMenu()
         group.records.map(autoApprovalSubmenuItem).forEach(submenu.addItem)
         item.submenu = submenu
@@ -1547,18 +1548,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func autoApprovalSubmenuItem(_ record: AutoApprovalRecord) -> NSMenuItem {
         let item = autoApprovalMenuItem(record)
         let time = "\(autoApprovalTimeFormatter.string(from: record.date))  "
-        let title = NSMutableAttributedString(
-            string: time,
-            attributes: [
-                .font: NSFont.menuFont(ofSize: 0),
-                .foregroundColor: NSColor.disabledControlTextColor,
-            ]
-        )
-        title.append(NSAttributedString(
-            string: record.displayCommand.replacingOccurrences(of: " \\\n  ", with: " "),
-            attributes: [.font: NSFont.menuFont(ofSize: 0)]
-        ))
-        item.attributedTitle = title
+        let command = record.displayCommand.replacingOccurrences(of: " \\\n  ", with: " ")
+        item.title = time + command
+        styleHistoryMenuTitle(item, activity: command)
         return item
     }
 
@@ -1570,6 +1562,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         item.target = self
         item.representedObject = record.accessRequestID.uuidString
+        styleHistoryMenuTitle(item, activity: autoApprovalText(record))
         setOpenAppMenuImage(on: item)
         return item
     }
@@ -1779,6 +1772,18 @@ private func groupedAutoApprovals(_ records: [AutoApprovalRecord]) -> [AutoAppro
 
 private func autoApprovalTitle(_ record: AutoApprovalRecord, formatter: DateFormatter) -> String {
     "\(formatter.string(from: record.date)) – \(autoApprovalText(record))"
+}
+
+private func styleHistoryMenuTitle(_ item: NSMenuItem, activity: String) {
+    let title = NSMutableAttributedString(
+        string: item.title,
+        attributes: [.font: NSFont.menuFont(ofSize: 0)]
+    )
+    title.addAttribute(
+        .foregroundColor, value: NSColor.disabledControlTextColor,
+        range: NSRange(location: 0, length: title.length - (activity as NSString).length)
+    )
+    item.attributedTitle = title
 }
 
 private func autoApprovalTitle(_ group: AutoApprovalGroup, formatter: DateFormatter) -> String {
@@ -17729,6 +17734,19 @@ private func runMenuStatusSelfCheck() -> Int32 {
         menuRecord(17_100),
     ])
     let groupedMenuItem = AppDelegate().autoApprovalMenuItem(groupedMenuRecords[0])
+    for group in groupedMenuRecords {
+        let item = AppDelegate().autoApprovalMenuItem(group)
+        let activity = autoApprovalText(group.record) + (group.count > 1 ? " \u{00D7}\(group.count)" : "")
+        guard let title = item.attributedTitle else { return 1 }
+        let activityStart = title.length - (activity as NSString).length
+        var timeRange = NSRange()
+        guard title.string == item.title, activityStart > 0,
+              title.attribute(.foregroundColor, at: 0, effectiveRange: &timeRange) as? NSColor
+                == .disabledControlTextColor,
+              timeRange == NSRange(location: 0, length: activityStart),
+              title.attribute(.foregroundColor, at: activityStart, effectiveRange: nil) == nil
+        else { return 1 }
+    }
     guard let groupedSubmenuTitle = groupedMenuItem.submenu?.items.first?.attributedTitle else {
         return 1
     }
