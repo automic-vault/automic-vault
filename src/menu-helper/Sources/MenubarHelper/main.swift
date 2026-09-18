@@ -232,7 +232,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let openItem = NSMenuItem(title: String(localized: "Open Automic Vault"), action: #selector(openMainWindow), keyEquivalent: "")
         setVersionBadge(appVersion(), on: openItem)
         openItem.target = self
-        openItem.image = openAppMenuImage()
+        setOpenAppMenuImage(on: openItem)
         menu.addItem(openItem)
         installCLIItem.target = self
         installCLIItem.isHidden = FileManager.default.fileExists(atPath: installedAVCLIPath)
@@ -635,7 +635,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let item = NSMenuItem(title: title, action: #selector(openSection), keyEquivalent: "")
         item.target = self
         item.representedObject = section.rawValue
-        item.image = openAppMenuImage()
+        setOpenAppMenuImage(on: item)
         item.isHidden = title.isEmpty
         return item
     }
@@ -994,7 +994,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         scanStatusItem.representedObject = section?.rawValue
         scanStatusItem.isEnabled = section != nil
         setStatusMenuItemTitle(title, on: scanStatusItem)
-        scanStatusItem.image = section == nil ? image : openAppMenuImage()
+        scanStatusItem.image = image
+        if #available(macOS 27.0, *) {
+            scanStatusItem.setValue(0, forKey: "preferredImageVisibility")
+        }
+        if section != nil { setOpenAppMenuImage(on: scanStatusItem) }
     }
 
     private func setDoctorStatus(count: Int) {
@@ -1566,7 +1570,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         item.target = self
         item.representedObject = record.accessRequestID.uuidString
-        item.image = openAppMenuImage()
+        setOpenAppMenuImage(on: item)
         return item
     }
 
@@ -1584,6 +1588,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                   item.action == #selector(openSection), item.target === self,
                   item.representedObject as? String == section.rawValue,
                   item.image != nil else { return false }
+            if #available(macOS 27.0, *), item.value(forKey: "preferredImageVisibility") as? Int != 1 {
+                print("App-opening menu icon is not explicitly visible")
+                return false
+            }
         }
         guard menu.index(of: reblessingStatusItem) == menu.index(of: doctorStatusItem) + 1,
               menu.items.first(where: { $0.action == #selector(openMainWindow) })?.image != nil
@@ -2014,11 +2022,15 @@ private func reblessingStatusTitle(count: Int) -> String? {
         : String(localized: "\(spelledOut(count)) Blessed Scripts Need Reblessing")
 }
 
-private func openAppMenuImage() -> NSImage? {
+private func setOpenAppMenuImage(on item: NSMenuItem) {
     let image = NSImage(systemSymbolName: "arrow.up.forward.app", accessibilityDescription: String(localized: "Open Automic Vault"))
     image?.size = NSSize(width: 16, height: 16)
     image?.isTemplate = true
-    return image
+    item.image = image
+    if #available(macOS 27.0, *) {
+        // Use the public property's raw value so builds with the macOS 26 SDK still work.
+        item.setValue(1, forKey: "preferredImageVisibility") // NSMenuItem.ImageVisibility.visible
+    }
 }
 
 private func vulnerabilityStatusTitle(count: Int) -> String {
