@@ -160,6 +160,11 @@ final class AutomicVaultMainWindowController: NSHostingController<DashboardRootV
         model.showAccessRequest(id: id)
     }
 
+    func showHistory() {
+        model.searchText = ""
+        model.selectSection(.secretUsage)
+    }
+
     func showSecretGate(id: String) {
         model.showSecretGate(id: id)
     }

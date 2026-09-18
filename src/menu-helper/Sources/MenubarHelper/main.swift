@@ -622,6 +622,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         showMainWindow(secretGateID: nil)
     }
 
+    @MainActor @objc private func openHistory() {
+        guard !isStartingUp, !isUpdating else { return }
+        showMainWindow(secretGateID: nil)
+        (mainWindow?.contentViewController as? AutomicVaultMainWindowController)?.showHistory()
+    }
+
     @MainActor private func showMainWindow(secretGateID: String?) {
         guard !isUpdating else { return }
         let wasVisible = mainWindow?.isVisible ?? false
@@ -1126,18 +1132,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         let groups = groupedAutoApprovals(autoApprovals)
         autoApprovalItems = groups.prefix(Self.visibleAutoApprovalCount).map(autoApprovalMenuItem)
-        let submenuGroups = groups.dropFirst(Self.visibleAutoApprovalCount).prefix(
-            autoApprovalSubmenuCapacity(
-                visibleHeight: statusItem.button?.window?.screen?.visibleFrame.height
-                    ?? NSScreen.main?.visibleFrame.height
-                    ?? 0
-            )
-        )
-        if !submenuGroups.isEmpty {
-            let moreItem = NSMenuItem(title: String(localized: "More"), action: nil, keyEquivalent: "")
-            let submenu = NSMenu()
-            submenuGroups.map(autoApprovalMenuItem).forEach(submenu.addItem)
-            moreItem.submenu = submenu
+        if groups.count > Self.visibleAutoApprovalCount {
+            let moreItem = NSMenuItem(title: String(localized: "More"), action: #selector(openHistory), keyEquivalent: "")
+            moreItem.target = self
             autoApprovalItems.append(moreItem)
         }
         let insertionIndex = temporaryAccessGrantMenuItemCount + liveSecretUseMenuItemCount
