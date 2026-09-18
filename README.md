@@ -274,7 +274,7 @@ Values must be nonempty UTF-8 without NUL bytes, at most 1 MiB.
 You can inject secrets into anything:
 
 ```sh
-av inject +SECRET_NAME -- /path/to/something
+av inject +SECRET_NAME -- /path/to/something   # shows an approval window
 ```
 
 > [!NOTE]
@@ -308,6 +308,9 @@ be unused, and each Value must fit the available pipe buffer.
 
 > † Environment variables both spread to child processes and allow any part of
 > large codebases to read them.
+
+Direct injection can be automatically authorized for a Verified Launcher.
+We do not recommend this: we recommend using blessed scripts.
 
 ### Blessed Scripts
 
