@@ -1,7 +1,7 @@
 use std::ffi::OsStr;
 use std::fs;
-use std::io::Write;
-use std::os::unix::fs::{MetadataExt, PermissionsExt};
+use std::io::{Read, Write};
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 #[cfg(target_os = "macos")]
@@ -396,6 +396,9 @@ fn diagnose(
         .filter(|hardener| {
             !hardener.detection.diagnostics.is_empty()
                 || hardener.detection.commands.iter().any(|command| {
+                    if hardener.name == "uv" {
+                        return uv_installation_present(command);
+                    }
                     command.hardened
                         || command
                             .stub_path
@@ -405,6 +408,28 @@ fn diagnose(
         })
         .map(|hardener| diagnose_one(hardener, None, path))
         .collect())
+}
+
+fn uv_installation_present(command: &HardenerCommand) -> bool {
+    // uv occupies a shared command path, so an ordinary installation is not
+    // evidence of AV hardening. Keep damaged installations visible via either
+    // the managed prefix (including older releases) or an AV launcher header.
+    command.hardened
+        || Path::new(&command.target_path)
+            .ancestors()
+            .nth(2)
+            .is_some_and(|root| fs::symlink_metadata(root).is_ok())
+        || command.stub_path.as_deref().is_some_and(|path| {
+            let header = b"#!/usr/local/bin/av ";
+            let mut bytes = [0; b"#!/usr/local/bin/av ".len()];
+            fs::OpenOptions::new()
+                .read(true)
+                .custom_flags(libc::O_NONBLOCK)
+                .open(path)
+                .and_then(|mut file| file.read_exact(&mut bytes))
+                .is_ok()
+                && &bytes == header
+        })
 }
 
 fn has_stub_checks(command: &HardenerCommand) -> bool {
@@ -1250,6 +1275,57 @@ mod tests {
         });
         assert_eq!(invalid.issues[0].kind, "launcher_bundle_command_invalid");
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn aggregate_uv_requires_evidence_of_av_installation() {
+        let dir = temp_dir("uv-installation");
+        let mise = executable_file(&dir.join("mise"));
+        let stub = dir.join("uv");
+        symlink(&mise, &stub).unwrap();
+        let root = dir.join("managed-uv");
+        let target = root.join("0.12.12/uv");
+        let metadata = || {
+            hardener(
+                "uv",
+                false,
+                command(
+                    "uv",
+                    false,
+                    stub.to_str().unwrap(),
+                    target.to_str().unwrap(),
+                ),
+            )
+        };
+
+        assert!(
+            diagnose(vec![metadata()], None, dir.as_os_str())
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            !diagnose(vec![metadata()], Some("uv"), dir.as_os_str()).unwrap()[0]
+                .issues
+                .is_empty()
+        );
+
+        // A remaining installation directory must expose replaced/missing launchers.
+        fs::create_dir(&root).unwrap();
+        assert!(
+            !diagnose(vec![metadata()], None, dir.as_os_str()).unwrap()[0]
+                .issues
+                .is_empty()
+        );
+        fs::remove_dir(&root).unwrap();
+        fs::remove_file(&stub).unwrap();
+        fs::write(&stub, crate::uv::UVX_STUB).unwrap();
+        // A damaged AV launcher still counts, even with the managed release removed.
+        assert!(
+            !diagnose(vec![metadata()], None, dir.as_os_str()).unwrap()[0]
+                .issues
+                .is_empty()
+        );
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
