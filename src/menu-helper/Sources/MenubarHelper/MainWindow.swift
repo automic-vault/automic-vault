@@ -1336,13 +1336,15 @@ final class DashboardModel: ObservableObject {
     }
 
     func installCLI() {
-        do {
-            if try installBundledCLI() {
-                errorMessage = nil
-                reload()
+        Task {
+            do {
+                if try await installBundledCLI() {
+                    errorMessage = nil
+                    reload()
+                }
+            } catch {
+                errorMessage = String(localized: "Could not install av CLI: \(error.localizedDescription)")
             }
-        } catch {
-            errorMessage = String(localized: "Could not install av CLI: \(error.localizedDescription)")
         }
     }
 
@@ -1795,43 +1797,59 @@ private func cliInstallerScript(sourcePath: String) -> String {
         .replacingOccurrences(of: "\r", with: "\\r")
         .replacingOccurrences(of: "\n", with: "\\n")
     return """
-    do shell script ("/bin/mkdir -p /usr/local/bin && /usr/bin/install -S -m 0755 -o root -g wheel " & quoted form of "\(path)" & " /usr/local/bin/av") with administrator privileges
+    try
+        do shell script ("/bin/mkdir -p /usr/local/bin && /usr/bin/install -S -m 0755 -o root -g wheel " & quoted form of "\(path)" & " /usr/local/bin/av") with administrator privileges
+        return "installed"
+    on error errorMessage number errorNumber
+        if errorNumber is -128 then return "cancelled"
+        error errorMessage number errorNumber
+    end try
     """
 }
 
+@MainActor private var isInstallingCLI = false
+
 @MainActor
-func installBundledCLI() throws -> Bool {
+func installBundledCLI() async throws -> Bool {
+    guard !isInstallingCLI else { return false }
     guard let bundledAVURL else {
         throw CLIInstallerError.bundledCLIUnavailable
     }
-    // Execute from the app: opening a quarantined .command document makes
-    // Gatekeeper assess that unsigned script independently of the signed bundle.
-    guard let script = NSAppleScript(source: cliInstallerScript(sourcePath: bundledAVURL.path)) else {
-        throw CLIInstallerError.invalidScript
-    }
-    var error: NSDictionary?
-    script.executeAndReturnError(&error)
-    if let error {
-        let code = (error[NSAppleScript.errorNumber] as? NSNumber)?.intValue ?? -1
-        if code == -128 { return false } // User canceled the administrator prompt.
-        throw NSError(
-            domain: NSOSStatusErrorDomain,
-            code: code,
-            userInfo: [NSLocalizedDescriptionKey:
-                error[NSAppleScript.errorMessage] as? String ?? "Could not install av CLI."]
-        )
-    }
-    return true
+    isInstallingCLI = true
+    defer { isInstallingCLI = false }
+    return try await runCLIInstallerScript(cliInstallerScript(sourcePath: bundledAVURL.path))
+}
+
+private func runCLIInstallerScript(_ script: String) async throws -> Bool {
+    // Keep both AppleScript execution and the administrator wait outside the app's
+    // main actor. No quarantined script document is opened through LaunchServices.
+    try await Task.detached(priority: .userInitiated) {
+        let process = Process()
+        let output = Pipe()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        process.arguments = ["-e", script]
+        process.standardOutput = output
+        process.standardError = output
+        try process.run()
+        // Drain before waiting so an error cannot fill the pipe and deadlock.
+        let message = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        process.waitUntilExit()
+        guard process.terminationStatus == 0, message == "installed" || message == "cancelled" else {
+            throw CLIInstallerError.commandFailed(message)
+        }
+        return message == "installed"
+    }.value
 }
 
 private enum CLIInstallerError: LocalizedError {
     case bundledCLIUnavailable
-    case invalidScript
+    case commandFailed(String)
 
     var errorDescription: String? {
         switch self {
         case .bundledCLIUnavailable: "Bundled av CLI is unavailable."
-        case .invalidScript: "Could not prepare the av CLI installer."
+        case .commandFailed(let message): message.isEmpty ? "Could not install av CLI." : message
         }
     }
 }

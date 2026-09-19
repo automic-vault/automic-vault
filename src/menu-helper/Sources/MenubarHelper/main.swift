@@ -447,13 +447,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @MainActor @objc private func installCLI() {
         guard !isStartingUp else { return }
-        do {
-            if try installBundledCLI() {
-                refreshCLIInstallState()
-                (mainWindow?.contentViewController as? AutomicVaultMainWindowController)?.reload()
+        Task {
+            do {
+                if try await installBundledCLI() {
+                    refreshCLIInstallState()
+                    (mainWindow?.contentViewController as? AutomicVaultMainWindowController)?.reload()
+                }
+            } catch {
+                NSAlert(error: error).runModal()
             }
-        } catch {
-            NSAlert(error: error).runModal()
         }
     }
 
