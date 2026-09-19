@@ -1336,10 +1336,15 @@ final class DashboardModel: ObservableObject {
     }
 
     func installCLI() {
-        do {
-            try openCLIInstaller()
-        } catch {
-            errorMessage = String(localized: "Could not open install command: \(error.localizedDescription)")
+        Task {
+            do {
+                if try await installBundledCLI() {
+                    errorMessage = nil
+                    reload()
+                }
+            } catch {
+                errorMessage = String(localized: "Could not install av CLI: \(error.localizedDescription)")
+            }
         }
     }
 
@@ -1784,37 +1789,67 @@ private func executable(at candidate: URL, satisfiesDesignatedRequirementOf trus
     return SecStaticCodeCheckValidity(candidateCode, [], requirement) == errSecSuccess
 }
 
-func isCLIInstallCompletionURL(_ url: URL) -> Bool {
-    url.scheme == "automic-vault"
-        && url.host == "cli-installed"
-        && url.path.isEmpty
-        && url.user == nil
-        && url.password == nil
-        && url.port == nil
-        && url.query == nil
-        && url.fragment == nil
+// Quote the path as AppleScript data, then let AppleScript quote it for the shell.
+private func cliInstallerScript(sourcePath: String) -> String {
+    let path = sourcePath
+        .replacingOccurrences(of: "\\", with: "\\\\")
+        .replacingOccurrences(of: "\"", with: "\\\"")
+        .replacingOccurrences(of: "\r", with: "\\r")
+        .replacingOccurrences(of: "\n", with: "\\n")
+    return """
+    try
+        do shell script ("/bin/mkdir -p /usr/local/bin && /usr/bin/install -S -m 0755 -o root -g wheel " & quoted form of "\(path)" & " /usr/local/bin/av") with administrator privileges
+        return "installed"
+    on error errorMessage number errorNumber
+        if errorNumber is -128 then return "cancelled"
+        error errorMessage number errorNumber
+    end try
+    """
 }
 
+@MainActor private var isInstallingCLI = false
+
 @MainActor
-func openCLIInstaller() throws {
-    guard let commandURL = Bundle.main.url(forResource: "install-av-cli", withExtension: "command"),
-          FileManager.default.isExecutableFile(atPath: commandURL.path)
-    else {
-        throw CLIInstallerError.bundledCommandUnavailable
+func installBundledCLI() async throws -> Bool {
+    guard !isInstallingCLI else { return false }
+    guard let bundledAVURL else {
+        throw CLIInstallerError.bundledCLIUnavailable
     }
-    guard NSWorkspace.shared.open(commandURL) else {
-        throw CLIInstallerError.couldNotOpenCommand
-    }
+    isInstallingCLI = true
+    defer { isInstallingCLI = false }
+    return try await runCLIInstallerScript(cliInstallerScript(sourcePath: bundledAVURL.path))
+}
+
+private func runCLIInstallerScript(_ script: String) async throws -> Bool {
+    // Keep both AppleScript execution and the administrator wait outside the app's
+    // main actor. No quarantined script document is opened through LaunchServices.
+    try await Task.detached(priority: .userInitiated) {
+        let process = Process()
+        let output = Pipe()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        process.arguments = ["-e", script]
+        process.standardOutput = output
+        process.standardError = output
+        try process.run()
+        // Drain before waiting so an error cannot fill the pipe and deadlock.
+        let message = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        process.waitUntilExit()
+        guard process.terminationStatus == 0, message == "installed" || message == "cancelled" else {
+            throw CLIInstallerError.commandFailed(message)
+        }
+        return message == "installed"
+    }.value
 }
 
 private enum CLIInstallerError: LocalizedError {
-    case bundledCommandUnavailable
-    case couldNotOpenCommand
+    case bundledCLIUnavailable
+    case commandFailed(String)
 
     var errorDescription: String? {
         switch self {
-        case .bundledCommandUnavailable: "Bundled install command is unavailable."
-        case .couldNotOpenCommand: "Could not open the install command."
+        case .bundledCLIUnavailable: "Bundled av CLI is unavailable."
+        case .commandFailed(let message): message.isEmpty ? "Could not install av CLI." : message
         }
     }
 }
@@ -2086,11 +2121,6 @@ func runDashboardSearchSelfCheck() -> Int32 {
           model.count(for: .hardenedTools) == 1,
           model.count(for: .allSecrets) == 1,
           model.selectedItemID == "aws"
-    else { return 1 }
-    guard isCLIInstallCompletionURL(URL(string: "automic-vault://cli-installed")!),
-          !isCLIInstallCompletionURL(URL(string: "automic-vault://cli-installed/extra")!),
-          !isCLIInstallCompletionURL(URL(string: "automic-vault://cli-installed?revision=1")!),
-          !isCLIInstallCompletionURL(URL(string: "https://cli-installed")!)
     else { return 1 }
     guard cliInstallState(installedExists: false, installedTrusted: false, expectedRevision: 1, installedRevision: nil) == .missing,
           cliInstallState(installedExists: true, installedTrusted: true, expectedRevision: 1, installedRevision: 1) == .current,

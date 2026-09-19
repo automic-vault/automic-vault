@@ -112,7 +112,7 @@
 "Could not bless script: %@" = "Could not bless script: %@";
 "Could not delete %@ Value: %@" = "Could not delete %@ Value: %@";
 "Could not delete %@: %@" = "Could not delete %@: %@";
-"Could not open install command: %@" = "Could not open install command: %@";
+"Could not install av CLI: %@" = "Could not install av CLI: %@";
 "Could not rename %@: %@" = "Could not rename %@: %@";
 "Could not review changes: %@" = "Could not review changes: %@";
 "Could not revoke Launcher Bundle enrollment: %@" = "Could not revoke Launcher Bundle enrollment: %@";
