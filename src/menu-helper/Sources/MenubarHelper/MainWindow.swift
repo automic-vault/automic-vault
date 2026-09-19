@@ -1826,12 +1826,15 @@ private func cliInstallerScript(sourcePath: String, requirement: String) -> Stri
             exit 1
         fi
     done
-    [ ! -d /usr/local/bin/av ] && [ ! -L /usr/local/bin/av ]
+    if [ -d /usr/local/bin/av ] || [ -L /usr/local/bin/av ]; then
+        echo "Unsafe CLI installation destination: /usr/local/bin/av" >&2
+        exit 1
+    fi
     stage=$(/usr/bin/mktemp -d /usr/local/bin/.av-install.XXXXXXXX)
     trap '/bin/rm -rf "$stage"' EXIT
     /usr/bin/install -S -m 0755 -o root -g wheel \(source) "$stage/av"
     /bin/chmod -N "$stage/av"
-    /usr/bin/codesign --verify --strict -R \(requirement) "$stage/av"
+    /usr/bin/codesign --verify --strict --all-architectures -R \(requirement) "$stage/av"
     /bin/mv -f "$stage/av" /usr/local/bin/av
     """
         .replacingOccurrences(of: "\\", with: "\\\\")

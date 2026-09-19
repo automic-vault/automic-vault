@@ -189,6 +189,34 @@ for directory in [prefix, local, bin] {
     clear.waitUntilExit()
     assert(clear.terminationStatus == 0)
 }
+// A directory or any symlink at the final destination must fail, not receive av/av.
+let savedDestination = root.appendingPathComponent("saved-av")
+try FileManager.default.moveItem(at: destination, to: savedDestination)
+for kind in ["directory", "directory-link", "file-link", "dangling-link"] {
+    let linkTarget = root.appendingPathComponent("destination-target-" + kind)
+    switch kind {
+    case "directory":
+        try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: false)
+    case "directory-link":
+        try FileManager.default.createDirectory(at: linkTarget, withIntermediateDirectories: false)
+        try FileManager.default.createSymbolicLink(atPath: destination.path, withDestinationPath: linkTarget.path)
+    case "file-link":
+        try FileManager.default.createSymbolicLink(atPath: destination.path, withDestinationPath: savedDestination.path)
+    default:
+        try FileManager.default.createSymbolicLink(atPath: destination.path, withDestinationPath: linkTarget.path)
+    }
+    do {
+        _ = try await runCLIInstallerScript(script)
+        fatalError("unsafe destination was accepted: \(kind)")
+    } catch CLIInstallerError.commandFailed(let message) {
+        assert(message.contains("Unsafe CLI installation destination"))
+    }
+    assert(!FileManager.default.fileExists(atPath: destination.appendingPathComponent("av").path))
+    let preserved = try Data(contentsOf: savedDestination)
+    assert(preserved == expectedData)
+    try FileManager.default.removeItem(at: destination)
+}
+try FileManager.default.moveItem(at: savedDestination, to: destination)
 // Reject unsigned, wrong-identity, and tampered replacements before publication.
 try expectedData.write(to: source)
 let wrongSigner = Process()
