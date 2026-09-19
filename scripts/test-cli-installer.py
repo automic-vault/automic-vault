@@ -10,10 +10,24 @@ installer = source.split("private func cliInstallDirectoryIsProtected(", 1)[1].s
     "@MainActor\nfunc runUpdateToolbarSelfCheck", 1
 )[0]
 installer = "private func cliInstallDirectoryIsProtected(" + installer
+# Substitute only the elevated script input when exercising the shared completion flow.
+installer = installer.replace("runCLIInstallerScript(cliInstallerScript(sourcePath: bundledAVURL.path))",
+                              "runCLIInstallerScript(fixtureInstallerScript(sourcePath: bundledAVURL.path))")
 fixture = r'''
 import Foundation
 
-@MainActor var bundledAVURL: URL? { nil }
+let cliInstallationDidFinish = Notification.Name("AutomicVaultCLIInstallationDidFinish")
+@MainActor var fixtureURL: URL?
+@MainActor var bundledAVURL: URL? { fixtureURL }
+@MainActor var fixtureScript = ""
+@MainActor func fixtureInstallerScript(sourcePath: String) -> String {
+    assert(sourcePath == "/fixture/av")
+    return fixtureScript
+}
+@MainActor final class CompletionObserver: NSObject {
+    var count = 0
+    @objc func completed() { count += 1 }
+}
 ''' + installer + r'''
 @main struct InstallerCheck {
 @MainActor static func main() async throws {
@@ -26,6 +40,24 @@ isInstallingCLI = true
 let duplicate = try await installBundledCLI()
 assert(!duplicate, "overlapping install was accepted")
 isInstallingCLI = false
+let observer = CompletionObserver()
+NotificationCenter.default.addObserver(observer, selector: #selector(CompletionObserver.completed),
+    name: cliInstallationDidFinish, object: nil)
+fixtureURL = URL(fileURLWithPath: "/fixture/av")
+for result in ["installed", "cancelled"] {
+    fixtureScript = "return \"\(result)\""
+    let installed = try await installBundledCLI()
+    assert(installed == (result == "installed") && !isInstallingCLI)
+    assert(observer.count == 1, "completion must refresh both surfaces only after success")
+}
+fixtureScript = "error number 42"
+do {
+    _ = try await installBundledCLI()
+    fatalError("failed install was accepted")
+} catch CLIInstallerError.commandFailed {}
+assert(observer.count == 1 && !isInstallingCLI)
+NotificationCenter.default.removeObserver(observer)
+fixtureURL = nil
 
 let root = URL(fileURLWithPath: CommandLine.arguments[1])
 let source = root.appendingPathComponent("AV ' \" \\ $(exit 73); `exit 74`\n\r.app/Contents/MacOS/av")

@@ -10,6 +10,8 @@ let automaticApprovalFeedbackDefaultsKey = "automaticApprovalFeedback"
 let compactAutomaticApprovalNotificationsDefaultsKey = "compactAutomaticApprovalNotifications"
 let autoCollapseTemporaryAccessGrantStripDefaultsKey = "autoCollapseTemporaryAccessGrantStrip"
 let keepLauncherAccessForDetachedProcessesDefaultsKey = "keepLauncherAccessForDetachedProcesses"
+let cliInstallationDidFinish = Notification.Name("AutomicVaultCLIInstallationDidFinish")
+
 let temporaryAccessGrantStripPresentationDidChange = Notification.Name(
     "TemporaryAccessGrantStripPresentationDidChange"
 )
@@ -1847,7 +1849,9 @@ func installBundledCLI() async throws -> Bool {
     }
     isInstallingCLI = true
     defer { isInstallingCLI = false }
-    return try await runCLIInstallerScript(cliInstallerScript(sourcePath: bundledAVURL.path))
+    let installed = try await runCLIInstallerScript(cliInstallerScript(sourcePath: bundledAVURL.path))
+    if installed { NotificationCenter.default.post(name: cliInstallationDidFinish, object: nil) }
+    return installed
 }
 
 private func runCLIInstallerScript(_ script: String) async throws -> Bool {

@@ -182,6 +182,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             object: nil
         )
         NotificationCenter.default.addObserver(
+            self, selector: #selector(refreshCLIInstallState), name: cliInstallationDidFinish, object: nil
+        )
+        NotificationCenter.default.addObserver(
             self,
             selector: #selector(temporaryAccessGrantStripPresentationChanged(_:)),
             name: temporaryAccessGrantStripPresentationDidChange,
@@ -450,7 +453,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Task {
             do {
                 if try await installBundledCLI() {
-                    refreshCLIInstallState()
                     (mainWindow?.contentViewController as? AutomicVaultMainWindowController)?.reload()
                 }
             } catch {
@@ -1029,7 +1031,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func refreshCLIInstallState() {
+    @objc private func refreshCLIInstallState() {
         scanQueue.async { [weak self] in
             let state = currentCLIInstallState()
             Task { @MainActor in
