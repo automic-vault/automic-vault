@@ -194,7 +194,6 @@ cp "$MENU_HELPER/Resources/NSMenuItem.png" "$RESOURCES/NSMenuItem.png"
 for localization in "$MENU_HELPER"/Resources/*.lproj; do
   ditto "$localization" "$RESOURCES/$(basename "$localization")"
 done
-/usr/bin/install -m 0755 "$MENU_HELPER/Resources/install-av-cli.command" "$RESOURCES/install-av-cli.command"
 # actool embeds changing metadata even for identical inputs. Preserve its outputs
 # until the source assets, build recipe, toolchain, or cached output changes.
 fingerprint() {

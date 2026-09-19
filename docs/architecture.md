@@ -305,6 +305,10 @@ website, and companion app distribute and present the system. Distribution
 supports the security contexts but does not define competing domain language or
 policy semantics.
 
+The app installs its CLI through an attended administrator-authorized transaction
+with protected staging and signature verification before publication. See
+[ADR 0049](adr/0049-administrator-authorized-cli-installation.md).
+
 ## Authorization flow
 
 ```mermaid

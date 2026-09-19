@@ -182,6 +182,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             object: nil
         )
         NotificationCenter.default.addObserver(
+            self, selector: #selector(refreshCLIInstallState), name: cliInstallationDidFinish, object: nil
+        )
+        NotificationCenter.default.addObserver(
             self,
             selector: #selector(temporaryAccessGrantStripPresentationChanged(_:)),
             name: temporaryAccessGrantStripPresentationDidChange,
@@ -421,10 +424,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func application(_ application: NSApplication, open urls: [URL]) {
-        if urls.contains(where: isCLIInstallCompletionURL) {
-            refreshCLIInstallState()
-            (mainWindow?.contentViewController as? AutomicVaultMainWindowController)?.reload()
-        }
         guard let secretGateID = urls.lazy.compactMap(secretGateID(from:)).first else { return }
         if shouldHandOffToLaunchAgent() {
             UserDefaults.standard.set(true, forKey: pendingMainWindowKey)
@@ -451,10 +450,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @MainActor @objc private func installCLI() {
         guard !isStartingUp else { return }
-        do {
-            try openCLIInstaller()
-        } catch {
-            NSAlert(error: error).runModal()
+        Task {
+            do {
+                if try await installBundledCLI() {
+                    (mainWindow?.contentViewController as? AutomicVaultMainWindowController)?.reload()
+                }
+            } catch {
+                NSAlert(error: error).runModal()
+            }
         }
     }
 
@@ -1028,7 +1031,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func refreshCLIInstallState() {
+    @objc private func refreshCLIInstallState() {
         scanQueue.async { [weak self] in
             let state = currentCLIInstallState()
             Task { @MainActor in

@@ -10,6 +10,8 @@ let automaticApprovalFeedbackDefaultsKey = "automaticApprovalFeedback"
 let compactAutomaticApprovalNotificationsDefaultsKey = "compactAutomaticApprovalNotifications"
 let autoCollapseTemporaryAccessGrantStripDefaultsKey = "autoCollapseTemporaryAccessGrantStrip"
 let keepLauncherAccessForDetachedProcessesDefaultsKey = "keepLauncherAccessForDetachedProcesses"
+let cliInstallationDidFinish = Notification.Name("AutomicVaultCLIInstallationDidFinish")
+
 let temporaryAccessGrantStripPresentationDidChange = Notification.Name(
     "TemporaryAccessGrantStripPresentationDidChange"
 )
@@ -1336,10 +1338,15 @@ final class DashboardModel: ObservableObject {
     }
 
     func installCLI() {
-        do {
-            try openCLIInstaller()
-        } catch {
-            errorMessage = String(localized: "Could not open install command: \(error.localizedDescription)")
+        Task {
+            do {
+                if try await installBundledCLI() {
+                    errorMessage = nil
+                    reload()
+                }
+            } catch {
+                errorMessage = String(localized: "Could not install av CLI: \(error.localizedDescription)")
+            }
         }
     }
 
@@ -1717,10 +1724,18 @@ func currentCLIInstallState(
     guard lstat(installedURL.path, &metadata) == 0 else {
         return errno == ENOENT ? .missing : .outdated
     }
+    var parent = installedURL.deletingLastPathComponent()
+    while true {
+        guard cliInstallDirectoryIsProtected(parent.path) else { return .outdated }
+        if parent.path == "/" { break }
+        parent.deleteLastPathComponent()
+    }
     guard let bundledURL,
           expectedRevision != nil,
           metadata.st_mode & S_IFMT == S_IFREG,
           metadata.st_uid == 0,
+          metadata.st_mode & 0o7777 == 0o755,
+          gitTransportPathHasNoACL(installedURL.path),
           FileManager.default.isExecutableFile(atPath: installedURL.path),
           executable(at: installedURL, satisfiesDesignatedRequirementOf: bundledURL)
     else {
@@ -1784,37 +1799,104 @@ private func executable(at candidate: URL, satisfiesDesignatedRequirementOf trus
     return SecStaticCodeCheckValidity(candidateCode, [], requirement) == errSecSuccess
 }
 
-func isCLIInstallCompletionURL(_ url: URL) -> Bool {
-    url.scheme == "automic-vault"
-        && url.host == "cli-installed"
-        && url.path.isEmpty
-        && url.user == nil
-        && url.password == nil
-        && url.port == nil
-        && url.query == nil
-        && url.fragment == nil
+private func cliInstallDirectoryIsProtected(_ path: String) -> Bool {
+    var metadata = stat()
+    return lstat(path, &metadata) == 0
+        && metadata.st_mode & S_IFMT == S_IFDIR
+        && metadata.st_uid == 0
+        && metadata.st_mode & 0o022 == 0
+        && gitTransportPathHasNoACL(path)
 }
 
+// Validate ancestors before creating children, inside the privileged transaction.
+private func cliInstallerScript(sourcePath: String, requirement: String) -> String {
+    let source = "'" + sourcePath.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    let requirement = "'=" + requirement.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    let command = """
+    set -eu
+    for directory in / /usr /usr/local /usr/local/bin; do
+        if [ ! -e "$directory" ] && [ ! -L "$directory" ]; then
+            /bin/mkdir -m 0755 "$directory"
+        fi
+        metadata=$(/usr/bin/stat -f '%u %p' "$directory")
+        set -- $metadata
+        acl=$(/bin/ls -lde "$directory")
+        if [ "$1" != 0 ] || [ "$((0$2 & 0170022))" -ne "$((0040000))" ] || [ "$(printf '%s\\n' "$acl" | /usr/bin/wc -l)" -ne 1 ]; then
+            echo "Unsafe CLI installation directory: $directory" >&2
+            exit 1
+        fi
+    done
+    if [ -d /usr/local/bin/av ] || [ -L /usr/local/bin/av ]; then
+        echo "Unsafe CLI installation destination: /usr/local/bin/av" >&2
+        exit 1
+    fi
+    stage=$(/usr/bin/mktemp -d /usr/local/bin/.av-install.XXXXXXXX)
+    trap '/bin/rm -rf "$stage"' EXIT
+    /usr/bin/install -S -m 0755 -o root -g wheel \(source) "$stage/av"
+    /bin/chmod -N "$stage/av"
+    /usr/bin/codesign --verify --strict --all-architectures -R \(requirement) "$stage/av"
+    /bin/mv -f "$stage/av" /usr/local/bin/av
+    """
+        .replacingOccurrences(of: "\\", with: "\\\\")
+        .replacingOccurrences(of: "\"", with: "\\\"")
+        .replacingOccurrences(of: "\r", with: "\\r")
+        .replacingOccurrences(of: "\n", with: "\\n")
+    return """
+    try
+        do shell script "\(command)" with administrator privileges
+        return "installed"
+    on error errorMessage number errorNumber
+        if errorNumber is -128 then return "cancelled"
+        error errorMessage number errorNumber
+    end try
+    """
+}
+
+@MainActor private var isInstallingCLI = false
+
 @MainActor
-func openCLIInstaller() throws {
-    guard let commandURL = Bundle.main.url(forResource: "install-av-cli", withExtension: "command"),
-          FileManager.default.isExecutableFile(atPath: commandURL.path)
-    else {
-        throw CLIInstallerError.bundledCommandUnavailable
-    }
-    guard NSWorkspace.shared.open(commandURL) else {
-        throw CLIInstallerError.couldNotOpenCommand
-    }
+func installBundledCLI() async throws -> Bool {
+    guard !isInstallingCLI else { return false }
+    isInstallingCLI = true
+    defer { isInstallingCLI = false }
+    let bundledAVURL = try validatedBundledAVURL(mainExecutableURL: Bundle.main.executableURL)
+    guard let teamIdentifier = selfTeamIdentifier() else { throw CLIInstallerError.bundledCLIUnavailable }
+    let requirement = "identifier \"com.automicvault.av\" and anchor apple generic and certificate leaf[subject.OU] = \"\(teamIdentifier)\""
+    let installed = try await runCLIInstallerScript(cliInstallerScript(sourcePath: bundledAVURL.path, requirement: requirement))
+    if installed { NotificationCenter.default.post(name: cliInstallationDidFinish, object: nil) }
+    return installed
+}
+
+private func runCLIInstallerScript(_ script: String) async throws -> Bool {
+    // Keep both AppleScript execution and the administrator wait outside the app's
+    // main actor. No quarantined script document is opened through LaunchServices.
+    try await Task.detached(priority: .userInitiated) {
+        let process = Process()
+        let output = Pipe()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        process.arguments = ["-e", script]
+        process.standardOutput = output
+        process.standardError = output
+        try process.run()
+        // Drain before waiting so an error cannot fill the pipe and deadlock.
+        let message = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        process.waitUntilExit()
+        guard process.terminationStatus == 0, message == "installed" || message == "cancelled" else {
+            throw CLIInstallerError.commandFailed(message)
+        }
+        return message == "installed"
+    }.value
 }
 
 private enum CLIInstallerError: LocalizedError {
-    case bundledCommandUnavailable
-    case couldNotOpenCommand
+    case bundledCLIUnavailable
+    case commandFailed(String)
 
     var errorDescription: String? {
         switch self {
-        case .bundledCommandUnavailable: "Bundled install command is unavailable."
-        case .couldNotOpenCommand: "Could not open the install command."
+        case .bundledCLIUnavailable: "Bundled av CLI is unavailable."
+        case .commandFailed(let message): message.isEmpty ? "Could not install av CLI." : message
         }
     }
 }
@@ -2086,11 +2168,6 @@ func runDashboardSearchSelfCheck() -> Int32 {
           model.count(for: .hardenedTools) == 1,
           model.count(for: .allSecrets) == 1,
           model.selectedItemID == "aws"
-    else { return 1 }
-    guard isCLIInstallCompletionURL(URL(string: "automic-vault://cli-installed")!),
-          !isCLIInstallCompletionURL(URL(string: "automic-vault://cli-installed/extra")!),
-          !isCLIInstallCompletionURL(URL(string: "automic-vault://cli-installed?revision=1")!),
-          !isCLIInstallCompletionURL(URL(string: "https://cli-installed")!)
     else { return 1 }
     guard cliInstallState(installedExists: false, installedTrusted: false, expectedRevision: 1, installedRevision: nil) == .missing,
           cliInstallState(installedExists: true, installedTrusted: true, expectedRevision: 1, installedRevision: 1) == .current,
