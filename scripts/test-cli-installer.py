@@ -13,9 +13,17 @@ installer = "private func cliInstallDirectoryIsProtected(" + installer
 # Substitute only the elevated script input when exercising the shared completion flow.
 installer = installer.replace("runCLIInstallerScript(cliInstallerScript(sourcePath: bundledAVURL.path, requirement: requirement))",
                               "runCLIInstallerScript(fixtureInstallerScript(sourcePath: bundledAVURL.path, requirement: requirement))")
+# Exercise actual installed-file checks with a user-owned fixture. Parent-path
+# protection is tested separately; no test acquires root or edits system paths.
+state_source = "enum CLIInstallState:" + source.split("enum CLIInstallState:", 1)[1].split(
+    "private func cliInstallDirectoryIsProtected(", 1)[0]
+state_source = state_source.replace("metadata.st_uid == 0", "metadata.st_uid == getuid()")
+state_source = state_source.replace("cliInstallDirectoryIsProtected(parent.path)", "true")
 fixture = r'''
 import Foundation
+import Security
 
+let installedAVCLIPath = "/unused/av"
 let cliInstallationDidFinish = Notification.Name("AutomicVaultCLIInstallationDidFinish")
 @MainActor var fixtureURL: URL?
 @MainActor func validatedBundledAVURL(mainExecutableURL: URL?) throws -> URL {
@@ -33,7 +41,7 @@ func selfTeamIdentifier() -> String? { "TESTTEAM" }
     var count = 0
     @objc func completed() { count += 1 }
 }
-''' + (repo / "src/menu-helper/Sources/MenubarHelperCore/GitTransport.swift").read_text().split("public let gitTransportRoot", 1)[0] + installer + r'''
+''' + (repo / "src/menu-helper/Sources/MenubarHelperCore/GitTransport.swift").read_text().split("public let gitTransportRoot", 1)[0] + state_source + installer + r'''
 @main struct InstallerCheck {
 @MainActor static func main() async throws {
 do {
@@ -93,7 +101,7 @@ let script = redirected.replacingOccurrences(of: "!= 0", with: "!= \(getuid())")
 var expectedData = Data()
 for _ in 0..<2 {
     try FileManager.default.removeItem(at: source)
-    try FileManager.default.copyItem(atPath: CommandLine.arguments[0], toPath: source.path)
+    try FileManager.default.copyItem(atPath: CommandLine.arguments[2], toPath: source.path)
     let signing = Process()
     signing.executableURL = URL(fileURLWithPath: "/usr/bin/codesign")
     signing.arguments = ["--force", "--sign", "-", "--identifier", "com.automicvault.av", source.path]
@@ -109,6 +117,37 @@ for _ in 0..<2 {
     let attributes = try FileManager.default.attributesOfItem(atPath: destination.path)
     assert((attributes[.posixPermissions] as? NSNumber)?.intValue == 0o755)
 }
+// The fixture is ad-hoc signed, not notarized. Installation above preserves the
+// quarantined input; remove its quarantine only to run the fixture's __version.
+let clearFixtureQuarantine = Process()
+clearFixtureQuarantine.executableURL = URL(fileURLWithPath: "/usr/bin/xattr")
+clearFixtureQuarantine.arguments = ["-d", "com.apple.quarantine", destination.path]
+try clearFixtureQuarantine.run()
+clearFixtureQuarantine.waitUntilExit()
+assert(clearFixtureQuarantine.terminationStatus == 0)
+func installedState() -> CLIInstallState {
+    currentCLIInstallState(installedURL: destination, bundledURL: source, expectedRevision: 1)
+}
+assert(installedState() == .current)
+for mode in [0o775, 0o757] {
+    try FileManager.default.setAttributes([.posixPermissions: mode], ofItemAtPath: destination.path)
+    assert(installedState() == .outdated, "writable installed CLI appeared current")
+    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: destination.path)
+    assert(installedState() == .current)
+}
+let fileACL = Process()
+fileACL.executableURL = URL(fileURLWithPath: "/bin/chmod")
+fileACL.arguments = ["+a", "user:\(NSUserName()) allow write", destination.path]
+try fileACL.run()
+fileACL.waitUntilExit()
+assert(fileACL.terminationStatus == 0)
+assert(installedState() == .outdated, "ACL-bearing installed CLI appeared current")
+let clearFileACL = Process()
+clearFileACL.executableURL = URL(fileURLWithPath: "/bin/chmod")
+clearFileACL.arguments = ["-N", destination.path]
+try clearFileACL.run()
+clearFileACL.waitUntilExit()
+assert(clearFileACL.terminationStatus == 0 && installedState() == .current)
 // Reject a writable component before changing the installed file.
 func expectUnsafe(_ script: String) async throws {
     do {
@@ -219,4 +258,8 @@ with tempfile.TemporaryDirectory(prefix="av-cli-installer-") as temporary:
     test.write_text(fixture)
     subprocess.run(["swiftc", "-swift-version", "6", "-parse-as-library", str(test), "-o", str(binary)],
                    check=True, timeout=60)
-    subprocess.run([str(binary), temporary], check=True, timeout=60)
+    cli_source = Path(temporary) / "cli.swift"
+    cli_binary = Path(temporary) / "fixture-cli"
+    cli_source.write_text('print("1")\n')
+    subprocess.run(["swiftc", str(cli_source), "-o", str(cli_binary)], check=True, timeout=60)
+    subprocess.run([str(binary), temporary, str(cli_binary)], check=True, timeout=60)
