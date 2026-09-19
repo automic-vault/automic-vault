@@ -1735,6 +1735,7 @@ func currentCLIInstallState(
           metadata.st_mode & S_IFMT == S_IFREG,
           metadata.st_uid == 0,
           metadata.st_mode & 0o022 == 0,
+          gitTransportPathHasNoACL(installedURL.path),
           FileManager.default.isExecutableFile(atPath: installedURL.path),
           executable(at: installedURL, satisfiesDesignatedRequirementOf: bundledURL)
     else {
@@ -1804,11 +1805,13 @@ private func cliInstallDirectoryIsProtected(_ path: String) -> Bool {
         && metadata.st_mode & S_IFMT == S_IFDIR
         && metadata.st_uid == 0
         && metadata.st_mode & 0o022 == 0
+        && gitTransportPathHasNoACL(path)
 }
 
 // Validate ancestors before creating children, inside the privileged transaction.
-private func cliInstallerScript(sourcePath: String) -> String {
+private func cliInstallerScript(sourcePath: String, requirement: String) -> String {
     let source = "'" + sourcePath.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    let requirement = "'=" + requirement.replacingOccurrences(of: "'", with: "'\\''") + "'"
     let command = """
     set -eu
     for directory in / /usr /usr/local /usr/local/bin; do
@@ -1817,12 +1820,18 @@ private func cliInstallerScript(sourcePath: String) -> String {
         fi
         metadata=$(/usr/bin/stat -f '%u %p' "$directory")
         set -- $metadata
-        if [ "$1" != 0 ] || [ "$((0$2 & 0170022))" -ne "$((0040000))" ]; then
+        acl=$(/bin/ls -lde "$directory")
+        if [ "$1" != 0 ] || [ "$((0$2 & 0170022))" -ne "$((0040000))" ] || [ "$(printf '%s\\n' "$acl" | /usr/bin/wc -l)" -ne 1 ]; then
             echo "Unsafe CLI installation directory: $directory" >&2
             exit 1
         fi
     done
-    /usr/bin/install -S -m 0755 -o root -g wheel \(source) /usr/local/bin/av
+    [ ! -d /usr/local/bin/av ] && [ ! -L /usr/local/bin/av ]
+    stage=$(/usr/bin/mktemp -d /usr/local/bin/.av-install.XXXXXXXX)
+    trap '/bin/rm -rf "$stage"' EXIT
+    /usr/bin/install -S -m 0755 -o root -g wheel \(source) "$stage/av"
+    /usr/bin/codesign --verify --strict -R \(requirement) "$stage/av"
+    /bin/mv -f "$stage/av" /usr/local/bin/av
     """
         .replacingOccurrences(of: "\\", with: "\\\\")
         .replacingOccurrences(of: "\"", with: "\\\"")
@@ -1844,12 +1853,12 @@ private func cliInstallerScript(sourcePath: String) -> String {
 @MainActor
 func installBundledCLI() async throws -> Bool {
     guard !isInstallingCLI else { return false }
-    guard let bundledAVURL else {
-        throw CLIInstallerError.bundledCLIUnavailable
-    }
     isInstallingCLI = true
     defer { isInstallingCLI = false }
-    let installed = try await runCLIInstallerScript(cliInstallerScript(sourcePath: bundledAVURL.path))
+    let bundledAVURL = try validatedBundledAVURL(mainExecutableURL: Bundle.main.executableURL)
+    guard let teamIdentifier = selfTeamIdentifier() else { throw CLIInstallerError.bundledCLIUnavailable }
+    let requirement = "identifier \"com.automicvault.av\" and anchor apple generic and certificate leaf[subject.OU] = \"\(teamIdentifier)\""
+    let installed = try await runCLIInstallerScript(cliInstallerScript(sourcePath: bundledAVURL.path, requirement: requirement))
     if installed { NotificationCenter.default.post(name: cliInstallationDidFinish, object: nil) }
     return installed
 }

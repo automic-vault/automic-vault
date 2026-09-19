@@ -11,16 +11,21 @@ installer = source.split("private func cliInstallDirectoryIsProtected(", 1)[1].s
 )[0]
 installer = "private func cliInstallDirectoryIsProtected(" + installer
 # Substitute only the elevated script input when exercising the shared completion flow.
-installer = installer.replace("runCLIInstallerScript(cliInstallerScript(sourcePath: bundledAVURL.path))",
-                              "runCLIInstallerScript(fixtureInstallerScript(sourcePath: bundledAVURL.path))")
+installer = installer.replace("runCLIInstallerScript(cliInstallerScript(sourcePath: bundledAVURL.path, requirement: requirement))",
+                              "runCLIInstallerScript(fixtureInstallerScript(sourcePath: bundledAVURL.path, requirement: requirement))")
 fixture = r'''
 import Foundation
 
 let cliInstallationDidFinish = Notification.Name("AutomicVaultCLIInstallationDidFinish")
 @MainActor var fixtureURL: URL?
-@MainActor var bundledAVURL: URL? { fixtureURL }
+@MainActor func validatedBundledAVURL(mainExecutableURL: URL?) throws -> URL {
+    guard let fixtureURL else { throw CLIInstallerError.bundledCLIUnavailable }
+    return fixtureURL
+}
+func selfTeamIdentifier() -> String? { "TESTTEAM" }
 @MainActor var fixtureScript = ""
-@MainActor func fixtureInstallerScript(sourcePath: String) -> String {
+@MainActor func fixtureInstallerScript(sourcePath: String, requirement: String) -> String {
+    assert(requirement.contains("TESTTEAM") && requirement.contains("anchor apple generic"))
     assert(sourcePath == "/fixture/av")
     return fixtureScript
 }
@@ -28,7 +33,7 @@ let cliInstallationDidFinish = Notification.Name("AutomicVaultCLIInstallationDid
     var count = 0
     @objc func completed() { count += 1 }
 }
-''' + installer + r'''
+''' + (repo / "src/menu-helper/Sources/MenubarHelperCore/GitTransport.swift").read_text().split("public let gitTransportRoot", 1)[0] + installer + r'''
 @main struct InstallerCheck {
 @MainActor static func main() async throws {
 do {
@@ -67,13 +72,15 @@ let bin = local.appendingPathComponent("bin")
 let destination = bin.appendingPathComponent("av")
 try FileManager.default.createDirectory(at: source.deletingLastPathComponent(), withIntermediateDirectories: true)
 try Data("quarantined CLI fixture".utf8).write(to: source)
-let quarantine = Process()
-quarantine.executableURL = URL(fileURLWithPath: "/usr/bin/xattr")
-quarantine.arguments = ["-w", "com.apple.quarantine", "0083;00000000;Safari;", source.path]
-try quarantine.run()
-quarantine.waitUntilExit()
-assert(quarantine.terminationStatus == 0)
-let productionScript = cliInstallerScript(sourcePath: source.path)
+func quarantineSource() throws {
+    let quarantine = Process()
+    quarantine.executableURL = URL(fileURLWithPath: "/usr/bin/xattr")
+    quarantine.arguments = ["-w", "com.apple.quarantine", "0083;00000000;Safari;", source.path]
+    try quarantine.run()
+    quarantine.waitUntilExit()
+    assert(quarantine.terminationStatus == 0)
+}
+let productionScript = cliInstallerScript(sourcePath: source.path, requirement: #"identifier "com.automicvault.av""#)
 assert(productionScript.contains("/usr/bin/install -S -m 0755 -o root -g wheel "))
 let redirected = productionScript
     .replacingOccurrences(of: "for directory in / /usr /usr/local /usr/local/bin", with:
@@ -83,12 +90,22 @@ let redirected = productionScript
     .replacingOccurrences(of: "/usr/local/bin", with: bin.path)
 // Test in a user-owned temporary tree; production always requires UID 0.
 let script = redirected.replacingOccurrences(of: "!= 0", with: "!= \(getuid())")
-for contents in ["quarantined CLI fixture", "updated CLI fixture"] {
-    try Data(contents.utf8).write(to: source)
+var expectedData = Data()
+for _ in 0..<2 {
+    try FileManager.default.removeItem(at: source)
+    try FileManager.default.copyItem(atPath: CommandLine.arguments[0], toPath: source.path)
+    let signing = Process()
+    signing.executableURL = URL(fileURLWithPath: "/usr/bin/codesign")
+    signing.arguments = ["--force", "--sign", "-", "--identifier", "com.automicvault.av", source.path]
+    try signing.run()
+    signing.waitUntilExit()
+    assert(signing.terminationStatus == 0)
+    try quarantineSource()
+    expectedData = try Data(contentsOf: source)
     let installed = try await runCLIInstallerScript(script)
     assert(installed)
     let installedData = try Data(contentsOf: destination)
-    assert(installedData == Data(contents.utf8))
+    assert(installedData == expectedData)
     let attributes = try FileManager.default.attributesOfItem(atPath: destination.path)
     assert((attributes[.posixPermissions] as? NSNumber)?.intValue == 0o755)
 }
@@ -101,7 +118,7 @@ func expectUnsafe(_ script: String) async throws {
         assert(message.contains("Unsafe CLI installation directory"))
     }
     let data = try Data(contentsOf: destination)
-    assert(data == Data("updated CLI fixture".utf8))
+    assert(data == expectedData)
 }
 for directory in [prefix, local, bin] {
     for mode in [0o775, 0o757] {
@@ -109,6 +126,44 @@ for directory in [prefix, local, bin] {
         try await expectUnsafe(script)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: directory.path)
     }
+}
+for directory in [prefix, local, bin] {
+    let chmod = Process()
+    chmod.executableURL = URL(fileURLWithPath: "/bin/chmod")
+    chmod.arguments = ["+a", "user:\(NSUserName()) allow add_file,delete_child", directory.path]
+    try chmod.run()
+    chmod.waitUntilExit()
+    assert(chmod.terminationStatus == 0)
+    assert(!gitTransportPathHasNoACL(directory.path))
+    try await expectUnsafe(script)
+    let clear = Process()
+    clear.executableURL = URL(fileURLWithPath: "/bin/chmod")
+    clear.arguments = ["-N", directory.path]
+    try clear.run()
+    clear.waitUntilExit()
+    assert(clear.terminationStatus == 0)
+}
+// Reject unsigned, wrong-identity, and tampered replacements before publication.
+try expectedData.write(to: source)
+let wrongSigner = Process()
+wrongSigner.executableURL = URL(fileURLWithPath: "/usr/bin/codesign")
+wrongSigner.arguments = ["--force", "--sign", "-", "--identifier", "wrong.identity", source.path]
+try wrongSigner.run()
+wrongSigner.waitUntilExit()
+assert(wrongSigner.terminationStatus == 0)
+let wrongIdentity = try Data(contentsOf: source)
+var tampered = expectedData
+tampered[0] = 0
+for invalid in [Data("unsigned replacement".utf8), wrongIdentity, tampered] {
+    try invalid.write(to: source)
+    do {
+        _ = try await runCLIInstallerScript(script)
+        fatalError("invalid executable was installed")
+    } catch CLIInstallerError.commandFailed {}
+    let preserved = try Data(contentsOf: destination)
+    assert(preserved == expectedData)
+    let leftovers = try FileManager.default.contentsOfDirectory(atPath: bin.path)
+    assert(leftovers == ["av"], "staging files leaked after validation failure")
 }
 // The production ownership rule rejects this otherwise protected user-owned tree.
 assert(getuid() != 0, "run this regression check without root")
