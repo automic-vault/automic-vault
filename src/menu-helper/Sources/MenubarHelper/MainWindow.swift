@@ -1722,10 +1722,17 @@ func currentCLIInstallState(
     guard lstat(installedURL.path, &metadata) == 0 else {
         return errno == ENOENT ? .missing : .outdated
     }
+    var parent = installedURL.deletingLastPathComponent()
+    while true {
+        guard cliInstallDirectoryIsProtected(parent.path) else { return .outdated }
+        if parent.path == "/" { break }
+        parent.deleteLastPathComponent()
+    }
     guard let bundledURL,
           expectedRevision != nil,
           metadata.st_mode & S_IFMT == S_IFREG,
           metadata.st_uid == 0,
+          metadata.st_mode & 0o022 == 0,
           FileManager.default.isExecutableFile(atPath: installedURL.path),
           executable(at: installedURL, satisfiesDesignatedRequirementOf: bundledURL)
     else {
@@ -1789,16 +1796,39 @@ private func executable(at candidate: URL, satisfiesDesignatedRequirementOf trus
     return SecStaticCodeCheckValidity(candidateCode, [], requirement) == errSecSuccess
 }
 
-// Quote the path as AppleScript data, then let AppleScript quote it for the shell.
+private func cliInstallDirectoryIsProtected(_ path: String) -> Bool {
+    var metadata = stat()
+    return lstat(path, &metadata) == 0
+        && metadata.st_mode & S_IFMT == S_IFDIR
+        && metadata.st_uid == 0
+        && metadata.st_mode & 0o022 == 0
+}
+
+// Validate ancestors before creating children, inside the privileged transaction.
 private func cliInstallerScript(sourcePath: String) -> String {
-    let path = sourcePath
+    let source = "'" + sourcePath.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    let command = """
+    set -eu
+    for directory in / /usr /usr/local /usr/local/bin; do
+        if [ ! -e "$directory" ] && [ ! -L "$directory" ]; then
+            /bin/mkdir -m 0755 "$directory"
+        fi
+        metadata=$(/usr/bin/stat -f '%u %p' "$directory")
+        set -- $metadata
+        if [ "$1" != 0 ] || [ "$((0$2 & 0170022))" -ne "$((0040000))" ]; then
+            echo "Unsafe CLI installation directory: $directory" >&2
+            exit 1
+        fi
+    done
+    /usr/bin/install -S -m 0755 -o root -g wheel \(source) /usr/local/bin/av
+    """
         .replacingOccurrences(of: "\\", with: "\\\\")
         .replacingOccurrences(of: "\"", with: "\\\"")
         .replacingOccurrences(of: "\r", with: "\\r")
         .replacingOccurrences(of: "\n", with: "\\n")
     return """
     try
-        do shell script ("/bin/mkdir -p /usr/local/bin && /usr/bin/install -S -m 0755 -o root -g wheel " & quoted form of "\(path)" & " /usr/local/bin/av") with administrator privileges
+        do shell script "\(command)" with administrator privileges
         return "installed"
     on error errorMessage number errorNumber
         if errorNumber is -128 then return "cancelled"
