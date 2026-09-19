@@ -1830,6 +1830,7 @@ private func cliInstallerScript(sourcePath: String, requirement: String) -> Stri
     stage=$(/usr/bin/mktemp -d /usr/local/bin/.av-install.XXXXXXXX)
     trap '/bin/rm -rf "$stage"' EXIT
     /usr/bin/install -S -m 0755 -o root -g wheel \(source) "$stage/av"
+    /bin/chmod -N "$stage/av"
     /usr/bin/codesign --verify --strict -R \(requirement) "$stage/av"
     /bin/mv -f "$stage/av" /usr/local/bin/av
     """

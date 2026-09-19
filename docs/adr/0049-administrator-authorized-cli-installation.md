@@ -24,7 +24,8 @@ creating children. Require actual root-owned directories, no group/world write
 permissions, and no extended ACL entries. Do not repair unsafe existing paths.
 
 Copy into a private root-owned temporary directory beneath the validated
-`/usr/local/bin`. Verify that staged copy's strict code signature against the CLI
+`/usr/local/bin`. Remove extended ACLs copied from the source so they cannot
+weaken the installed file's permissions. Verify the staged copy's strict code signature against the CLI
 identifier, Apple signing anchor, and app Team ID before atomically renaming it
 to the fixed destination. Reject an existing destination directory or symlink.
 This second verification prevents a changed source during the administrator
