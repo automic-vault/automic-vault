@@ -1734,7 +1734,7 @@ func currentCLIInstallState(
           expectedRevision != nil,
           metadata.st_mode & S_IFMT == S_IFREG,
           metadata.st_uid == 0,
-          metadata.st_mode & 0o022 == 0,
+          metadata.st_mode & 0o7777 == 0o755,
           gitTransportPathHasNoACL(installedURL.path),
           FileManager.default.isExecutableFile(atPath: installedURL.path),
           executable(at: installedURL, satisfiesDesignatedRequirementOf: bundledURL)

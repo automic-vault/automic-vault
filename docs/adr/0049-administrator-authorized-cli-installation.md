@@ -38,7 +38,8 @@ the existing CLI intact and removes staging through a shell exit trap. Abrupt
 process termination or machine failure may leave a staging directory. Missing
 protected parent directories created earlier in the transaction may remain.
 After success, refresh both dashboard and menu state. Installed-state detection
-also rejects unsafe ancestors and a CLI with group/world writes or an ACL.
+also rejects unsafe ancestors, any CLI mode other than `0755` (including
+setuid/setgid bits), and any CLI ACL.
 
 ## Consequences
 

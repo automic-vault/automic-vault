@@ -32,8 +32,10 @@ let cliInstallationDidFinish = Notification.Name("AutomicVaultCLIInstallationDid
 }
 func selfTeamIdentifier() -> String? { "TESTTEAM" }
 @MainActor var fixtureScript = ""
+@MainActor var capturedRequirement = ""
 @MainActor func fixtureInstallerScript(sourcePath: String, requirement: String) -> String {
-    assert(requirement.contains("TESTTEAM") && requirement.contains("anchor apple generic"))
+    assert(requirement == #"identifier "com.automicvault.av" and anchor apple generic and certificate leaf[subject.OU] = "TESTTEAM""#)
+    capturedRequirement = requirement
     assert(sourcePath == "/fixture/av")
     return fixtureScript
 }
@@ -90,12 +92,14 @@ func quarantineSource() throws {
 }
 let productionScript = cliInstallerScript(sourcePath: source.path, requirement: #"identifier "com.automicvault.av""#)
 assert(productionScript.contains("/usr/bin/install -S -m 0755 -o root -g wheel "))
-let redirected = productionScript
-    .replacingOccurrences(of: "for directory in / /usr /usr/local /usr/local/bin", with:
+func redirectToFixture(_ script: String) -> String {
+    script.replacingOccurrences(of: "for directory in / /usr /usr/local /usr/local/bin", with:
         "for directory in \(prefix.path) \(local.path) \(bin.path)")
     .replacingOccurrences(of: " with administrator privileges", with: "")
     .replacingOccurrences(of: " -o root -g wheel", with: "")
     .replacingOccurrences(of: "/usr/local/bin", with: bin.path)
+}
+let redirected = redirectToFixture(productionScript)
 // Test in a user-owned temporary tree; production always requires UID 0.
 let script = redirected.replacingOccurrences(of: "!= 0", with: "!= \(getuid())")
 var expectedData = Data()
@@ -124,6 +128,16 @@ for _ in 0..<2 {
     let attributes = try FileManager.default.attributesOfItem(atPath: destination.path)
     assert((attributes[.posixPermissions] as? NSNumber)?.intValue == 0o755)
 }
+// The exact production publisher constraint must reject a valid ad-hoc CLI
+// even with the right identifier; no Developer ID credentials are used in CI.
+let publisherScript = redirectToFixture(cliInstallerScript(sourcePath: source.path, requirement: capturedRequirement))
+    .replacingOccurrences(of: "!= 0", with: "!= \(getuid())")
+do {
+    _ = try await runCLIInstallerScript(publisherScript)
+    fatalError("publisher requirement accepted an ad-hoc CLI")
+} catch CLIInstallerError.commandFailed {}
+let publisherPreserved = try Data(contentsOf: destination)
+assert(publisherPreserved == expectedData)
 // The fixture is ad-hoc signed, not notarized. Installation above preserves the
 // quarantined input; remove its quarantine only to run the fixture's __version.
 let clearFixtureQuarantine = Process()
@@ -136,7 +150,7 @@ func installedState() -> CLIInstallState {
     currentCLIInstallState(installedURL: destination, bundledURL: source, expectedRevision: 1)
 }
 assert(installedState() == .current)
-for mode in [0o775, 0o757] {
+for mode in [0o775, 0o757, 0o4755, 0o2755, 0o1755] {
     try FileManager.default.setAttributes([.posixPermissions: mode], ofItemAtPath: destination.path)
     assert(installedState() == .outdated, "writable installed CLI appeared current")
     try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: destination.path)
