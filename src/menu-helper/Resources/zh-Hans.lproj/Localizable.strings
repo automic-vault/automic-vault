@@ -112,7 +112,7 @@
 "Could not bless script: %@" = "无法认可脚本：%@";
 "Could not delete %@ Value: %@" = "无法删除 %@ 的值：%@";
 "Could not delete %@: %@" = "无法删除 %@：%@";
-"Could not open install command: %@" = "无法打开安装命令：%@";
+"Could not install av CLI: %@" = "无法安装 av CLI：%@";
 "Could not rename %@: %@" = "无法重命名 %@：%@";
 "Could not review changes: %@" = "无法检查更改：%@";
 "Could not revoke Launcher Bundle enrollment: %@" = "无法撤销启动器应用包登记：%@";

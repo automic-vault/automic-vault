@@ -421,10 +421,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func application(_ application: NSApplication, open urls: [URL]) {
-        if urls.contains(where: isCLIInstallCompletionURL) {
-            refreshCLIInstallState()
-            (mainWindow?.contentViewController as? AutomicVaultMainWindowController)?.reload()
-        }
         guard let secretGateID = urls.lazy.compactMap(secretGateID(from:)).first else { return }
         if shouldHandOffToLaunchAgent() {
             UserDefaults.standard.set(true, forKey: pendingMainWindowKey)
@@ -452,7 +448,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @MainActor @objc private func installCLI() {
         guard !isStartingUp else { return }
         do {
-            try openCLIInstaller()
+            if try installBundledCLI() {
+                refreshCLIInstallState()
+                (mainWindow?.contentViewController as? AutomicVaultMainWindowController)?.reload()
+            }
         } catch {
             NSAlert(error: error).runModal()
         }
