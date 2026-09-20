@@ -1,0 +1,7 @@
+# Import into Atlas's /etc/caddy/Caddyfile; Caddy now owns ports 80 and 443.
+approval-relay.automicvault.com {
+	request_body {
+		max_size 1MiB
+	}
+	reverse_proxy 127.0.0.1:8788
+}
