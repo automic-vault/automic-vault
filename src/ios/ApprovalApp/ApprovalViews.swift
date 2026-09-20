@@ -229,9 +229,11 @@ struct ApprovalDetailView: View {
                 if subscription.state == .active {
                     HStack(spacing: 12) {
                         denyButton
+                        if isResponding { ProgressView().accessibilityLabel("Responding") }
                         Button("Approve Once") { Task { await model.approve(request) } }
                             .buttonStyle(.borderedProminent).controlSize(.large).frame(maxWidth: .infinity)
                     }
+                    .disabled(isResponding)
                 } else {
                     denyButton
                     Button("Subscribe to Approve") { showingSubscription = true }
@@ -247,6 +249,7 @@ struct ApprovalDetailView: View {
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.large)
+                    .disabled(isResponding)
                     .accessibilityLabel("Allow Write Access for 10 minutes for \(scope)")
 
                     Text("Limited to \(scope).")
@@ -274,9 +277,14 @@ struct ApprovalDetailView: View {
         }
     }
 
+    private var isResponding: Bool {
+        model.respondingRequestIDs.contains(request.id)
+    }
+
     private var denyButton: some View {
         Button("Deny", role: .destructive) { Task { await model.deny(request) } }
             .buttonStyle(.bordered).controlSize(.large).frame(maxWidth: .infinity)
+            .disabled(isResponding)
     }
 }
 

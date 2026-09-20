@@ -117,6 +117,7 @@ final class ApprovalModel {
     }
 
     private(set) var pending: [PhoneApprovalRequest] = []
+    private(set) var respondingRequestIDs: Set<UUID> = []
     private(set) var activity: [PhoneApprovalActivity] = []
     private(set) var state: ConnectionState = .setup
     private(set) var notificationPreferences = ApprovalNotificationPreferences()
@@ -202,18 +203,11 @@ final class ApprovalModel {
     }
 
     func approve(_ request: PhoneApprovalRequest) async {
-        await approve(request, outcome: .approved)
+        await respond(to: request, outcome: .approved)
     }
 
     func allowTemporaryWriteAccess(_ request: PhoneApprovalRequest) async {
-        await approve(request, outcome: .temporaryWriteAccess)
-    }
-
-    private func approve(_ request: PhoneApprovalRequest, outcome: PhoneApprovalOutcome) async {
-        if biometricProtectionEnabled {
-            guard await authenticateBiometrically() else { return }
-        }
-        await respond(to: request, outcome: outcome)
+        await respond(to: request, outcome: .temporaryWriteAccess)
     }
 
     func deny(_ request: PhoneApprovalRequest) async {
@@ -255,9 +249,6 @@ final class ApprovalModel {
         switch response.actionIdentifier {
         case "AV_DENY": await respond(to: ticket, outcome: .denied)
         case "AV_APPROVE" where !ticket.requiresFullReview:
-            if biometricProtectionEnabled {
-                guard await authenticateBiometrically() else { return }
-            }
             await respond(to: ticket, outcome: .approved)
         case "AV_REVIEW", UNNotificationDefaultActionIdentifier:
             notificationReviewRequestID = ticket.requestID
@@ -350,6 +341,11 @@ final class ApprovalModel {
     }
 
     private func respond(to request: PhoneApprovalRequest, outcome: PhoneApprovalOutcome) async {
+        guard respondingRequestIDs.insert(request.id).inserted else { return }
+        defer { respondingRequestIDs.remove(request.id) }
+        if outcome != .denied, biometricProtectionEnabled {
+            guard await authenticateBiometrically() else { return }
+        }
         guard await subscriptionPermits(outcome) else { return }
         do {
             guard let relay else { throw ApprovalRelayClientError.disconnected }
@@ -364,6 +360,11 @@ final class ApprovalModel {
     }
 
     private func respond(to ticket: PhoneApprovalTicket, outcome: PhoneApprovalOutcome) async {
+        guard respondingRequestIDs.insert(ticket.requestID).inserted else { return }
+        defer { respondingRequestIDs.remove(ticket.requestID) }
+        if outcome != .denied, biometricProtectionEnabled {
+            guard await authenticateBiometrically() else { return }
+        }
         guard await subscriptionPermits(outcome) else { return }
         do {
             if relay == nil { await connect() }
