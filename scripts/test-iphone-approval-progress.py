@@ -8,23 +8,39 @@ source = (Path(__file__).resolve().parents[1] /
           "src/ios/ApprovalApp/ApprovalApp.swift").read_text()
 methods = source[source.index("    private func respond(to request:"):
                  source.index("    private func subscriptionPermits(")]
+methods += source[source.index("    func handleNotificationResponse("):
+                  source.index("    func handleBackgroundNotification(")]
 methods = methods.replace("private func", "func")
 fixture = r'''
 import Foundation
 
 enum PhoneApprovalOutcome { case approved, denied, temporaryWriteAccess }
 struct PhoneApprovalRequest { let id = UUID() }
-struct PhoneApprovalTicket { let requestID: UUID; let requestDigest = "digest" }
+struct PhoneApprovalTicket {
+    let requestID: UUID
+    let requestDigest = "digest"
+    var requiresFullReview = false
+    var canceled = false
+}
+let UNNotificationDefaultActionIdentifier = "default"
+struct UNNotificationResponse {
+    let actionIdentifier: String
+    let notification = Notification()
+    struct Notification { let request = Request() }
+    struct Request { let content = Content() }
+    struct Content { let userInfo: [AnyHashable: Any] = [:] }
+}
 struct PhoneApprovalResponse {
     init(request: PhoneApprovalRequest, outcome: PhoneApprovalOutcome, deviceID: String) throws {}
     init(requestID: UUID, requestDigest: String, outcome: PhoneApprovalOutcome, deviceID: String) throws {}
 }
 struct PhoneApprovalActivity {
+    init?(canceled ticket: PhoneApprovalTicket) { if !ticket.canceled { return nil } }
     init(request: PhoneApprovalRequest, outcome: PhoneApprovalOutcome) {}
     init(ticket: PhoneApprovalTicket, outcome: PhoneApprovalOutcome) {}
 }
 enum ApprovalRelayClientError: Error { case disconnected }
-enum Message { case response(PhoneApprovalResponse) }
+enum Message { case response(PhoneApprovalResponse), sync }
 @MainActor final class Relay {
     var sends = 0
     var fails = false
@@ -36,6 +52,12 @@ enum Message { case response(PhoneApprovalResponse) }
     }
 }
 @MainActor final class Model {
+    var notificationReviewTicket: PhoneApprovalTicket?
+    var notificationReviewRequestID: UUID?
+    var notificationReviewSequence: UInt64 = 0
+    var incomingTicket: PhoneApprovalTicket?
+    var onConnect: () -> Void = {}
+    func ticket(from info: [AnyHashable: Any]) async -> PhoneApprovalTicket? { incomingTicket }
     var respondingRequestIDs: Set<UUID> = []
     var pending: [PhoneApprovalRequest] = []
     var biometricProtectionEnabled = true
@@ -54,7 +76,7 @@ enum Message { case response(PhoneApprovalResponse) }
     func subscriptionPermits(_ outcome: PhoneApprovalOutcome) async -> Bool {
         outcome == .denied || subscribed
     }
-    func connect() async {}
+    func connect() async { onConnect() }
     func recordActivity(_ item: PhoneApprovalActivity) {}
     func removeDeliveredNotifications(for id: UUID) async {}
 METHODS
@@ -107,7 +129,31 @@ METHODS
                 }
             }
         }
-        print("iPhone approval progress checks passed")
+        let model = Model()
+        model.relay = nil
+        let id = UUID()
+        model.incomingTicket = PhoneApprovalTicket(requestID: id, requiresFullReview: true)
+        var connects = 0
+        model.onConnect = {
+            connects += 1
+            // Authenticated summary and routing must be ready before any relay wait.
+            assert(model.notificationReviewTicket?.requestID == id)
+            assert(model.notificationReviewRequestID == id)
+            assert(model.notificationReviewSequence > 0)
+        }
+        for action in ["AV_REVIEW", UNNotificationDefaultActionIdentifier] {
+            await model.handleNotificationResponse(.init(actionIdentifier: action))
+        }
+        assert(connects == 2 && model.notificationReviewSequence == 2)
+        model.dismissNotificationReview()
+        assert(model.notificationReviewTicket == nil && model.notificationReviewRequestID == nil)
+        model.incomingTicket = nil
+        await model.handleNotificationResponse(.init(actionIdentifier: "AV_REVIEW"))
+        assert(model.notificationReviewTicket == nil && connects == 2)
+        model.incomingTicket = PhoneApprovalTicket(requestID: id, canceled: true)
+        await model.handleNotificationResponse(.init(actionIdentifier: "AV_REVIEW"))
+        assert(model.notificationReviewTicket == nil && connects == 2)
+        print("iPhone approval progress and notification routing checks passed")
     }
 }
 '''.replace("METHODS", methods)

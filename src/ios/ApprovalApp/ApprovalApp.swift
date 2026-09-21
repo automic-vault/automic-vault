@@ -13,6 +13,8 @@ struct AutomicVaultApprovalApp: App {
                 .tint(.purple)
                 .task {
                     await ApprovalSubscription.shared.start()
+                }
+                .task {
                     await ApprovalModel.shared.start()
                 }
         }
@@ -121,6 +123,7 @@ final class ApprovalModel {
     private(set) var activity: [PhoneApprovalActivity] = []
     private(set) var state: ConnectionState = .setup
     private(set) var notificationPreferences = ApprovalNotificationPreferences()
+    private(set) var notificationReviewTicket: PhoneApprovalTicket?
     private(set) var notificationReviewRequestID: UUID?
     private(set) var notificationReviewSequence: UInt64 = 0
     var errorMessage: String?
@@ -251,6 +254,7 @@ final class ApprovalModel {
         case "AV_APPROVE" where !ticket.requiresFullReview:
             await respond(to: ticket, outcome: .approved)
         case "AV_REVIEW", UNNotificationDefaultActionIdentifier:
+            notificationReviewTicket = ticket
             notificationReviewRequestID = ticket.requestID
             notificationReviewSequence &+= 1
             if !pending.contains(where: { $0.id == ticket.requestID }) {
@@ -259,6 +263,11 @@ final class ApprovalModel {
             }
         default: break
         }
+    }
+
+    func dismissNotificationReview() {
+        notificationReviewTicket = nil
+        notificationReviewRequestID = nil
     }
 
     func handleBackgroundNotification(_ userInfo: [AnyHashable: Any]) async -> UIBackgroundFetchResult {
@@ -315,6 +324,7 @@ final class ApprovalModel {
             do {
                 switch try await relay.receive() {
                 case .request(let request):
+                    if notificationReviewTicket?.requestID == request.id { notificationReviewTicket = nil }
                     if !pending.contains(where: { $0.id == request.id }) { pending.append(request) }
                 case .response(let response):
                     pending.removeAll { $0.id == response.requestID }
@@ -411,6 +421,7 @@ final class ApprovalModel {
     }
 
     private func removeDeliveredNotifications(for requestID: UUID) async {
+        if notificationReviewRequestID == requestID { dismissNotificationReview() }
         let center = UNUserNotificationCenter.current()
         let identifiers = await center.deliveredNotifications()
             .filter { $0.request.content.threadIdentifier == requestID.uuidString }

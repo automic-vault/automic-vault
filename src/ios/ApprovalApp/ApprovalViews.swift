@@ -20,12 +20,14 @@ struct ApprovalRootView: View {
             Group {
                 if let request = notificationRequest {
                     ApprovalDetailView(request: request, model: model, subscription: subscription)
+                } else if let ticket = model.notificationReviewTicket {
+                    notificationPreview(ticket)
                 } else if model.pending.count == 1, !keepsPendingListVisible, let request = model.pending.first {
                     ApprovalDetailView(request: request, model: model, subscription: subscription)
                 } else if !model.pending.isEmpty {
                     list
                 } else if subscription.state == .loading {
-                    ProgressView("Checking subscription…")
+                    ProgressView().accessibilityLabel("Loading")
                 } else if model.state == .setup || subscription.state == .inactive {
                     setup
                 } else if showsActivity {
@@ -34,7 +36,7 @@ struct ApprovalRootView: View {
                     empty
                 }
             }
-            .navigationTitle(showsActivity ? "Request History" : "Approvals")
+            .navigationTitle(model.notificationReviewTicket != nil ? "Approval" : showsActivity ? "Request History" : "Approvals")
             .navigationDestination(for: ApprovalRoute.self) { route in
                 destination(for: route)
             }
@@ -82,6 +84,34 @@ struct ApprovalRootView: View {
                 keepsPendingListVisible = false
             }
         }
+    }
+
+    private func notificationPreview(_ ticket: PhoneApprovalTicket) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(ticket.launcher).font(.title2.bold())
+                    Text("on \(ticket.macName)").foregroundStyle(.secondary)
+                }
+                LabeledContent("Tool", value: ticket.tool)
+                Text(ticket.command).font(.body.monospaced())
+                Text(ticket.reason).foregroundStyle(.secondary)
+                ProgressView().accessibilityLabel("Loading")
+                    .frame(maxWidth: .infinity)
+                if case .reconnecting(let reason) = model.state {
+                    Text(reason).foregroundStyle(.secondary)
+                    Button("Refresh", systemImage: "arrow.clockwise") {
+                        Task { await model.refresh() }
+                    }
+                } else if case .unavailable(let reason) = model.state {
+                    Text(reason).foregroundStyle(.secondary)
+                }
+                Button("Done") { model.dismissNotificationReview() }
+                    .frame(maxWidth: .infinity)
+            }
+            .padding()
+        }
+        .navigationBarTitleDisplayMode(.inline)
     }
 
     private var notificationRequest: PhoneApprovalRequest? {
@@ -234,6 +264,12 @@ struct ApprovalDetailView: View {
                             .buttonStyle(.borderedProminent).controlSize(.large).frame(maxWidth: .infinity)
                     }
                     .disabled(isResponding)
+                } else if subscription.state == .loading {
+                    HStack(spacing: 12) {
+                        denyButton
+                        ProgressView().accessibilityLabel("Loading")
+                            .frame(maxWidth: .infinity)
+                    }
                 } else {
                     denyButton
                     Button("Subscribe to Approve") { showingSubscription = true }
