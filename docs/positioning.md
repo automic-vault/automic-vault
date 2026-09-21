@@ -31,8 +31,8 @@ applying a protected credential, and asks you when policy requires Approval.
 exposed credentials into the Keychain, and gates their use while you keep your
 usual commands.
 
-**Supporting line:** Give your agent Read Only access to GitHub. Approve its
-writes. Require a separate decision to reveal the token.
+**Supporting line:** Your secrets manager should know what the secrets *do*.
+Follow it with GitHub's read, write, and disclosure decisions for one token.
 
 ## Voice and order
 
@@ -40,8 +40,12 @@ Write as the developers fixing a specific problem in the command-line toolchain.
 Explain the exposed credential or uncontrolled operation, show the intervention,
 and give a command that demonstrates it. Use plain, opinionated language.
 
-Lead with packaging and tool hardening. Follow with an operation example, a
-Scan or installation path, and the relevant security boundary. Explain Secrets,
+Lead with packaging and tool hardening. Show what `av harden gh` changes and
+how Homebrew's Read & Update policy treats installs before the runtime demo.
+Follow with the operation comparison, a Scan or installation path, and the
+relevant security boundary. Attribute the founder line to Max Howell without
+repeating “creator of Homebrew” beside it. The About page connects tool
+installation to the authority agents inherit. Explain Secrets,
 Verified Launchers, and Authorization Gates as the reader encounters them.
 Keep the fuller model in the technical documentation.
 
