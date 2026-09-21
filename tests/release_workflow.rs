@@ -30,6 +30,8 @@ fn ci_tests_optimized_and_executable_boundaries() {
     );
     assert!(CI_WORKFLOW.contains("scripts/test-menu-helper-self-checks.sh"));
     assert!(CI_WORKFLOW.contains("scripts/test-varlock-plugin-helper.sh"));
+    assert!(CI_WORKFLOW.contains("runner: [macos-26, macos-15-intel]"));
+    assert!(CI_WORKFLOW.contains("python3 scripts/test-universal-app.py"));
 }
 
 #[test]
@@ -188,7 +190,12 @@ fn release_builds_are_actions_only_and_fail_closed() {
     );
     assert!(BUILD_SCRIPT.contains("--arch arm64"));
     assert!(BUILD_SCRIPT.contains("-no-whole-module-optimization"));
-    assert!(!BUILD_SCRIPT.contains("lipo "));
+    assert!(BUILD_SCRIPT.contains("lipo -create"));
+    assert!(BUILD_SCRIPT.contains("--arch arm64 --arch x86_64"));
+    assert!(BUILD_SCRIPT.contains("verify-universal-app.sh"));
+    assert!(
+        RELEASE_WORKFLOW.contains("rustup target add aarch64-apple-darwin x86_64-apple-darwin")
+    );
     assert!(BUILD_SCRIPT.contains(
         "ditto \"$SWIFT_BIN/AppUpdater_AppUpdater.bundle\" \"$RESOURCES/AppUpdater_AppUpdater.bundle\""
     ));
@@ -271,17 +278,14 @@ fn macos_app_uses_its_violet_accent() {
 #[test]
 fn git_signing_adapter_is_hardened_and_bundled_without_a_privileged_install() {
     assert!(BUILD_SCRIPT.contains("--identifier com.automicvault.av-gpg \"$MACOS/av-gpg\""));
-    assert!(BUILD_SCRIPT.contains("cp \"$ROOT/target/release/av-gpg\" \"$MACOS/av-gpg\""));
+    assert!(BUILD_SCRIPT.contains("cp \"$RUST_BIN/av-gpg\" \"$MACOS/av-gpg\""));
     assert!(BUILD_SCRIPT.contains("codesign --verify --strict \"$MACOS/av-gpg\""));
     assert!(!INSTALL_SCRIPT.contains("Contents/MacOS/av-gpg"));
 }
 
 #[test]
 fn proxy_helper_is_sandboxed_signed_inside_out_and_has_no_keychain_authority() {
-    assert!(
-        BUILD_SCRIPT
-            .contains("cp \"$ROOT/target/release/av-proxy-helper\" \"$MACOS/av-proxy-helper\"")
-    );
+    assert!(BUILD_SCRIPT.contains("cp \"$RUST_BIN/av-proxy-helper\" \"$MACOS/av-proxy-helper\""));
     assert!(BUILD_SCRIPT.contains("--identifier com.automicvault.av-proxy-helper"));
     assert!(BUILD_SCRIPT.contains("--entitlements \"$PROXY_HELPER_ENTITLEMENTS\""));
     assert!(

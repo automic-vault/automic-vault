@@ -16,9 +16,7 @@ const MAX_BINARY_BYTES: u64 = 256 * 1024 * 1024;
 pub(crate) fn download(destination: &Path) -> Result<String, String> {
     let index = fetch(INDEX_URL, MAX_INDEX_BYTES, Duration::from_secs(15))?;
     let version = latest_stable_version(&index)?;
-    let url = format!(
-        "https://releases.hashicorp.com/terraform/{version}/terraform_{version}_darwin_arm64.zip"
-    );
+    let url = release_url(&version, std::env::consts::ARCH)?;
     download_to(
         &url,
         destination,
@@ -26,6 +24,17 @@ pub(crate) fn download(destination: &Path) -> Result<String, String> {
         Duration::from_secs(180),
     )?;
     super::isotope::sha256_file(destination)
+}
+
+fn release_url(version: &str, architecture: &str) -> Result<String, String> {
+    let architecture = match architecture {
+        "aarch64" => "arm64",
+        "x86_64" => "amd64",
+        _ => return Err("official Terraform is supported only on macOS arm64 and x86_64".into()),
+    };
+    Ok(format!(
+        "https://releases.hashicorp.com/terraform/{version}/terraform_{version}_darwin_{architecture}.zip"
+    ))
 }
 
 pub(crate) fn install_privileged(expected_sha256: &str, archive: &Path) -> Result<(), String> {
@@ -220,6 +229,19 @@ fn install_dir() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn release_archive_matches_the_executing_architecture() {
+        for (architecture, upstream) in [("aarch64", "arm64"), ("x86_64", "amd64")] {
+            assert_eq!(
+                release_url("1.15.9", architecture).unwrap(),
+                format!(
+                    "https://releases.hashicorp.com/terraform/1.15.9/terraform_1.15.9_darwin_{upstream}.zip"
+                )
+            );
+        }
+        assert!(release_url("1.15.9", "unknown").is_err());
+    }
 
     #[test]
     fn release_index_selects_only_the_highest_stable_semver() {

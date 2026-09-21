@@ -16,7 +16,11 @@ concurrency:
 jobs:
   rust:
     name: Rust
-    runs-on: macos-26
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-26, macos-15-intel]
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 20
     steps:
       - name: Check out repository
@@ -35,7 +39,11 @@ jobs:
 
   swift:
     name: Swift
-    runs-on: macos-26
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-26, macos-15-intel]
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 20
     steps:
       - name: Check out repository
@@ -48,6 +56,9 @@ jobs:
 
       - name: Test menu helper executable boundaries
         run: scripts/test-menu-helper-self-checks.sh
+
+      - name: Test Universal 2 artifact checks
+        run: python3 scripts/test-universal-app.py
 
       - name: Test Launcher Bundle runner
         run: scripts/test-launcher-bundle-runner.sh
