@@ -456,6 +456,24 @@ intercept every process execution. Keep your terminal and agent harness's
 &nbsp;
 
     
+## Companion Apps
+
+Network filtering and general-purpose agent sandboxing are outside Automic
+Vault's scope and roadmap. These apps cover those needs:
+
+- [Tiny Shield](https://tinyshield.proxyman.com) monitors your Mac's network
+  connections and lets you block apps or domains. Automic Vault controls whether
+  an operation may use a protected credential; Tiny Shield adds control over
+  where apps can connect, including traffic that uses no credential.
+- [agentsh](https://www.agentsh.org) applies file, network, and process policies
+  to agents run through it. Use it to restrict workspace access and command
+  execution alongside Automic Vault's Secret Custody and Authorization Gates.
+  Those restrictions address local actions, such as deleting files, that need
+  no protected Secret and may never reach an Automic Vault gate.
+
+&nbsp;
+
+
 ## Documentation
 
 - [User manual][user manual]
