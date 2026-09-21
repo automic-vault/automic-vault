@@ -11,9 +11,15 @@ I created Homebrew. Now I’m fixing what happens when agents use it.
 You install tools to do a job. Their credentials often sit in files or helpers
 that other code running as you can read. Agents inherit that access.
 
-Automic Vault hardens supported CLI tools on macOS. We move exposed credentials
-into the Keychain and change how the tools request them. You keep your commands;
-AV checks the complete operation before applying a protected credential.
+Automic Vault hardens supported CLI tools on macOS. AV understands how supported
+commands use credentials and classifies operations by sensitivity. Set Access
+Levels in advance for each app and Tool to reduce Approval prompts without
+blanket access. Unknown operations still require Approval.
+
+We move exposed credentials into the Keychain and change how the tools request
+them. You keep your commands; AV checks the complete operation before applying
+a protected credential.
+
 
 &nbsp;
 
