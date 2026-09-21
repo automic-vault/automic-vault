@@ -7,25 +7,54 @@ and [Architecture](architecture.md).
 
 ## Product promise
 
-Automic Vault applies a developer credential after policy or the user allows the
-complete operation requested by verified software.
+CLI security is broken. The packaging layer is where we fix it.
 
-A retrieval-based secrets manager decides whether an identity may receive a
-stored secret. Automic Vault authorizes the complete operation at the point
-where software uses a developer credential. It considers the Verified Launcher,
-Gate Client, Target, command, arguments, working directory, requested Secret
-Names, and policy. Automic Vault asks the user when policy requires Approval.
+You install a CLI to do a job. Its credentials often sit in files, environment
+variables, or helpers that other code running as you can read. An agent running
+that CLI inherits access you may never have meant to give it.
+
+Automic Vault hardens supported tools where they are installed and configured.
+We move exposed credentials into protected storage and reconfigure, wrap, or
+patch the tools to request authorization when they use them. Homebrew has an
+Execution Gate for supported package-management operations, too.
+
+You keep using your commands. Automic Vault checks the complete operation before
+applying a protected credential, and asks you when policy requires Approval.
 
 ## Short copy
 
-**Headline:** Your secrets manager should know what the secrets *do*.
+**Headline:** CLI security is broken. The packaging layer is where we fix it.
 
-**One sentence:** Automic Vault checks the Tool, Verified Launcher, Target,
-command, arguments, working directory, and Secret Names before applying a
-developer credential.
+**Founder line:** I created Homebrew. Now I’m fixing what happens when agents use it.
 
-**Contrast:** Retrieval-based managers decide who can receive a named secret.
-Automic Vault decides whether a complete operation may use it.
+**One sentence:** Automic Vault hardens supported CLI tools on macOS, moves
+exposed credentials into the Keychain, and gates their use while you keep your
+usual commands.
+
+**Supporting line:** Give your agent Read Only access to GitHub. Approve its
+writes. Require a separate decision to reveal the token.
+
+## Voice and order
+
+Write as the developers fixing a specific problem in the command-line toolchain.
+Explain the exposed credential or uncontrolled operation, show the intervention,
+and give a command that demonstrates it. Use plain, opinionated language.
+
+Lead with packaging and tool hardening. Follow with an operation example, a
+Scan or installation path, and the relevant security boundary. Explain Secrets,
+Verified Launchers, and Authorization Gates as the reader encounters them.
+Keep the fuller model in the technical documentation.
+
+“The packaging layer is where we fix it” describes our intervention through tool
+installation and configuration. Hardeners may use an Isotope, a wrapper, an
+upstream credential helper, or a verified vendor release. Runtime Authorization
+Gates enforce protected requests after installation. Packaging itself is not an
+authority decision, and installing a package does not make its code trustworthy.
+
+Do not turn package-catalog size into a protection claim. Coverage is per
+supported Tool and operation. Do not imply that every Homebrew package, npm
+invocation, or process execution runs through Automic Vault. General-purpose
+agent sandboxing is outside the product's scope.
 
 ## Supporting claims
 

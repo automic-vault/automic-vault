@@ -2,21 +2,26 @@
 
 [English](README.md) · [简体中文](README.zh-Hans.md)
 
-Most secrets managers guard secrets.
-That’s it.
-The secret is either stored securely or delivered to its destination.
-Is the destination safe? That’s *your* problem.
+**CLI security is broken. The packaging layer is where we fix it.**
 
-We think the secrets manager should know what the secrets *do*.
+I created Homebrew. Now I’m fixing what happens when agents use it.
 
----
+— [Max Howell](https://mxcl.dev/)
 
-Automic Vault is a macOS secrets manager for developer tools and agents. It
-moves supported credentials out of plaintext files and checks the complete
-operation before applying a credential.
+You install a CLI to do a job. It leaves credentials in a file. Your agent,
+its dependencies, and whatever else runs as you can often read them.
 
-Your terminals, IDEs, agents, and projects keep their normal commands. Agents
-need no Automic Vault plugin, and repositories need no policy file.
+We’re fixing that where tools are installed and configured. Automic Vault
+hardens supported CLI tools on macOS: moving exposed credentials into the
+Keychain, then reconfiguring, wrapping, or patching how the tools use them.
+Before a protected credential leaves the vault, AV checks the complete operation.
+
+Your terminal and agents keep using their usual commands. You choose which
+operations can run under policy and which need your Approval.
+
+> [!NOTE]
+> Hardening is per supported Tool. AV does not sandbox your agent or intercept
+> every command. A Tool that receives a Secret can still leak it.
 
 &nbsp;
 
@@ -47,9 +52,9 @@ av doctor gh
 &nbsp;
 
 
-# Product Overview
+# Patch the tools you use
 
-## Detectors
+## Find exposed credentials
 
 Automic Vault continuously checks over 100 developer-tool configurations for
 Exposures and Hazards, including plaintext credentials, permissive Keychain
@@ -61,7 +66,7 @@ your machine is holistically secure.
 
 [Detection coverage and interpreting Findings](docs/tool-hardening.md)
 
-## Hardeners
+## Harden a supported tool
 
 Hardeners move supported credentials into Secret Custody in the macOS Data
 Protection Keychain and configure the Tool's Authorization Gate. Depending on
@@ -71,24 +76,17 @@ Vault-compatible build of the Tool.
 `av doctor` verifies the protection Automic Vault installed.
 
 > [!NOTE]
-> Our hardeners are best in class.
 > AWS hardening gives normal commands short-lived credentials;
 > Docker hardening removes ambient registry-helper access.
 > Homebrew's Execution Gate controls supported operations even when no Secret is involved.
 
-> [!IMPORTANT]
-> Our hardeners prove their own necessity: we wouldn’t be able to migrate your
-> credentials into Automic Vault if they weren’t *already stored in an exposed
-> state*.
-
 [Hardening, verification, and AWS/Docker handoffs](docs/tool-hardening.md)
 
-## Authorization Gates
+## Reading issues and publishing releases need different authority
 
-Automic Vault
-checks the Verified Launcher, Tool, Target, command, arguments, working
-directory, Secret Names, and selected Value sources before allowing the
-complete operation on the Mac where it will run.
+Each Authorization Gate checks the software making the request and the complete
+operation: Tool, Target, command, arguments, working directory, Secret Names,
+and selected Value sources. The Mac enforces the decision.
 
 With **Read Only** access, one GitHub token produces three decisions:
 
@@ -442,7 +440,7 @@ and `av proxy` are separate sessions; don't nest them.
 &nbsp;
 
 
-## Security Boundaries
+## Where this stops
 
 Automic Vault protects against untrusted or compromised code running with your
 normal user privileges. It builds on macOS code signing, the Data Protection
