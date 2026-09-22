@@ -37,3 +37,9 @@ The website checkout contains `/index.json` for the product overview and JSON-LD
 ### JSON news feed
 
 The website now generates `/blog/index.json` from the blog index's editorial order. Overview fetches it with a bounded, timed HTTPS request and displays at most two same-origin blog links (one at compact sizes). The blog link remains available on network or decoding failures. No local security data is sent with the request.
+
+### Attention ordering, activity, and footer
+
+Doctor-only Tools are included; Tools with Doctor reports or detector findings sort before healthy Tools. Overflow is paginated to preserve the no-scroll layout. Both feed headlines remain visible in compact layouts, with Documentation and GitHub links in the footer. The deployed feed was verified on 2026-09-22.
+
+Each Tool shows recorded authorization requests within 24 hours, not execution counts. A `+` marks a lower-bound count when older history pages remain unloaded; failed history loads show unavailable. Navigation self-checks cover Doctor-only rows, findings-first ordering, and the time window. Native renders verify the compact footer and two headlines fit.

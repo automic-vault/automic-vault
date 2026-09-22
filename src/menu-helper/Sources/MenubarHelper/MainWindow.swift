@@ -1592,14 +1592,34 @@ final class DashboardModel: ObservableObject {
         }
         let hardenedNames = Set(snapshot.hardenedTools.map(\.name))
         rows += findings.filter { !hardenedNames.contains($0.key) }.compactMap { $0.value.first }
+        for issue in snapshot.doctorIssues where issue.hardener != "Doctor" && !rows.contains(where: { overviewDoctorIssue(for: $0)?.hardener == issue.hardener }) {
+            rows.append(DashboardItem(id: "doctor:" + issue.hardener, title: issue.hardener,
+                                      subtitle: issue.message, detail: ""))
+        }
         return rows
             .filter { searchQuery.isEmpty || $0.title.localizedCaseInsensitiveContains(searchQuery) }
-            .sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
+            .sorted {
+                let lhsAttention = $0.isTriggered || overviewDoctorIssue(for: $0) != nil
+                let rhsAttention = $1.isTriggered || overviewDoctorIssue(for: $1) != nil
+                if lhsAttention != rhsAttention { return lhsAttention }
+                return $0.title.localizedStandardCompare($1.title) == .orderedAscending
+            }
     }
 
     func overviewDoctorIssue(for tool: DashboardItem) -> DoctorIssue? {
         let hardener = hardenerNameReferencedByDocumentation(tool.documentation) ?? tool.title
         return snapshot.doctorIssues.first { $0.hardener == hardener || $0.command == tool.title }
+    }
+
+    func overviewActivity(for tool: DashboardItem, now: Date = Date()) -> String {
+        guard !historyLoadFailed else { return "History unavailable" }
+        let name = hardenerNameReferencedByDocumentation(tool.documentation) ?? tool.title
+        let cutoff = now.addingTimeInterval(-86_400)
+        let count = snapshot.accessRequests.filter {
+            $0.tool == name && $0.date >= cutoff && $0.date <= now
+        }.count
+        let partial = historyOlderPageCursor != nil
+        return "\(count)\(partial ? "+" : "") recorded \(count == 1 && !partial ? "request" : "requests") · 24h"
     }
 
     func openOverviewTool(_ tool: DashboardItem) {
@@ -2039,6 +2059,19 @@ func runDashboardSearchSelfCheck() -> Int32 {
     model.openOverviewTool(ghOverview)
     guard model.selectedSection == .hardenedTools,
           model.selectedItemID == ghOverview.id else { return 1 }
+    var attentionSnapshot = model.snapshot
+    attentionSnapshot.doctorIssues.append(DoctorIssue(hardener: "wrangler", kind: "test",
+        command: "wrangler", message: "Wrangler needs attention", remediation: "Review configuration"))
+    let attentionModel = DashboardModel(snapshot: attentionSnapshot)
+    guard attentionModel.overviewTools.prefix(2).map(\.title) == ["aws", "wrangler"],
+          model.overviewActivity(for: awsOverview, now: accessRequest.date) == "1 recorded request · 24h",
+          model.overviewActivity(for: awsOverview, now: accessRequest.date.addingTimeInterval(86_401)) == "0 recorded requests · 24h"
+    else { return 1 }
+    var findingSnapshot = attentionSnapshot
+    findingSnapshot.detectorFindings = try! JSONDecoder().decode([DetectorFinding].self,
+        from: Data(#"[{"source":"git","severity":"high"}]"#.utf8))
+    let findingModel = DashboardModel(snapshot: findingSnapshot)
+    guard findingModel.overviewTools.prefix(3).map(\.title) == ["aws", "git", "wrangler"] else { return 1 }
     model.searchText = "gh"
     guard model.overviewTools.map(\.title) == ["gh"] else { return 1 }
     for section in DashboardSection.allCases {
@@ -2053,7 +2086,7 @@ func runDashboardSearchSelfCheck() -> Int32 {
     model.navigateFromOverview(to: .overview)
     // Render the actual SwiftUI layout at the minimum detail area and a larger window.
     if let directory = ProcessInfo.processInfo.environment["AV_OVERVIEW_RENDER_DIR"] {
-        var renderSnapshot = model.snapshot
+        var renderSnapshot = attentionSnapshot
         renderSnapshot.hardenedTools += (1...12).map {
             HardenedTool(name: "tool-\($0)", targetPath: "/usr/local/bin/tool-\($0)")
         }
@@ -6419,6 +6452,7 @@ private struct DashboardOverviewView: View {
     @ObservedObject var model: DashboardModel
     let checkForUpdates: () -> Void
     @State private var news: [BlogPost] = []
+    @State private var toolPage = 0
 
     init(model: DashboardModel, checkForUpdates: @escaping () -> Void, news: [BlogPost] = []) {
         self.model = model
@@ -6444,20 +6478,26 @@ private struct DashboardOverviewView: View {
                 }
                 ViewThatFits(in: .horizontal) {
                     HStack(alignment: .top, spacing: 20) {
-                        tools(limit: max(3, min(10, Int((geometry.size.height - 220) / 44)))).frame(minWidth: 320)
+                        tools(limit: max(3, min(10, Int((geometry.size.height - 250) / 58)))).frame(minWidth: 320)
                         attention(compact: compact).frame(width: 240)
                     }
                     VStack(alignment: .leading, spacing: 12) {
-                        tools(limit: max(2, min(8, Int((geometry.size.height - 410) / 44))))
+                        tools(limit: max(2, min(8, Int((geometry.size.height - 370) / 58))))
                         attention(compact: true)
                     }
                 }
                 Spacer(minLength: 0)
+                HStack(spacing: 16) {
+                    Link("Documentation", destination: URL(string: "https://www.automicvault.com/docs/")!)
+                    Link("GitHub ↗", destination: URL(string: "https://github.com/automic-vault/automic-vault")!)
+                    Spacer()
+                }.font(.caption)
             }
             .padding(20)
             .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
         }
         .background(Color(nsColor: .windowBackgroundColor))
+        .onChange(of: model.overviewTools) { _, _ in toolPage = 0 }
         .task {
             do { news = try await BlogFeed.load() }
             catch { /* News is optional; the blog link remains available offline. */ }
@@ -6465,14 +6505,15 @@ private struct DashboardOverviewView: View {
     }
 
     private func tools(limit: Int) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
+        let allTools = model.overviewTools
+        let page = min(toolPage, max(0, (allTools.count - 1) / limit))
+        let visibleTools = Array(allTools.dropFirst(page * limit).prefix(limit))
+        return VStack(alignment: .leading, spacing: 10) {
             HStack {
                 Text("Tools").font(.title2.bold())
                 Spacer()
                 destination("All detectors", section: .detectors)
             }
-            Text("Configured Tools and detected findings")
-                .font(.caption).foregroundStyle(.secondary)
             VStack(spacing: 0) {
                 if model.overviewTools.isEmpty {
                     Button {
@@ -6482,7 +6523,7 @@ private struct DashboardOverviewView: View {
                             .frame(maxWidth: .infinity, alignment: .leading).padding(12)
                     }.buttonStyle(.plain)
                 }
-                ForEach(model.overviewTools.prefix(limit)) { tool in
+                ForEach(visibleTools) { tool in
                     let issue = model.overviewDoctorIssue(for: tool)
                     let needsAttention = tool.isTriggered || issue != nil
                     Button {
@@ -6492,7 +6533,11 @@ private struct DashboardOverviewView: View {
                             Image(systemName: needsAttention ? "exclamationmark.triangle.fill" : "hammer")
                                 .foregroundStyle(needsAttention ? Color.orange : Color.accentColor)
                                 .frame(width: 20)
-                            Text(tool.title).fontWeight(.medium).lineLimit(1)
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(tool.title).fontWeight(.medium).lineLimit(1)
+                                Text(model.overviewActivity(for: tool)).font(.caption2)
+                                    .foregroundStyle(.secondary).lineLimit(1)
+                            }
                             Spacer(minLength: 8)
                             Text(issue != nil ? (tool.isTriggered ? "Finding · Doctor report" : "Doctor report") : (tool.isTriggered ? "Finding" : "Hardened"))
                                 .font(.caption)
@@ -6501,8 +6546,8 @@ private struct DashboardOverviewView: View {
                         }.padding(12).contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                    .help(issue?.message ?? tool.subtitle)
-                    if tool.id != model.overviewTools.prefix(limit).last?.id { Divider().padding(.leading, 42) }
+                    .help((issue?.message ?? tool.subtitle) + "\nRecorded authorization requests in the last 24 hours; + indicates only part of the history is loaded. This is not a count of Tool executions.")
+                    if tool.id != visibleTools.last?.id { Divider().padding(.leading, 42) }
                 }
             }
             .background(.background, in: RoundedRectangle(cornerRadius: 10))
@@ -6510,17 +6555,28 @@ private struct DashboardOverviewView: View {
                 destination("\(model.snapshot.hardenedTools.count) hardened Tools", section: .hardenedTools)
                 Spacer()
                 if model.overviewTools.count > limit {
-                    Text("Showing \(limit) of \(model.overviewTools.count)").foregroundStyle(.secondary)
+                    Button { toolPage = max(0, page - 1) } label: {
+                        Image(systemName: "chevron.left")
+                    }.disabled(page == 0).accessibilityLabel("Previous Tools")
+                    Text("\(page * limit + 1)–\(page * limit + visibleTools.count) of \(allTools.count)")
+                        .foregroundStyle(.secondary)
+                    Button { toolPage = page + 1 } label: {
+                        Image(systemName: "chevron.right")
+                    }.disabled((page + 1) * limit >= allTools.count).accessibilityLabel("Next Tools")
                 }
             }.font(.caption)
         }
     }
 
     private func attention(compact: Bool) -> some View {
-        VStack(alignment: .leading, spacing: compact ? 8 : 14) {
-            Text(model.snapshot.flaggedDetectorCount == 0 && model.snapshot.doctorIssues.isEmpty ? "System checks" : "Needs attention").font(.headline)
+        let checksLayout = compact ? AnyLayout(HStackLayout(spacing: 12))
+            : AnyLayout(VStackLayout(alignment: .leading, spacing: 10))
+        return VStack(alignment: .leading, spacing: compact ? 8 : 14) {
+            if !compact { Text(model.snapshot.flaggedDetectorCount == 0 && model.snapshot.doctorIssues.isEmpty ? "System checks" : "Needs attention").font(.headline) }
+            checksLayout {
             destination(model.snapshot.flaggedDetectorCount == 0 ? "No detector findings" : "\(model.snapshot.flaggedDetectorCount) flagged detectors", section: .detectors)
             destination(model.snapshot.doctorIssues.count == 1 ? "Doctor · 1 issue" : "Doctor · \(model.snapshot.doctorIssues.count) issues", section: .doctor)
+            }
             if !compact, let issue = model.snapshot.doctorIssues.first {
                 Button {
                     model.navigateFromOverview(to: .doctor, itemID: issue.id)
@@ -6530,16 +6586,18 @@ private struct DashboardOverviewView: View {
                 }.buttonStyle(.plain)
             }
             Divider()
-            Text("What’s new").font(.headline)
-            ForEach(news.prefix(compact ? 1 : 2)) { post in
+            HStack {
+                Text("What’s new").font(.headline)
+                Spacer()
+                Link("Blog ↗", destination: URL(string: "https://www.automicvault.com/blog/")!)
+                    .font(.caption)
+            }
+            ForEach(news.prefix(2)) { post in
                 Link(destination: post.url) {
                     Text(post.title).font(.callout)
                         .multilineTextAlignment(.leading).lineLimit(compact ? 1 : 2)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
-            }
-            HStack {
-                Link("From the blog ↗", destination: URL(string: "https://www.automicvault.com/blog/")!)
-                Spacer(minLength: 0)
             }
             Button(model.availableUpdateVersion.map { "Update to v\($0)" } ?? "Check for updates",
                    action: checkForUpdates)
