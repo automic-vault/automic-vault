@@ -1597,6 +1597,19 @@ final class DashboardModel: ObservableObject {
             .sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
     }
 
+    func overviewDoctorIssue(for tool: DashboardItem) -> DoctorIssue? {
+        let hardener = hardenerNameReferencedByDocumentation(tool.documentation) ?? tool.title
+        return snapshot.doctorIssues.first { $0.hardener == hardener || $0.command == tool.title }
+    }
+
+    func openOverviewTool(_ tool: DashboardItem) {
+        if let issue = overviewDoctorIssue(for: tool) {
+            navigateFromOverview(to: .doctor, itemID: issue.id)
+        } else {
+            navigateFromOverview(to: tool.isTriggered ? .detectors : .hardenedTools, itemID: tool.id)
+        }
+    }
+
     func navigateFromOverview(to section: DashboardSection, itemID: String? = nil) {
         searchText = ""
         selectSection(section)
@@ -2016,6 +2029,16 @@ func runDashboardSearchSelfCheck() -> Int32 {
     guard groupedModel.overviewTools.map(\.title) == ["aws", "gh"],
           groupedModel.overviewTools.filter(\.isHardened).count == groupedModel.count(for: .hardenedTools)
     else { return 1 }
+    guard let awsOverview = model.overviewTools.first(where: { $0.title == "aws" }),
+          let ghOverview = model.overviewTools.first(where: { $0.title == "gh" }),
+          model.overviewDoctorIssue(for: awsOverview)?.hardener == "aws",
+          model.overviewDoctorIssue(for: ghOverview) == nil else { return 1 }
+    model.openOverviewTool(awsOverview)
+    guard model.selectedSection == .doctor,
+          model.selectedItemID == model.snapshot.doctorIssues.first?.id else { return 1 }
+    model.openOverviewTool(ghOverview)
+    guard model.selectedSection == .hardenedTools,
+          model.selectedItemID == ghOverview.id else { return 1 }
     model.searchText = "gh"
     guard model.overviewTools.map(\.title) == ["gh"] else { return 1 }
     for section in DashboardSection.allCases {
@@ -6460,23 +6483,25 @@ private struct DashboardOverviewView: View {
                     }.buttonStyle(.plain)
                 }
                 ForEach(model.overviewTools.prefix(limit)) { tool in
+                    let issue = model.overviewDoctorIssue(for: tool)
+                    let needsAttention = tool.isTriggered || issue != nil
                     Button {
-                        let section: DashboardSection = tool.isTriggered ? .detectors : .hardenedTools
-                        model.navigateFromOverview(to: section, itemID: tool.id)
+                        model.openOverviewTool(tool)
                     } label: {
                         HStack(spacing: 10) {
-                            Image(systemName: tool.isTriggered ? "exclamationmark.triangle.fill" : "hammer")
-                                .foregroundStyle(tool.isTriggered ? Color.orange : Color.accentColor)
+                            Image(systemName: needsAttention ? "exclamationmark.triangle.fill" : "hammer")
+                                .foregroundStyle(needsAttention ? Color.orange : Color.accentColor)
                                 .frame(width: 20)
                             Text(tool.title).fontWeight(.medium).lineLimit(1)
                             Spacer(minLength: 8)
-                            Text(tool.isTriggered ? "Finding" : "Hardened")
-                                .font(.caption).foregroundStyle(.secondary)
+                            Text(issue != nil ? (tool.isTriggered ? "Finding · Doctor report" : "Doctor report") : (tool.isTriggered ? "Finding" : "Hardened"))
+                                .font(.caption)
+                                .foregroundStyle(needsAttention ? Color.orange : Color.secondary)
                             Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary)
                         }.padding(12).contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                    .help(tool.subtitle)
+                    .help(issue?.message ?? tool.subtitle)
                     if tool.id != model.overviewTools.prefix(limit).last?.id { Divider().padding(.leading, 42) }
                 }
             }
