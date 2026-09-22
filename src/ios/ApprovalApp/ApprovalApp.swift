@@ -121,7 +121,13 @@ final class ApprovalModel {
     private(set) var pending: [PhoneApprovalRequest] = []
     private(set) var respondingRequestIDs: Set<UUID> = []
     private(set) var activity: [PhoneApprovalActivity] = []
-    private(set) var state: ConnectionState = .setup
+    private(set) var isStarting = true
+    private(set) var state: ConnectionState = .setup {
+        didSet {
+            // Only the first resolved connection/setup state ends the startup gate.
+            if state != .connecting { isStarting = false }
+        }
+    }
     private(set) var notificationPreferences = ApprovalNotificationPreferences()
     private(set) var notificationReviewTicket: PhoneApprovalTicket?
     private(set) var notificationReviewRequestID: UUID?

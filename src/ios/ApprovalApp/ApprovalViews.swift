@@ -26,7 +26,7 @@ struct ApprovalRootView: View {
                     ApprovalDetailView(request: request, model: model, subscription: subscription)
                 } else if !model.pending.isEmpty {
                     list
-                } else if subscription.state == .loading {
+                } else if model.isStarting || subscription.state == .loading {
                     ProgressView().accessibilityLabel("Loading")
                 } else if model.state == .setup || subscription.state == .inactive {
                     setup

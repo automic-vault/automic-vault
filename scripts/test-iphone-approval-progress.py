@@ -11,6 +11,16 @@ methods = source[source.index("    private func respond(to request:"):
 methods += source[source.index("    func handleNotificationResponse("):
                   source.index("    func handleBackgroundNotification(")]
 methods = methods.replace("private func", "func")
+startup_state = source[source.index("    enum ConnectionState:"):
+                       source.index("    static var biometricProtectionEnabled:")]
+startup_state += source[source.index("    private(set) var isStarting"):
+                        source.index("    private(set) var notificationPreferences")]
+views = (Path(__file__).resolve().parents[1] /
+         "src/ios/ApprovalApp/ApprovalViews.swift").read_text()
+# Approval content must outrank the startup gate, which must outrank empty/setup UI.
+assert views.index("if let request = notificationRequest") < views.index("else if let ticket")
+assert views.index("else if !model.pending.isEmpty") < views.index("model.isStarting || subscription.state == .loading")
+assert views.index("model.isStarting || subscription.state == .loading") < views.index("else if model.state == .setup")
 fixture = r'''
 import Foundation
 
@@ -52,6 +62,8 @@ enum Message { case response(PhoneApprovalResponse), sync }
     }
 }
 @MainActor final class Model {
+STARTUP_STATE
+    func setConnectionState(_ value: ConnectionState) { state = value }
     var notificationReviewTicket: PhoneApprovalTicket?
     var notificationReviewRequestID: UUID?
     var notificationReviewSequence: UInt64 = 0
@@ -83,6 +95,17 @@ METHODS
 }
 @main struct Check {
     @MainActor static func main() async {
+        for resolved in [Model.ConnectionState.setup, .connected,
+                         .unavailable("failure"), .reconnecting("offline")] {
+            let startup = Model()
+            assert(startup.isStarting)
+            startup.setConnectionState(.connecting)
+            assert(startup.isStarting)
+            startup.setConnectionState(resolved)
+            assert(!startup.isStarting)
+            startup.setConnectionState(.connecting)
+            assert(!startup.isStarting) // Subsequent retries never restart the gate.
+        }
         for usesTicket in [false, true] {
             for outcome in [PhoneApprovalOutcome.approved, .temporaryWriteAccess, .denied] {
                 let model = Model()
@@ -140,6 +163,7 @@ METHODS
             assert(model.notificationReviewTicket?.requestID == id)
             assert(model.notificationReviewRequestID == id)
             assert(model.notificationReviewSequence > 0)
+            assert(model.isStarting) // Notification review bypasses unresolved startup.
         }
         for action in ["AV_REVIEW", UNNotificationDefaultActionIdentifier] {
             await model.handleNotificationResponse(.init(actionIdentifier: action))
@@ -156,7 +180,7 @@ METHODS
         print("iPhone approval progress and notification routing checks passed")
     }
 }
-'''.replace("METHODS", methods)
+'''.replace("METHODS", methods).replace("STARTUP_STATE", startup_state)
 with tempfile.TemporaryDirectory(prefix="av-approval-progress-") as directory:
     path = Path(directory)
     (path / "check.swift").write_text(fixture)
