@@ -427,8 +427,8 @@ struct ApprovalActivityView: View {
                 }
             }
             .frame(maxWidth: .infinity)
-            .background(.bar)
             .clipped()
+            .background(.bar, ignoresSafeAreaEdges: .bottom)
             .animation(.easeInOut(duration: 0.25), value: connectionMessage != nil)
         }
     }
