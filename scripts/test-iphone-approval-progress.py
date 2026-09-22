@@ -21,6 +21,9 @@ views = (Path(__file__).resolve().parents[1] /
 assert views.index("if let request = notificationRequest") < views.index("else if let ticket")
 assert views.index("else if !model.pending.isEmpty") < views.index("model.isStarting || subscription.state == .loading")
 assert views.index("model.isStarting || subscription.state == .loading") < views.index("else if model.state == .setup")
+history_visibility = views[views.index("    private var showsActivity:"):
+                           views.index("    @ViewBuilder\n    private func destination")]
+history_visibility = history_visibility.replace("private var", "var")
 fixture = r'''
 import Foundation
 
@@ -93,6 +96,15 @@ STARTUP_STATE
     func removeDeliveredNotifications(for id: UUID) async {}
 METHODS
 }
+@MainActor struct HistoryVisibility {
+    let model: Model
+    let subscription = Subscription()
+    struct Subscription {
+        enum State { case active }
+        let state = State.active
+    }
+HISTORY_VISIBILITY
+}
 @main struct Check {
     @MainActor static func main() async {
         for resolved in [Model.ConnectionState.setup, .connected,
@@ -105,6 +117,14 @@ METHODS
             assert(!startup.isStarting)
             startup.setConnectionState(.connecting)
             assert(!startup.isStarting) // Subsequent retries never restart the gate.
+            let history = HistoryVisibility(model: startup)
+            assert(history.showsActivity) // Reconnecting must keep the same history screen.
+            for state in [Model.ConnectionState.connected, .reconnecting("offline"), .unavailable("failed")] {
+                startup.setConnectionState(state)
+                assert(history.showsActivity)
+            }
+            startup.setConnectionState(.setup)
+            assert(!history.showsActivity)
         }
         for usesTicket in [false, true] {
             for outcome in [PhoneApprovalOutcome.approved, .temporaryWriteAccess, .denied] {
@@ -180,7 +200,7 @@ METHODS
         print("iPhone approval progress and notification routing checks passed")
     }
 }
-'''.replace("METHODS", methods).replace("STARTUP_STATE", startup_state)
+'''.replace("METHODS", methods).replace("STARTUP_STATE", startup_state).replace("HISTORY_VISIBILITY", history_visibility)
 with tempfile.TemporaryDirectory(prefix="av-approval-progress-") as directory:
     path = Path(directory)
     (path / "check.swift").write_text(fixture)

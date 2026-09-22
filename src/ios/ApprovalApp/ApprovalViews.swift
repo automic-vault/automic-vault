@@ -30,10 +30,8 @@ struct ApprovalRootView: View {
                     ProgressView().accessibilityLabel("Loading")
                 } else if model.state == .setup || subscription.state == .inactive {
                     setup
-                } else if showsActivity {
-                    ApprovalActivityView(model: model)
                 } else {
-                    empty
+                    ApprovalActivityView(model: model)
                 }
             }
             .navigationTitle(model.notificationReviewTicket != nil ? "Approval" : showsActivity ? "Request History" : "Approvals")
@@ -120,7 +118,7 @@ struct ApprovalRootView: View {
     }
 
     private var showsActivity: Bool {
-        model.pending.isEmpty && model.state == .connected && subscription.state == .active
+        model.pending.isEmpty && !model.isStarting && model.state != .setup && subscription.state == .active
     }
 
     @ViewBuilder
@@ -159,31 +157,6 @@ struct ApprovalRootView: View {
                 }
             }
                 .buttonStyle(.borderedProminent)
-        }
-    }
-
-    private var empty: some View {
-        ContentUnavailableView {
-            Label("No Pending Approvals", systemImage: "checkmark.shield")
-        } description: {
-            Text(connectionText)
-        } actions: {
-            if case .reconnecting = model.state {
-                Button("Refresh", systemImage: "arrow.clockwise") {
-                    Task { await model.refresh() }
-                }
-                .buttonStyle(.borderedProminent)
-            }
-        }
-    }
-
-    private var connectionText: String {
-        switch model.state {
-        case .setup: "Enable notifications to receive Approval requests."
-        case .connecting: "Connecting…"
-        case .connected: "Ready for Approval requests."
-        case .unavailable(let reason): reason
-        case .reconnecting(let reason): reason
         }
     }
 
@@ -386,6 +359,7 @@ struct ApprovalSettingsView: View {
 
 struct ApprovalActivityView: View {
     @Bindable var model: ApprovalModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         Group {
@@ -418,13 +392,47 @@ struct ApprovalActivityView: View {
             }
         }
         .safeAreaInset(edge: .bottom) {
-            Text("Up to 50 responses and canceled requests. The Mac's Authorization History is authoritative.")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .padding()
-                .frame(maxWidth: .infinity)
-                .background(.bar)
+            ZStack {
+                Text("Up to 50 responses and canceled requests. The Mac's Authorization History is authoritative.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding()
+                    .opacity(connectionMessage == nil ? 1 : 0)
+                    .accessibilityHidden(connectionMessage != nil)
+
+                if let message = connectionMessage {
+                    HStack(spacing: 12) {
+                        if case .unavailable = model.state {
+                            Image(systemName: "exclamationmark.triangle")
+                                .foregroundStyle(.orange)
+                        } else {
+                            ProgressView().accessibilityHidden(true)
+                        }
+                        Text(message).font(.callout)
+                        if case .reconnecting = model.state {
+                            Button("Retry") { Task { await model.refresh() } }
+                                .buttonStyle(.bordered)
+                                .controlSize(.large)
+                        }
+                    }
+                    .padding()
+                    .frame(maxWidth: .infinity)
+                    .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
+                }
+            }
+            .frame(maxWidth: .infinity)
+            .background(.bar)
+            .clipped()
+            .animation(.easeInOut(duration: 0.25), value: connectionMessage != nil)
+        }
+    }
+
+    private var connectionMessage: String? {
+        switch model.state {
+        case .connecting: "Connecting…"
+        case .reconnecting(let reason), .unavailable(let reason): reason
+        case .setup, .connected: nil
         }
     }
 }
