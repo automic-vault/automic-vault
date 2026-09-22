@@ -19,3 +19,11 @@ This artifact deliberately retains the user-approved mock scenario. It is not a 
 | What’s new article | No feed identified | Aspirational | 1 illustrative article, no actual link |
 
 All variants include the same findings, six Tools, global Secret names, three Launchers, one Project and two announcements. Variant C presents the Doctor message within the gh panel. Buttons intentionally open a preview-only explanation. Choosing a design does not authorize implementation or security-policy changes.
+
+## Native implementation (2026-09-22)
+
+The user selected A as a structural guideline and authorized native implementation. Overview is the default destination; all existing sidebar sections remain. Projects link to Secrets and have no sidebar section. Bounded summaries replace scrolling within Overview; existing inventory/detail screens retain their normal scrolling.
+
+Live content uses detector findings, hardening records, Doctor issues, Secret counts, Launcher Bundle enrollments, Project Value directories, and the existing update checker. No installed-inventory claim, monitoring count for uninstalled Tools, fabricated news feed, universal Launcher allow-list, or security score is introduced. The mock's Launcher summary maps to the existing Launcher Bundles destination. No authorization or Secret routing behavior changes.
+
+Validation: Swift package build; dashboard search/navigation self-check; optional native renders at 590×480, 590×550, and 980×680 detail-area sizes with an overflowing Tool inventory. Reproduce renders with `AV_OVERVIEW_RENDER_DIR=/tmp src/menu-helper/.build/debug/AutomicVaultMenubar --self-check-dashboard-search`.

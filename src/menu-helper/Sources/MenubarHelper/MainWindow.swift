@@ -229,7 +229,7 @@ final class AutomicVaultWindow: NSWindow {
 
 @MainActor
 final class DashboardModel: ObservableObject {
-    @Published var selectedSection: DashboardSection = .detectors
+    @Published var selectedSection: DashboardSection = .overview
     @Published private(set) var snapshot = DashboardSnapshot.empty
     @Published private(set) var isReloading = false
     @Published var isAddingSecret = false
@@ -374,6 +374,7 @@ final class DashboardModel: ObservableObject {
 
     private func items(for section: DashboardSection) -> [DashboardItem] {
         let base = switch section {
+        case .overview: [DashboardItem]()
         case .detectors:
             detectorItems
         case .doctor:
@@ -616,6 +617,7 @@ final class DashboardModel: ObservableObject {
         }
         guard searchQuery.isEmpty else { return items(for: section).count }
         return switch section {
+        case .overview: 0
         case .detectors: snapshot.detectorDisplayCount
         case .doctor: snapshot.doctorIssues.count
         case .hardenedTools: snapshot.hardenedTools.count
@@ -1578,6 +1580,26 @@ final class DashboardModel: ObservableObject {
         }
     }
 
+    var overviewTools: [DashboardItem] {
+        let detected = detectorItems.filter { $0.isTriggered || $0.isHardened }
+        let names = Set(detected.map(\.title))
+        let hardened = snapshot.hardenedTools.filter { !names.contains($0.name) }.map {
+            DashboardItem(id: $0.stubPath ?? $0.name, title: $0.name,
+                          subtitle: "Hardened", detail: "", isHardened: true)
+        }
+        return (detected + hardened)
+            .filter { searchQuery.isEmpty || $0.title.localizedCaseInsensitiveContains(searchQuery) }
+            .sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
+    }
+
+    func navigateFromOverview(to section: DashboardSection, itemID: String? = nil) {
+        searchText = ""
+        selectSection(section)
+        if let itemID, items.contains(where: { $0.id == itemID }) {
+            selectedItemID = itemID
+        }
+    }
+
     private var detectorItems: [DashboardItem] {
         let findingsBySource = Dictionary(grouping: snapshot.detectorFindings, by: \.source)
         let hardenersByName = snapshot.hardeners.reduce(into: [String: HardenerMetadata]()) {
@@ -1979,6 +2001,39 @@ func runDashboardSearchSelfCheck() -> Int32 {
             resolvedPath: "/opt/homebrew/bin/aws"
         )]
     ))
+    guard model.selectedSection == .overview,
+          model.overviewTools.map(\.title) == ["aws", "gh"] else { return 1 }
+    model.searchText = "gh"
+    guard model.overviewTools.map(\.title) == ["gh"] else { return 1 }
+    for section in DashboardSection.allCases {
+        model.searchText = "unrelated filter"
+        model.navigateFromOverview(to: section)
+        guard model.selectedSection == section, model.searchText.isEmpty else { return 1 }
+    }
+    model.navigateFromOverview(to: .hardenedTools, itemID: "/usr/local/bin/gh")
+    guard model.selectedItemID == "/usr/local/bin/gh" else { return 1 }
+    model.navigateFromOverview(to: .hardenedTools, itemID: "missing")
+    guard model.selectedItemID != "missing" else { return 1 }
+    model.navigateFromOverview(to: .overview)
+    // Render the actual SwiftUI layout at the minimum detail area and a larger window.
+    if let directory = ProcessInfo.processInfo.environment["AV_OVERVIEW_RENDER_DIR"] {
+        var renderSnapshot = model.snapshot
+        renderSnapshot.hardenedTools += (1...12).map {
+            HardenedTool(name: "tool-\($0)", targetPath: "/usr/local/bin/tool-\($0)")
+        }
+        let renderModel = DashboardModel(snapshot: renderSnapshot)
+        for size in [NSSize(width: 590, height: 480), NSSize(width: 590, height: 550), NSSize(width: 980, height: 680)] {
+            let host = NSHostingView(rootView: DashboardOverviewView(model: renderModel, checkForUpdates: {}))
+            host.frame = NSRect(origin: .zero, size: size)
+            host.layoutSubtreeIfNeeded()
+            guard let bitmap = host.bitmapImageRepForCachingDisplay(in: host.bounds) else { return 1 }
+            host.cacheDisplay(in: host.bounds, to: bitmap)
+            guard let png = bitmap.representation(using: .png, properties: [:]) else { return 1 }
+            do {
+                try png.write(to: URL(fileURLWithPath: directory).appendingPathComponent("overview-\(Int(size.width))-\(Int(size.height)).png"))
+            } catch { return 1 }
+        }
+    }
     let gate = SecretGate(
         id: "gh",
         keyPatterns: ["GH_TOKEN_*"],
@@ -2332,6 +2387,7 @@ func runDashboardSearchSelfCheck() -> Int32 {
 }
 
 enum DashboardSection: String, CaseIterable, Identifiable {
+    case overview
     case detectors
     case hardenedTools
     case secretGates
@@ -2347,6 +2403,7 @@ enum DashboardSection: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
+        case .overview: String(localized: "Overview")
         case .detectors: String(localized: "Detectors")
         case .doctor: String(localized: "Doctor")
         case .hardenedTools: String(localized: "Hardened Tools")
@@ -2362,6 +2419,7 @@ enum DashboardSection: String, CaseIterable, Identifiable {
 
     var systemImage: String {
         switch self {
+        case .overview: "square.grid.2x2"
         case .detectors: String(localized: "sensor.tag.radiowaves.forward")
         case .doctor: String(localized: "stethoscope")
         case .hardenedTools: String(localized: "hammer")
@@ -2413,6 +2471,24 @@ struct DashboardRootView: View {
     let requestScan: () -> Void
 
     var body: some View {
+        Group {
+            if model.selectedSection == .overview {
+                NavigationSplitView {
+                    DashboardSidebarView(model: model)
+                        .navigationSplitViewColumnWidth(min: 186, ideal: 227, max: 250)
+                } detail: {
+                    DashboardOverviewView(model: model, checkForUpdates: checkForUpdates)
+                        .toolbar {
+                            Button {
+                                requestScan()
+                                model.reload()
+                            } label: {
+                                Label("Refresh", systemImage: "arrow.clockwise")
+                            }
+                            .disabled(model.isReloading)
+                        }
+                }
+            } else {
         NavigationSplitView() {
             DashboardSidebarView(model: model)
                 .navigationSplitViewColumnWidth(min: 186, ideal: 227, max: 250)
@@ -2528,6 +2604,8 @@ struct DashboardRootView: View {
                     .help(model.isReloading ? "Refresh in Progress" : "Refresh")
                     .accessibilityLabel("Refresh")
                 }
+        }
+            }
         }
         .searchable(text: $model.searchText, placement: .sidebar, prompt: "Search")
         .onChange(of: proxySessions.historyRevision) { _, _ in
@@ -3082,6 +3160,7 @@ private struct EmptyListView: View {
 
     private var emptyText: String {
         switch section {
+        case .overview: String(localized: "Review your Tools and configuration")
         case .detectors: String(localized: "Detectors identify developer tool configurations that could expose secrets")
         case .doctor: String(localized: "Doctor identifies problems with your Automic Vault installation and explains how to fix them")
         case .hardenedTools: String(localized: "Hardened Tools secure developer tools with granular access to secrets")
@@ -3097,6 +3176,7 @@ private struct EmptyListView: View {
 
     private var learnMoreURL: URL? {
         switch section {
+        case .overview: nil
         case .detectors: detectionAndHardeningDocumentationURL
         case .doctor: detectionAndHardeningDocumentationURL
         case .hardenedTools: toolHardeningDocumentationURL
@@ -6294,4 +6374,158 @@ private extension View {
 
 private var hairline: some View {
     Rectangle().fill(Color(nsColor: .separatorColor)).frame(height: 1)
+}
+
+/// Bounded summaries only: full inventories and actions stay in their existing sections.
+private struct DashboardOverviewView: View {
+    @ObservedObject var model: DashboardModel
+    let checkForUpdates: () -> Void
+
+    private var projectCount: Int {
+        Set(model.snapshot.secrets.flatMap(\.values).compactMap { value -> String? in
+            if case .projectDirectory(let path) = value.source { return path }
+            return nil
+        }).count
+    }
+
+    var body: some View {
+        GeometryReader { geometry in
+            let compact = geometry.size.height < 550
+            VStack(alignment: .leading, spacing: compact ? 12 : 20) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text("Overview").font(.largeTitle.bold())
+                    Spacer()
+                    Text("Automic Vault").foregroundStyle(.secondary)
+                }
+                ViewThatFits(in: .horizontal) {
+                    HStack(alignment: .top, spacing: 20) {
+                        tools(limit: compact ? 3 : 6).frame(minWidth: 320)
+                        attention(compact: compact).frame(width: 240)
+                    }
+                    VStack(alignment: .leading, spacing: 12) {
+                        tools(limit: max(2, min(6, Int((geometry.size.height - 420) / 44))))
+                        attention(compact: true)
+                    }
+                }
+                Spacer(minLength: 0)
+                HStack(spacing: 12) {
+                    summary(.allSecrets, value: "\(model.snapshot.secrets.count)", caption: "Secrets")
+                    summary(.launcherBundles, value: "\(model.launcherBundles.count)", caption: "Launcher Bundles")
+                    summary(.allSecrets, value: "\(projectCount)", caption: "Projects with Values")
+                }
+            }
+            .padding(20)
+            .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
+        }
+        .background(Color(nsColor: .windowBackgroundColor))
+        .navigationTitle("Overview")
+    }
+
+    private func tools(limit: Int) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("Tools").font(.title2.bold())
+                Spacer()
+                destination("All detectors", section: .detectors)
+            }
+            Text("Findings and hardening on this Mac")
+                .font(.caption).foregroundStyle(.secondary)
+            VStack(spacing: 0) {
+                if model.overviewTools.isEmpty {
+                    Button {
+                        model.navigateFromOverview(to: .detectors)
+                    } label: {
+                        Label(model.hasSearchQuery ? "No matching Tools · View detectors" : "Review available detectors", systemImage: "sensor.tag.radiowaves.forward")
+                            .frame(maxWidth: .infinity, alignment: .leading).padding(12)
+                    }.buttonStyle(.plain)
+                }
+                ForEach(model.overviewTools.prefix(limit)) { tool in
+                    Button {
+                        let section: DashboardSection = tool.isTriggered || model.snapshot.detectors.contains { $0.name == tool.id }
+                            ? .detectors : .hardenedTools
+                        model.navigateFromOverview(to: section, itemID: tool.id)
+                    } label: {
+                        HStack(spacing: 10) {
+                            Image(systemName: tool.isTriggered ? "exclamationmark.triangle.fill" : "hammer")
+                                .foregroundStyle(tool.isTriggered ? Color.orange : Color.accentColor)
+                                .frame(width: 20)
+                            Text(tool.title).fontWeight(.medium).lineLimit(1)
+                            Spacer(minLength: 8)
+                            Text(tool.isTriggered ? "Finding" : "Hardened")
+                                .font(.caption).foregroundStyle(.secondary)
+                            Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary)
+                        }.padding(12).contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help(tool.subtitle)
+                    if tool.id != model.overviewTools.prefix(limit).last?.id { Divider().padding(.leading, 42) }
+                }
+            }
+            .background(.background, in: RoundedRectangle(cornerRadius: 10))
+            HStack {
+                destination("\(model.snapshot.hardenedTools.count) hardened Tools", section: .hardenedTools)
+                Spacer()
+                if model.overviewTools.count > limit {
+                    Text("Showing \(limit) of \(model.overviewTools.count)").foregroundStyle(.secondary)
+                }
+            }.font(.caption)
+        }
+    }
+
+    private func attention(compact: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Attention").font(.headline)
+            HStack {
+                destination("\(model.snapshot.flaggedDetectorCount) flagged detectors", section: .detectors)
+                if compact { Spacer() }
+            }
+            destination(model.snapshot.doctorIssues.count == 1 ? "Doctor · 1 issue" : "Doctor · \(model.snapshot.doctorIssues.count) issues", section: .doctor)
+            if !compact, let issue = model.snapshot.doctorIssues.first {
+                Button {
+                    model.navigateFromOverview(to: .doctor, itemID: issue.id)
+                } label: {
+                    Text(issue.message).font(.callout).foregroundStyle(.secondary)
+                        .lineLimit(3).frame(maxWidth: .infinity, alignment: .leading)
+                }.buttonStyle(.plain)
+            }
+            Divider()
+            HStack {
+                Text("What’s new").font(.headline)
+                Spacer()
+                Button(model.availableUpdateVersion.map { "Update to v\($0)" } ?? "Check for updates",
+                       action: checkForUpdates)
+                    .buttonStyle(.link).lineLimit(1)
+            }
+            if !compact {
+                Text("App updates and release notes")
+                    .font(.caption).foregroundStyle(.secondary)
+                destination("Settings", section: .settings)
+            }
+        }
+        .padding(14)
+        .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    private func summary(_ section: DashboardSection, value: String, caption: String) -> some View {
+        Button {
+            model.navigateFromOverview(to: section)
+        } label: {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Image(systemName: section.systemImage).foregroundStyle(Color.accentColor)
+                    Spacer()
+                    Text(value).font(.title2.monospacedDigit())
+                }
+                Text(caption).font(.caption).lineLimit(1)
+            }
+            .padding(12).frame(maxWidth: .infinity, alignment: .leading)
+            .background(.background, in: RoundedRectangle(cornerRadius: 10))
+            .contentShape(Rectangle())
+        }.buttonStyle(.plain)
+    }
+
+    private func destination(_ title: String, section: DashboardSection) -> some View {
+        Button(title) { model.navigateFromOverview(to: section) }
+            .buttonStyle(.link).lineLimit(1)
+    }
 }
