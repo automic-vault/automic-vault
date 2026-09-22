@@ -1581,13 +1581,18 @@ final class DashboardModel: ObservableObject {
     }
 
     var overviewTools: [DashboardItem] {
-        let detected = detectorItems.filter { $0.isTriggered || $0.isHardened }
-        let names = Set(detected.map(\.title))
-        let hardened = snapshot.hardenedTools.filter { !names.contains($0.name) }.map {
-            DashboardItem(id: $0.stubPath ?? $0.name, title: $0.name,
-                          subtitle: "Hardened", detail: "", isHardened: true)
+        // Several detectors can describe one Tool; hardening records are the inventory.
+        let findings = Dictionary(grouping: detectorItems.filter(\.isTriggered)) { item in
+            hardenerNameReferencedByDocumentation(item.documentation) ?? item.title
         }
-        return (detected + hardened)
+        var rows = snapshot.hardenedTools.map { tool in
+            if let finding = findings[tool.name]?.first { return finding }
+            return DashboardItem(id: tool.stubPath ?? tool.name, title: tool.name,
+                                 subtitle: "Hardened", detail: "", isHardened: true)
+        }
+        let hardenedNames = Set(snapshot.hardenedTools.map(\.name))
+        rows += findings.filter { !hardenedNames.contains($0.key) }.compactMap { $0.value.first }
+        return rows
             .filter { searchQuery.isEmpty || $0.title.localizedCaseInsensitiveContains(searchQuery) }
             .sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
     }
@@ -2003,6 +2008,14 @@ func runDashboardSearchSelfCheck() -> Int32 {
     ))
     guard model.selectedSection == .overview,
           model.overviewTools.map(\.title) == ["aws", "gh"] else { return 1 }
+    var duplicateDetectorSnapshot = model.snapshot
+    duplicateDetectorSnapshot.detectors.append(DetectorMetadata(
+        name: "aws-extra", homepage: "", docsURL: "", documentation: "Run `av harden aws`."
+    ))
+    let groupedModel = DashboardModel(snapshot: duplicateDetectorSnapshot)
+    guard groupedModel.overviewTools.map(\.title) == ["aws", "gh"],
+          groupedModel.overviewTools.filter(\.isHardened).count == groupedModel.count(for: .hardenedTools)
+    else { return 1 }
     model.searchText = "gh"
     guard model.overviewTools.map(\.title) == ["gh"] else { return 1 }
     for section in DashboardSection.allCases {
@@ -6392,27 +6405,22 @@ private struct DashboardOverviewView: View {
         GeometryReader { geometry in
             let compact = geometry.size.height < 550
             VStack(alignment: .leading, spacing: compact ? 12 : 20) {
-                HStack(alignment: .firstTextBaseline) {
-                    Text("Overview").font(.largeTitle.bold())
-                    Spacer()
-                    Text("Automic Vault").foregroundStyle(.secondary)
+                HStack(spacing: 12) {
+                    summary(.allSecrets, value: "\(model.snapshot.secrets.count)", caption: "Secrets")
+                    summary(.launcherBundles, value: "\(model.launcherBundles.count)", caption: "Launcher Bundles")
+                    summary(.allSecrets, value: "\(projectCount)", caption: "Projects with Values", icon: "folder")
                 }
                 ViewThatFits(in: .horizontal) {
                     HStack(alignment: .top, spacing: 20) {
-                        tools(limit: compact ? 3 : 6).frame(minWidth: 320)
+                        tools(limit: max(3, min(10, Int((geometry.size.height - 220) / 44)))).frame(minWidth: 320)
                         attention(compact: compact).frame(width: 240)
                     }
                     VStack(alignment: .leading, spacing: 12) {
-                        tools(limit: max(2, min(6, Int((geometry.size.height - 420) / 44))))
+                        tools(limit: max(2, min(8, Int((geometry.size.height - 410) / 44))))
                         attention(compact: true)
                     }
                 }
                 Spacer(minLength: 0)
-                HStack(spacing: 12) {
-                    summary(.allSecrets, value: "\(model.snapshot.secrets.count)", caption: "Secrets")
-                    summary(.launcherBundles, value: "\(model.launcherBundles.count)", caption: "Launcher Bundles")
-                    summary(.allSecrets, value: "\(projectCount)", caption: "Projects with Values")
-                }
             }
             .padding(20)
             .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
@@ -6428,7 +6436,7 @@ private struct DashboardOverviewView: View {
                 Spacer()
                 destination("All detectors", section: .detectors)
             }
-            Text("Findings and hardening on this Mac")
+            Text("Configured Tools and detected findings")
                 .font(.caption).foregroundStyle(.secondary)
             VStack(spacing: 0) {
                 if model.overviewTools.isEmpty {
@@ -6441,8 +6449,7 @@ private struct DashboardOverviewView: View {
                 }
                 ForEach(model.overviewTools.prefix(limit)) { tool in
                     Button {
-                        let section: DashboardSection = tool.isTriggered || model.snapshot.detectors.contains { $0.name == tool.id }
-                            ? .detectors : .hardenedTools
+                        let section: DashboardSection = tool.isTriggered ? .detectors : .hardenedTools
                         model.navigateFromOverview(to: section, itemID: tool.id)
                     } label: {
                         HStack(spacing: 10) {
@@ -6473,12 +6480,9 @@ private struct DashboardOverviewView: View {
     }
 
     private func attention(compact: Bool) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Attention").font(.headline)
-            HStack {
-                destination("\(model.snapshot.flaggedDetectorCount) flagged detectors", section: .detectors)
-                if compact { Spacer() }
-            }
+        VStack(alignment: .leading, spacing: 14) {
+            Text(model.snapshot.flaggedDetectorCount == 0 && model.snapshot.doctorIssues.isEmpty ? "System checks" : "Needs attention").font(.headline)
+            destination(model.snapshot.flaggedDetectorCount == 0 ? "No detector findings" : "\(model.snapshot.flaggedDetectorCount) flagged detectors", section: .detectors)
             destination(model.snapshot.doctorIssues.count == 1 ? "Doctor · 1 issue" : "Doctor · \(model.snapshot.doctorIssues.count) issues", section: .doctor)
             if !compact, let issue = model.snapshot.doctorIssues.first {
                 Button {
@@ -6489,30 +6493,33 @@ private struct DashboardOverviewView: View {
                 }.buttonStyle(.plain)
             }
             Divider()
-            HStack {
-                Text("What’s new").font(.headline)
-                Spacer()
-                Button(model.availableUpdateVersion.map { "Update to v\($0)" } ?? "Check for updates",
-                       action: checkForUpdates)
-                    .buttonStyle(.link).lineLimit(1)
-            }
             if !compact {
-                Text("App updates and release notes")
-                    .font(.caption).foregroundStyle(.secondary)
-                destination("Settings", section: .settings)
+                Text("What’s new").font(.headline)
+                Link(destination: URL(string: "https://www.automicvault.com/blog/bringing-macos-security-to-the-terminal/")!) {
+                    Text("Bringing macOS security to the terminal")
+                        .font(.callout).multilineTextAlignment(.leading).lineLimit(2)
+                }
             }
+            HStack {
+                Link("From the blog ↗", destination: URL(string: "https://www.automicvault.com/blog/")!)
+                Spacer(minLength: 0)
+            }
+            Button(model.availableUpdateVersion.map { "Update to v\($0)" } ?? "Check for updates",
+                   action: checkForUpdates)
+                .buttonStyle(.link).lineLimit(1)
         }
-        .padding(14)
-        .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 10))
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.quaternary.opacity(0.3), in: RoundedRectangle(cornerRadius: 10))
     }
 
-    private func summary(_ section: DashboardSection, value: String, caption: String) -> some View {
+    private func summary(_ section: DashboardSection, value: String, caption: String, icon: String? = nil) -> some View {
         Button {
             model.navigateFromOverview(to: section)
         } label: {
             VStack(alignment: .leading, spacing: 6) {
                 HStack {
-                    Image(systemName: section.systemImage).foregroundStyle(Color.accentColor)
+                    Image(systemName: icon ?? section.systemImage).foregroundStyle(Color.accentColor)
                     Spacer()
                     Text(value).font(.title2.monospacedDigit())
                 }

@@ -27,3 +27,9 @@ The user selected A as a structural guideline and authorized native implementati
 Live content uses detector findings, hardening records, Doctor issues, Secret counts, Launcher Bundle enrollments, Project Value directories, and the existing update checker. No installed-inventory claim, monitoring count for uninstalled Tools, fabricated news feed, universal Launcher allow-list, or security score is introduced. The mock's Launcher summary maps to the existing Launcher Bundles destination. No authorization or Secret routing behavior changes.
 
 Validation: Swift package build; dashboard search/navigation self-check; optional native renders at 590×480, 590×550, and 980×680 detail-area sizes with an overflowing Tool inventory. Reproduce renders with `AV_OVERVIEW_RENDER_DIR=/tmp src/menu-helper/.build/debug/AutomicVaultMenubar --self-check-dashboard-search`.
+
+### Follow-up refinement
+
+Removed the duplicate content heading (Overview remains in the native toolbar), moved configuration summaries above the inventory, and adjusted row budgets after compact/wide rendering. Hardened rows now come from the same inventory as the sidebar; multiple detectors referencing one hardener no longer inflate the Overview. A regression check covers duplicate detector metadata.
+
+The website checkout contains `/index.json` for the product overview and JSON-LD embedded in `/blog/`, but no standalone blog feed was found; `/blog/index.json` returned 404. The app currently links to the existing blog and introductory article, without presenting those links as a live feed.
