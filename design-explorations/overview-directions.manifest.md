@@ -33,3 +33,7 @@ Validation: Swift package build; dashboard search/navigation self-check; optiona
 Removed the duplicate content heading (Overview remains in the native toolbar), moved configuration summaries above the inventory, and adjusted row budgets after compact/wide rendering. Hardened rows now come from the same inventory as the sidebar; multiple detectors referencing one hardener no longer inflate the Overview. A regression check covers duplicate detector metadata.
 
 The website checkout contains `/index.json` for the product overview and JSON-LD embedded in `/blog/`, but no standalone blog feed was found; `/blog/index.json` returned 404. The app currently links to the existing blog and introductory article, without presenting those links as a live feed.
+
+### JSON news feed
+
+The website now generates `/blog/index.json` from the blog index's editorial order. Overview fetches it with a bounded, timed HTTPS request and displays at most two same-origin blog links (one at compact sizes). The blog link remains available on network or decoding failures. No local security data is sent with the request.

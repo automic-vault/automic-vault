@@ -2036,7 +2036,8 @@ func runDashboardSearchSelfCheck() -> Int32 {
         }
         let renderModel = DashboardModel(snapshot: renderSnapshot)
         for size in [NSSize(width: 590, height: 480), NSSize(width: 590, height: 550), NSSize(width: 980, height: 680)] {
-            let host = NSHostingView(rootView: DashboardOverviewView(model: renderModel, checkForUpdates: {}))
+            let headlines = try! BlogFeed.posts(from: Data(#"{"items":[{"title":"Automic Vault vs AWS Secrets Manager","url":"https://www.automicvault.com/blog/automic-vault-vs-aws-secrets-manager/"},{"title":"Automic Vault vs HashiCorp Vault","url":"https://www.automicvault.com/blog/automic-vault-vs-hashicorp-vault/"}]}"#.utf8))
+            let host = NSHostingView(rootView: DashboardOverviewView(model: renderModel, checkForUpdates: {}, news: headlines))
             host.frame = NSRect(origin: .zero, size: size)
             host.layoutSubtreeIfNeeded()
             guard let bitmap = host.bitmapImageRepForCachingDisplay(in: host.bounds) else { return 1 }
@@ -6393,6 +6394,13 @@ private var hairline: some View {
 private struct DashboardOverviewView: View {
     @ObservedObject var model: DashboardModel
     let checkForUpdates: () -> Void
+    @State private var news: [BlogPost] = []
+
+    init(model: DashboardModel, checkForUpdates: @escaping () -> Void, news: [BlogPost] = []) {
+        self.model = model
+        self.checkForUpdates = checkForUpdates
+        _news = State(initialValue: news)
+    }
 
     private var projectCount: Int {
         Set(model.snapshot.secrets.flatMap(\.values).compactMap { value -> String? in
@@ -6427,6 +6435,10 @@ private struct DashboardOverviewView: View {
         }
         .background(Color(nsColor: .windowBackgroundColor))
         .navigationTitle("Overview")
+        .task {
+            do { news = try await BlogFeed.load() }
+            catch { /* News is optional; the blog link remains available offline. */ }
+        }
     }
 
     private func tools(limit: Int) -> some View {
@@ -6480,7 +6492,7 @@ private struct DashboardOverviewView: View {
     }
 
     private func attention(compact: Bool) -> some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: compact ? 8 : 14) {
             Text(model.snapshot.flaggedDetectorCount == 0 && model.snapshot.doctorIssues.isEmpty ? "System checks" : "Needs attention").font(.headline)
             destination(model.snapshot.flaggedDetectorCount == 0 ? "No detector findings" : "\(model.snapshot.flaggedDetectorCount) flagged detectors", section: .detectors)
             destination(model.snapshot.doctorIssues.count == 1 ? "Doctor · 1 issue" : "Doctor · \(model.snapshot.doctorIssues.count) issues", section: .doctor)
@@ -6493,11 +6505,11 @@ private struct DashboardOverviewView: View {
                 }.buttonStyle(.plain)
             }
             Divider()
-            if !compact {
-                Text("What’s new").font(.headline)
-                Link(destination: URL(string: "https://www.automicvault.com/blog/bringing-macos-security-to-the-terminal/")!) {
-                    Text("Bringing macOS security to the terminal")
-                        .font(.callout).multilineTextAlignment(.leading).lineLimit(2)
+            Text("What’s new").font(.headline)
+            ForEach(news.prefix(compact ? 1 : 2)) { post in
+                Link(destination: post.url) {
+                    Text(post.title).font(.callout)
+                        .multilineTextAlignment(.leading).lineLimit(compact ? 1 : 2)
                 }
             }
             HStack {
@@ -6508,7 +6520,7 @@ private struct DashboardOverviewView: View {
                    action: checkForUpdates)
                 .buttonStyle(.link).lineLimit(1)
         }
-        .padding(16)
+        .padding(compact ? 12 : 16)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(.quaternary.opacity(0.3), in: RoundedRectangle(cornerRadius: 10))
     }
