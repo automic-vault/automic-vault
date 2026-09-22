@@ -6489,7 +6489,9 @@ private struct DashboardOverviewView: View {
                 Spacer(minLength: 0)
                 HStack(spacing: 16) {
                     Link("Documentation", destination: URL(string: "https://www.automicvault.com/docs/")!)
+                        .foregroundStyle(Color.accentColor)
                     Link("GitHub ↗", destination: URL(string: "https://github.com/automic-vault/automic-vault")!)
+                        .foregroundStyle(Color.accentColor)
                     Spacer()
                 }.font(.caption)
             }
@@ -6497,6 +6499,7 @@ private struct DashboardOverviewView: View {
             .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
         }
         .background(Color(nsColor: .windowBackgroundColor))
+        .tint(Color.accentColor)
         .onChange(of: model.overviewTools) { _, _ in toolPage = 0 }
         .task {
             do { news = try await BlogFeed.load() }
@@ -6590,18 +6593,19 @@ private struct DashboardOverviewView: View {
                 Text("What’s new").font(.headline)
                 Spacer()
                 Link("Blog ↗", destination: URL(string: "https://www.automicvault.com/blog/")!)
+                    .foregroundStyle(Color.accentColor)
                     .font(.caption)
             }
             ForEach(news.prefix(2)) { post in
                 Link(destination: post.url) {
-                    Text(post.title).font(.callout)
+                    Text(post.title).font(.callout).foregroundStyle(Color.accentColor)
                         .multilineTextAlignment(.leading).lineLimit(compact ? 1 : 2)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
             Button(model.availableUpdateVersion.map { "Update to v\($0)" } ?? "Check for updates",
                    action: checkForUpdates)
-                .buttonStyle(.link).lineLimit(1)
+                .buttonStyle(.link).foregroundStyle(Color.accentColor).lineLimit(1)
         }
         .padding(compact ? 12 : 16)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -6628,6 +6632,6 @@ private struct DashboardOverviewView: View {
 
     private func destination(_ title: String, section: DashboardSection) -> some View {
         Button(title) { model.navigateFromOverview(to: section) }
-            .buttonStyle(.link).lineLimit(1)
+            .buttonStyle(.link).foregroundStyle(Color.accentColor).lineLimit(1)
     }
 }
