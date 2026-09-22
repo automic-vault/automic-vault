@@ -2621,6 +2621,7 @@ struct DashboardRootView: View {
         }
             }
         }
+        .navigationTitle(model.selectedSection.title)
         .searchable(text: $model.searchText, placement: .sidebar, prompt: "Search")
         .onChange(of: proxySessions.historyRevision) { _, _ in
             model.reloadAccessRequests()
@@ -6434,7 +6435,6 @@ private struct DashboardOverviewView: View {
             .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
         }
         .background(Color(nsColor: .windowBackgroundColor))
-        .navigationTitle("Overview")
         .task {
             do { news = try await BlogFeed.load() }
             catch { /* News is optional; the blog link remains available offline. */ }
