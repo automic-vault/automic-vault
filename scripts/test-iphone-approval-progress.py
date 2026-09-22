@@ -100,7 +100,7 @@ METHODS
     let model: Model
     let subscription = Subscription()
     struct Subscription {
-        enum State { case active }
+        enum State { case active, loading }
         let state = State.active
     }
 HISTORY_VISIBILITY
@@ -111,6 +111,7 @@ HISTORY_VISIBILITY
                          .unavailable("failure"), .reconnecting("offline")] {
             let startup = Model()
             assert(startup.isStarting)
+            assert(HistoryVisibility(model: startup).showsActivity)
             startup.setConnectionState(.connecting)
             assert(startup.isStarting)
             startup.setConnectionState(resolved)

@@ -27,7 +27,9 @@ struct ApprovalRootView: View {
                 } else if !model.pending.isEmpty {
                     list
                 } else if model.isStarting || subscription.state == .loading {
-                    ProgressView().accessibilityLabel("Loading")
+                    ProgressView()
+                        .controlSize(.large)
+                        .accessibilityLabel("Loading")
                 } else if model.state == .setup || subscription.state == .inactive {
                     setup
                 } else {
@@ -118,7 +120,10 @@ struct ApprovalRootView: View {
     }
 
     private var showsActivity: Bool {
-        model.pending.isEmpty && !model.isStarting && model.state != .setup && subscription.state == .active
+        model.pending.isEmpty && (
+            model.isStarting || subscription.state == .loading
+                || (model.state != .setup && subscription.state == .active)
+        )
     }
 
     @ViewBuilder
