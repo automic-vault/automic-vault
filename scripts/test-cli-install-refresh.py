@@ -69,6 +69,9 @@ struct DashboardSnapshot: Sendable {
 enum CLIInstallState { case current, outdated }
 func currentCLIInstallState() -> CLIInstallState { .current }
 func loadLauncherBundleEnrollments() -> [String] { [] }
+func loadAccessRequestRecordsForDisclosure(since: Date? = nil) -> [AccessRequestRecord]? {
+    ["latest"]
+}
 func loadAccessRequestRecordsPage(beforeSequence: Int64? = nil) -> AuthorizationHistoryPage? {
     if blockHistory.withLock({ $0 }) {
         historyReads.withLock { $0 += 1 }
@@ -104,6 +107,9 @@ func loadAccessRequestRecordsPage(beforeSequence: Int64? = nil) -> Authorization
     var searchText = ""
     var reloadPending = false
     var isReloading = false
+    var hasLoadedInitialSnapshot = false
+    var overviewHistory: [AccessRequestRecord]?
+    var lastHardeningRefresh: Date?
     var snapshot = DashboardSnapshot()
     var cliInstallState = CLIInstallState.outdated
     var launcherBundles: [String] = []
@@ -151,6 +157,8 @@ for _ in 0..<100 { model.reload() }
 assert(!first.isCancelled, "refresh must not cancel a usable result")
 finishSnapshot.signal()
 await first.value
+assert(model.hasLoadedInitialSnapshot && model.lastHardeningRefresh != nil)
+assert(model.overviewHistory == ["latest"])
 assert(model.snapshot.accessRequests.count == 50 && model.snapshot.accessRequests.first == "latest")
 assert(model.historyOlderPageCursor == 50)
 assert(model.authorizationHistoryDayCount == 30)
