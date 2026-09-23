@@ -1658,6 +1658,22 @@ final class DashboardModel: ObservableObject {
 
     var overviewFindings: [DashboardItem] { detectorItems.filter(\.isTriggered) }
 
+    var overviewClearStatus: String? {
+        switch (snapshot.flaggedDetectorCount == 0, snapshot.doctorIssues.isEmpty) {
+        case (true, true): "No vulnerability or doctor reports"
+        case (true, false): "No vulnerabilities detected"
+        case (false, true): "No doctor reports"
+        case (false, false): nil
+        }
+    }
+
+    fileprivate var doctorSeverity: DetectorSeverityLevel {
+        snapshot.doctorIssues.allSatisfy {
+            ["aws_update_available", "isotope_update_required"].contains($0.kind)
+        } ? .medium : .high
+    }
+
+
     func overviewVerification(for tool: DashboardItem) -> String {
         guard let refreshed = lastHardeningRefresh else { return "Hardening not yet refreshed" }
         let status = tool.isHardened && overviewDoctorIssue(for: tool) == nil
@@ -2141,6 +2157,19 @@ func runDashboardSearchSelfCheck() -> Int32 {
     guard findingModel.overviewTools.prefix(3).map(\.title) == ["aws", "git", "wrangler"] else { return 1 }
     guard !model.overviewHasGate(awsOverview),
           model.overviewVerification(for: awsOverview) == "Hardening not yet refreshed" else { return 1 }
+    var statusSnapshot = model.snapshot
+    guard model.overviewClearStatus == "No vulnerabilities detected" else { return 1 }
+    statusSnapshot.doctorIssues = []
+    guard DashboardModel(snapshot: statusSnapshot).overviewClearStatus == "No vulnerability or doctor reports" else { return 1 }
+    statusSnapshot.detectorFindings = findingSnapshot.detectorFindings
+    guard DashboardModel(snapshot: statusSnapshot).overviewClearStatus == "No doctor reports",
+          findingModel.overviewClearStatus == nil else { return 1 }
+    statusSnapshot.doctorIssues = ["aws_update_available", "isotope_update_required"].map {
+        DoctorIssue(hardener: "test", kind: $0, message: "Update available", remediation: "Update")
+    }
+    guard DashboardModel(snapshot: statusSnapshot).doctorSeverity == .medium else { return 1 }
+    statusSnapshot.doctorIssues += model.snapshot.doctorIssues
+    guard DashboardModel(snapshot: statusSnapshot).doctorSeverity == .high else { return 1 }
     var gatedSnapshot = model.snapshot
     gatedSnapshot.secretGates.append(SecretGate(id: "aws", keyPatterns: [], routes: [],
         defaultProtection: .noAccess, appPolicies: []))
@@ -2863,7 +2892,7 @@ private struct DashboardSidebarView: View {
                     )
                         .fixedSize()
                 } else if section == .doctor, model.selectedSection != .doctor {
-                    DetectorCountPill(count: count, color: .red)
+                    DetectorCountPill(count: count, color: model.doctorSeverity.color)
                         .fixedSize()
                 } else if section == .blessedScripts,
                           model.selectedSection != .blessedScripts,
@@ -4200,7 +4229,7 @@ private func detectorSummary(for item: DashboardItem) -> String {
     }
 }
 
-private enum DetectorSeverityLevel {
+fileprivate enum DetectorSeverityLevel {
     case medium
     case high
 
@@ -6653,9 +6682,11 @@ private struct DashboardOverviewView: View {
             HStack(alignment: .firstTextBaseline) {
                 Text("Tools").font(.title2.bold())
                 Spacer()
-                Text("\(model.snapshot.flaggedDetectorCount == 0 ? "No vulnerabilities detected" : "\(model.snapshot.flaggedDetectorCount) detector findings"); \(model.snapshot.doctorIssues.count) Doctor reports")
-                    .font(.caption).foregroundStyle(.secondary)
-                    .multilineTextAlignment(.trailing)
+                if let status = model.overviewClearStatus {
+                    Text(status)
+                        .font(.caption).foregroundStyle(.secondary)
+                        .multilineTextAlignment(.trailing)
+                }
             }
             GeometryReader { tableSpace in
                 let visibleTools = Array(allTools.prefix(max(1, Int(tableSpace.size.height / 54))))
@@ -6674,7 +6705,7 @@ private struct DashboardOverviewView: View {
                         Button {
                             model.openOverviewTool(tool)
                         } label: {
-                            HStack(spacing: 10) {
+                            HStack(spacing: 4) {
                                 Image(systemName: needsAttention ? "exclamationmark.triangle.fill" : "hammer")
                                     .foregroundStyle(needsAttention ? Color.orange : Color.secondary)
                                     .frame(width: 20)
@@ -6684,9 +6715,9 @@ private struct DashboardOverviewView: View {
                                         .font(.caption2)
                                         .foregroundStyle(model.overviewHasGate(tool) ? .secondary : .tertiary).lineLimit(1)
                                 }
-                                Spacer(minLength: 8)
+                                Spacer(minLength: 0)
                                 HStack(spacing: 4) {
-                                        if !needsAttention { Image(systemName: "checkmark.square") }
+                                        if !needsAttention { Image(systemName: "checkmark.seal") }
                                         Text(issue != nil ? (tool.isTriggered ? "Finding · Doctor report" : "Doctor report") : (tool.isTriggered ? "Finding" : "Hardened"))
                                     }
                                     .font(.caption)
