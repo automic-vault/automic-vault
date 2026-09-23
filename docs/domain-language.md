@@ -677,8 +677,9 @@ A local record of an Authorization Request and its Authorization Decision. It in
 
 Automic Vault persists and verifies a record of allowed Secret Use before releasing a Secret. Failure to persist that required record denies the request. Records of denials and failures are best effort. Authorization History is bounded and local; it is not an append-only, tamper-proof, or complete forensic log.
 
-The Mac makes Authorization History available for up to 30 days and 25 MiB of
-encrypted record payloads, whichever bound is reached first. Expired ciphertext
+The Mac makes Authorization History available for up to 30 days and a configurable
+encrypted record payload limit (1–1024 MiB, default 25 MiB), whichever bound is
+reached first. SQLite overhead is additional to this payload limit. Expired ciphertext
 is filtered from reads immediately and pruned on writes or a coalesced
 background pass after a read. A dormant database may temporarily retain it.
 The dashboard browses all retained records, grouped by day. An unqualified

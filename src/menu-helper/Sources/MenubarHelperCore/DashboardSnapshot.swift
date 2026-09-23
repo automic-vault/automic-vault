@@ -1779,17 +1779,24 @@ final class ProductionAuthorizationHistoryStore: @unchecked Sendable {
     private var cached: AuthorizationHistoryStore?
     private var lastMaintenance = Date.distantPast
     private let open: () -> AuthorizationHistoryStore?
+    private let defaults: UserDefaults
 
-    init(open: @escaping () -> AuthorizationHistoryStore?) {
+    init(defaults: UserDefaults = .standard, open: @escaping () -> AuthorizationHistoryStore?) {
+        self.defaults = defaults
         self.open = open
     }
 
     func get() -> AuthorizationHistoryStore? {
         lock.withLock {
-            if let cached { return cached }
-            let store = open()
+            guard let store = cached ?? open() else { return nil }
             cached = store
-            return store
+            do {
+                try store.setMaximumEncryptedBytes(
+                    Int64(AuthorizationHistoryRetention.configuredSizeMiB(defaults: defaults)) * 1024 * 1024)
+                return store
+            } catch {
+                return nil
+            }
         }
     }
 
@@ -1815,7 +1822,12 @@ final class ProductionAuthorizationHistoryStore: @unchecked Sendable {
         guard let key = loadOrCreateAuthorizationHistoryEncryptionKey(
             allowCreation: !FileManager.default.fileExists(atPath: url.path)
         ) else { return nil }
-        guard let store = try? AuthorizationHistoryStore(url: url, keyData: key) else { return nil }
+        guard let store = try? AuthorizationHistoryStore(
+            url: url, keyData: key,
+            retention: AuthorizationHistoryRetention(
+                maximumAge: AuthorizationHistoryRetention.standard.maximumAge,
+                maximumEncryptedBytes: Int64(AuthorizationHistoryRetention.configuredSizeMiB()) * 1024 * 1024)
+        ) else { return nil }
         let legacyKeychainData: Data?
         switch loadKeychainDataResult(
             service: accessRequestLogKeychainService,

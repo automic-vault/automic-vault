@@ -518,8 +518,8 @@ final class DashboardModel: ObservableObject {
                 ),
                 DashboardItem(
                     id: String(localized: "authorization-history-access"),
-                    title: String(localized: "Authorization History Access"),
-                    subtitle: String(localized: "Verified Launchers allowed to run av history"),
+                    title: String(localized: "Authorization History"),
+                    subtitle: String(localized: "Storage size and access"),
                     detail: String(localized: "Manage Verified Launchers that may read Authorization History without Approval.")
                 ),
                 DashboardItem(
@@ -4933,14 +4933,30 @@ private struct SecretNameAccessSettingsView: View {
 
 private struct AuthorizationHistoryAccessSettingsView: View {
     @ObservedObject var model: DashboardModel
+    @AppStorage(AuthorizationHistoryRetention.sizeDefaultsKey)
+    private var sizeMiB = AuthorizationHistoryRetention.defaultSizeMiB
+    @State private var draftSizeMiB = AuthorizationHistoryRetention.configuredSizeMiB()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
             VStack(alignment: .leading, spacing: 6) {
-                Text("Authorization History Access")
+                Text("Authorization History")
                     .font(.system(size: 24, weight: .semibold))
                 Text("These Verified Launchers may run av history without Approval.")
                     .font(.system(size: 13))
+                    .foregroundStyle(.secondary)
+            }
+            VStack(alignment: .leading, spacing: 8) {
+                LabeledContent("Database size (MiB)") {
+                    TextField("Database size (MiB)", value: $draftSizeMiB, format: .number.grouping(.never))
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 90)
+                    Button("Apply") { sizeMiB = draftSizeMiB }
+                        .disabled(!AuthorizationHistoryRetention.sizeRangeMiB.contains(draftSizeMiB)
+                            || draftSizeMiB == sizeMiB)
+                }
+                Text("1–1024 MiB; default 25 MiB. Limits encrypted record payloads; SQLite adds disk overhead. Records are kept for up to 30 days. Lowering the limit removes older records on the next history access.")
+                    .font(.caption)
                     .foregroundStyle(.secondary)
             }
             launcherList(

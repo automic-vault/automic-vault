@@ -426,6 +426,70 @@ func newlyCreatedLegacyHistoryAbortsMigration() throws {
     #expect(try fixture.store.records().isEmpty)
 }
 
+@Test
+func authorizationHistorySizePreferenceDefaultsAndValidates() throws {
+    let suite = "history-size-\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suite))
+    defer { defaults.removePersistentDomain(forName: suite) }
+    #expect(AuthorizationHistoryRetention.configuredSizeMiB(defaults: defaults) == 25)
+    #expect(AuthorizationHistoryRetention.standard.maximumEncryptedBytes == 25 * 1024 * 1024)
+    for value in [0, -1, 1025, Int.max] {
+        defaults.set(value, forKey: AuthorizationHistoryRetention.sizeDefaultsKey)
+        #expect(AuthorizationHistoryRetention.configuredSizeMiB(defaults: defaults) == 25)
+    }
+    for value in [1, 50, 1024] {
+        defaults.set(value, forKey: AuthorizationHistoryRetention.sizeDefaultsKey)
+        #expect(AuthorizationHistoryRetention.configuredSizeMiB(defaults: defaults) == value)
+    }
+}
+
+@Test
+func productionAuthorizationHistorySizeChangesReachCachedStore() throws {
+    let fixture = try HistoryStoreFixture()
+    defer { fixture.remove() }
+    let suite = "history-size-\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suite))
+    defer { defaults.removePersistentDomain(forName: suite) }
+    let holder = ProductionAuthorizationHistoryStore(defaults: defaults) { fixture.store }
+    let store = try #require(holder.get())
+    let older = fixture.record(index: 1, reason: String(repeating: "a", count: 600_000))
+    let newer = fixture.record(index: 2, reason: String(repeating: "b", count: 600_000))
+    #expect(store.append(older))
+    #expect(store.append(newer))
+    defaults.set(1, forKey: AuthorizationHistoryRetention.sizeDefaultsKey)
+    #expect(holder.get() === store)
+    #expect(try store.records().map(\.id) == [newer.id])
+    let larger = fixture.record(index: 3, reason: String(repeating: "c", count: 1_100_000))
+    #expect(!store.append(larger))
+    defaults.set(2, forKey: AuthorizationHistoryRetention.sizeDefaultsKey)
+    #expect(holder.get() === store)
+    #expect(store.append(larger))
+    #expect(try store.records().map(\.id) == [larger.id, newer.id])
+    #expect(throws: AuthorizationHistoryStoreError.invalidLimit) {
+        try store.setMaximumEncryptedBytes(0)
+    }
+}
+
+@Test
+func authorizationHistorySizeChangeRollsBackOnPruningFailure() throws {
+    let fixture = try HistoryStoreFixture()
+    defer { fixture.remove() }
+    let record = fixture.record(index: 1)
+    #expect(fixture.store.append(record))
+    var database: OpaquePointer?
+    #expect(sqlite3_open(fixture.url.path, &database) == SQLITE_OK)
+    defer { sqlite3_close(database) }
+    #expect(sqlite3_exec(database, """
+        CREATE TRIGGER reject_history_delete BEFORE DELETE ON authorization_history
+        BEGIN SELECT RAISE(ABORT, 'test deletion failure'); END
+        """, nil, nil, nil) == SQLITE_OK)
+    #expect(throws: AuthorizationHistoryStoreError.self) {
+        try fixture.store.setMaximumEncryptedBytes(1)
+    }
+    #expect(try fixture.store.records() == [record])
+    #expect(fixture.store.append(fixture.record(index: 2)))
+}
+
 private final class HistoryStoreFixture {
     let directory: URL
     let url: URL

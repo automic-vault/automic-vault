@@ -423,3 +423,11 @@
 "Retry" = "重试";
 "Retry Loading Older Records" = "重试加载更早的记录";
 "Search covers loaded records. Load older records to continue searching." = "搜索仅涵盖已加载的记录。加载更早的记录以继续搜索。";
+
+"Storage size and access" = "存储大小与访问权限";
+
+"Database size (MiB)" = "数据库大小（MiB）";
+
+"Apply" = "应用";
+
+"1–1024 MiB; default 25 MiB. Limits encrypted record payloads; SQLite adds disk overhead. Records are kept for up to 30 days. Lowering the limit removes older records on the next history access." = "1–1024 MiB；默认值为 25 MiB。此限制适用于加密记录的数据量；SQLite 会占用额外磁盘空间。记录最多保留 30 天。降低限制后，下次访问历史记录时将删除较旧的记录。";

@@ -721,8 +721,11 @@ inspection or migration.
 
 Authorization History is bounded local operational history. Same-user compromise or storage failure can damage it. Product copy must not promise an append-only audit trail or complete forensic evidence.
 
-The rolling store makes at most 30 days and 25 MiB of encrypted record
-payloads available. Reads filter expired rows; writes prune them, and a
+The rolling store makes at most 30 days of encrypted record payloads available,
+with a configurable payload cap of 1–1024 MiB, defaulting to 25 MiB. Size changes
+apply transactionally on the next history access; failures make that access
+unavailable. SQLite overhead is additional. See
+[ADR 0050](adr/0050-configurable-authorization-history-size.md). Reads filter expired rows; writes prune them, and a
 coalesced background pass prunes after reads. An unused database can retain
 expired ciphertext until its next access. Each allowed
 Secret Use commits and verifies its record synchronously before release. See

@@ -4,9 +4,18 @@ import Darwin
 import Foundation
 
 public struct AuthorizationHistoryRetention: Sendable {
+    public static let sizeDefaultsKey = "authorizationHistorySizeMiB"
+    public static let defaultSizeMiB = 25
+    public static let sizeRangeMiB = 1...1024
+
+    public static func configuredSizeMiB(defaults: UserDefaults = .standard) -> Int {
+        let value = defaults.integer(forKey: sizeDefaultsKey)
+        return sizeRangeMiB.contains(value) ? value : defaultSizeMiB
+    }
+
     public static let standard = AuthorizationHistoryRetention(
         maximumAge: 30 * 24 * 60 * 60,
-        maximumEncryptedBytes: 25 * 1024 * 1024
+        maximumEncryptedBytes: Int64(defaultSizeMiB) * 1024 * 1024
     )
 
     public let maximumAge: TimeInterval
@@ -39,7 +48,7 @@ public final class AuthorizationHistoryStore: @unchecked Sendable {
     private let database: OpaquePointer
     private let encryptionKey: SymmetricKey
     private let bucketKey: SymmetricKey
-    private let retention: AuthorizationHistoryRetention
+    private var retention: AuthorizationHistoryRetention
     private let now: @Sendable () -> Date
     private let lock = NSLock()
 
@@ -298,6 +307,25 @@ public final class AuthorizationHistoryStore: @unchecked Sendable {
         }
     }
 
+    public func setMaximumEncryptedBytes(_ bytes: Int64) throws {
+        guard bytes > 0 else { throw AuthorizationHistoryStoreError.invalidLimit }
+        try lock.withLock {
+            guard bytes != retention.maximumEncryptedBytes else { return }
+            let previous = retention
+            try execute("BEGIN IMMEDIATE")
+            do {
+                retention = AuthorizationHistoryRetention(
+                    maximumAge: previous.maximumAge, maximumEncryptedBytes: bytes)
+                try prune(preserving: nil)
+                try execute("COMMIT")
+            } catch {
+                retention = previous
+                try? execute("ROLLBACK")
+                throw error
+            }
+        }
+    }
+
     public func maintain() throws {
         try lock.withLock {
             try execute("BEGIN IMMEDIATE")
@@ -405,7 +433,7 @@ public final class AuthorizationHistoryStore: @unchecked Sendable {
     }
 
     private func prune(preserving recordID: UUID?) throws {
-        // ponytail: O(rows) inside the 25 MiB ciphertext cap. Authenticate every row
+        // ponytail: O(rows) inside the configured ciphertext cap; larger caps add latency. Authenticate every row
         // before allowing Secret Use; a cleartext date index would leak activity.
         let currentDate = now()
         let cutoff = currentDate.addingTimeInterval(-retention.maximumAge)

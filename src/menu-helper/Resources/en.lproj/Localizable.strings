@@ -423,3 +423,11 @@
 "Retry" = "Retry";
 "Retry Loading Older Records" = "Retry Loading Older Records";
 "Search covers loaded records. Load older records to continue searching." = "Search covers loaded records. Load older records to continue searching.";
+
+"Storage size and access" = "Storage size and access";
+
+"Database size (MiB)" = "Database size (MiB)";
+
+"Apply" = "Apply";
+
+"1–1024 MiB; default 25 MiB. Limits encrypted record payloads; SQLite adds disk overhead. Records are kept for up to 30 days. Lowering the limit removes older records on the next history access." = "1–1024 MiB; default 25 MiB. Limits encrypted record payloads; SQLite adds disk overhead. Records are kept for up to 30 days. Lowering the limit removes older records on the next history access.";
