@@ -6864,7 +6864,7 @@ private struct DashboardOverviewView: View {
                 }
             }
             GeometryReader { tableSpace in
-                let visibleTools = Array(allTools.prefix(max(1, Int(tableSpace.size.height / 68))))
+                let visibleTools = Array(allTools.prefix(max(1, Int(tableSpace.size.height / 54))))
                 VStack(spacing: 0) {
                     if allTools.isEmpty {
                         Button {
@@ -6908,10 +6908,10 @@ private struct DashboardOverviewView: View {
                                     ToolActivityStrip(counts: model.overviewActivitySlots(for: tool, now: now), now: now)
                                         .padding(.leading, 30)
                                 }
-                            }.padding(12).contentShape(Rectangle())
+                            }.padding(.horizontal, 12).padding(.vertical, 8).contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
-                        .frame(height: 67)
+                        .frame(height: 53)
                         .help((issue?.message ?? tool.subtitle) + (hasGate
                             ? "\n" + String(localized: "Recorded authorization requests in the last 24 hours. This is not a count of Tool executions.") : ""))
                         if tool.id != visibleTools.last?.id { Divider().padding(.leading, 42) }
