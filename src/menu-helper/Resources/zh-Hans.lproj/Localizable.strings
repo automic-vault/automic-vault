@@ -467,3 +467,13 @@
 "Last update check: Not yet checked" = "上次检查更新：尚未检查";
 "Projects %lld" = "项目 %lld";
 "Recorded authorization requests in the last 24 hours. This is not a count of Tool executions." = "过去 24 小时内记录的授权请求。这不是工具执行次数。";
+
+"Last 24 hours" = "过去 24 小时";
+
+"Activity in the last 24 hours" = "过去 24 小时的活动";
+
+"%@ recorded requests" = "%@ 条已记录的请求";
+
+"%@: %@ recorded requests" = "%@：%@ 条已记录的请求";
+
+"Retained Authorization Records, including denials. Older records may have been removed by the storage limit." = "保留的授权记录，包括被拒绝的请求。较旧的记录可能已因存储限制而被删除。";

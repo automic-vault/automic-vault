@@ -467,3 +467,13 @@
 "Last update check: Not yet checked" = "Last update check: Not yet checked";
 "Projects %lld" = "Projects %lld";
 "Recorded authorization requests in the last 24 hours. This is not a count of Tool executions." = "Recorded authorization requests in the last 24 hours. This is not a count of Tool executions.";
+
+"Last 24 hours" = "Last 24 hours";
+
+"Activity in the last 24 hours" = "Activity in the last 24 hours";
+
+"%@ recorded requests" = "%@ recorded requests";
+
+"%@: %@ recorded requests" = "%@: %@ recorded requests";
+
+"Retained Authorization Records, including denials. Older records may have been removed by the storage limit." = "Retained Authorization Records, including denials. Older records may have been removed by the storage limit.";

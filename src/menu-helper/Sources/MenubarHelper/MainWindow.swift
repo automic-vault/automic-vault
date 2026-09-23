@@ -244,23 +244,36 @@ private struct DashboardActivityIndex {
     }
 
     func count(for tool: String, now: Date) -> Int {
-        guard let dates = datesByTool[tool] else { return 0 }
-        let cutoff = now.addingTimeInterval(-86_400)
-        // Find both inclusive window boundaries without scanning history during rendering.
-        func boundary(_ date: Date, includingEqual: Bool) -> Int {
-            var low = 0
-            var high = dates.count
-            while low < high {
-                let middle = low + (high - low) / 2
-                if dates[middle] < date || (includingEqual && dates[middle] == date) {
-                    low = middle + 1
-                } else {
-                    high = middle
-                }
-            }
-            return low
+        let dates = datesByTool[tool] ?? []
+        return boundary(now, in: dates, includingEqual: true)
+            - boundary(now.addingTimeInterval(-86_400), in: dates)
+    }
+
+    func slots(for tool: String, now: Date) -> [Int] {
+        let dates = datesByTool[tool] ?? []
+        let start = now.addingTimeInterval(-86_400)
+        var previous = boundary(start, in: dates)
+        return (0..<96).map { slot in
+            let end = start.addingTimeInterval(Double(slot + 1) * 900)
+            let next = boundary(end, in: dates, includingEqual: slot == 95)
+            defer { previous = next }
+            return next - previous
         }
-        return boundary(now, includingEqual: true) - boundary(cutoff, includingEqual: false)
+    }
+
+    // Binary searches avoid scanning retained records during rendering.
+    private func boundary(_ date: Date, in dates: [Date], includingEqual: Bool = false) -> Int {
+        var low = 0
+        var high = dates.count
+        while low < high {
+            let middle = low + (high - low) / 2
+            if dates[middle] < date || (includingEqual && dates[middle] == date) {
+                low = middle + 1
+            } else {
+                high = middle
+            }
+        }
+        return low
     }
 }
 
@@ -1728,6 +1741,11 @@ final class DashboardModel: ObservableObject {
         return String(localized: "\(String(count)) recorded requests · 24h")
     }
 
+    fileprivate func overviewActivitySlots(for tool: DashboardItem, now: Date) -> [Int]? {
+        let name = hardenerNameReferencedByDocumentation(tool.documentation) ?? tool.title
+        return overviewActivityIndex?.slots(for: name, now: now)
+    }
+
     private func overviewRequestCount(for tool: DashboardItem, now: Date) -> Int? {
         let name = hardenerNameReferencedByDocumentation(tool.documentation) ?? tool.title
         return overviewActivityIndex?.count(for: name, now: now)
@@ -2117,9 +2135,9 @@ func runDashboardSearchSelfCheck() -> Int32 {
         detail: "List buckets"
     )
     // Unsorted input, duplicate timestamps, both inclusive boundaries, and clock reversal.
-    let activityRecords = [86_401.0, 0, 86_400, -1, 0].map { offset in
+    let activityRecords = [86_401.0, 0, 86_400, -1, 0, 900, 901, 85_500].map { offset in
         AccessRequestRecord(date: accessRequest.date.addingTimeInterval(offset),
-            tool: "aws", command: "fixture", decision: "Approved", reason: "Test",
+            tool: "aws", command: "fixture", decision: offset == 900 ? "Denied" : "Approved", reason: "Test",
             launcher: nil, callerPath: "/fixture/av", target: "/fixture/tool",
             cwd: "/fixture", keys: [], detail: nil)
     }
@@ -2129,6 +2147,18 @@ func runDashboardSearchSelfCheck() -> Int32 {
         let expected = activityRecords.filter {
             $0.date >= now.addingTimeInterval(-86_400) && $0.date <= now
         }.count
+        let slots = activityIndex.slots(for: "aws", now: now)
+        guard slots.count == 96, slots.reduce(0, +) == expected,
+              activityIndex.slots(for: "missing", now: now) == Array(repeating: 0, count: 96)
+        else { return 1 }
+        for slot in slots.indices {
+            let start = now.addingTimeInterval(-86_400 + Double(slot) * 900)
+            let end = start.addingTimeInterval(900)
+            let expectedSlot = activityRecords.filter {
+                $0.date >= start && ($0.date < end || (slot == 95 && $0.date == end))
+            }.count
+            guard slots[slot] == expectedSlot else { return 1 }
+        }
         guard activityIndex.count(for: "aws", now: now) == expected,
               activityIndex.count(for: "missing", now: now) == 0,
               DashboardActivityIndex([]).count(for: "aws", now: now) == 0 else { return 1 }
@@ -2262,7 +2292,10 @@ func runDashboardSearchSelfCheck() -> Int32 {
             benchmark.selectSection(.settings)
             benchmark.selectSection(.overview)
             let tools = benchmark.overviewTools
-            for tool in tools { _ = benchmark.overviewActivity(for: tool) }
+            for tool in tools {
+                _ = benchmark.overviewActivity(for: tool)
+                _ = benchmark.overviewActivitySlots(for: tool, now: Date())
+            }
         }
         let elapsed = start.duration(to: .now)
         print("Dashboard: five Overview selections, 50k records: \(elapsed)")
@@ -2285,6 +2318,13 @@ func runDashboardSearchSelfCheck() -> Int32 {
         var renderSnapshot = attentionSnapshot
         renderSnapshot.hardenedTools += (1...12).map {
             HardenedTool(name: "tool-\($0)", targetPath: "/usr/local/bin/tool-\($0)")
+        }
+        renderSnapshot.accessRequests = (0..<384).map { index in
+            AccessRequestRecord(date: Date().addingTimeInterval(-Double((index * index) % 86_400)),
+                tool: index.isMultiple(of: 3) ? "gh" : "aws", command: "fixture",
+                decision: index.isMultiple(of: 5) ? "Denied" : "Approved", reason: "Test",
+                launcher: nil, callerPath: "/fixture/av", target: "/fixture/tool",
+                cwd: "/fixture", keys: [], detail: nil)
         }
         let renderModel = DashboardModel(snapshot: renderSnapshot)
         for size in [NSSize(width: 590, height: 480), NSSize(width: 590, height: 550), NSSize(width: 980, height: 680)] {
@@ -6701,6 +6741,45 @@ private func shortDashboardTimestamp(_ date: Date) -> String {
     date.formatted(.dateTime.month(.twoDigits).day(.twoDigits).hour().minute())
 }
 
+private struct ToolActivityStrip: View {
+    let counts: [Int]?
+    let now: Date
+
+    var body: some View {
+        Group {
+            if let counts {
+                HStack(spacing: 1) {
+                    ForEach(counts.indices, id: \.self) { slot in
+                        Rectangle()
+                            // A fixed logarithmic scale keeps Tools comparable: 1, 4, 16, 64 requests.
+                            .fill(Color.primary.opacity(counts[slot] == 0
+                                ? 0.06 : min(1, 0.25 + log2(Double(counts[slot])) / 8)))
+                            .frame(minWidth: 0.5)
+                            .help(slotDescription(slot, count: counts[slot]))
+                    }
+                }
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("Activity in the last 24 hours")
+                .accessibilityValue("\(String(counts.reduce(0, +))) recorded requests")
+            } else {
+                RoundedRectangle(cornerRadius: 1)
+                    .stroke(Color.secondary, style: StrokeStyle(lineWidth: 0.5, dash: [2, 2]))
+                    .help("History unavailable")
+                    .accessibilityLabel("History unavailable")
+            }
+        }
+        .frame(height: 8)
+    }
+
+    private func slotDescription(_ slot: Int, count: Int) -> String {
+        let start = now.addingTimeInterval(-86_400 + Double(slot) * 900)
+        let end = start.addingTimeInterval(900)
+        let interval = start.formatted(.dateTime.hour().minute()) + "–"
+            + end.formatted(.dateTime.hour().minute())
+        return String(localized: "\(interval): \(String(count)) recorded requests")
+    }
+}
+
 /// Bounded summaries only: full inventories and actions stay in their existing sections.
 private struct DashboardOverviewView: View {
     @ObservedObject var model: DashboardModel
@@ -6770,13 +6849,19 @@ private struct DashboardOverviewView: View {
         }
     }
 
-    private var toolPanel: some View { tools() }
+    private var toolPanel: some View {
+        TimelineView(.periodic(from: .now, by: 60)) { context in
+            tools(now: context.date)
+        }
+    }
 
-    private func tools() -> some View {
+    private func tools(now: Date) -> some View {
         let allTools = model.overviewTools
         return VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .firstTextBaseline) {
                 Text("Tools").font(Font(NSFont.titleBarFont(ofSize: 0)))
+                Text("Last 24 hours").font(.caption2).foregroundStyle(.secondary)
+                    .help("Retained Authorization Records, including denials. Older records may have been removed by the storage limit.")
                 Spacer()
                 if let status = model.overviewClearStatus {
                     Text(localizedUIString(status))
@@ -6785,7 +6870,7 @@ private struct DashboardOverviewView: View {
                 }
             }
             GeometryReader { tableSpace in
-                let visibleTools = Array(allTools.prefix(max(1, Int(tableSpace.size.height / 54))))
+                let visibleTools = Array(allTools.prefix(max(1, Int(tableSpace.size.height / 68))))
                 VStack(spacing: 0) {
                     if allTools.isEmpty {
                         Button {
@@ -6801,29 +6886,33 @@ private struct DashboardOverviewView: View {
                         Button {
                             model.openOverviewTool(tool)
                         } label: {
-                            HStack(spacing: 4) {
-                                Image(systemName: needsAttention ? "exclamationmark.triangle.fill" : "hammer")
-                                    .foregroundStyle(needsAttention ? Color.orange : Color.secondary)
-                                    .frame(width: 20)
-                                    .padding(.trailing, 6)
-                                VStack(alignment: .leading, spacing: 3) {
-                                    Text(tool.title).fontWeight(.medium).lineLimit(1)
-                                    Text(model.overviewHasGate(tool) ? model.overviewActivity(for: tool) : model.overviewVerification(for: tool))
-                                        .font(.caption2)
-                                        .foregroundStyle(model.overviewHasGate(tool) ? .secondary : .tertiary).lineLimit(1)
-                                }
-                                Spacer(minLength: 0)
+                            VStack(alignment: .leading, spacing: 6) {
                                 HStack(spacing: 4) {
-                                        if !needsAttention { Image(systemName: "checkmark.seal") }
-                                        Text(localizedUIString(issue != nil ? (tool.isTriggered ? "Finding · Doctor report" : "Doctor report") : (tool.isTriggered ? "Finding" : "Hardened")))
+                                    Image(systemName: needsAttention ? "exclamationmark.triangle.fill" : "hammer")
+                                        .foregroundStyle(needsAttention ? Color.orange : Color.secondary)
+                                        .frame(width: 20)
+                                        .padding(.trailing, 6)
+                                    VStack(alignment: .leading, spacing: 3) {
+                                        Text(tool.title).fontWeight(.medium).lineLimit(1)
+                                        Text(model.overviewHasGate(tool) ? model.overviewActivity(for: tool, now: now) : model.overviewVerification(for: tool))
+                                            .font(.caption2)
+                                            .foregroundStyle(model.overviewHasGate(tool) ? .secondary : .tertiary).lineLimit(1)
                                     }
-                                    .font(.caption)
-                                    .foregroundStyle(needsAttention ? Color.orange : Color.secondary)
-                                Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary)
+                                    Spacer(minLength: 0)
+                                    HStack(spacing: 4) {
+                                            if !needsAttention { Image(systemName: "checkmark.seal") }
+                                            Text(localizedUIString(issue != nil ? (tool.isTriggered ? "Finding · Doctor report" : "Doctor report") : (tool.isTriggered ? "Finding" : "Hardened")))
+                                        }
+                                        .font(.caption)
+                                        .foregroundStyle(needsAttention ? Color.orange : Color.secondary)
+                                    Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary)
+                                }
+                                ToolActivityStrip(counts: model.overviewActivitySlots(for: tool, now: now), now: now)
+                                    .padding(.leading, 30)
                             }.padding(12).contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
-                        .frame(height: 53)
+                        .frame(height: 67)
                         .help((issue?.message ?? tool.subtitle) + "\n" + String(localized: "Recorded authorization requests in the last 24 hours. This is not a count of Tool executions."))
                         if tool.id != visibleTools.last?.id { Divider().padding(.leading, 42) }
                     }
