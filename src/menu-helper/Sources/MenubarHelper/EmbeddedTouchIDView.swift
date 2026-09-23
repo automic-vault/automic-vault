@@ -35,7 +35,7 @@ struct EmbeddedTouchIDView: NSViewRepresentable {
 
     func makeNSView(context: Context) -> AuthenticationView {
         let authenticationContext = attempt.prepare()
-        let view = AuthenticationView(context: authenticationContext, controlSize: .large)
+        let view = AuthenticationView(context: authenticationContext, controlSize: .mini)
         view.start = { [weak view] in
             guard let view, view.window?.isVisible == true else { return }
             TouchIDApproval.authenticate(
@@ -60,6 +60,9 @@ struct EmbeddedTouchIDView: NSViewRepresentable {
     final class AuthenticationView: LAAuthenticationView {
         var start: (() -> Void)?
 
+        override var acceptsFirstResponder: Bool { false }
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
             guard window != nil else {
@@ -80,6 +83,10 @@ struct EmbeddedTouchIDView: NSViewRepresentable {
 
 @MainActor
 func embeddedTouchIDAttemptSelfCheck() -> Bool {
+    let indicator = EmbeddedTouchIDView.AuthenticationView(context: LAContext(), controlSize: .mini)
+    guard indicator.fittingSize == NSSize(width: 16, height: 16),
+          !indicator.acceptsFirstResponder,
+          indicator.hitTest(.zero) == nil else { return false }
     let attempt = EmbeddedTouchIDAttempt()
     var approvals = 0
     let canceled = attempt.prepare()

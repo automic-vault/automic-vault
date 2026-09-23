@@ -13684,17 +13684,6 @@ private struct ApprovalPromptView: View {
                     .multilineTextAlignment(.center)
             }
 
-            if usesTouchIDApproval && usesEmbeddedTouchID && !isAuthenticatingWithTouchID {
-                HStack(spacing: 12) {
-                    EmbeddedTouchIDView(attempt: embeddedTouchID) {
-                        decide(.approved, .touchID)
-                    }
-                    .frame(width: 48, height: 48)
-                    Text("Touch ID to approve this request once")
-                        .font(.callout)
-                }
-            }
-
             if usesTouchIDApproval {
                 HStack(spacing: 12) {
                     Button(usesIPhoneApproval ? String(localized: "Cancel Request") : String(localized: "Deny"), role: .cancel) {
@@ -13704,14 +13693,58 @@ private struct ApprovalPromptView: View {
                     .controlSize(.large)
                     .frame(maxWidth: .infinity)
                     .keyboardShortcut(.cancelAction)
-                    ApprovalPromptApprovalMenu(
-                        allowsPersistentApproval: allowsPersistentApproval,
-                        temporaryGrantCandidate: temporaryGrantCandidate,
-                        title: isAuthenticatingWithTouchID ? "Waiting for Touch ID…" : "Approve with Touch ID",
-                        systemImage: "touchid",
-                        decide: authenticateWithTouchID
-                    )
-                    .disabled(isAuthenticatingWithTouchID || !TouchIDApproval.isAvailable)
+                    if usesEmbeddedTouchID {
+                        HStack(spacing: 8) {
+                            HStack(spacing: 8) {
+                                if isAuthenticatingWithTouchID {
+                                    ProgressView().controlSize(.small)
+                                } else {
+                                    EmbeddedTouchIDView(attempt: embeddedTouchID) {
+                                        decide(.approved, .touchID)
+                                    }
+                                    .frame(width: 16, height: 16)
+                                }
+                                Text(isAuthenticatingWithTouchID ? "Waiting for Touch ID…" : "Approve with Touch ID")
+                            }
+                            .padding(.horizontal, 16)
+                            .frame(maxWidth: .infinity, minHeight: 32)
+                            .background(.quaternary, in: Capsule())
+                            .allowsHitTesting(false)
+                            .accessibilityElement(children: .contain)
+                            .accessibilityHint("Touch the sensor to approve this request once. This is a status indicator, not a button.")
+
+                            if allowsPersistentApproval || temporaryGrantCandidate != nil {
+                                Menu {
+                                    if temporaryGrantCandidate != nil {
+                                        Button("Allow Write Access for 10 Minutes…") {
+                                            authenticateWithTouchID(.temporaryWriteAccess)
+                                        }
+                                    }
+                                    if allowsPersistentApproval {
+                                        Button(localizedUIString(persistentApprovalLabel)) {
+                                            authenticateWithTouchID(.alwaysApproved)
+                                        }
+                                    }
+                                } label: {
+                                    Image(systemName: "ellipsis")
+                                }
+                                .menuStyle(.borderlessButton)
+                                .fixedSize()
+                                .accessibilityLabel("More approval options")
+                                .disabled(isAuthenticatingWithTouchID || !TouchIDApproval.isAvailable)
+                            }
+                        }
+                        .frame(maxWidth: .infinity)
+                    } else {
+                        ApprovalPromptApprovalMenu(
+                            allowsPersistentApproval: allowsPersistentApproval,
+                            temporaryGrantCandidate: temporaryGrantCandidate,
+                            title: isAuthenticatingWithTouchID ? "Waiting for Touch ID…" : "Approve with Touch ID",
+                            systemImage: "touchid",
+                            decide: authenticateWithTouchID
+                        )
+                        .disabled(isAuthenticatingWithTouchID || !TouchIDApproval.isAvailable)
+                    }
                 }
             } else if usesIPhoneApproval {
                 Button("Cancel Request", role: .cancel) { decide(.denied, .standardMac) }

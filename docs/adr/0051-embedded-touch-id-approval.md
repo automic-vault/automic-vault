@@ -12,8 +12,10 @@ for biometric evaluation within the window that explains the request.
 
 When Touch ID Approval is separately enabled, use Apple's embedded view by
 default. Start a fresh biometric-only evaluation after displaying the immutable
-request. Its result means Approve Once only. Broader menu actions cancel that
-attempt before evaluating their explicitly selected scope in the system prompt.
+request. Its result means Approve Once only. The native mini-size indicator sits
+inside the approval status pill, which accepts neither clicks nor keyboard
+activation. Broader actions live in a separate menu and cancel that attempt
+before evaluating their explicitly selected scope in the system prompt.
 
 Keep the existing no-reuse, no-password, no-companion policy, active-session and
 awake-display requirements, exact-request binding, first-result-wins handling,
