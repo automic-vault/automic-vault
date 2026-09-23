@@ -3,6 +3,9 @@
 Status: native signed adapter passes private GitHub/Vault E2E; broad workflow and distribution coverage pending.
 Date: 2026-09-10
 
+Force/lease follow-up: 2026-09-23; see the assessment below. Production support
+remains disabled.
+
 The proposed integration can preserve ordinary Git commands, but a helper that
 forwards an arbitrary command stream to credential-bearing `git-remote-https`
 does **not** meet our security promises. Two executable counterexamples below
@@ -13,6 +16,115 @@ This assessment follows the [domain language](domain-language.md),
 [architecture](architecture.md), and [positioning](positioning.md). The native adapter now has its own signed E2E evidence in
 [ADR 0047](adr/0047-protected-git-https-transport.md); the loopback probes below
 remain separate tests of Git behavior and the protocol boundary.
+
+## Force pushes and leases: feasibility assessment
+
+**Conditional go for implementation; not yet ready to enable.** Neither force
+pushes nor exact leases inherently needs a broader credential boundary. They
+can use the existing fixed destination, isolated configuration, protected
+executables, and one complete batch per HTTPS process. This conclusion covers
+branch updates through the reviewed smart HTTPS path, not arbitrary Git
+options, signed pushes, or unrestricted helper sessions.
+
+The earlier counterexamples concern arbitrary authenticated requests and reuse
+of a read-authorized session. A forced branch update can remain one Remote Write
+Authorization Request. Its URL, destination, exact new commit, force mode, and
+any exact expected remote commit must all be immutable before Secret
+Application. The caller must never acquire the credential-bearing input pipe.
+
+Source review used upstream Git v2.50.1 alongside behavioral checks of the
+installed Apple Git 2.50.1 (Apple Git-155):
+
+- [transport-helper.c](https://github.com/git/git/blob/v2.50.1/transport-helper.c#L945-L1025)
+  encodes unconditional force as `+` on each update and emits one `cas` option
+  per lease. Implicit tracking-ref expectations become explicit object IDs
+  before crossing the helper interface.
+- [remote-curl.c](https://github.com/git/git/blob/v2.50.1/remote-curl.c#L1282-L1344)
+  passes leases as `--force-with-lease=REF:OID` arguments to `send-pack`. The
+  smart transport continues to use `git-receive-pack` at the fixed destination.
+- [remote.c](https://github.com/git/git/blob/v2.50.1/remote.c#L1541-L1626)
+  checks the expected old object ID and permits a non-fast-forward update when
+  it matches. Explicit force overrides rejection, including a stale lease.
+- [receive-pack.c](https://github.com/git/git/blob/v2.50.1/builtin/receive-pack.c#L1523-L1530)
+  supplies both new and advertised old IDs to the server ref transaction. This
+  rejects a concurrent remote change after discovery.
+
+### Reproducible evidence
+
+```sh
+python3 scripts/check-git-credential-confinement.py --force-lease
+```
+
+The new probe reuses the loopback TLS fixture and public dummy password. It
+verifies the installed transport's Apple signatures and runs that transport
+from an isolated bare repository with a fresh environment, fixed helper, and
+redirects disabled. It omits the fixture's extra public-key pin, matching the
+production transport's reliance on TLS verification. Fixture setup and the
+server use the current Xcode Git, observed as Apple Git 2.54.0 (Apple Git-157).
+No real Secret, Vault policy, production runtime, or GitHub repository changes.
+
+Observed results:
+
+| Check | Result |
+| --- | --- |
+| Divergent update without force, then with force | Rejected normally; exact forced update succeeded. |
+| Server denies non-fast-forward updates | Force was still rejected. |
+| Matching and stale exact leases | Matching lease allowed the rewrite; stale lease prevented it. |
+| Lease expects an absent branch (zero OID) | Creation succeeded; an existing branch was rejected. |
+| Multiple leases | Each expectation was enforced; ordinary partial success remained possible. |
+| Remote changes between discovery and receive-pack | Server rejected the update; concurrent value remained intact. |
+| Force and lease dry-runs | Remote refs stayed unchanged. |
+| Outer credential-store, TLS/proxy configuration, and ambient tracing | No dummy credential capture or trace file; intended updates succeeded. |
+| Authenticated redirect to another origin | Push failed; the second origin received no request. |
+| Parent-facing stdout/stderr | No dummy password or Authorization value in any exchange. |
+
+Two executable counterexamples rule out a simple allowlist extension:
+
+1. **Adding `+` to a leased update defeats its stale-lease rejection.** A lease
+   permits a rewrite on its own; it must not be implemented by adding an
+   unconditional-force marker. Initially reject a lease combined with `+` for
+   the same destination, or explicitly model it as unconditional force with no
+   lease guarantee. Never display it as lease-protected.
+2. **The current option map cannot represent multiple leases.** Rust stores
+   options in a `BTreeMap<String, String>`; Swift also requires unique ordered
+   option names. Keeping only the last `cas` loses earlier expectations. The
+   probe demonstrates an otherwise valid fast-forward proceeding despite a
+   stale expectation when its lease is dropped. Current production rejects
+   `cas`, so this is a hazard in a proposed extension, not an enabled bypass.
+
+### Conditions for enabling support
+
+Represent each update's destination, fixed new commit, and either unconditional
+force or exact lease explicitly. Preserve every lease and bind it to its exact
+destination. Bound counts and bytes; reject duplicate destinations, duplicate
+or conflicting leases, unmatched leases, malformed refs/OIDs, and arbitrary
+revision expressions. Accept the zero OID only as an expected absent ref, not
+as permission to delete. Keep tags, deletion, unreviewed options and arbitrary
+helper commands outside this extension.
+
+Both native Rust and service-side Swift must validate the same schema before
+registration. Generate the complete payload from that frozen plan. Approval
+and Authorization History must distinguish unconditional force from a checked
+lease and include every exact expectation. Never reread tracking refs or
+refresh an expected OID after Approval. Scope lease state to its push batch.
+Retain Remote Write classification and the existing policy checks; discovery
+approval cannot authorize a later update. A lease protects against a changed
+remote value, not malicious intent: the outer Git may choose any expectation,
+which must be authorized as part of the complete request.
+
+Before release, add native parser/wire parity and adversarial tests, then run
+the signed Vault/GitHub workflow with force and leases: human Approval and
+denial, Read Only policy, record failure, plan changes while Approval is
+pending, multiple branches, implicit and explicit leases, dry-run, and stale
+remote races. Repeat the existing nonce replay, process-chain, credential
+confinement, and session-isolation checks. Reject unsupported combinations
+instead of dropping their semantics. Update ADR 0047 when adopting the expanded
+surface.
+
+These probes establish transport feasibility, not production authorization
+correctness or an exhaustive absence of credential leaks. The production
+adapter and service were not changed. Signed pushes and atomic pushes require
+their own review; this result does not approve them.
 
 ## Executable evidence
 

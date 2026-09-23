@@ -4,6 +4,7 @@
 Run on macOS: python3 scripts/check-git-credential-confinement.py
 Add --remote-helper to probe configuration routing and raw-helper session attacks.
 Add --adapter to exercise a bounded adapter with ordinary feature-branch workflows.
+Add --force-lease to assess the installed transport's force/lease semantics.
 Uses Apple Git, a dummy provider, and two ephemeral loopback TLS identities.
 PASS means an expected observation held, including expected counterexamples.
 This is not a production wrapper or a test of AV's XPC/Launcher boundary.
@@ -34,6 +35,159 @@ def run(argv, *, cwd, env, data=None, ok=True):
 
 TOKEN = "AV319_DUMMY_NOT_A_CREDENTIAL"
 AUTH = "Basic " + base64.b64encode(f"probe:{TOKEN}".encode()).decode()
+
+
+def force_lease_probe(git, exec_path, root, env, url, common, pin, server, Server, Backend, calls):
+    """Fixed batches and dummy credentials only; no change to Vault's allowlist."""
+    transport_git = Path('/opt/av/git/bin/git')
+    transport_https = transport_git.with_name('git-remote-https')
+    for binary, identifier in [(transport_git, 'com.apple.git'),
+                               (transport_https, 'com.apple.git-remote-http')]:
+        subprocess.run(['/usr/bin/codesign', '--verify', '--strict',
+                        f'-R=anchor apple and identifier "{identifier}"', str(binary)], check=True)
+    print('Transport: ' + subprocess.check_output([str(transport_git), '--version'], text=True).strip())
+
+    def local(*args, cwd=root):
+        return run([str(git), *args], cwd=cwd, env=env).stdout.decode().strip()
+
+    seed, remote = root / 'seed', root / 'remote.git'
+    fixed, empty = root / 'force-fixed.git', root / 'force-empty'
+    local('init', '--bare', '--template=', str(fixed))
+    empty.mkdir()
+    base = local('rev-parse', 'HEAD', cwd=seed)
+    tree = local('rev-parse', 'HEAD^{tree}', cwd=seed)
+    left = local('commit-tree', tree, '-p', base, '-m', 'left', cwd=seed)
+    right = local('commit-tree', tree, '-p', base, '-m', 'right', cwd=seed)
+    local('push', str(remote), f'{left}:refs/heads/left', f'{right}:refs/heads/right', cwd=seed)
+    branch = 'refs/heads/main'
+
+    def set_ref(oid, ref=branch):
+        local('--git-dir=' + str(remote), 'update-ref', ref, oid)
+
+    def read_ref(ref=branch):
+        return local('--git-dir=' + str(remote), 'rev-parse', ref)
+
+    transport_env = dict(env, HOME=str(empty), XDG_CONFIG_HOME=str(empty),
+                         GIT_DIR=str(fixed), GIT_OBJECT_DIRECTORY=str(seed / '.git/objects'),
+                         GIT_EXEC_PATH=str(transport_git.parent))
+    command = [str(transport_git), '--no-replace-objects', *common,
+               '-c', 'http.sslBackend=openssl', '-c', 'http.sslCAPath=' + str(empty),
+               '-c', 'core.fsmonitor=false', '-c', 'protocol.version=0',
+               'remote-https', url, url]
+    # Deliberately omit the fixture's extra public-key pin: production has no pin.
+    def exchange(lines):
+        result = run(command, cwd=empty, env=transport_env,
+                     data=('\n'.join(lines) + '\n\n\n').encode(), ok=False)
+        assert all(value not in result.stdout + result.stderr
+                   for value in (TOKEN.encode(), AUTH.encode())), 'dummy credential leaked to output'
+        return result
+
+    def push(oid, *, expected=None, force=False, options=()):
+        lines = list(options)
+        if expected is not None:
+            lines.append(f'option cas {branch}:{expected}')
+        return exchange(lines + [f'push {"+" if force else ""}{oid}:{branch}'])
+
+    set_ref(left)
+    assert b'error ' in push(right).stdout and read_ref() == left
+    assert b'ok refs/heads/main' in push(right, force=True).stdout and read_ref() == right
+    print('PASS: fixed non-fast-forward update fails normally and succeeds with explicit force')
+
+    local('--git-dir=' + str(remote), 'config', 'receive.denyNonFastForwards', 'true')
+    try:
+        assert b'error refs/heads/main' in push(left, force=True).stdout and read_ref() == right
+    finally:
+        local('--git-dir=' + str(remote), 'config', '--unset', 'receive.denyNonFastForwards')
+    print('PASS: force cannot override the server policy against non-fast-forward updates')
+
+    set_ref(left)
+    assert b'ok refs/heads/main' in push(right, expected=left).stdout and read_ref() == right
+    result = push(base, expected=left)
+    assert b'stale info' in result.stdout and read_ref() == right
+    print('PASS: exact lease permits a rewrite; stale lease rejects it')
+
+    result = push(base, expected=left, force=True)
+    assert b'ok refs/heads/main' in result.stdout and read_ref() == base
+    print('COUNTEREXAMPLE: +OID overrides a stale cas lease; never add + to implement a lease')
+
+    new = 'refs/heads/new-lease'
+    zero = '0' * 40
+    assert b'ok refs/heads/new-lease' in exchange([f'option cas {new}:{zero}', f'push {left}:{new}']).stdout
+    assert b'stale info' in exchange([f'option cas {new}:{zero}', f'push {right}:{new}']).stdout
+    assert read_ref(new) == left
+    print('PASS: zero-OID lease creates an absent branch and rejects an existing branch')
+
+    a, b = 'refs/heads/lease-a', 'refs/heads/lease-b'
+    set_ref(right, a)
+    set_ref(left, b)
+    leases = [f'option cas {a}:{left}', f'option cas {b}:{left}']
+    updates = [f'push {base}:{a}', f'push {right}:{b}']
+    result = exchange(leases + updates)
+    assert b'stale info' in result.stdout and read_ref(a) == right and read_ref(b) == right
+    # Dropping a's lease lets a fast-forward proceed despite its stale expectation.
+    set_ref(base, a)
+    set_ref(left, b)
+    updates = [f'push {right}:{a}', f'push {right}:{b}']
+    result = exchange(leases + updates)
+    assert b'stale info' in result.stdout and read_ref(a) == base
+    result = exchange(leases[-1:] + updates)
+    assert b'ok refs/heads/lease-a' in result.stdout and read_ref(a) == right
+    print('COUNTEREXAMPLE: collapsing repeated cas options drops a branch lease and permits a forbidden update')
+
+    set_ref(left)
+    raced = threading.Event()
+    def move_after_discovery(path):
+        if path == '/remote.git/git-receive-pack' and not raced.is_set():
+            set_ref(right)
+            raced.set()
+    server.before_authenticated_request = move_after_discovery
+    try:
+        result = push(base, expected=left)
+        assert raced.is_set() and b'error refs/heads/main' in result.stdout and read_ref() == right
+    finally:
+        del server.before_authenticated_request
+    print('PASS: a remote update after discovery is rejected by the server ref transaction')
+
+    set_ref(left)
+    for kwargs in ({'force': True}, {'expected': left}):
+        result = push(right, options=['option dry-run true'], **kwargs)
+        assert b'ok refs/heads/main' in result.stdout and read_ref() == left
+    print('PASS: force and lease dry-runs leave the remote unchanged')
+
+    capture, trace = root / 'force-stored', root / 'force-trace'
+    local('config', 'credential.helper', 'store --file=' + str(capture), cwd=seed)
+    local('config', f'http.{url}.sslVerify', 'false', cwd=seed)
+    local('config', f'http.{url}.proxy', 'http://127.0.0.1:1', cwd=seed)
+    previous = dict(os.environ)
+    try:
+        os.environ.update(GIT_TRACE_CURL=str(trace), GIT_TRACE_REDACT='0',
+                          GIT_SSL_NO_VERIFY='1', HTTPS_PROXY='http://127.0.0.1:1')
+        for kwargs in ({'force': True}, {'expected': left}):
+            set_ref(left)
+            assert b'ok refs/heads/main' in push(right, **kwargs).stdout and read_ref() == right
+        assert not capture.exists() and not trace.exists()
+    finally:
+        os.environ.clear()
+        os.environ.update(previous)
+    print('PASS: force/lease requests ignore outer helper, TLS, proxy, and trace configuration')
+
+    sink = Server(('127.0.0.1', 0), Backend)
+    worker = threading.Thread(target=sink.serve_forever, daemon=True)
+    worker.start()
+    try:
+        server.redirect = f'https://localhost:{sink.server_port}/remote.git/info/refs?service=git-receive-pack'
+        for kwargs in ({'force': True}, {'expected': left}):
+            set_ref(left)
+            assert push(right, **kwargs).returncode and read_ref() == left
+        assert sink.requests == 0
+    finally:
+        server.redirect = None
+        sink.shutdown()
+        sink.server_close()
+        worker.join(timeout=5)
+    assert calls.read_text().count('get\n') > 0
+    print('PASS: authenticated redirects cannot carry the dummy credential to another origin')
+    print('RESULT: transport feasibility only; native parsing, Vault authorization, and GitHub E2E remain untested')
 
 
 def adapter_probe(git, exec_path, root, env, url, common, pin, server, Server, Backend, calls):
@@ -450,6 +604,10 @@ def main():
                 assert value not in result.stdout + result.stderr, "credential appeared in output"
 
         try:
+            if sys.argv[1:] == ["--force-lease"]:
+                force_lease_probe(git, exec_path, root, env, url, common, pin,
+                                  server, Server, Backend, calls)
+                return
             if sys.argv[1:] == ["--adapter"]:
                 adapter_probe(git, exec_path, root, env, url, common, pin,
                               server, Server, Backend, calls)
