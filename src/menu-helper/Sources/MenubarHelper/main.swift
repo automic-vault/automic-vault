@@ -18428,6 +18428,15 @@ if CommandLine.arguments.contains("--self-check-localization") {
     precondition(String(localized: "Approve Once") == (chinese ? "批准一次" : "Approve Once"))
     precondition(localizedUIString("Allow for Session") == (chinese ? "在本会话中允许" : "Allow for Session"))
     precondition(localizedUIString("Untranslated fallback") == "Untranslated fallback")
+    precondition(localizedUIString("Overview") == (chinese ? "概览" : "Overview"))
+    precondition(localizedUIString("No vulnerabilities detected") == (chinese ? "未检测到漏洞" : "No vulnerabilities detected"))
+    precondition(localizedUIString("Activity & Settings") == (chinese ? "活动与设置" : "Activity & Settings"))
+    let dashboardCount = "12"
+    precondition(String(localized: "View all \(dashboardCount) hardened Tools →") ==
+        (chinese ? "查看全部 12 个已加固工具 →" : "View all 12 hardened Tools →"))
+    precondition(String(localized: "\(dashboardCount) recorded requests · 24h") ==
+        (chinese ? "过去 24 小时内记录了 12 次请求" : "12 recorded requests · 24h"))
+
 
     // Interpolation must preserve technical identifiers, even when they contain
     // translation keys, format characters, shell syntax, or non-ASCII text.

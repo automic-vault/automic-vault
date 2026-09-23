@@ -431,3 +431,39 @@
 "Apply" = "应用";
 
 "1–1024 MiB; default 25 MiB. Limits encrypted record payloads; SQLite adds disk overhead. Records are kept for up to 30 days. Lowering the limit removes older records on the next history access." = "1–1024 MiB；默认值为 25 MiB。此限制适用于加密记录的数据量；SQLite 会占用额外磁盘空间。记录最多保留 30 天。降低限制后，下次访问历史记录时将删除较旧的记录。";
+
+/* Overview dashboard */
+"Overview" = "概览";
+"Tools" = "工具";
+"Access" = "访问";
+"Activity & Settings" = "活动与设置";
+"Loading Automic Vault…" = "正在加载 Automic Vault…";
+"No vulnerability or doctor reports" = "没有漏洞或安装诊断报告";
+"No vulnerabilities detected" = "未检测到漏洞";
+"No doctor reports" = "没有安装诊断报告";
+"Hardening not yet refreshed" = "尚未刷新加固状态";
+"Hardening verified: %@" = "加固已验证：%@";
+"Hardening checked: %@" = "加固已检查：%@";
+"History unavailable" = "历史记录不可用";
+"No requests recorded · 24h" = "过去 24 小时内无请求记录";
+"1 recorded request · 24h" = "过去 24 小时内记录了 1 次请求";
+"%@ recorded requests · 24h" = "过去 24 小时内记录了 %@ 次请求";
+"No matching Tools · View detectors" = "无匹配工具 · 查看检测器";
+"Review available detectors" = "查看可用检测器";
+"Finding · Doctor report" = "检测发现 · 安装诊断报告";
+"Doctor report" = "安装诊断报告";
+"Finding" = "检测发现";
+"View all %@ hardened Tools →" = "查看全部 %@ 个已加固工具 →";
+"No attention required" = "无需处理";
+"Attention required" = "需要处理";
+"%@ needs reblessing" = "%@ 需要重新认可";
+"Scripts needing reblessing: %lld" = "需要重新认可的脚本：%lld";
+"What’s new" = "最新动态";
+"Blog ↗" = "博客 ↗";
+"Documentation ↗" = "文档 ↗";
+"GitHub ↗" = "GitHub ↗";
+"Update to v%@" = "更新至 v%@";
+"Last update check: %@" = "上次检查更新：%@";
+"Last update check: Not yet checked" = "上次检查更新：尚未检查";
+"Projects %lld" = "项目 %lld";
+"Recorded authorization requests in the last 24 hours. This is not a count of Tool executions." = "过去 24 小时内记录的授权请求。这不是工具执行次数。";

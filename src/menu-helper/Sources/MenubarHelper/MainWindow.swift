@@ -1714,16 +1714,18 @@ final class DashboardModel: ObservableObject {
 
 
     func overviewVerification(for tool: DashboardItem) -> String {
-        guard let refreshed = lastHardeningRefresh else { return "Hardening not yet refreshed" }
-        let status = tool.isHardened && overviewDoctorIssue(for: tool) == nil
-            ? "Hardening verified" : "Hardening checked"
-        return "\(status): \(shortDashboardTimestamp(refreshed))"
+        guard let refreshed = lastHardeningRefresh else { return String(localized: "Hardening not yet refreshed") }
+        let timestamp = shortDashboardTimestamp(refreshed)
+        return tool.isHardened && overviewDoctorIssue(for: tool) == nil
+            ? String(localized: "Hardening verified: \(timestamp)")
+            : String(localized: "Hardening checked: \(timestamp)")
     }
 
     func overviewActivity(for tool: DashboardItem, now: Date = Date()) -> String {
-        guard let count = overviewRequestCount(for: tool, now: now) else { return "History unavailable" }
-        return count == 0 ? "No requests recorded · 24h"
-            : "\(count) recorded \(count == 1 ? "request" : "requests") · 24h"
+        guard let count = overviewRequestCount(for: tool, now: now) else { return String(localized: "History unavailable") }
+        if count == 0 { return String(localized: "No requests recorded · 24h") }
+        if count == 1 { return String(localized: "1 recorded request · 24h") }
+        return String(localized: "\(String(count)) recorded requests · 24h")
     }
 
     private func overviewRequestCount(for tool: DashboardItem, now: Date) -> Int? {
@@ -6777,7 +6779,7 @@ private struct DashboardOverviewView: View {
                 Text("Tools").font(Font(NSFont.titleBarFont(ofSize: 0)))
                 Spacer()
                 if let status = model.overviewClearStatus {
-                    Text(status)
+                    Text(localizedUIString(status))
                         .font(.caption).foregroundStyle(.secondary)
                         .multilineTextAlignment(.trailing)
                 }
@@ -6789,7 +6791,7 @@ private struct DashboardOverviewView: View {
                         Button {
                             model.navigateFromOverview(to: .detectors)
                         } label: {
-                            Label(model.hasSearchQuery ? "No matching Tools · View detectors" : "Review available detectors", systemImage: "sensor.tag.radiowaves.forward")
+                            Label(localizedUIString(model.hasSearchQuery ? "No matching Tools · View detectors" : "Review available detectors"), systemImage: "sensor.tag.radiowaves.forward")
                                 .frame(maxWidth: .infinity, alignment: .leading).padding(12)
                         }.buttonStyle(.plain)
                     }
@@ -6813,7 +6815,7 @@ private struct DashboardOverviewView: View {
                                 Spacer(minLength: 0)
                                 HStack(spacing: 4) {
                                         if !needsAttention { Image(systemName: "checkmark.seal") }
-                                        Text(issue != nil ? (tool.isTriggered ? "Finding · Doctor report" : "Doctor report") : (tool.isTriggered ? "Finding" : "Hardened"))
+                                        Text(localizedUIString(issue != nil ? (tool.isTriggered ? "Finding · Doctor report" : "Doctor report") : (tool.isTriggered ? "Finding" : "Hardened")))
                                     }
                                     .font(.caption)
                                     .foregroundStyle(needsAttention ? Color.orange : Color.secondary)
@@ -6822,7 +6824,7 @@ private struct DashboardOverviewView: View {
                         }
                         .buttonStyle(.plain)
                         .frame(height: 53)
-                        .help((issue?.message ?? tool.subtitle) + "\nRecorded authorization requests in the last 24 hours. This is not a count of Tool executions.")
+                        .help((issue?.message ?? tool.subtitle) + "\n" + String(localized: "Recorded authorization requests in the last 24 hours. This is not a count of Tool executions."))
                         if tool.id != visibleTools.last?.id { Divider().padding(.leading, 42) }
                     }
                     Spacer(minLength: 0)
@@ -6832,15 +6834,15 @@ private struct DashboardOverviewView: View {
             }
             HStack {
                 Spacer()
-                destination("View all \(model.snapshot.hardenedTools.count) hardened Tools →", section: .hardenedTools)
+                destination(String(localized: "View all \(String(model.snapshot.hardenedTools.count)) hardened Tools →"), section: .hardenedTools)
             }.font(.caption)
         }
     }
 
     private func attention(compact: Bool) -> some View {
         VStack(alignment: .leading, spacing: compact ? 8 : 14) {
-            Text(model.snapshot.doctorIssues.isEmpty && model.snapshot.flaggedDetectorCount == 0 && model.scriptsNeedingReblessing.isEmpty
-                 ? "No attention required" : "Attention required").font(.headline)
+            Text(localizedUIString(model.snapshot.doctorIssues.isEmpty && model.snapshot.flaggedDetectorCount == 0 && model.scriptsNeedingReblessing.isEmpty
+                 ? "No attention required" : "Attention required")).font(.headline)
             ForEach(model.scriptsNeedingReblessing) { script in
                 Button {
                     model.navigateFromOverview(to: .blessedScripts, itemID: script.id)
@@ -6914,7 +6916,7 @@ private struct DashboardOverviewView: View {
                     Text(value).font(.title2.monospacedDigit())
                 }
                 HStack(alignment: .firstTextBaseline) {
-                    Text(caption).font(.caption).lineLimit(1)
+                    Text(localizedUIString(caption)).font(.caption).lineLimit(1)
                     Spacer(minLength: 4)
                     if let projects {
                         Text("Projects \(projects)")

@@ -431,3 +431,39 @@
 "Apply" = "Apply";
 
 "1–1024 MiB; default 25 MiB. Limits encrypted record payloads; SQLite adds disk overhead. Records are kept for up to 30 days. Lowering the limit removes older records on the next history access." = "1–1024 MiB; default 25 MiB. Limits encrypted record payloads; SQLite adds disk overhead. Records are kept for up to 30 days. Lowering the limit removes older records on the next history access.";
+
+/* Overview dashboard */
+"Overview" = "Overview";
+"Tools" = "Tools";
+"Access" = "Access";
+"Activity & Settings" = "Activity & Settings";
+"Loading Automic Vault…" = "Loading Automic Vault…";
+"No vulnerability or doctor reports" = "No vulnerability or doctor reports";
+"No vulnerabilities detected" = "No vulnerabilities detected";
+"No doctor reports" = "No doctor reports";
+"Hardening not yet refreshed" = "Hardening not yet refreshed";
+"Hardening verified: %@" = "Hardening verified: %@";
+"Hardening checked: %@" = "Hardening checked: %@";
+"History unavailable" = "History unavailable";
+"No requests recorded · 24h" = "No requests recorded · 24h";
+"1 recorded request · 24h" = "1 recorded request · 24h";
+"%@ recorded requests · 24h" = "%@ recorded requests · 24h";
+"No matching Tools · View detectors" = "No matching Tools · View detectors";
+"Review available detectors" = "Review available detectors";
+"Finding · Doctor report" = "Finding · Doctor report";
+"Doctor report" = "Doctor report";
+"Finding" = "Finding";
+"View all %@ hardened Tools →" = "View all %@ hardened Tools →";
+"No attention required" = "No attention required";
+"Attention required" = "Attention required";
+"%@ needs reblessing" = "%@ needs reblessing";
+"Scripts needing reblessing: %lld" = "Scripts needing reblessing: %lld";
+"What’s new" = "What’s new";
+"Blog ↗" = "Blog ↗";
+"Documentation ↗" = "Documentation ↗";
+"GitHub ↗" = "GitHub ↗";
+"Update to v%@" = "Update to v%@";
+"Last update check: %@" = "Last update check: %@";
+"Last update check: Not yet checked" = "Last update check: Not yet checked";
+"Projects %lld" = "Projects %lld";
+"Recorded authorization requests in the last 24 hours. This is not a count of Tool executions." = "Recorded authorization requests in the last 24 hours. This is not a count of Tool executions.";
