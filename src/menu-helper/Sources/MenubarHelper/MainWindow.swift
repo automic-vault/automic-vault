@@ -5074,6 +5074,7 @@ private struct IPhoneApprovalSettingsView: View {
 }
 
 private struct TouchIDApprovalSettingsView: View {
+    @State private var embeddedTouchID = embeddedTouchIDApprovalIsEnabled()
     @StateObject private var approval = AuthorityApprovalState()
     @State private var enabled = TouchIDApproval.isEnabled
     @State private var status = TouchIDApproval.isAvailable
@@ -5099,6 +5100,22 @@ private struct TouchIDApprovalSettingsView: View {
                 title: "Explicit local authority",
                 text: String(localized: "Touch ID Approval works independently of relay availability and may coexist with iPhone Approval. It never accepts a password, Apple Watch, pointer, or keyboard action.")
             )
+
+            Toggle("Use Touch ID directly in the Approval window", isOn: Binding(
+                get: { embeddedTouchID },
+                set: { value in
+                    let result = setEmbeddedTouchIDApprovalEnabled(value)
+                    if result == errSecSuccess {
+                        embeddedTouchID = value
+                        abortActiveApprovalPrompt()
+                    } else {
+                        status = TouchIDApprovalError.storage(result).localizedDescription
+                    }
+                }
+            ))
+            Text("When enabled, touching the sensor approves the displayed request once, without clicking first. Turn this off if you prefer to click Approve before Touch ID starts. Touch ID Approval must be enabled separately.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
 
             if enabled {
                 Button("Disable Touch ID Approval") {

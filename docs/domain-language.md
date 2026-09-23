@@ -480,6 +480,13 @@ Approval. It may coexist with iPhone Approval, but relay failure never enables i
 or changes its policy. It requires an active Mac user session and awake displays
 and does not provide iPhone Approval's physical separation from the Mac.
 
+By default, an enabled Touch ID Approval surface starts biometric evaluation
+inside the displayed Approval window using Apple's native view. A successful
+touch approves that request once. The user may disable this presentation to
+require a click before the system Touch ID prompt starts. This independent
+Keychain-protected preference does not enable Touch ID Approval or grant
+broader authority.
+
 ### Authorization Decision
 
 The final allow or deny result and its source. An allowed request is either **automically authorized** by policy or **approved** by the user.

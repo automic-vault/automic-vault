@@ -2695,6 +2695,28 @@ func loadKeychainDataResult(service: String, account: String) -> KeychainDataLoa
     return .success(data)
 }
 
+// This preference cannot enable Touch ID Approval itself.
+public func embeddedTouchIDApprovalIsEnabled() -> Bool {
+    embeddedTouchIDApprovalIsEnabled(loadKeychainDataResult(
+        service: touchIDApprovalKeychainService, account: "EmbeddedTouchIDV1"
+    ))
+}
+
+func embeddedTouchIDApprovalIsEnabled(_ result: KeychainDataLoad) -> Bool {
+    switch result {
+    case .notFound: true
+    case .success(let data): data == Data([1])
+    case .failure: false
+    }
+}
+
+public func setEmbeddedTouchIDApprovalEnabled(_ enabled: Bool) -> OSStatus {
+    saveKeychainData(
+        Data([enabled ? 1 : 0]), service: touchIDApprovalKeychainService,
+        account: "EmbeddedTouchIDV1", accessibility: .afterFirstUnlock
+    )
+}
+
 public func touchIDApprovalIsEnabled(
     service: String = touchIDApprovalKeychainService,
     account: String = touchIDApprovalKeychainAccount

@@ -710,6 +710,16 @@ canceled. Relay state never toggles this choice. Memory-only reuse of the exact
 Authorization Decision under the ordinary live-process and complete-request
 constraints does not reuse the Local Authentication result.
 
+The Approval window embeds Apple's `LAAuthenticationView` by default when Touch
+ID Approval is enabled. It begins a fresh biometric-only evaluation once the
+window is displayed, bound to Approve Once. Selecting a broader action cancels
+the embedded attempt before starting a separate evaluation for the selected
+scope. Dismissal invalidates the context; canceled, replaced, and duplicate
+callbacks cannot approve. The Keychain-protected presentation setting restores
+the click-then-system-prompt flow when disabled. Missing settings default on;
+unreadable or malformed settings fall back to the click-first flow. See
+[ADR 0051](adr/0051-embedded-touch-id-approval.md).
+
 ## Recording before release
 
 An allowed Secret Use must produce a persisted, verified Authorization Record before the secret bytes leave custody. A failure to write or read back the record denies release. Denial and internal-failure records are best effort because recording failure must not replace the original denial with authority.

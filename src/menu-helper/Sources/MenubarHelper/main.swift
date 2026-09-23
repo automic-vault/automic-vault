@@ -12783,6 +12783,7 @@ private final class ApprovalPromptState: @unchecked Sendable {
         }
         #endif
         panel?.orderOut(nil)
+        panel?.contentView = nil // Tear down any pending embedded biometric attempt.
         continuation?.resume(returning: finalResult)
         continuation = nil
     }
@@ -13602,6 +13603,8 @@ private struct ApprovalPromptView: View {
     var compact = false
     let decide: (ApprovalDecision, ApprovalDecisionSource) -> Void
     @State private var isAuthenticatingWithTouchID = false
+    @StateObject private var embeddedTouchID = EmbeddedTouchIDAttempt()
+    private let usesEmbeddedTouchID = embeddedTouchIDApprovalIsEnabled()
 
     var body: some View {
         VStack(spacing: 18) {
@@ -13679,6 +13682,17 @@ private struct ApprovalPromptView: View {
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
+            }
+
+            if usesTouchIDApproval && usesEmbeddedTouchID && !isAuthenticatingWithTouchID {
+                HStack(spacing: 12) {
+                    EmbeddedTouchIDView(attempt: embeddedTouchID) {
+                        decide(.approved, .touchID)
+                    }
+                    .frame(width: 48, height: 48)
+                    Text("Touch ID to approve this request once")
+                        .font(.callout)
+                }
             }
 
             if usesTouchIDApproval {
@@ -13777,6 +13791,7 @@ private struct ApprovalPromptView: View {
     }
 
     private func authenticateWithTouchID(_ decision: ApprovalDecision) {
+        embeddedTouchID.cancel()
         isAuthenticatingWithTouchID = true
         TouchIDApproval.authenticate(
             reason: String(localized: "Approve this exact Automic Vault request")
@@ -14744,6 +14759,7 @@ private func fileDescriptorInjectionSelfCheck() -> Bool {
 
 @MainActor
 private func runApprovalSelfCheck() -> Int32 {
+    guard embeddedTouchIDAttemptSelfCheck() else { return 1 }
     guard fileDescriptorInjectionSelfCheck() else { return 1 }
     let helperSigning = SigningInfo(identifier: "com.automicvault", teamIdentifier: "TEAM")
     var selfIdentity = AVProcessIdentity()

@@ -58,9 +58,9 @@ enum TouchIDApproval {
 
     static func authenticate(
         reason: String,
+        context: LAContext = LAContext(),
         completion: @escaping @MainActor (Bool) -> Void
     ) {
-        let context = LAContext()
         context.touchIDAuthenticationAllowableReuseDuration = 0
         context.localizedFallbackTitle = ""
         var error: NSError?
