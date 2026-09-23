@@ -2744,13 +2744,26 @@ struct DashboardRootView: View {
                 } detail: {
                     DashboardOverviewView(model: model, checkForUpdates: checkForUpdates)
                         .toolbar {
-                            Button {
-                                requestScan()
-                                model.reload()
-                            } label: {
-                                Label("Refresh", systemImage: "arrow.clockwise")
+                            ToolbarItem(placement: .principal) {
+                                HStack(spacing: 8) {
+                                    if let url = Bundle.main.url(forResource: "NSMenuItem", withExtension: "png"),
+                                       let icon = NSImage(contentsOf: url) {
+                                        Image(nsImage: icon).renderingMode(.template)
+                                            .resizable().scaledToFit().frame(width: 16, height: 20)
+                                            .accessibilityHidden(true)
+                                    }
+                                    Text("Automic Vault").font(.headline)
+                                }
                             }
-                            .disabled(model.isReloading)
+                            ToolbarItem(placement: .primaryAction) {
+                                Button {
+                                    requestScan()
+                                    model.reload()
+                                } label: {
+                                    Label("Refresh", systemImage: "arrow.clockwise")
+                                }
+                                .disabled(model.isReloading)
+                            }
                         }
                 }
             } else {
@@ -2872,7 +2885,7 @@ struct DashboardRootView: View {
         }
             }
         }
-        .navigationTitle(model.selectedSection.title)
+        .navigationTitle(model.selectedSection == .overview ? "Automic Vault" : model.selectedSection.title)
         .searchable(text: $model.searchText, placement: .sidebar, prompt: "Search")
         .onChange(of: proxySessions.historyRevision) { _, _ in
             model.reloadAccessRequests()
@@ -6715,9 +6728,9 @@ private struct DashboardOverviewView: View {
             let compact = geometry.size.height < 550
             VStack(alignment: .leading, spacing: compact ? 12 : 20) {
                 HStack(spacing: 12) {
-                    summary(.allSecrets, value: "\(model.snapshot.secrets.count)", caption: "Secrets")
+                    summary(.allSecrets, value: "\(model.snapshot.secrets.count)", caption: "Secrets", projects: projectCount)
                     summary(.launcherBundles, value: "\(model.launcherBundles.count)", caption: "Launcher Bundles")
-                    summary(.allSecrets, value: "\(projectCount)", caption: "Projects with Values", icon: "folder")
+                    summary(.blessedScripts, value: "\(model.count(for: .blessedScripts))", caption: "Blessed Scripts")
                 }
                 ViewThatFits(in: .horizontal) {
                     HStack(alignment: .top, spacing: 20) {
@@ -6732,7 +6745,7 @@ private struct DashboardOverviewView: View {
                 .frame(maxHeight: .infinity)
                 HStack(spacing: 16) {
                     Spacer()
-                    Link("Documentation", destination: URL(string: "https://www.automicvault.com/docs/")!)
+                    Link("Documentation ↗", destination: URL(string: "https://www.automicvault.com/docs/")!)
                         .foregroundStyle(Color.accentColor)
                     Link("GitHub ↗", destination: URL(string: "https://github.com/automic-vault/automic-vault")!)
                         .foregroundStyle(Color.accentColor)
@@ -6784,6 +6797,7 @@ private struct DashboardOverviewView: View {
                                 Image(systemName: needsAttention ? "exclamationmark.triangle.fill" : "hammer")
                                     .foregroundStyle(needsAttention ? Color.orange : Color.secondary)
                                     .frame(width: 20)
+                                    .padding(.trailing, 6)
                                 VStack(alignment: .leading, spacing: 3) {
                                     Text(tool.title).fontWeight(.medium).lineLimit(1)
                                     Text(model.overviewHasGate(tool) ? model.overviewActivity(for: tool) : model.overviewVerification(for: tool))
@@ -6857,7 +6871,7 @@ private struct DashboardOverviewView: View {
             }
             ForEach(news.prefix(2)) { post in
                 Link(destination: post.url) {
-                    Text(post.title).font(.callout).foregroundStyle(Color.accentColor)
+                    Text(post.title + " ↗").font(.callout).foregroundStyle(Color.accentColor)
                         .multilineTextAlignment(.leading).lineLimit(nil)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -6883,17 +6897,24 @@ private struct DashboardOverviewView: View {
         .background(.quaternary.opacity(0.3), in: RoundedRectangle(cornerRadius: 10))
     }
 
-    private func summary(_ section: DashboardSection, value: String, caption: String, icon: String? = nil) -> some View {
+    private func summary(_ section: DashboardSection, value: String, caption: String, projects: Int? = nil) -> some View {
         Button {
             model.navigateFromOverview(to: section)
         } label: {
             VStack(alignment: .leading, spacing: 6) {
                 HStack {
-                    Image(systemName: icon ?? section.systemImage).foregroundStyle(Color.accentColor)
+                    Image(systemName: section.systemImage).foregroundStyle(Color.accentColor)
                     Spacer()
                     Text(value).font(.title2.monospacedDigit())
                 }
-                Text(caption).font(.caption).lineLimit(1)
+                HStack(alignment: .firstTextBaseline) {
+                    Text(caption).font(.caption).lineLimit(1)
+                    Spacer(minLength: 4)
+                    if let projects {
+                        Text("Projects \(projects)")
+                            .font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
+                    }
+                }
             }
             .padding(12).frame(maxWidth: .infinity, alignment: .leading)
             .background(.background, in: RoundedRectangle(cornerRadius: 10))
