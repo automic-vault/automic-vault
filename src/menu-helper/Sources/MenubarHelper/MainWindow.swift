@@ -6741,8 +6741,8 @@ private struct DashboardOverviewView: View {
             VStack(alignment: .leading, spacing: compact ? 12 : 20) {
                 HStack(spacing: 12) {
                     summary(.allSecrets, value: "\(model.snapshot.secrets.count)", caption: "Secrets", projects: projectCount)
-                    summary(.launcherBundles, value: "\(model.launcherBundles.count)", caption: "Launcher Bundles")
                     summary(.blessedScripts, value: "\(model.count(for: .blessedScripts))", caption: "Blessed Scripts")
+                    summary(.launcherBundles, value: "\(model.launcherBundles.count)", caption: "Launcher Bundles")
                 }
                 ViewThatFits(in: .horizontal) {
                     HStack(alignment: .top, spacing: 20) {
@@ -6774,7 +6774,7 @@ private struct DashboardOverviewView: View {
         let allTools = model.overviewTools
         return VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .firstTextBaseline) {
-                Text("Tools").font(.title2.bold())
+                Text("Tools").font(Font(NSFont.titleBarFont(ofSize: 0)))
                 Spacer()
                 if let status = model.overviewClearStatus {
                     Text(status)
