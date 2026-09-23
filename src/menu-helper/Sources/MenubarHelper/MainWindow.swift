@@ -1631,12 +1631,16 @@ final class DashboardModel: ObservableObject {
             rows.append(DashboardItem(id: "doctor:" + issue.hardener, title: issue.hardener,
                                       subtitle: issue.message, detail: ""))
         }
+        let now = Date()
         return rows
             .filter { searchQuery.isEmpty || $0.title.localizedCaseInsensitiveContains(searchQuery) }
             .sorted {
                 let lhsAttention = $0.isTriggered || overviewDoctorIssue(for: $0) != nil
                 let rhsAttention = $1.isTriggered || overviewDoctorIssue(for: $1) != nil
                 if lhsAttention != rhsAttention { return lhsAttention }
+                let lhsActive = overviewHasGate($0) && (overviewRequestCount(for: $0, now: now) ?? 0) > 0
+                let rhsActive = overviewHasGate($1) && (overviewRequestCount(for: $1, now: now) ?? 0) > 0
+                if lhsActive != rhsActive { return lhsActive }
                 return $0.title.localizedStandardCompare($1.title) == .orderedAscending
             }
     }
@@ -1662,14 +1666,18 @@ final class DashboardModel: ObservableObject {
     }
 
     func overviewActivity(for tool: DashboardItem, now: Date = Date()) -> String {
-        guard let overviewHistory else { return "History unavailable" }
-        let name = hardenerNameReferencedByDocumentation(tool.documentation) ?? tool.title
-        let cutoff = now.addingTimeInterval(-86_400)
-        let count = overviewHistory.filter {
-            $0.tool == name && $0.date >= cutoff && $0.date <= now
-        }.count
+        guard let count = overviewRequestCount(for: tool, now: now) else { return "History unavailable" }
         return count == 0 ? "No requests recorded · 24h"
             : "\(count) recorded \(count == 1 ? "request" : "requests") · 24h"
+    }
+
+    private func overviewRequestCount(for tool: DashboardItem, now: Date) -> Int? {
+        guard let overviewHistory else { return nil }
+        let name = hardenerNameReferencedByDocumentation(tool.documentation) ?? tool.title
+        let cutoff = now.addingTimeInterval(-86_400)
+        return overviewHistory.filter {
+            $0.tool == name && $0.date >= cutoff && $0.date <= now
+        }.count
     }
 
     func openOverviewTool(_ tool: DashboardItem) {
@@ -2138,6 +2146,16 @@ func runDashboardSearchSelfCheck() -> Int32 {
         defaultProtection: .noAccess, appPolicies: []))
     let gatedModel = DashboardModel(snapshot: gatedSnapshot)
     guard gatedModel.overviewHasGate(awsOverview), !gatedModel.overviewHasGate(ghOverview) else { return 1 }
+    var activitySnapshot = attentionSnapshot
+    activitySnapshot.doctorIssues.removeAll { $0.hardener == "aws" }
+    activitySnapshot.accessRequests = [AccessRequestRecord(date: Date(), tool: "gh", command: "gh api user",
+        decision: "Approved", reason: "Test", launcher: nil, callerPath: "/usr/bin/gh",
+        target: "/usr/bin/gh", cwd: "/tmp", keys: [], detail: nil)]
+    // History alone must not imply a Gate; attention always precedes activity.
+    guard DashboardModel(snapshot: activitySnapshot).overviewTools.map(\.title) == ["wrangler", "aws", "gh"] else { return 1 }
+    activitySnapshot.secretGates.append(SecretGate(id: "gh", keyPatterns: [], routes: [],
+        defaultProtection: .noAccess, appPolicies: []))
+    guard DashboardModel(snapshot: activitySnapshot).overviewTools.map(\.title) == ["wrangler", "gh", "aws"] else { return 1 }
     model.searchText = "gh"
     guard model.overviewTools.map(\.title) == ["gh"] else { return 1 }
     for section in DashboardSection.allCases {
@@ -6583,7 +6601,7 @@ private struct DashboardOverviewView: View {
                         .foregroundStyle(Color.accentColor)
                 }.font(.caption)
             }
-            .padding(20)
+            .padding([.horizontal, .bottom], 20)
             .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
         }
         .background(Color(nsColor: .windowBackgroundColor))
@@ -6598,8 +6616,8 @@ private struct DashboardOverviewView: View {
 
     private func tools() -> some View {
         let allTools = model.overviewTools
-        return VStack(alignment: .leading, spacing: 10) {
-            HStack {
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline) {
                 Text("Tools").font(.title2.bold())
                 Spacer()
                 Text("\(model.snapshot.flaggedDetectorCount == 0 ? "No vulnerabilities detected" : "\(model.snapshot.flaggedDetectorCount) detector findings"); \(model.snapshot.doctorIssues.count) Doctor reports")
@@ -6685,7 +6703,7 @@ private struct DashboardOverviewView: View {
                 Button {
                     model.navigateFromOverview(to: .doctor, itemID: issue.id)
                 } label: {
-                    Text(issue.message).font(.callout).foregroundStyle(.secondary)
+                    Text(issue.message.prefix(1).uppercased() + issue.message.dropFirst()).font(.callout).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }.buttonStyle(.plain)
