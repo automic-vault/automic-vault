@@ -60,16 +60,19 @@ human interaction. Approval/cancellation testing is part of the pre-merge review
 ## Current limits
 
 Only explicit `https://github.com/OWNER/REPO.git` destinations, full SHA-1
-repositories, and ordinary branch operations are supported. Tags, shallow or
-partial clones, force/deletion, leases, atomic/signed pushes, submodules and LFS
+repositories, and branch updates (including force and leases) are supported by the candidate
+in [ADR 0052](adr/0052-protected-git-force-and-leases.md). Tags, shallow or
+partial clones, deletion, atomic/signed pushes, submodules and LFS
 are outside this candidate's surface. Unsupported helper commands/options fail
 explicitly. Repositories using these features may need to stay outside the
 opt-in while the surface is extended. Large transfers and GUI/embedded Git
 clients have not been validated.
 
 Try `git push --dry-run`: it must leave the remote unchanged. Try
-`git push --force-with-lease`: this candidate must reject it explicitly rather
-than dropping the lease. These discovery requests conservatively require
+`git push --force-with-lease` on a disposable rebased branch: the candidate
+must preserve the exact expected remote commit and reject stale state.
+`--force` must display unconditional force; combining it with a lease for the
+same branch must fail. Repeat both with `--dry-run` and verify unchanged refs. These discovery requests conservatively require
 Remote Write authority even when no update follows.
 
 ## Roll back routing
@@ -96,4 +99,7 @@ python3 scripts/test-git-remote-e2e.py \
 It creates and retains a new feature branch and local clones. It verifies
 actual GitHub commits, upstream tracking, dry-run, hostile config isolation,
 malformed request denial, copied-nonce denial, and fresh Vault records without
-reading or displaying the raw token.
+reading or displaying the raw token. It also exercises force, implicit/explicit
+leases, multiple native lease checks, and expected-absent branch creation.
+The signed force/lease run is pending; do not treat the earlier ordinary-push
+results as validation of this extension.

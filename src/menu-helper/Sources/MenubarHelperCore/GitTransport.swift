@@ -97,23 +97,39 @@ public func gitTransportEnvironment(objects: String, nonce: String) -> [String: 
 /// Wire schema mirrors RemotePlan in src/git_transport.rs. Every accepted field
 /// determines the sole request supplied to a fresh credential-bearing process.
 public struct GitRemotePlan: Sendable, Equatable {
+    public static let maxWireArguments = 8202
     public let wire: [String]
     public let url: String
     public let phase: String
 
     public init?(_ args: [String]) {
-        guard args.count >= 5, args.count <= 4106, args[0] == "remote-helper",
+        guard args.count >= 5, args.count <= Self.maxWireArguments, args[0] == "remote-helper",
               args.reduce(0, { $0 + $1.utf8.count }) <= 1024 * 1024 + 16_384,
               args.allSatisfy({ $0.utf8.count <= 8192 && !$0.contains("\n") && !$0.contains("\r") && !$0.contains("\0") }),
               GitTransportOperation(["fetch", args[1]]) != nil,
               let separator = args[3...].firstIndex(of: "") else { return nil }
         var previous = ""
+        var previousLease = ""
+        var leaseBytes = 0
+        var leases: [String: String] = [:]
         for option in args[3..<separator] {
             let parts = option.split(separator: " ", omittingEmptySubsequences: false).map(String.init)
-            guard parts.count == 3, parts[0] == "option", parts[1] > previous,
-                  Self.validOption(parts[1], parts[2]) else { return nil }
-            previous = parts[1]
+            guard parts.count == 3, parts[0] == "option" else { return nil }
+            if parts[1] == "cas" {
+                // Leases precede ordinary options and are unique by destination.
+                leaseBytes += parts[2].utf8.count
+                let lease = parts[2].split(separator: ":", omittingEmptySubsequences: false).map(String.init)
+                guard previous.isEmpty, lease.count == 2, Self.validBranch(lease[0]),
+                      GitTransportOperation.validOID(lease[1]), lease[0] > previousLease,
+                      leases.count < 4096, leaseBytes <= 1024 * 1024 else { return nil }
+                leases[lease[0]] = lease[1]
+                previousLease = lease[0]
+            } else {
+                guard parts[1] > previous, Self.validOption(parts[1], parts[2]) else { return nil }
+                previous = parts[1]
+            }
         }
+        guard leases.isEmpty || args[2] == "push" else { return nil }
         let commands = Array(args.dropFirst(separator + 1))
         guard !commands.isEmpty, commands.count <= 4096,
               commands.reduce(0, { $0 + $1.utf8.count }) <= 1024 * 1024 else { return nil }
@@ -126,14 +142,33 @@ public struct GitRemotePlan: Sendable, Equatable {
                 return p.count == 3 && p[0] == "fetch" && GitTransportOperation.validOID(p[1]) && (p[2] == "HEAD" || Self.validBranch(p[2]))
             }) else { return nil }
         case "push":
+            var destinations = Set<String>()
             guard commands.allSatisfy({ line in
                 guard line.hasPrefix("push ") else { return false }
                 let p = line.dropFirst(5).split(separator: ":", omittingEmptySubsequences: false).map(String.init)
-                return p.count == 2 && GitTransportOperation.validOID(p[0]) && Self.validBranch(p[1])
-            }) else { return nil }
+                guard p.count == 2 else { return false }
+                let force = p[0].hasPrefix("+")
+                let oid = force ? String(p[0].dropFirst()) : p[0]
+                return GitTransportOperation.validOID(oid) && oid.contains(where: { $0 != "0" })
+                    && Self.validBranch(p[1]) && destinations.insert(p[1]).inserted
+                    && !(force && leases[p[1]] != nil)
+            }), leases.keys.allSatisfy({ destinations.contains($0) }) else { return nil }
         default: return nil
         }
         wire = args; url = args[1]; phase = args[2]
+    }
+
+    public var approvalDetail: String {
+        var lines = ["Git HTTPS request: " + wire.dropFirst().joined(separator: "\n")]
+        if phase == "push" {
+            for line in wire where line.hasPrefix("push +") {
+                lines.append("Unconditional force: " + line.dropFirst(6) + " (may overwrite remote history)")
+            }
+            for line in wire where line.hasPrefix("option cas ") {
+                lines.append("Required lease (branch:expected commit): " + line.dropFirst(11))
+            }
+        }
+        return lines.joined(separator: "\n")
     }
 
     public static func validOption(_ key: String, _ value: String) -> Bool {

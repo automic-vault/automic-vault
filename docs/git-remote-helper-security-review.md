@@ -3,8 +3,9 @@
 Status: native signed adapter passes private GitHub/Vault E2E; broad workflow and distribution coverage pending.
 Date: 2026-09-10
 
-Force/lease follow-up: 2026-09-23; see the assessment below. Production support
-remains disabled.
+Force/lease follow-up: 2026-09-23; see the assessment below and the subsequent
+[candidate implementation decision](adr/0052-protected-git-force-and-leases.md).
+Signed candidate validation remains pending.
 
 The proposed integration can preserve ordinary Git commands, but a helper that
 forwards an arbitrary command stream to credential-bearing `git-remote-https`

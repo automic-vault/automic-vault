@@ -130,7 +130,7 @@ fn network(
         return Err("protected HTTPS request failed".into());
     }
     let mut response = output.stdout.as_slice();
-    for _ in &plan.options {
+    for _ in 0..plan.options.len() + plan.leases.len() {
         let Some(rest) = response.strip_prefix(b"ok\n") else {
             return Err("HTTPS transport rejected a required option".into());
         };
@@ -158,95 +158,24 @@ pub(super) fn run(args: &[OsString], stdout: &mut dyn Write, stderr: &mut dyn Wr
             return Err("must not run Git operations as root".into());
         }
         xpc_request("git-helper-version", |message| unsafe {
-            xpc_set_u64(message, "requested_version", 2);
+            xpc_set_u64(message, "requested_version", 3);
             Ok(())
         })?;
         super::git::verify_runtime()?;
-        let mut input = std::io::stdin().lock();
-        let mut options = BTreeMap::new();
-        while let Some(value) = line(&mut input)? {
-            if value.is_empty() {
-                break;
-            }
-            if value == "capabilities" {
-                stdout
-                    .write_all(b"fetch\npush\noption\n\n")
-                    .and_then(|_| stdout.flush())
-                    .map_err(|e| e.to_string())?;
-            } else if let Some(setting) = value.strip_prefix("option ") {
-                let (key, value) = setting.split_once(' ').ok_or("malformed option")?;
-                if !valid_option(key, value) {
-                    return Err(format!(
-                        "unsupported Git option: {key}; protected HTTPS transport does not support \
-                         --force-with-lease (cas), --atomic, or --signed pushes.\n\
-                         See https://github.com/automic-vault/automic-vault/blob/main/docs/adr/0047-protected-git-https-transport.md#validation-and-limits"
-                    ));
-                }
-                options.insert(key.to_owned(), value.to_owned());
-                stdout
-                    .write_all(b"ok\n")
-                    .and_then(|_| stdout.flush())
-                    .map_err(|e| e.to_string())?;
-            } else {
-                let phase = match value.as_str() {
-                    "list" | "list for-push" => value.clone(),
-                    s if s.starts_with("fetch ") => "fetch".into(),
-                    s if s.starts_with("push ") => "push".into(),
-                    _ => return Err("unsupported Git helper command".into()),
-                };
-                let mut commands = vec![value];
-                let mut size = commands[0].len();
-                if matches!(phase.as_str(), "fetch" | "push") {
-                    loop {
-                        let next = line(&mut input)?.ok_or("incomplete Git batch")?;
-                        if next.is_empty() {
-                            break;
-                        }
-                        size += next.len();
-                        if !next.starts_with(&format!("{phase} "))
-                            || commands.len() >= 4096
-                            || size > 1024 * 1024
-                        {
-                            return Err("mixed or oversized Git batch".into());
-                        }
-                        commands.push(next);
-                    }
-                }
-                if phase == "push" {
-                    for command in &mut commands {
-                        let (source, destination) = command
-                            .strip_prefix("push ")
-                            .and_then(|s| s.split_once(':'))
-                            .ok_or("malformed push")?;
-                        if !(source == "HEAD" || valid_oid(source) || valid_branch(source))
-                            || !valid_branch(destination)
-                        {
-                            return Err("only non-forced branch updates are supported".into());
-                        }
-                        let oid = local(&[
-                            "rev-parse",
-                            "--verify",
-                            "--end-of-options",
-                            &format!("{source}^{{commit}}"),
-                        ])?;
-                        if !valid_oid(&oid) {
-                            return Err("invalid push object ID".into());
-                        }
-                        *command = format!("push {oid}:{destination}");
-                    }
-                }
-                network(
-                    &RemotePlan {
-                        url: url.into(),
-                        phase,
-                        options: options.clone(),
-                        commands,
-                    },
-                    stdout,
-                    stderr,
-                )?;
-            }
-        }
+        session(
+            &mut std::io::stdin().lock(),
+            url,
+            stdout,
+            &mut |source| {
+                local(&[
+                    "rev-parse",
+                    "--verify",
+                    "--end-of-options",
+                    &format!("{source}^{{commit}}"),
+                ])
+            },
+            &mut |plan, output| network(plan, output, stderr),
+        )?;
         Ok::<_, String>(())
     })();
     match result {
@@ -256,6 +185,125 @@ pub(super) fn run(args: &[OsString], stdout: &mut dyn Write, stderr: &mut dyn Wr
             1
         }
     }
+}
+
+fn session(
+    input: &mut impl BufRead,
+    url: &str,
+    stdout: &mut dyn Write,
+    resolve: &mut impl FnMut(&str) -> Result<String, String>,
+    execute: &mut impl FnMut(&RemotePlan, &mut dyn Write) -> Result<(), String>,
+) -> Result<(), String> {
+    let mut options = BTreeMap::new();
+    let mut leases = BTreeMap::new();
+    let mut lease_bytes = 0;
+    while let Some(value) = line(input)? {
+        if value.is_empty() {
+            break;
+        }
+        if value == "capabilities" {
+            stdout
+                .write_all(b"fetch\npush\noption\n\n")
+                .and_then(|_| stdout.flush())
+                .map_err(|e| e.to_string())?;
+        } else if let Some(setting) = value.strip_prefix("option ") {
+            let (key, value) = setting.split_once(' ').ok_or("malformed option")?;
+            if key == "cas" {
+                let (reference, oid) = value.split_once(':').ok_or("malformed Git lease")?;
+                lease_bytes += value.len();
+                if !valid_branch(reference)
+                    || !valid_oid(oid)
+                    || leases.len() >= 4096
+                    || lease_bytes > 1024 * 1024
+                    || leases.contains_key(reference)
+                {
+                    return Err("invalid, duplicate, or oversized Git lease".into());
+                }
+                leases.insert(reference.to_owned(), oid.to_owned());
+            } else if !valid_option(key, value) {
+                return Err(format!(
+                    "unsupported Git option: {key}; protected HTTPS transport does not support \
+                         --atomic or --signed pushes.\n\
+                         See https://github.com/automic-vault/automic-vault/blob/main/docs/adr/0047-protected-git-https-transport.md#validation-and-limits"
+                ));
+            } else {
+                options.insert(key.to_owned(), value.to_owned());
+            }
+            stdout
+                .write_all(b"ok\n")
+                .and_then(|_| stdout.flush())
+                .map_err(|e| e.to_string())?;
+        } else {
+            let phase = match value.as_str() {
+                "list" | "list for-push" => value.clone(),
+                s if s.starts_with("fetch ") => "fetch".into(),
+                s if s.starts_with("push ") => "push".into(),
+                _ => return Err("unsupported Git helper command".into()),
+            };
+            let mut commands = vec![value];
+            let mut size = commands[0].len();
+            if matches!(phase.as_str(), "fetch" | "push") {
+                loop {
+                    let next = line(input)?.ok_or("incomplete Git batch")?;
+                    if next.is_empty() {
+                        break;
+                    }
+                    size += next.len();
+                    if !next.starts_with(&format!("{phase} "))
+                        || commands.len() >= 4096
+                        || size > 1024 * 1024
+                    {
+                        return Err("mixed or oversized Git batch".into());
+                    }
+                    commands.push(next);
+                }
+            }
+            if phase == "push" {
+                for command in &mut commands {
+                    let (source, destination) = command
+                        .strip_prefix("push ")
+                        .and_then(|s| s.split_once(':'))
+                        .ok_or("malformed push")?;
+                    let (force, source) = source
+                        .strip_prefix('+')
+                        .map_or((false, source), |s| (true, s));
+                    if force && leases.contains_key(destination) {
+                        return Err(
+                            "cannot combine unconditional force and a lease for the same branch"
+                                .into(),
+                        );
+                    }
+                    if !(source == "HEAD" || valid_oid(source) || valid_branch(source))
+                        || !valid_branch(destination)
+                    {
+                        return Err(
+                            "only branch updates are supported; tags and deletion are unsupported"
+                                .into(),
+                        );
+                    }
+                    let oid = resolve(source)?;
+                    if !valid_oid(&oid) {
+                        return Err("invalid push object ID".into());
+                    }
+                    *command = format!("push {}{oid}:{destination}", if force { "+" } else { "" });
+                }
+            }
+            let plan = RemotePlan {
+                url: url.into(),
+                phase,
+                options: options.clone(),
+                leases: std::mem::take(&mut leases),
+                commands,
+            };
+            plan.validate()?;
+            execute(&plan, stdout)?;
+            lease_bytes = 0;
+        }
+    }
+    if !leases.is_empty() {
+        return Err("incomplete Git lease request".into());
+    }
+    Ok(())
 }
 
 #[test]
@@ -273,4 +321,117 @@ fn helper_lines_require_bounded_complete_utf8_frames() {
     assert_eq!(line(&mut input).unwrap(), Some("list".into()));
     assert_eq!(line(&mut input).unwrap(), Some(String::new()));
     assert_eq!(line(&mut input).unwrap(), None);
+}
+
+#[test]
+fn force_and_leases_freeze_complete_batches_before_execution() {
+    let old = "a".repeat(40);
+    let new = "b".repeat(40);
+    let input = format!(
+        "option cas refs/heads/z:{old}\noption cas refs/heads/a:{}\noption dry-run true\n\
+         push HEAD:refs/heads/z\npush refs/heads/topic:refs/heads/a\n\n\
+         push +HEAD:refs/heads/z\n\n\n",
+        "0".repeat(40)
+    );
+    let mut plans = Vec::new();
+    let mut sources = Vec::new();
+    session(
+        &mut std::io::Cursor::new(input),
+        "https://github.com/a/b.git",
+        &mut Vec::new(),
+        &mut |source| {
+            sources.push(source.to_owned());
+            Ok(new.clone())
+        },
+        &mut |plan, _| {
+            plans.push((plan.wire(), plan.payload()));
+            Ok(())
+        },
+    )
+    .unwrap();
+    assert_eq!(sources, ["HEAD", "refs/heads/topic", "HEAD"]);
+    let expected = vec![
+        "remote-helper".to_owned(),
+        "https://github.com/a/b.git".into(),
+        "push".into(),
+        format!("option cas refs/heads/a:{}", "0".repeat(40)),
+        format!("option cas refs/heads/z:{old}"),
+        "option dry-run true".into(),
+        "".into(),
+        format!("push {new}:refs/heads/z"),
+        format!("push {new}:refs/heads/a"),
+    ];
+    assert_eq!(plans[0].0, expected);
+    assert_eq!(
+        String::from_utf8(plans[0].1.clone()).unwrap(),
+        format!(
+            "option cas refs/heads/a:{}\noption cas refs/heads/z:{old}\noption dry-run true\npush {new}:refs/heads/z\npush {new}:refs/heads/a\n\n\n",
+            "0".repeat(40)
+        )
+    );
+    assert_eq!(
+        plans[1].0,
+        [
+            "remote-helper",
+            "https://github.com/a/b.git",
+            "push",
+            "option dry-run true",
+            "",
+            &format!("push +{new}:refs/heads/z")
+        ]
+    );
+}
+
+#[test]
+fn invalid_force_and_lease_requests_never_execute() {
+    let oid = "a".repeat(40);
+    let lease = format!("option cas refs/heads/main:{oid}\n");
+    for input in [
+        format!("{lease}push +HEAD:refs/heads/main\n\n"),
+        format!("{lease}{lease}push HEAD:refs/heads/main\n\n"),
+        format!("{lease}push HEAD:refs/heads/other\n\n"),
+        format!("{lease}list for-push\n"),
+        format!("{lease}fetch {oid} HEAD\n\n"),
+        format!("{lease}push HEAD:refs/heads/main\n"),
+        lease,
+        "option cas refs/heads/main:HEAD\n".into(),
+        "option cas refs/heads/main:\n".into(),
+        format!("option cas refs/tags/v1:{oid}\n"),
+        "push ++HEAD:refs/heads/main\n\n".into(),
+        "push :refs/heads/main\n\n".into(),
+        "push +HEAD:refs/tags/v1\n\n".into(),
+        "push HEAD:refs/heads/main\npush +HEAD:refs/heads/main\n\n".into(),
+        "push HEAD:refs/heads/main\nget https://evil /tmp/token\n\n".into(),
+    ] {
+        let mut executions = 0;
+        let result = session(
+            &mut std::io::Cursor::new(&input),
+            "https://github.com/a/b.git",
+            &mut Vec::new(),
+            &mut |_| Ok(oid.clone()),
+            &mut |_, _| {
+                executions += 1;
+                Ok(())
+            },
+        );
+        assert!(result.is_err(), "{input:?}");
+        assert_eq!(executions, 0, "{input:?}");
+    }
+    // A denied execution terminates the session; no fallback or next request.
+    let input = "push +HEAD:refs/heads/main\n\npush HEAD:refs/heads/other\n\n";
+    let mut executions = 0;
+    assert!(
+        session(
+            &mut std::io::Cursor::new(input),
+            "https://github.com/a/b.git",
+            &mut Vec::new(),
+            &mut |_| Ok(oid.clone()),
+            &mut |_, _| {
+                executions += 1;
+                Err("denied".into())
+            }
+        )
+        .is_err()
+    );
+    assert_eq!(executions, 1);
 }

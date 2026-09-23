@@ -79,13 +79,45 @@ def main():
     third = commit(clone, 'Pending update for dry-run and ordinary push')
     run(git + ['push', '--dry-run'], cwd=clone)
     assert api('commits/' + branch)['sha'] == second
-    for flag in ['--force-with-lease', '--atomic', '--signed']:
+    for flag in ['--atomic', '--signed']:
         result = run(git + ['push', flag], cwd=clone, ok=False)
         assert result.returncode and b'unsupported Git option:' in result.stderr
     assert api('commits/' + branch)['sha'] == second
     run(git + ['push'], cwd=clone)
     assert api('commits/' + branch)['sha'] == third
     print('PASS: dry-run and unsupported safety options cannot silently become writes', flush=True)
+    reference = 'refs/heads/' + branch
+    run(git + ['push', '--force', '--dry-run', 'origin', f'{second}:{reference}'], cwd=clone)
+    assert api('commits/' + branch)['sha'] == third
+    run(git + ['push', '--dry-run', f'--force-with-lease={reference}:{third}',
+               'origin', f'{second}:{reference}'], cwd=clone)
+    assert api('commits/' + branch)['sha'] == third
+    run(git + ['push', '--force', 'origin', f'{second}:{reference}'], cwd=clone)
+    assert api('commits/' + branch)['sha'] == second
+    result = run(git + ['push', f'--force-with-lease={reference}:{third}',
+                        'origin', f'{first}:{reference}'], cwd=clone, ok=False)
+    assert result.returncode and api('commits/' + branch)['sha'] == second
+    # The prior force push updates origin's tracking ref; implicit lease uses it.
+    run(git + ['push', '--force-with-lease', 'origin', f'{first}:{reference}'], cwd=clone)
+    assert api('commits/' + branch)['sha'] == first
+    run(git + ['push', f'--force-with-lease={reference}:{first}',
+               'origin', f'{third}:{reference}'], cwd=clone)
+    assert api('commits/' + branch)['sha'] == third
+    print('PASS: force, force dry-run, implicit/explicit leases, and stale rejection', flush=True)
+    leased_branch = branch + '-lease'
+    leased_ref = 'refs/heads/' + leased_branch
+    run(git + ['push', f'--force-with-lease={leased_ref}:',
+               'origin', f'{third}:{leased_ref}'], cwd=clone)
+    # Drive the signed adapter directly so outer Git cannot pre-reject the stale
+    # lease. Each branch must retain its own check; non-atomic partial success is normal.
+    payload = (f'option cas {reference}:{second}\noption cas {leased_ref}:{third}\n'
+               f'push {first}:{reference}\npush {second}:{leased_ref}\n\n').encode()
+    result = run(['/usr/local/bin/av', '__git-remote', 'origin', url], cwd=clone, data=payload, ok=False)
+    assert f'error {reference} stale info'.encode() in result.stdout
+    assert f'ok {leased_ref}'.encode() in result.stdout
+    assert api('commits/' + branch)['sha'] == third
+    assert api('commits/' + leased_branch)['sha'] == second
+    print('PASS: signed adapter preserves multiple leases and rejects stale state in the transport', flush=True)
     capture = root / 'credential-store'
     trace = root / 'trace'
     hostile = dict(environment, GIT_TRACE_CURL=str(trace), GIT_SSL_NO_VERIFY='1', HTTPS_PROXY='http://127.0.0.1:1')
@@ -96,9 +128,11 @@ def main():
     denied_before = {r['id'] for r in records()}
     for data in [b'get https://evil.invalid/token /tmp/token\n', b'option cas refs/heads/main:abc\n',
                  b'fetch ' + b'a' * 40 + b' HEAD\npush ' + b'a' * 40 + b':refs/heads/main\n\n',
-                 b'push HEAD:refs/heads/main\n']:
+                 b'push HEAD:refs/heads/main\n',
+                 f'option cas {reference}:{third}\npush +{second}:{reference}\n\n'.encode(),
+                 f'option cas {reference}:{third}\noption cas {reference}:{third}\n'.encode()]:
         result = run(['/usr/local/bin/av', '__git-remote', 'origin', url], cwd=clone, data=data, ok=False)
-        assert result.returncode and not result.stdout
+        assert result.returncode and all(line == b'ok' for line in result.stdout.splitlines())
     assert {r['id'] for r in records()} == denied_before, 'malformed input reached credential authorization'
     provider_env = dict(environment, HOME='/opt/av/git/empty', GH_CONFIG_DIR='/opt/av/git/empty')
     result = run(['/opt/av/git/bin/gh', 'auth', 'git-credential', 'get'], cwd='/opt/av/git', env=provider_env,
@@ -169,6 +203,9 @@ def main():
     fresh = [r for r in records() if r['id'] not in baseline and '[protected HTTPS request]' in r['command']]
     assert fresh and all(r['target'] == '/opt/av/git/bin/gh' and r['keys'] == ['GH_TOKEN_GITHUB_COM'] for r in fresh)
     assert any(third in r['command'] and 'refs/heads/' + branch in r['command'] for r in fresh), 'missing exact push authorization record'
+    assert any(f'push +{second}:{reference}' in r['command'] for r in fresh), 'missing force plan record'
+    assert any(f'option cas {reference}:{second}' in r['command'] and
+               f'option cas {leased_ref}:{third}' in r['command'] for r in fresh), 'missing complete lease record'
     print(f'PASS: {len(fresh)} fresh Vault records, including the exact pushed OID and ref\nReady for manual testing: {clone}', flush=True)
 
 

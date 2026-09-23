@@ -3907,7 +3907,7 @@ private final class ApprovalServer: @unchecked Sendable {
                   error: supported ? nil : "uv helper requires an app or macOS update", value: supported ? "1" : nil)
         case .gitHelperVersion where isTrustedAvCaller(path: callerPath, signing: signing):
             let version = xpc_dictionary_get_uint64(message, "requested_version")
-            let supported = [1, 2].contains(version) && av_original_parent_tracking_available()
+            let supported = [1, 2, 3].contains(version) && av_original_parent_tracking_available()
             reply(peer, to: message, ok: supported, error: supported ? nil : "protected Git requires an app or macOS update", value: supported ? String(version) : nil)
         case .gitRegister where isTrustedAvCaller(path: callerPath, signing: signing):
             handleGitRegistration(message, on: peer, identity: identity)
@@ -7268,7 +7268,7 @@ private final class ApprovalServer: @unchecked Sendable {
     }
 
     private func handleGitRegistration(_ message: xpc_object_t, on peer: xpc_connection_t, identity: AVProcessIdentity) {
-        guard let args = stringArray(message, "args"), args.count <= 4106,
+        guard let args = stringArray(message, "args"), args.count <= GitRemotePlan.maxWireArguments,
               args.reduce(0, { $0 + $1.utf8.count }) <= 1024 * 1024 + 16_384,
               let operation = GitTransportOperation(args),
               let cwd = xpc_dictionary_get_string(message, "cwd").map({ String(cString: $0) }),
@@ -7390,7 +7390,7 @@ private final class ApprovalServer: @unchecked Sendable {
             cwd: registration.projectCWD, replaceExistingEnv: request.replaceExistingEnv, allowMissingKeys: false,
             envConflicts: [], shebangScript: nil, scriptData: nil, tool: "gh",
             title: "Allow Git \(registration.operation.command)?",
-            detail: registration.operation.remotePlan.map { "Git HTTPS request: " + $0.wire.dropFirst().joined(separator: "\n") }
+            detail: registration.operation.remotePlan.map { $0.approvalDetail }
                 ?? "Git \(registration.operation.command): \(registration.operation.url), main branch. Transport selection: \(registration.arguments.last ?? "").",
             credentialScope: scope, credentialParent: parent)
     }
