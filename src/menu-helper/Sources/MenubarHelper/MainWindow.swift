@@ -268,6 +268,7 @@ private struct DashboardActivityIndex {
 final class DashboardModel: ObservableObject {
     @Published var selectedSection: DashboardSection = .overview
     @Published private(set) var snapshot = DashboardSnapshot.empty
+    @Published private(set) var hasLoadedInitialSnapshot = false
     @Published private(set) var isReloading = false
     @Published var isAddingSecret = false
     @Published var isRenamingSecret = false
@@ -320,7 +321,9 @@ final class DashboardModel: ObservableObject {
 
     private var blessingCompletion: ((BlessedScriptReviewOutcome) -> Void)?
 
-    init(snapshot: DashboardSnapshot = .empty, cliInstallState: CLIInstallState? = nil) {
+    init(snapshot: DashboardSnapshot? = nil, cliInstallState: CLIInstallState? = nil) {
+        hasLoadedInitialSnapshot = snapshot != nil
+        let snapshot = snapshot ?? .empty
         self.snapshot = snapshot
         self.cliInstallState = cliInstallState
         setHistoryRecords(snapshot.accessRequests)
@@ -1034,6 +1037,7 @@ final class DashboardModel: ObservableObject {
                 }
             }
             self.launcherBundles = launcherBundles
+            hasLoadedInitialSnapshot = true
             normalizeSelection()
         }
     }
@@ -2084,6 +2088,8 @@ func runUpdateToolbarSelfCheck() -> Int32 {
 
 @MainActor
 func runDashboardSearchSelfCheck() -> Int32 {
+    guard !DashboardModel().hasLoadedInitialSnapshot,
+          DashboardModel(snapshot: .empty).hasLoadedInitialSnapshot else { return 1 }
     let controller = AutomicVaultMainWindowController(checkForUpdates: {}, requestScan: {})
     for section in [DashboardSection.detectors, .doctor, .blessedScripts, .secretUsage] {
         controller.rootView.model.searchText = "previous filter"
@@ -2744,17 +2750,6 @@ struct DashboardRootView: View {
                 } detail: {
                     DashboardOverviewView(model: model, checkForUpdates: checkForUpdates)
                         .toolbar {
-                            ToolbarItem(placement: .principal) {
-                                HStack(spacing: 8) {
-                                    if let url = Bundle.main.url(forResource: "NSMenuItem", withExtension: "png"),
-                                       let icon = NSImage(contentsOf: url) {
-                                        Image(nsImage: icon).renderingMode(.template)
-                                            .resizable().scaledToFit().frame(width: 16, height: 20)
-                                            .accessibilityHidden(true)
-                                    }
-                                    Text("Automic Vault").font(.headline)
-                                }
-                            }
                             ToolbarItem(placement: .primaryAction) {
                                 Button {
                                     requestScan()
@@ -6724,6 +6719,23 @@ private struct DashboardOverviewView: View {
     }
 
     var body: some View {
+        Group {
+            if model.hasLoadedInitialSnapshot {
+                dashboard
+            } else {
+                ProgressView("Loading Automic Vault…")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        .background(Color(nsColor: .windowBackgroundColor))
+        .tint(Color.accentColor)
+        .task {
+            do { news = try await BlogFeed.load() }
+            catch { /* News is optional; the blog link remains available offline. */ }
+        }
+    }
+
+    private var dashboard: some View {
         GeometryReader { geometry in
             let compact = geometry.size.height < 550
             VStack(alignment: .leading, spacing: compact ? 12 : 20) {
@@ -6753,12 +6765,6 @@ private struct DashboardOverviewView: View {
             }
             .padding([.horizontal, .bottom], 20)
             .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
-        }
-        .background(Color(nsColor: .windowBackgroundColor))
-        .tint(Color.accentColor)
-        .task {
-            do { news = try await BlogFeed.load() }
-            catch { /* News is optional; the blog link remains available offline. */ }
         }
     }
 
