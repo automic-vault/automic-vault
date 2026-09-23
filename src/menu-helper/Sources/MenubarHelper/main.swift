@@ -13955,8 +13955,7 @@ private struct ApprovalPromptInlineMeta: View {
             Text(value.isEmpty ? "none" : value)
                 .font(.system(.caption, design: .monospaced))
                 .foregroundStyle(value.isEmpty ? .tertiary : .secondary)
-                .lineLimit(1)
-                .truncationMode(.middle)
+                .fixedSize(horizontal: false, vertical: true)
                 .textSelection(.enabled)
                 .help(value.isEmpty ? "none" : value)
         }
