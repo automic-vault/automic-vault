@@ -163,6 +163,11 @@ final class AutomicVaultMainWindowController: NSHostingController<DashboardRootV
         model.showAccessRequest(id: id)
     }
 
+    func showScriptsNeedingReblessing() {
+        model.showScriptsNeedingReblessing()
+        model.reload()
+    }
+
     func showSection(_ section: DashboardSection) {
         model.searchText = ""
         model.selectSection(section)
@@ -274,6 +279,7 @@ final class DashboardModel: ObservableObject {
     @Published private(set) var historyLoadFailed = false
     private var pendingAccessRequestID: UUID?
     private var reloadPending = false
+    private var selectScriptNeedingReblessing = false
     private var launcherHelperDiscoveryTask: Task<Void, Never>?
     let authorityApproval = AuthorityApprovalState()
 
@@ -615,6 +621,17 @@ final class DashboardModel: ObservableObject {
         items(for: .blessedScripts).filter { $0.blessingStatus == "Changed" }.count
     }
 
+    var scriptsNeedingReblessing: [DashboardItem] {
+        blessedScriptItems(snapshot.blessedScripts, pending: nil).filter { $0.blessingStatus == "Changed" }
+    }
+
+    func showScriptsNeedingReblessing() {
+        searchText = ""
+        selectSection(.blessedScripts)
+        selectScriptNeedingReblessing = true
+        normalizeSelection()
+    }
+
     func count(for section: DashboardSection) -> Int {
         if section == .secretUsage && selectedSection != .secretUsage {
             return snapshot.accessRequests.count
@@ -640,6 +657,7 @@ final class DashboardModel: ObservableObject {
     }
 
     func selectSection(_ section: DashboardSection) {
+        selectScriptNeedingReblessing = false
         pendingAccessRequestID = nil
         selectedSection = section
         selectedItemID = nil
@@ -649,6 +667,7 @@ final class DashboardModel: ObservableObject {
 
     func select(_ item: DashboardItem) {
         pendingAccessRequestID = nil
+        selectScriptNeedingReblessing = false
         selectedItemID = item.id
     }
 
@@ -1165,6 +1184,12 @@ final class DashboardModel: ObservableObject {
     }
 
     private func normalizeSelection() {
+        if selectedSection == .blessedScripts, selectScriptNeedingReblessing,
+           let changed = scriptsNeedingReblessing.first {
+            selectedItemID = changed.id
+            selectScriptNeedingReblessing = false
+            return
+        }
         if selectedSection == .secretUsage {
             if pendingAccessRequestID != nil {
                 selectedItemID = nil
@@ -1740,7 +1765,12 @@ private func blessedScriptItems(
     _ blessed: [BlessedScript],
     pending: BlessedScriptReviewRequest?
 ) -> [DashboardItem] {
-    let scripts = blessed.map(blessedScriptItem)
+    let scripts = blessed.map(blessedScriptItem).sorted {
+        if ($0.blessingStatus == "Changed") != ($1.blessingStatus == "Changed") {
+            return $0.blessingStatus == "Changed"
+        }
+        return $0.title.localizedStandardCompare($1.title) == .orderedAscending
+    }
     guard let pending, !scripts.contains(where: { $0.id == pending.path }) else { return scripts }
     return [
         DashboardItem(
@@ -2257,6 +2287,11 @@ func runDashboardSearchSelfCheck() -> Int32 {
     else { return 1 }
     changedModel.searchText = "no matching script"
     guard changedModel.scriptsNeedingReblessingCount == 0 else { return 1 }
+    changedModel.selectedItemID = "unrelated-script"
+    changedModel.showScriptsNeedingReblessing()
+    guard changedModel.searchText.isEmpty,
+          changedModel.selectedSection == .blessedScripts,
+          changedModel.selectedItemID == changedScript.path else { return 1 }
     changedModel.searchText = ""
     changedModel.reviewChanges(to: changedScript)
     guard changedModel.pendingBlessing?.scriptData == currentScriptData,
@@ -6583,8 +6618,20 @@ private struct DashboardOverviewView: View {
 
     private func attention(compact: Bool) -> some View {
         VStack(alignment: .leading, spacing: compact ? 8 : 14) {
-            Text(model.snapshot.doctorIssues.isEmpty && model.snapshot.flaggedDetectorCount == 0
+            Text(model.snapshot.doctorIssues.isEmpty && model.snapshot.flaggedDetectorCount == 0 && model.scriptsNeedingReblessing.isEmpty
                  ? "No attention required" : "Attention required").font(.headline)
+            if !model.scriptsNeedingReblessing.isEmpty {
+                Button {
+                    model.showScriptsNeedingReblessing()
+                } label: {
+                    Label(model.scriptsNeedingReblessing.count == 1
+                          ? "1 script needs reblessing"
+                          : "\(model.scriptsNeedingReblessing.count) scripts need reblessing",
+                          systemImage: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                        .multilineTextAlignment(.leading)
+                }.buttonStyle(.plain)
+            }
             if !compact, let issue = model.snapshot.doctorIssues.first {
                 Button {
                     model.navigateFromOverview(to: .doctor, itemID: issue.id)

@@ -639,7 +639,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
               let rawValue = sender.representedObject as? String,
               let section = DashboardSection(rawValue: rawValue) else { return }
         showMainWindow(secretGateID: nil)
-        (mainWindow?.contentViewController as? AutomicVaultMainWindowController)?.showSection(section)
+        let controller = mainWindow?.contentViewController as? AutomicVaultMainWindowController
+        if sender === reblessingStatusItem {
+            controller?.showScriptsNeedingReblessing()
+        } else {
+            controller?.showSection(section)
+        }
     }
 
     private func makeSectionMenuItem(title: String, section: DashboardSection) -> NSMenuItem {
