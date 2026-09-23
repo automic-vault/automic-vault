@@ -233,6 +233,37 @@ final class AutomicVaultWindow: NSWindow {
     }
 }
 
+// Presentation-only index; authorization decisions never consult these counts.
+private struct DashboardActivityIndex {
+    private let datesByTool: [String: [Date]]
+
+    init(_ records: [AccessRequestRecord]) {
+        var dates: [String: [Date]] = [:]
+        for record in records { dates[record.tool, default: []].append(record.date) }
+        datesByTool = dates.mapValues { $0.sorted() }
+    }
+
+    func count(for tool: String, now: Date) -> Int {
+        guard let dates = datesByTool[tool] else { return 0 }
+        let cutoff = now.addingTimeInterval(-86_400)
+        // Find both inclusive window boundaries without scanning history during rendering.
+        func boundary(_ date: Date, includingEqual: Bool) -> Int {
+            var low = 0
+            var high = dates.count
+            while low < high {
+                let middle = low + (high - low) / 2
+                if dates[middle] < date || (includingEqual && dates[middle] == date) {
+                    low = middle + 1
+                } else {
+                    high = middle
+                }
+            }
+            return low
+        }
+        return boundary(now, includingEqual: true) - boundary(cutoff, includingEqual: false)
+    }
+}
+
 @MainActor
 final class DashboardModel: ObservableObject {
     @Published var selectedSection: DashboardSection = .overview
@@ -255,7 +286,10 @@ final class DashboardModel: ObservableObject {
     @Published private(set) var authorizationHistoryDayCount = 0
     @Published private(set) var isSearchingHistory = false
     private var allHistorySections: [HistoryDay] = []
-    @Published private var overviewHistory: [AccessRequestRecord]? = nil
+    @Published private var overviewHistory: [AccessRequestRecord]? = nil {
+        didSet { overviewActivityIndex = overviewHistory.map(DashboardActivityIndex.init) }
+    }
+    private var overviewActivityIndex: DashboardActivityIndex?
     private var historyRecordsByID: [UUID: AccessRequestRecord] = [:]
     private var historySearchTask: Task<Void, Never>?
     private var historySearchWorker: Task<[HistorySearchDay], Never>?
@@ -291,6 +325,7 @@ final class DashboardModel: ObservableObject {
         self.cliInstallState = cliInstallState
         setHistoryRecords(snapshot.accessRequests)
         overviewHistory = snapshot.accessRequests
+        overviewActivityIndex = DashboardActivityIndex(snapshot.accessRequests)
         normalizeSelection()
     }
 
@@ -1688,12 +1723,8 @@ final class DashboardModel: ObservableObject {
     }
 
     private func overviewRequestCount(for tool: DashboardItem, now: Date) -> Int? {
-        guard let overviewHistory else { return nil }
         let name = hardenerNameReferencedByDocumentation(tool.documentation) ?? tool.title
-        let cutoff = now.addingTimeInterval(-86_400)
-        return overviewHistory.filter {
-            $0.tool == name && $0.date >= cutoff && $0.date <= now
-        }.count
+        return overviewActivityIndex?.count(for: name, now: now)
     }
 
     func openOverviewTool(_ tool: DashboardItem) {
@@ -2077,6 +2108,23 @@ func runDashboardSearchSelfCheck() -> Int32 {
         keys: ["AWS_SECRET_ACCESS_KEY"],
         detail: "List buckets"
     )
+    // Unsorted input, duplicate timestamps, both inclusive boundaries, and clock reversal.
+    let activityRecords = [86_401.0, 0, 86_400, -1, 0].map { offset in
+        AccessRequestRecord(date: accessRequest.date.addingTimeInterval(offset),
+            tool: "aws", command: "fixture", decision: "Approved", reason: "Test",
+            launcher: nil, callerPath: "/fixture/av", target: "/fixture/tool",
+            cwd: "/fixture", keys: [], detail: nil)
+    }
+    let activityIndex = DashboardActivityIndex(activityRecords)
+    for offset in [0.0, 86_400, 86_401, 172_802, -2, 0] {
+        let now = accessRequest.date.addingTimeInterval(offset)
+        let expected = activityRecords.filter {
+            $0.date >= now.addingTimeInterval(-86_400) && $0.date <= now
+        }.count
+        guard activityIndex.count(for: "aws", now: now) == expected,
+              activityIndex.count(for: "missing", now: now) == 0,
+              DashboardActivityIndex([]).count(for: "aws", now: now) == 0 else { return 1 }
+    }
     let model = DashboardModel(snapshot: DashboardSnapshot(
         detectors: [
             DetectorMetadata(name: "aws", homepage: "", docsURL: "", documentation: "Run `av harden aws`."),
@@ -2185,6 +2233,33 @@ func runDashboardSearchSelfCheck() -> Int32 {
     activitySnapshot.secretGates.append(SecretGate(id: "gh", keyPatterns: [], routes: [],
         defaultProtection: .noAccess, appPolicies: []))
     guard DashboardModel(snapshot: activitySnapshot).overviewTools.map(\.title) == ["wrangler", "gh", "aws"] else { return 1 }
+    if ProcessInfo.processInfo.environment["AV_BENCHMARK_DASHBOARD"] == "1" {
+        var benchmarkSnapshot = activitySnapshot
+        benchmarkSnapshot.hardenedTools = (0..<12).map {
+            HardenedTool(name: "tool-\($0)", targetPath: "/fixture/tool-\($0)")
+        }
+        benchmarkSnapshot.secretGates = (0..<12).map {
+            SecretGate(id: "tool-\($0)", keyPatterns: [], routes: [],
+                       defaultProtection: .noAccess, appPolicies: [])
+        }
+        benchmarkSnapshot.accessRequests = (0..<50_000).map {
+            AccessRequestRecord(date: Date().addingTimeInterval(-Double($0)),
+                tool: "tool-\($0 % 12)", command: "fixture", decision: "Approved",
+                reason: "Test", launcher: nil, callerPath: "/fixture/av",
+                target: "/fixture/tool", cwd: "/fixture", keys: [], detail: nil)
+        }
+        let benchmark = DashboardModel(snapshot: benchmarkSnapshot)
+        let start = ContinuousClock.now
+        for _ in 0..<5 {
+            benchmark.selectSection(.settings)
+            benchmark.selectSection(.overview)
+            let tools = benchmark.overviewTools
+            for tool in tools { _ = benchmark.overviewActivity(for: tool) }
+        }
+        let elapsed = start.duration(to: .now)
+        print("Dashboard: five Overview selections, 50k records: \(elapsed)")
+        guard elapsed < .milliseconds(300) else { return 1 }
+    }
     model.searchText = "gh"
     guard model.overviewTools.map(\.title) == ["gh"] else { return 1 }
     for section in DashboardSection.allCases {
@@ -6691,7 +6766,7 @@ private struct DashboardOverviewView: View {
             GeometryReader { tableSpace in
                 let visibleTools = Array(allTools.prefix(max(1, Int(tableSpace.size.height / 54))))
                 VStack(spacing: 0) {
-                    if model.overviewTools.isEmpty {
+                    if allTools.isEmpty {
                         Button {
                             model.navigateFromOverview(to: .detectors)
                         } label: {
