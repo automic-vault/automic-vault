@@ -104,6 +104,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var automaticUpdateCheckTask: Task<Void, Never>?
     private var readyUpdate: Update?
     private var isCheckingForUpdates = false
+    private var lastUpdateCheck = UserDefaults.standard.object(forKey: "LastSuccessfulUpdateCheck") as? Date
     private var isUpdating = false
     private var isStatusMenuOpen = false
     private var menuBeforeUpdate: NSMenu?
@@ -477,7 +478,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let update = if let readyUpdate {
                 readyUpdate
             } else {
-                try await updater.check()
+                try await checkForAvailableUpdate()
             }
             guard let update else {
                 readyUpdate = nil
@@ -598,10 +599,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     #endif
 
+    private func checkForAvailableUpdate() async throws -> Update? {
+        let update = try await updater.check()
+        lastUpdateCheck = Date()
+        UserDefaults.standard.set(lastUpdateCheck, forKey: "LastSuccessfulUpdateCheck")
+        return update
+    }
+
     private func refreshAvailableUpdate() async {
         guard !isCheckingForUpdates else { return }
         do {
-            readyUpdate = try await updater.check()
+            readyUpdate = try await checkForAvailableUpdate()
             updateCheckControls()
         } catch {
             // A transient metadata failure must not hide an update already found.
@@ -618,7 +626,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         checkForUpdatesItem.isEnabled = !isCheckingForUpdates
         (mainWindow?.contentViewController as? AutomicVaultMainWindowController)?
-            .setAvailableUpdateVersion(readyUpdate?.version)
+            .setAvailableUpdateVersion(readyUpdate?.version, checkedAt: lastUpdateCheck)
     }
 
     @MainActor @objc private func openMainWindow() {
@@ -666,7 +674,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             requestScan: { [weak self] in self?.scheduleScan(after: 0) }
         )
         controller.updateDetectorFindings(latestDetectorFindings)
-        controller.setAvailableUpdateVersion(readyUpdate?.version)
+        controller.setAvailableUpdateVersion(readyUpdate?.version, checkedAt: lastUpdateCheck)
         let defaultWindowSize = NSSize(width: 860, height: 578)
         let window = AutomicVaultWindow(
             contentRect: NSRect(origin: .zero, size: defaultWindowSize),

@@ -154,8 +154,9 @@ final class AutomicVaultMainWindowController: NSHostingController<DashboardRootV
         model.updateDetectorFindings(findings)
     }
 
-    func setAvailableUpdateVersion(_ version: String?) {
+    func setAvailableUpdateVersion(_ version: String?, checkedAt: Date? = nil) {
         model.availableUpdateVersion = version
+        model.lastUpdateCheck = checkedAt
     }
 
     func showAccessRequest(id: UUID) {
@@ -256,6 +257,7 @@ final class DashboardModel: ObservableObject {
     private var historySearchGeneration = 0
     @Published private(set) var cliInstallState: CLIInstallState?
     @Published fileprivate var availableUpdateVersion: String?
+    @Published fileprivate var lastUpdateCheck: Date?
     @Published private(set) var pendingBlessing: BlessedScriptReviewRequest?
     @Published private(set) var pendingBlessingLaunchers: [BlessedScriptLauncher] = []
     @Published private(set) var launcherBundles: [LauncherBundleEnrollment] = []
@@ -1970,8 +1972,12 @@ private enum CLIInstallerError: LocalizedError {
 @MainActor
 func runUpdateToolbarSelfCheck() -> Int32 {
     let controller = AutomicVaultMainWindowController(checkForUpdates: {}, requestScan: {})
-    controller.setAvailableUpdateVersion("2.8.0")
-    return controller.rootView.model.availableUpdateVersion == "2.8.0" ? 0 : 1
+    let checked = Date(timeIntervalSince1970: 1_790_000_000)
+    controller.setAvailableUpdateVersion("2.8.0", checkedAt: checked)
+    guard controller.rootView.model.availableUpdateVersion == "2.8.0" else { return 1 }
+    controller.setAvailableUpdateVersion(nil, checkedAt: checked)
+    return controller.rootView.model.availableUpdateVersion == nil
+        && controller.rootView.model.lastUpdateCheck == checked ? 0 : 1
 }
 
 @MainActor
@@ -6460,7 +6466,6 @@ private struct DashboardOverviewView: View {
     @ObservedObject var model: DashboardModel
     let checkForUpdates: () -> Void
     @State private var news: [BlogPost] = []
-    @State private var toolPage = 0
 
     init(model: DashboardModel, checkForUpdates: @escaping () -> Void, news: [BlogPost] = []) {
         self.model = model
@@ -6508,93 +6513,78 @@ private struct DashboardOverviewView: View {
         }
         .background(Color(nsColor: .windowBackgroundColor))
         .tint(Color.accentColor)
-        .onChange(of: model.overviewTools) { _, _ in toolPage = 0 }
         .task {
             do { news = try await BlogFeed.load() }
             catch { /* News is optional; the blog link remains available offline. */ }
         }
     }
 
-    private var toolPanel: some View {
-        GeometryReader { space in
-            tools(limit: max(1, Int((space.size.height - 72) / 54)))
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        }
-    }
+    private var toolPanel: some View { tools() }
 
-    private func tools(limit: Int) -> some View {
+    private func tools() -> some View {
         let allTools = model.overviewTools
-        let page = min(toolPage, max(0, (allTools.count - 1) / limit))
-        let visibleTools = Array(allTools.dropFirst(page * limit).prefix(limit))
         return VStack(alignment: .leading, spacing: 10) {
             HStack {
                 Text("Tools").font(.title2.bold())
                 Spacer()
-                destination("Detector catalog", section: .detectors)
+                Text("\(model.snapshot.flaggedDetectorCount == 0 ? "No vulnerabilities detected" : "\(model.snapshot.flaggedDetectorCount) detector findings"); \(model.snapshot.doctorIssues.count) Doctor reports")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .multilineTextAlignment(.trailing)
             }
-            VStack(spacing: 0) {
-                if model.overviewTools.isEmpty {
-                    Button {
-                        model.navigateFromOverview(to: .detectors)
-                    } label: {
-                        Label(model.hasSearchQuery ? "No matching Tools · View detectors" : "Review available detectors", systemImage: "sensor.tag.radiowaves.forward")
-                            .frame(maxWidth: .infinity, alignment: .leading).padding(12)
-                    }.buttonStyle(.plain)
-                }
-                ForEach(visibleTools) { tool in
-                    let issue = model.overviewDoctorIssue(for: tool)
-                    let needsAttention = tool.isTriggered || issue != nil
-                    Button {
-                        model.openOverviewTool(tool)
-                    } label: {
-                        HStack(spacing: 10) {
-                            Image(systemName: needsAttention ? "exclamationmark.triangle.fill" : "hammer")
-                                .foregroundStyle(needsAttention ? Color.orange : Color.accentColor)
-                                .frame(width: 20)
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(tool.title).fontWeight(.medium).lineLimit(1)
-                                Text(model.overviewActivity(for: tool)).font(.caption2)
-                                    .foregroundStyle(.secondary).lineLimit(1)
-                            }
-                            Spacer(minLength: 8)
-                            Text(issue != nil ? (tool.isTriggered ? "Finding · Doctor report" : "Doctor report") : (tool.isTriggered ? "Finding" : "Hardened"))
-                                .font(.caption)
-                                .foregroundStyle(needsAttention ? Color.orange : Color.secondary)
-                            Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary)
-                        }.padding(12).contentShape(Rectangle())
+            GeometryReader { tableSpace in
+                let visibleTools = Array(allTools.prefix(max(1, Int(tableSpace.size.height / 54))))
+                VStack(spacing: 0) {
+                    if model.overviewTools.isEmpty {
+                        Button {
+                            model.navigateFromOverview(to: .detectors)
+                        } label: {
+                            Label(model.hasSearchQuery ? "No matching Tools · View detectors" : "Review available detectors", systemImage: "sensor.tag.radiowaves.forward")
+                                .frame(maxWidth: .infinity, alignment: .leading).padding(12)
+                        }.buttonStyle(.plain)
                     }
-                    .buttonStyle(.plain)
-                    .frame(height: 53)
-                    .help((issue?.message ?? tool.subtitle) + "\nRecorded authorization requests in the last 24 hours. This is not a count of Tool executions.")
-                    if tool.id != visibleTools.last?.id { Divider().padding(.leading, 42) }
+                    ForEach(visibleTools) { tool in
+                        let issue = model.overviewDoctorIssue(for: tool)
+                        let needsAttention = tool.isTriggered || issue != nil
+                        Button {
+                            model.openOverviewTool(tool)
+                        } label: {
+                            HStack(spacing: 10) {
+                                Image(systemName: needsAttention ? "exclamationmark.triangle.fill" : "hammer")
+                                    .foregroundStyle(needsAttention ? Color.orange : Color.secondary)
+                                    .frame(width: 20)
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(tool.title).fontWeight(.medium).lineLimit(1)
+                                    Text(model.overviewActivity(for: tool)).font(.caption2)
+                                        .foregroundStyle(.secondary).lineLimit(1)
+                                }
+                                Spacer(minLength: 8)
+                                Text(issue != nil ? (tool.isTriggered ? "Finding · Doctor report" : "Doctor report") : (tool.isTriggered ? "Finding" : "Hardened"))
+                                    .font(.caption)
+                                    .foregroundStyle(needsAttention ? Color.orange : Color.secondary)
+                                Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary)
+                            }.padding(12).contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .frame(height: 53)
+                        .help((issue?.message ?? tool.subtitle) + "\nRecorded authorization requests in the last 24 hours. This is not a count of Tool executions.")
+                        if tool.id != visibleTools.last?.id { Divider().padding(.leading, 42) }
+                    }
+                    Spacer(minLength: 0)
                 }
-                Spacer(minLength: 0)
+                .frame(maxHeight: .infinity, alignment: .top)
+                .background(.background, in: RoundedRectangle(cornerRadius: 10))
             }
-            .frame(maxHeight: .infinity, alignment: .top)
-            .background(.background, in: RoundedRectangle(cornerRadius: 10))
             HStack {
-                destination("\(model.snapshot.hardenedTools.count) hardened Tools", section: .hardenedTools)
                 Spacer()
-                if model.overviewTools.count > limit {
-                    Button { toolPage = max(0, page - 1) } label: {
-                        Image(systemName: "chevron.left")
-                    }.disabled(page == 0).accessibilityLabel("Previous Tools")
-                    Text("\(page * limit + 1)–\(page * limit + visibleTools.count) of \(allTools.count)")
-                        .foregroundStyle(.secondary)
-                    Button { toolPage = page + 1 } label: {
-                        Image(systemName: "chevron.right")
-                    }.disabled((page + 1) * limit >= allTools.count).accessibilityLabel("Next Tools")
-                }
+                destination("View all \(model.snapshot.hardenedTools.count) hardened Tools →", section: .hardenedTools)
             }.font(.caption)
         }
     }
 
     private func attention(compact: Bool) -> some View {
         VStack(alignment: .leading, spacing: compact ? 8 : 14) {
-            VStack(alignment: .leading, spacing: 8) {
-                destination(model.snapshot.flaggedDetectorCount == 0 ? "Detectors · No findings" : "Detectors · \(model.snapshot.flaggedDetectorCount) flagged", section: .detectors)
-                destination(model.snapshot.doctorIssues.count == 1 ? "Doctor · 1 issue" : "Doctor · \(model.snapshot.doctorIssues.count) issues", section: .doctor)
-            }
+            Text(model.snapshot.doctorIssues.isEmpty && model.snapshot.flaggedDetectorCount == 0
+                 ? "No attention required" : "Attention required").font(.headline)
             if !compact, let issue = model.snapshot.doctorIssues.first {
                 Button {
                     model.navigateFromOverview(to: .doctor, itemID: issue.id)
@@ -6622,6 +6612,15 @@ private struct DashboardOverviewView: View {
                 Divider()
                 Button("Update to v\(version)", action: checkForUpdates)
                     .buttonStyle(.link).foregroundStyle(Color.accentColor)
+            } else {
+                Divider()
+                if let checked = model.lastUpdateCheck {
+                    Text("Last update check: \(checked.formatted(date: .abbreviated, time: .shortened))")
+                        .font(.caption).foregroundStyle(.secondary)
+                } else {
+                    Text("Last update check: Not yet checked")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
             }
         }
         .padding(compact ? 12 : 16)
