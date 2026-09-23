@@ -263,6 +263,7 @@ final class DashboardModel: ObservableObject {
     @Published private(set) var cliInstallState: CLIInstallState?
     @Published fileprivate var availableUpdateVersion: String?
     @Published fileprivate var lastUpdateCheck: Date?
+    @Published private(set) var lastHardeningRefresh: Date?
     @Published private(set) var pendingBlessing: BlessedScriptReviewRequest?
     @Published private(set) var pendingBlessingLaunchers: [BlessedScriptLauncher] = []
     @Published private(set) var launcherBundles: [LauncherBundleEnrollment] = []
@@ -985,6 +986,7 @@ final class DashboardModel: ObservableObject {
             next.accessRequests = generation == accessRequestsGeneration
                 ? (page?.records ?? []) : snapshot.accessRequests
             snapshot = next
+            lastHardeningRefresh = Date()
             setHistoryRecords(next.accessRequests, storedDayCount: page?.storedDayCount)
             if generation == accessRequestsGeneration {
                 historyOlderPageCursor = page?.olderPageCursor
@@ -1644,6 +1646,21 @@ final class DashboardModel: ObservableObject {
         return snapshot.doctorIssues.first { $0.hardener == hardener || $0.command == tool.title }
     }
 
+    func overviewHasGate(_ tool: DashboardItem) -> Bool {
+        let name = hardenerNameReferencedByDocumentation(tool.documentation) ?? tool.title
+        let gateID = snapshot.hardeners.first { $0.name == name }?.secretGate?.id ?? name
+        return snapshot.secretGates.contains { $0.id == gateID }
+    }
+
+    var overviewFindings: [DashboardItem] { detectorItems.filter(\.isTriggered) }
+
+    func overviewVerification(for tool: DashboardItem) -> String {
+        guard let refreshed = lastHardeningRefresh else { return "Hardening not yet refreshed" }
+        let status = tool.isHardened && overviewDoctorIssue(for: tool) == nil
+            ? "Hardening verified" : "Hardening checked"
+        return "\(status): \(shortDashboardTimestamp(refreshed))"
+    }
+
     func overviewActivity(for tool: DashboardItem, now: Date = Date()) -> String {
         guard let overviewHistory else { return "History unavailable" }
         let name = hardenerNameReferencedByDocumentation(tool.documentation) ?? tool.title
@@ -2114,6 +2131,13 @@ func runDashboardSearchSelfCheck() -> Int32 {
         from: Data(#"[{"source":"git","severity":"high"}]"#.utf8))
     let findingModel = DashboardModel(snapshot: findingSnapshot)
     guard findingModel.overviewTools.prefix(3).map(\.title) == ["aws", "git", "wrangler"] else { return 1 }
+    guard !model.overviewHasGate(awsOverview),
+          model.overviewVerification(for: awsOverview) == "Hardening not yet refreshed" else { return 1 }
+    var gatedSnapshot = model.snapshot
+    gatedSnapshot.secretGates.append(SecretGate(id: "aws", keyPatterns: [], routes: [],
+        defaultProtection: .noAccess, appPolicies: []))
+    let gatedModel = DashboardModel(snapshot: gatedSnapshot)
+    guard gatedModel.overviewHasGate(awsOverview), !gatedModel.overviewHasGate(ghOverview) else { return 1 }
     model.searchText = "gh"
     guard model.overviewTools.map(\.title) == ["gh"] else { return 1 }
     for section in DashboardSection.allCases {
@@ -2756,9 +2780,21 @@ private struct DashboardSidebarView: View {
 
     var body: some View {
         List(selection: sectionSelection) {
-            ForEach(DashboardSection.allCases) { section in
-                sidebarRow(section)
-                    .tag(section)
+            sidebarRow(.overview).tag(DashboardSection.overview)
+            Section("Tools") {
+                ForEach([DashboardSection.detectors, .hardenedTools, .doctor]) { section in
+                    sidebarRow(section).tag(section)
+                }
+            }
+            Section("Access") {
+                ForEach([DashboardSection.secretGates, .blessedScripts, .launcherBundles, .allSecrets, .proxySessions]) { section in
+                    sidebarRow(section).tag(section)
+                }
+            }
+            Section("Activity & Settings") {
+                ForEach([DashboardSection.secretUsage, .settings]) { section in
+                    sidebarRow(section).tag(section)
+                }
             }
         }
         .listStyle(.sidebar)
@@ -6496,6 +6532,10 @@ private var hairline: some View {
     Rectangle().fill(Color(nsColor: .separatorColor)).frame(height: 1)
 }
 
+private func shortDashboardTimestamp(_ date: Date) -> String {
+    date.formatted(.dateTime.month(.twoDigits).day(.twoDigits).hour().minute())
+}
+
 /// Bounded summaries only: full inventories and actions stay in their existing sections.
 private struct DashboardOverviewView: View {
     @ObservedObject var model: DashboardModel
@@ -6589,11 +6629,15 @@ private struct DashboardOverviewView: View {
                                     .frame(width: 20)
                                 VStack(alignment: .leading, spacing: 3) {
                                     Text(tool.title).fontWeight(.medium).lineLimit(1)
-                                    Text(model.overviewActivity(for: tool)).font(.caption2)
-                                        .foregroundStyle(.secondary).lineLimit(1)
+                                    Text(model.overviewHasGate(tool) ? model.overviewActivity(for: tool) : model.overviewVerification(for: tool))
+                                        .font(.caption2)
+                                        .foregroundStyle(model.overviewHasGate(tool) ? .secondary : .tertiary).lineLimit(1)
                                 }
                                 Spacer(minLength: 8)
-                                Text(issue != nil ? (tool.isTriggered ? "Finding · Doctor report" : "Doctor report") : (tool.isTriggered ? "Finding" : "Hardened"))
+                                HStack(spacing: 4) {
+                                        if !needsAttention { Image(systemName: "checkmark.square") }
+                                        Text(issue != nil ? (tool.isTriggered ? "Finding · Doctor report" : "Doctor report") : (tool.isTriggered ? "Finding" : "Hardened"))
+                                    }
                                     .font(.caption)
                                     .foregroundStyle(needsAttention ? Color.orange : Color.secondary)
                                 Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary)
@@ -6620,24 +6664,30 @@ private struct DashboardOverviewView: View {
         VStack(alignment: .leading, spacing: compact ? 8 : 14) {
             Text(model.snapshot.doctorIssues.isEmpty && model.snapshot.flaggedDetectorCount == 0 && model.scriptsNeedingReblessing.isEmpty
                  ? "No attention required" : "Attention required").font(.headline)
-            if !model.scriptsNeedingReblessing.isEmpty {
+            ForEach(model.scriptsNeedingReblessing) { script in
                 Button {
-                    model.showScriptsNeedingReblessing()
+                    model.navigateFromOverview(to: .blessedScripts, itemID: script.id)
                 } label: {
-                    Label(model.scriptsNeedingReblessing.count == 1
-                          ? "1 script needs reblessing"
-                          : "\(model.scriptsNeedingReblessing.count) scripts need reblessing",
-                          systemImage: "exclamationmark.triangle.fill")
-                        .foregroundStyle(.orange)
+                    Label("\(script.title) needs reblessing", systemImage: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange).multilineTextAlignment(.leading)
+                }.buttonStyle(.plain)
+            }
+            ForEach(model.overviewFindings) { finding in
+                Button {
+                    model.navigateFromOverview(to: .detectors, itemID: finding.id)
+                } label: {
+                    Text("\(finding.title): \(finding.subtitle)")
+                        .font(.callout).foregroundStyle(.secondary)
                         .multilineTextAlignment(.leading)
                 }.buttonStyle(.plain)
             }
-            if !compact, let issue = model.snapshot.doctorIssues.first {
+            ForEach(model.snapshot.doctorIssues) { issue in
                 Button {
                     model.navigateFromOverview(to: .doctor, itemID: issue.id)
                 } label: {
                     Text(issue.message).font(.callout).foregroundStyle(.secondary)
-                        .lineLimit(3).frame(maxWidth: .infinity, alignment: .leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }.buttonStyle(.plain)
             }
             Divider()
@@ -6662,8 +6712,8 @@ private struct DashboardOverviewView: View {
             } else {
                 Divider()
                 if let checked = model.lastUpdateCheck {
-                    Text("Last update check: \(checked.formatted(date: .abbreviated, time: .shortened))")
-                        .font(.caption).foregroundStyle(.secondary)
+                    Text("Last update check: \(shortDashboardTimestamp(checked))")
+                        .font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 } else {
                     Text("Last update check: Not yet checked")
                         .font(.caption).foregroundStyle(.secondary)
