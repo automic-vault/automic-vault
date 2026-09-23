@@ -20,6 +20,8 @@ We move exposed credentials into the Keychain and change how the tools request
 them. You keep your commands; AV checks the complete operation before applying
 a protected credential.
 
+![Automic Vault in dark mode, showing hardened Tools and items requiring attention](docs/img/overview-dark.png)
+
 
 &nbsp;
 
