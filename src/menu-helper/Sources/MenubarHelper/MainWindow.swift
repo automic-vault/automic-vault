@@ -1734,13 +1734,6 @@ final class DashboardModel: ObservableObject {
             : String(localized: "Hardening checked: \(timestamp)")
     }
 
-    func overviewActivity(for tool: DashboardItem, now: Date = Date()) -> String {
-        guard let count = overviewRequestCount(for: tool, now: now) else { return String(localized: "History unavailable") }
-        if count == 0 { return String(localized: "No requests recorded · 24h") }
-        if count == 1 { return String(localized: "1 recorded request · 24h") }
-        return String(localized: "\(String(count)) recorded requests · 24h")
-    }
-
     fileprivate func overviewActivitySlots(for tool: DashboardItem, now: Date) -> [Int]? {
         let name = hardenerNameReferencedByDocumentation(tool.documentation) ?? tool.title
         return overviewActivityIndex?.slots(for: name, now: now)
@@ -2233,8 +2226,8 @@ func runDashboardSearchSelfCheck() -> Int32 {
         command: "wrangler", message: "Wrangler needs attention", remediation: "Review configuration"))
     let attentionModel = DashboardModel(snapshot: attentionSnapshot)
     guard attentionModel.overviewTools.prefix(2).map(\.title) == ["aws", "wrangler"],
-          model.overviewActivity(for: awsOverview, now: accessRequest.date) == "1 recorded request · 24h",
-          model.overviewActivity(for: awsOverview, now: accessRequest.date.addingTimeInterval(86_401)) == "No requests recorded · 24h"
+          model.overviewActivitySlots(for: awsOverview, now: accessRequest.date)?.reduce(0, +) == 1,
+          model.overviewActivitySlots(for: awsOverview, now: accessRequest.date.addingTimeInterval(86_401))?.reduce(0, +) == 0
     else { return 1 }
     var findingSnapshot = attentionSnapshot
     findingSnapshot.detectorFindings = try! JSONDecoder().decode([DetectorFinding].self,
@@ -2293,7 +2286,6 @@ func runDashboardSearchSelfCheck() -> Int32 {
             benchmark.selectSection(.overview)
             let tools = benchmark.overviewTools
             for tool in tools {
-                _ = benchmark.overviewActivity(for: tool)
                 _ = benchmark.overviewActivitySlots(for: tool, now: Date())
             }
         }
@@ -2316,6 +2308,8 @@ func runDashboardSearchSelfCheck() -> Int32 {
     // Render the actual SwiftUI layout at the minimum detail area and a larger window.
     if let directory = ProcessInfo.processInfo.environment["AV_OVERVIEW_RENDER_DIR"] {
         var renderSnapshot = attentionSnapshot
+        renderSnapshot.secretGates.append(SecretGate(id: "aws", keyPatterns: [], routes: [],
+            defaultProtection: .noAccess, appPolicies: []))
         renderSnapshot.hardenedTools += (1...12).map {
             HardenedTool(name: "tool-\($0)", targetPath: "/usr/local/bin/tool-\($0)")
         }
@@ -6883,6 +6877,7 @@ private struct DashboardOverviewView: View {
                     ForEach(visibleTools) { tool in
                         let issue = model.overviewDoctorIssue(for: tool)
                         let needsAttention = tool.isTriggered || issue != nil
+                        let hasGate = model.overviewHasGate(tool)
                         Button {
                             model.openOverviewTool(tool)
                         } label: {
@@ -6894,9 +6889,11 @@ private struct DashboardOverviewView: View {
                                         .padding(.trailing, 6)
                                     VStack(alignment: .leading, spacing: 3) {
                                         Text(tool.title).fontWeight(.medium).lineLimit(1)
-                                        Text(model.overviewHasGate(tool) ? model.overviewActivity(for: tool, now: now) : model.overviewVerification(for: tool))
-                                            .font(.caption2)
-                                            .foregroundStyle(model.overviewHasGate(tool) ? .secondary : .tertiary).lineLimit(1)
+                                        if !hasGate {
+                                            Text(model.overviewVerification(for: tool))
+                                                .font(.caption2)
+                                                .foregroundStyle(.tertiary).lineLimit(1)
+                                        }
                                     }
                                     Spacer(minLength: 0)
                                     HStack(spacing: 4) {
@@ -6907,13 +6904,16 @@ private struct DashboardOverviewView: View {
                                         .foregroundStyle(needsAttention ? Color.orange : Color.secondary)
                                     Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary)
                                 }
-                                ToolActivityStrip(counts: model.overviewActivitySlots(for: tool, now: now), now: now)
-                                    .padding(.leading, 30)
+                                if hasGate {
+                                    ToolActivityStrip(counts: model.overviewActivitySlots(for: tool, now: now), now: now)
+                                        .padding(.leading, 30)
+                                }
                             }.padding(12).contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
                         .frame(height: 67)
-                        .help((issue?.message ?? tool.subtitle) + "\n" + String(localized: "Recorded authorization requests in the last 24 hours. This is not a count of Tool executions."))
+                        .help((issue?.message ?? tool.subtitle) + (hasGate
+                            ? "\n" + String(localized: "Recorded authorization requests in the last 24 hours. This is not a count of Tool executions.") : ""))
                         if tool.id != visibleTools.last?.id { Divider().padding(.leading, 42) }
                     }
                     Spacer(minLength: 0)
