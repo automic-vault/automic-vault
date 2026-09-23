@@ -43,3 +43,9 @@ The website now generates `/blog/index.json` from the blog index's editorial ord
 Doctor-only Tools are included; Tools with Doctor reports or detector findings sort before healthy Tools. Overflow is paginated to preserve the no-scroll layout. Both feed headlines remain visible in compact layouts, with Documentation and GitHub links in the footer. The deployed feed was verified on 2026-09-22.
 
 Each Tool shows recorded authorization requests within 24 hours, not execution counts. A `+` marks a lower-bound count when older history pages remain unloaded; failed history loads show unavailable. Navigation self-checks cover Doctor-only rows, findings-first ordering, and the time window. Native renders verify the compact footer and two headlines fit.
+
+### Screenshot corrections (2026-09-23)
+
+The Tool panel sizes its page from its own available height and extends to the pager. Status links are stacked, news headlines wrap, updates appear only when available with a divider, and footer links align right. “Detector catalog” distinguishes the full catalog from configured Hardened Tools.
+
+Activity now loads the full available 24-hour history independently of the 50-record history page, removing the previous lower-bound `+` display. Empty counts say “No requests recorded”; failed reads remain unavailable. The 20 AuthorizationHistoryStore tests and dashboard self-check pass; compact and wide native renders were reviewed.

@@ -249,6 +249,7 @@ final class DashboardModel: ObservableObject {
     @Published private(set) var authorizationHistoryDayCount = 0
     @Published private(set) var isSearchingHistory = false
     private var allHistorySections: [HistoryDay] = []
+    @Published private var overviewHistory: [AccessRequestRecord]? = nil
     private var historyRecordsByID: [UUID: AccessRequestRecord] = [:]
     private var historySearchTask: Task<Void, Never>?
     private var historySearchWorker: Task<[HistorySearchDay], Never>?
@@ -280,6 +281,7 @@ final class DashboardModel: ObservableObject {
         self.snapshot = snapshot
         self.cliInstallState = cliInstallState
         setHistoryRecords(snapshot.accessRequests)
+        overviewHistory = snapshot.accessRequests
         normalizeSelection()
     }
 
@@ -953,10 +955,12 @@ final class DashboardModel: ObservableObject {
             }.value
             guard !Task.isCancelled else { return }
             next.detectorFindings = snapshot.detectorFindings
-            let page = await Task.detached(priority: .background) {
-                loadAccessRequestRecordsPage()
+            let (page, activity) = await Task.detached(priority: .background) {
+                (loadAccessRequestRecordsPage(),
+                 loadAccessRequestRecordsForDisclosure(since: Date().addingTimeInterval(-86_400)))
             }.value
             guard !Task.isCancelled else { return }
+            overviewHistory = activity
             next.accessRequests = generation == accessRequestsGeneration
                 ? (page?.records ?? []) : snapshot.accessRequests
             snapshot = next
@@ -992,11 +996,13 @@ final class DashboardModel: ObservableObject {
                     self?.reloadAccessRequests()
                 }
             }
-            let page = await Task.detached(priority: .background) {
-                loadAccessRequestRecordsPage()
+            let (page, activity) = await Task.detached(priority: .background) {
+                (loadAccessRequestRecordsPage(),
+                 loadAccessRequestRecordsForDisclosure(since: Date().addingTimeInterval(-86_400)))
             }.value
             guard !Task.isCancelled, let self,
                   generation == accessRequestsGeneration else { return }
+            overviewHistory = activity
             if let page {
                 snapshot.accessRequests = page.records
                 setHistoryRecords(page.records, storedDayCount: page.storedDayCount)
@@ -1612,14 +1618,14 @@ final class DashboardModel: ObservableObject {
     }
 
     func overviewActivity(for tool: DashboardItem, now: Date = Date()) -> String {
-        guard !historyLoadFailed else { return "History unavailable" }
+        guard let overviewHistory else { return "History unavailable" }
         let name = hardenerNameReferencedByDocumentation(tool.documentation) ?? tool.title
         let cutoff = now.addingTimeInterval(-86_400)
-        let count = snapshot.accessRequests.filter {
+        let count = overviewHistory.filter {
             $0.tool == name && $0.date >= cutoff && $0.date <= now
         }.count
-        let partial = historyOlderPageCursor != nil
-        return "\(count)\(partial ? "+" : "") recorded \(count == 1 && !partial ? "request" : "requests") · 24h"
+        return count == 0 ? "No requests recorded · 24h"
+            : "\(count) recorded \(count == 1 ? "request" : "requests") · 24h"
     }
 
     func openOverviewTool(_ tool: DashboardItem) {
@@ -2065,7 +2071,7 @@ func runDashboardSearchSelfCheck() -> Int32 {
     let attentionModel = DashboardModel(snapshot: attentionSnapshot)
     guard attentionModel.overviewTools.prefix(2).map(\.title) == ["aws", "wrangler"],
           model.overviewActivity(for: awsOverview, now: accessRequest.date) == "1 recorded request · 24h",
-          model.overviewActivity(for: awsOverview, now: accessRequest.date.addingTimeInterval(86_401)) == "0 recorded requests · 24h"
+          model.overviewActivity(for: awsOverview, now: accessRequest.date.addingTimeInterval(86_401)) == "No requests recorded · 24h"
     else { return 1 }
     var findingSnapshot = attentionSnapshot
     findingSnapshot.detectorFindings = try! JSONDecoder().decode([DetectorFinding].self,
@@ -2095,6 +2101,8 @@ func runDashboardSearchSelfCheck() -> Int32 {
             let headlines = try! BlogFeed.posts(from: Data(#"{"items":[{"title":"Automic Vault vs AWS Secrets Manager","url":"https://www.automicvault.com/blog/automic-vault-vs-aws-secrets-manager/"},{"title":"Automic Vault vs HashiCorp Vault","url":"https://www.automicvault.com/blog/automic-vault-vs-hashicorp-vault/"}]}"#.utf8))
             let host = NSHostingView(rootView: DashboardOverviewView(model: renderModel, checkForUpdates: {}, news: headlines))
             host.frame = NSRect(origin: .zero, size: size)
+            host.layoutSubtreeIfNeeded()
+            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
             host.layoutSubtreeIfNeeded()
             guard let bitmap = host.bitmapImageRepForCachingDisplay(in: host.bounds) else { return 1 }
             host.cacheDisplay(in: host.bounds, to: bitmap)
@@ -6478,21 +6486,21 @@ private struct DashboardOverviewView: View {
                 }
                 ViewThatFits(in: .horizontal) {
                     HStack(alignment: .top, spacing: 20) {
-                        tools(limit: max(3, min(10, Int((geometry.size.height - 250) / 58)))).frame(minWidth: 320)
-                        attention(compact: compact).frame(width: 240)
+                        toolPanel.frame(minWidth: 320)
+                        attention(compact: false).frame(width: 240)
                     }
                     VStack(alignment: .leading, spacing: 12) {
-                        tools(limit: max(2, min(8, Int((geometry.size.height - 370) / 58))))
+                        toolPanel
                         attention(compact: true)
                     }
                 }
-                Spacer(minLength: 0)
+                .frame(maxHeight: .infinity)
                 HStack(spacing: 16) {
+                    Spacer()
                     Link("Documentation", destination: URL(string: "https://www.automicvault.com/docs/")!)
                         .foregroundStyle(Color.accentColor)
                     Link("GitHub ↗", destination: URL(string: "https://github.com/automic-vault/automic-vault")!)
                         .foregroundStyle(Color.accentColor)
-                    Spacer()
                 }.font(.caption)
             }
             .padding(20)
@@ -6507,6 +6515,13 @@ private struct DashboardOverviewView: View {
         }
     }
 
+    private var toolPanel: some View {
+        GeometryReader { space in
+            tools(limit: max(1, Int((space.size.height - 72) / 54)))
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        }
+    }
+
     private func tools(limit: Int) -> some View {
         let allTools = model.overviewTools
         let page = min(toolPage, max(0, (allTools.count - 1) / limit))
@@ -6515,7 +6530,7 @@ private struct DashboardOverviewView: View {
             HStack {
                 Text("Tools").font(.title2.bold())
                 Spacer()
-                destination("All detectors", section: .detectors)
+                destination("Detector catalog", section: .detectors)
             }
             VStack(spacing: 0) {
                 if model.overviewTools.isEmpty {
@@ -6549,10 +6564,13 @@ private struct DashboardOverviewView: View {
                         }.padding(12).contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                    .help((issue?.message ?? tool.subtitle) + "\nRecorded authorization requests in the last 24 hours; + indicates only part of the history is loaded. This is not a count of Tool executions.")
+                    .frame(height: 53)
+                    .help((issue?.message ?? tool.subtitle) + "\nRecorded authorization requests in the last 24 hours. This is not a count of Tool executions.")
                     if tool.id != visibleTools.last?.id { Divider().padding(.leading, 42) }
                 }
+                Spacer(minLength: 0)
             }
+            .frame(maxHeight: .infinity, alignment: .top)
             .background(.background, in: RoundedRectangle(cornerRadius: 10))
             HStack {
                 destination("\(model.snapshot.hardenedTools.count) hardened Tools", section: .hardenedTools)
@@ -6572,13 +6590,10 @@ private struct DashboardOverviewView: View {
     }
 
     private func attention(compact: Bool) -> some View {
-        let checksLayout = compact ? AnyLayout(HStackLayout(spacing: 12))
-            : AnyLayout(VStackLayout(alignment: .leading, spacing: 10))
-        return VStack(alignment: .leading, spacing: compact ? 8 : 14) {
-            if !compact { Text(model.snapshot.flaggedDetectorCount == 0 && model.snapshot.doctorIssues.isEmpty ? "System checks" : "Needs attention").font(.headline) }
-            checksLayout {
-            destination(model.snapshot.flaggedDetectorCount == 0 ? "No detector findings" : "\(model.snapshot.flaggedDetectorCount) flagged detectors", section: .detectors)
-            destination(model.snapshot.doctorIssues.count == 1 ? "Doctor · 1 issue" : "Doctor · \(model.snapshot.doctorIssues.count) issues", section: .doctor)
+        VStack(alignment: .leading, spacing: compact ? 8 : 14) {
+            VStack(alignment: .leading, spacing: 8) {
+                destination(model.snapshot.flaggedDetectorCount == 0 ? "Detectors · No findings" : "Detectors · \(model.snapshot.flaggedDetectorCount) flagged", section: .detectors)
+                destination(model.snapshot.doctorIssues.count == 1 ? "Doctor · 1 issue" : "Doctor · \(model.snapshot.doctorIssues.count) issues", section: .doctor)
             }
             if !compact, let issue = model.snapshot.doctorIssues.first {
                 Button {
@@ -6599,16 +6614,19 @@ private struct DashboardOverviewView: View {
             ForEach(news.prefix(2)) { post in
                 Link(destination: post.url) {
                     Text(post.title).font(.callout).foregroundStyle(Color.accentColor)
-                        .multilineTextAlignment(.leading).lineLimit(compact ? 1 : 2)
+                        .multilineTextAlignment(.leading).lineLimit(nil)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
-            Button(model.availableUpdateVersion.map { "Update to v\($0)" } ?? "Check for updates",
-                   action: checkForUpdates)
-                .buttonStyle(.link).foregroundStyle(Color.accentColor).lineLimit(1)
+            if let version = model.availableUpdateVersion {
+                Divider()
+                Button("Update to v\(version)", action: checkForUpdates)
+                    .buttonStyle(.link).foregroundStyle(Color.accentColor)
+            }
         }
         .padding(compact ? 12 : 16)
         .frame(maxWidth: .infinity, alignment: .leading)
+        .fixedSize(horizontal: false, vertical: true)
         .background(.quaternary.opacity(0.3), in: RoundedRectangle(cornerRadius: 10))
     }
 
