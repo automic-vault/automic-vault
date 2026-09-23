@@ -176,7 +176,11 @@ pub(super) fn run(args: &[OsString], stdout: &mut dyn Write, stderr: &mut dyn Wr
             } else if let Some(setting) = value.strip_prefix("option ") {
                 let (key, value) = setting.split_once(' ').ok_or("malformed option")?;
                 if !valid_option(key, value) {
-                    return Err(format!("unsupported Git option: {key}"));
+                    return Err(format!(
+                        "unsupported Git option: {key}; protected HTTPS transport does not support \
+                         --force-with-lease (cas), --atomic, or --signed pushes.\n\
+                         See https://github.com/automic-vault/automic-vault/blob/main/docs/adr/0047-protected-git-https-transport.md#validation-and-limits"
+                    ));
                 }
                 options.insert(key.to_owned(), value.to_owned());
                 stdout
