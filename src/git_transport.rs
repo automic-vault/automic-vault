@@ -2,7 +2,7 @@
 //!
 //! The installed runtime is root-owned; all mutable local operations run outside
 //! its credential registration. Do not relax this to a preflight config scan.
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 pub(crate) const ROOT: &str = "/opt/av/git";
 pub(crate) const GIT: &str = "/opt/av/git/bin/git";
@@ -203,6 +203,7 @@ pub(crate) struct RemotePlan {
     pub url: String,
     pub phase: String,
     pub options: BTreeMap<String, String>,
+    pub leases: BTreeMap<String, String>,
     pub commands: Vec<String>,
 }
 
@@ -230,8 +231,17 @@ pub(crate) fn valid_option(key: &str, value: &str) -> bool {
 
 impl RemotePlan {
     pub fn validate(&self) -> Result<(), String> {
+        let wire = self.wire();
+        let mut destinations = BTreeSet::new();
         let valid = valid_url(&self.url) && self.url.len() <= 8192
+            && wire.len() <= 8202
+            && wire.iter().map(String::len).sum::<usize>() <= 1024 * 1024 + 16_384
+            && wire.iter().all(|v| v.len() <= 8192 && !v.contains(['\n', '\r', '\0']))
             && self.options.iter().all(|(k,v)| valid_option(k,v))
+            && self.leases.len() <= 4096
+            && self.leases.iter().map(|(reference, oid)| reference.len() + 1 + oid.len()).sum::<usize>() <= 1024 * 1024
+            && self.leases.iter().all(|(reference, oid)| valid_branch(reference) && valid_oid(oid))
+            && (self.leases.is_empty() || self.phase == "push")
             && !self.commands.is_empty() && self.commands.len() <= 4096
             && self.commands.iter().map(String::len).sum::<usize>() <= 1024 * 1024
             && match self.phase.as_str() {
@@ -242,8 +252,14 @@ impl RemotePlan {
                 }),
                 "push" => self.commands.iter().all(|line| {
                     line.strip_prefix("push ").and_then(|s| s.split_once(':'))
-                        .is_some_and(|(oid, reference)| valid_oid(oid) && valid_branch(reference))
-                }),
+                        .is_some_and(|(source, reference)| {
+                            let oid = source.strip_prefix('+').unwrap_or(source);
+                            valid_oid(oid) && oid.bytes().any(|b| b != b'0')
+                                && valid_branch(reference) && destinations.insert(reference)
+                                // Git's unconditional force overrides even a stale lease.
+                                && !(source.starts_with('+') && self.leases.contains_key(reference))
+                        })
+                }) && self.leases.keys().all(|reference| destinations.contains(reference.as_str())),
                 _ => false,
             };
         if valid {
@@ -255,6 +271,11 @@ impl RemotePlan {
 
     pub fn wire(&self) -> Vec<String> {
         let mut result = vec!["remote-helper".into(), self.url.clone(), self.phase.clone()];
+        result.extend(
+            self.leases
+                .iter()
+                .map(|(reference, oid)| format!("option cas {reference}:{oid}")),
+        );
         result.extend(self.options.iter().map(|(k, v)| format!("option {k} {v}")));
         result.push(String::new());
         result.extend(self.commands.clone());
@@ -263,9 +284,10 @@ impl RemotePlan {
 
     pub fn payload(&self) -> Vec<u8> {
         let mut lines: Vec<_> = self
-            .options
+            .leases
             .iter()
-            .map(|(k, v)| format!("option {k} {v}"))
+            .map(|(reference, oid)| format!("option cas {reference}:{oid}"))
+            .chain(self.options.iter().map(|(k, v)| format!("option {k} {v}")))
             .collect();
         lines.extend(self.commands.clone());
         // Batch terminator, then end-of-session. The child never sees another request.
@@ -291,6 +313,7 @@ fn remote_requests_are_closed_and_fixed() {
         url: "https://github.com/a/b.git".into(),
         phase: "push".into(),
         options: BTreeMap::new(),
+        leases: BTreeMap::new(),
         commands: vec![format!("push {}:refs/heads/topic", "a".repeat(40))],
     };
     assert!(plan.validate().is_ok());
@@ -317,4 +340,53 @@ fn remote_requests_are_closed_and_fixed() {
     ] {
         assert!(!valid_branch(reference));
     }
+}
+
+#[test]
+fn force_and_lease_plans_remain_bounded_and_exact() {
+    let oid = "a".repeat(40);
+    let mut plan = RemotePlan {
+        url: "https://github.com/a/b.git".into(),
+        phase: "push".into(),
+        options: BTreeMap::new(),
+        leases: BTreeMap::new(),
+        commands: vec![format!("push +{oid}:refs/heads/main")],
+    };
+    assert!(plan.validate().is_ok());
+    plan.leases.insert("refs/heads/main".into(), "0".repeat(40));
+    assert!(plan.validate().is_err());
+    plan.commands[0] = format!("push {oid}:refs/heads/main");
+    assert!(plan.validate().is_ok());
+    for (reference, expected) in [
+        ("refs/heads/main", "HEAD"),
+        ("refs/heads/main", ""),
+        ("refs/heads/missing", oid.as_str()),
+        ("refs/heads/main:extra", oid.as_str()),
+        ("refs/tags/v1", oid.as_str()),
+        ("refs/heads/main\nget https://evil", oid.as_str()),
+    ] {
+        plan.leases = [(reference.into(), expected.into())].into();
+        assert!(plan.validate().is_err(), "{reference}:{expected}");
+    }
+    plan.leases.clear();
+    plan.commands = vec![format!("push {}:refs/heads/main", "0".repeat(40))];
+    assert!(plan.validate().is_err());
+    plan.commands = vec![format!("push {oid}:refs/heads/main"); 2];
+    assert!(plan.validate().is_err());
+    plan.commands = (0..4096)
+        .map(|i| format!("push {oid}:refs/heads/b{i:04}"))
+        .collect();
+    plan.leases = (0..4096)
+        .map(|i| (format!("refs/heads/b{i:04}"), oid.clone()))
+        .collect();
+    assert!(plan.validate().is_ok());
+    assert_eq!(plan.wire().len(), 8196);
+    plan.leases
+        .insert("refs/heads/overflow".into(), oid.clone());
+    assert!(plan.validate().is_err());
+    plan.leases.clear();
+    plan.commands = (0..300)
+        .map(|i| format!("push {oid}:refs/heads/{}-{i}", "a".repeat(4000)))
+        .collect();
+    assert!(plan.validate().is_err());
 }

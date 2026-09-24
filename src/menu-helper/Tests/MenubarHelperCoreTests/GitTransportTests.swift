@@ -60,7 +60,7 @@ import Testing
         #expect(GitTransportOperation(wire + ["get https://evil /tmp/token"]) == nil)
         #expect(op.arguments(phase: "push", oid: oid) == nil)
     }
-    for command in ["push HEAD:refs/heads/main", "push +\(oid):refs/heads/main", "push :refs/heads/main",
+    for command in ["push HEAD:refs/heads/main", "push :refs/heads/main",
                     "push \(oid):refs/heads/a.lock", "push \(oid):refs/tags/v1", "push \(oid):refs/heads/../config"] {
         #expect(GitRemotePlan(["remote-helper", url, "push", "", command]) == nil)
     }
@@ -70,4 +70,64 @@ import Testing
     #expect(GitRemotePlan(["remote-helper", url, "list", "option progress true", "option progress false", "", "list"]) == nil)
     #expect(GitRemotePlan(["remote-helper", "https://evil/a/b.git", "list", "", "list"]) == nil)
     #expect(GitRemotePlan(["remote-helper", url, "fetch", "", "fetch \(oid) HEAD\npush \(oid):refs/heads/x"]) == nil)
+}
+
+@Test func forceAndLeasesPreserveExactRemoteWriteAuthority() throws {
+    let url = "https://github.com/a/b.git", old = String(repeating: "a", count: 40), new = String(repeating: "b", count: 40)
+    let zero = String(repeating: "0", count: 40)
+    // Exact wire emitted by Rust's force_and_leases_freeze_complete_batches_before_execution.
+    let wire = ["remote-helper", url, "push", "option cas refs/heads/a:\(zero)",
+                "option cas refs/heads/z:\(old)", "option dry-run true", "",
+                "push \(new):refs/heads/z", "push \(new):refs/heads/a"]
+    let forced = ["remote-helper", url, "push", "", "push +\(new):refs/heads/z"]
+    for request in [wire, forced] {
+        let operation = try #require(GitTransportOperation(request))
+        let plan = try #require(operation.remotePlan)
+        #expect(plan.wire == request)
+        #expect(operation.classification == .mutating)
+        #expect(!SecretGateProtection.readOnly.allows(operation.classification))
+        #expect(!SecretGateProtection.readOnlyAndLocalWrites.allows(operation.classification))
+        #expect(SecretGateProtection.fullExceptSecretDumps.allows(operation.classification))
+        #expect(operation.arguments(phase: "remote-helper", oid: "")?.suffix(3) == ["remote-https", url, url])
+        #expect(plan.approvalDetail.contains(new))
+    }
+    let leased = try #require(GitRemotePlan(wire))
+    #expect(leased.approvalDetail.contains("Required lease (branch:expected commit): refs/heads/z:\(old)"))
+    #expect(leased.approvalDetail.contains("option dry-run true"))
+    #expect(!leased.approvalDetail.contains("Unconditional force"))
+    #expect(try #require(GitRemotePlan(forced)).approvalDetail.contains("Unconditional force:"))
+
+    let prefix = ["remote-helper", url, "push"]
+    let lease = "option cas refs/heads/main:\(old)", push = "push \(new):refs/heads/main"
+    for tail in [
+        [lease, "", "push +\(new):refs/heads/main"],
+        [lease, lease, "", push],
+        [lease, "option cas refs/heads/main:\(zero)", "", push],
+        [lease, "", "push \(new):refs/heads/other"],
+        ["option cas refs/heads/main:HEAD", "", push],
+        ["option cas refs/heads/main:", "", push],
+        ["option cas refs/tags/v1:\(old)", "", push],
+        ["option cas refs/heads/main:extra:\(old)", "", push],
+        ["option dry-run true", lease, "", push],
+        ["option cas refs/heads/z:\(old)", "option cas refs/heads/a:\(old)", "", push],
+        ["", "push ++\(new):refs/heads/main"],
+        ["", "push \(zero):refs/heads/main"],
+        ["", push, push],
+        ["", push, "get https://evil /tmp/token"],
+        ["", "push +\(new):refs/tags/v1"],
+    ] {
+        #expect(GitRemotePlan(prefix + tail) == nil, "\(tail)")
+    }
+    for phase in ["list", "list for-push", "fetch"] {
+        let command = phase == "fetch" ? "fetch \(new) HEAD" : phase
+        #expect(GitRemotePlan(["remote-helper", url, phase, lease, "", command]) == nil)
+    }
+    // Independent force and lease on different branches are unambiguous.
+    #expect(GitRemotePlan(prefix + [lease, "", push, "push +\(new):refs/heads/other"]) != nil)
+    let leases = (0..<4096).map { "option cas refs/heads/b\(String(format: "%04d", $0)):\(old)" }
+    let updates = (0..<4096).map { "push \(new):refs/heads/b\(String(format: "%04d", $0))" }
+    #expect(GitRemotePlan(prefix + leases + [""] + updates) != nil)
+    #expect(GitRemotePlan(prefix + leases + ["option cas refs/heads/overflow:\(old)", ""] + updates) == nil)
+    let oversized = (0..<300).map { "push \(new):refs/heads/\(String(repeating: "a", count: 4000))-\($0)" }
+    #expect(GitRemotePlan(prefix + [""] + oversized) == nil)
 }
