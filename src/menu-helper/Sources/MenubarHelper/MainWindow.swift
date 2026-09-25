@@ -243,6 +243,10 @@ private struct DashboardActivityIndex {
         datesByTool = dates.mapValues { $0.sorted() }
     }
 
+    func latestActivity(for tool: String) -> Date {
+        datesByTool[tool]?.last ?? .distantPast
+    }
+
     func count(for tool: String, now: Date) -> Int {
         let dates = datesByTool[tool] ?? []
         return boundary(now, in: dates, includingEqual: true)
@@ -1739,6 +1743,11 @@ final class DashboardModel: ObservableObject {
         return overviewActivityIndex?.slots(for: name, now: now)
     }
 
+    fileprivate func overviewLatestActivity(for tool: DashboardItem) -> Date? {
+        let name = hardenerNameReferencedByDocumentation(tool.documentation) ?? tool.title
+        return overviewActivityIndex?.latestActivity(for: name)
+    }
+
     private func overviewRequestCount(for tool: DashboardItem, now: Date) -> Int? {
         let name = hardenerNameReferencedByDocumentation(tool.documentation) ?? tool.title
         return overviewActivityIndex?.count(for: name, now: now)
@@ -2228,6 +2237,12 @@ func runDashboardSearchSelfCheck() -> Int32 {
     guard attentionModel.overviewTools.prefix(2).map(\.title) == ["aws", "wrangler"],
           model.overviewActivitySlots(for: awsOverview, now: accessRequest.date)?.reduce(0, +) == 1,
           model.overviewActivitySlots(for: awsOverview, now: accessRequest.date.addingTimeInterval(86_401))?.reduce(0, +) == 0
+    else { return 1 }
+    let singleRequestIndex = DashboardActivityIndex([accessRequest])
+    guard singleRequestIndex.latestActivity(for: accessRequest.tool) == accessRequest.date,
+          DashboardActivityIndex([]).latestActivity(for: accessRequest.tool) == .distantPast,
+          activityIndex.latestActivity(for: "unused-tool") == .distantPast,
+          model.overviewLatestActivity(for: awsOverview) == accessRequest.date
     else { return 1 }
     var findingSnapshot = attentionSnapshot
     findingSnapshot.detectorFindings = try! JSONDecoder().decode([DetectorFinding].self,
@@ -6738,6 +6753,9 @@ private func shortDashboardTimestamp(_ date: Date) -> String {
 private struct ToolActivityStrip: View {
     let counts: [Int]?
     let now: Date
+    let latestActivity: Date?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var pulse = 0
 
     var body: some View {
         Group {
@@ -6748,6 +6766,18 @@ private struct ToolActivityStrip: View {
                             // A fixed logarithmic scale keeps Tools comparable: 1, 4, 16, 64 requests.
                             .fill(Color.primary.opacity(counts[slot] == 0
                                 ? 0.06 : min(1, 0.25 + log2(Double(counts[slot])) / 8)))
+                            .overlay {
+                                if slot == counts.indices.last {
+                                    Rectangle().fill(Color.accentColor)
+                                        .keyframeAnimator(initialValue: 0.0, trigger: pulse) { content, opacity in
+                                            content.opacity(opacity)
+                                        } keyframes: { _ in
+                                            MoveKeyframe(1)
+                                            LinearKeyframe(0, duration: 0.8)
+                                        }
+                                        .opacity(reduceMotion ? 0 : 1)
+                                }
+                            }
                             .frame(minWidth: 0.5)
                             .help(slotDescription(slot, count: counts[slot]))
                     }
@@ -6763,6 +6793,12 @@ private struct ToolActivityStrip: View {
             }
         }
         .frame(height: 8)
+        .onChange(of: latestActivity) { previous, latest in
+            // Initial loads and history removal are not live activity.
+            if let previous, let latest, latest > previous, !reduceMotion {
+                pulse += 1
+            }
+        }
     }
 
     private func slotDescription(_ slot: Int, count: Int) -> String {
@@ -6850,7 +6886,7 @@ private struct DashboardOverviewView: View {
 
     private var toolPanel: some View {
         TimelineView(.periodic(from: .now, by: 60)) { context in
-            tools(now: context.date)
+            tools(now: max(context.date, Date()))
         }
     }
 
@@ -6869,7 +6905,7 @@ private struct DashboardOverviewView: View {
                 }
             }
             GeometryReader { tableSpace in
-                let visibleTools = Array(allTools.prefix(max(1, Int(tableSpace.size.height / 54))))
+                let visibleTools = Array(allTools.prefix(max(1, Int((tableSpace.size.height - 24) / 54))))
                 VStack(spacing: 0) {
                     if allTools.isEmpty {
                         Button {
@@ -6910,7 +6946,8 @@ private struct DashboardOverviewView: View {
                                     Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary)
                                 }
                                 if hasGate {
-                                    ToolActivityStrip(counts: model.overviewActivitySlots(for: tool, now: now), now: now)
+                                    ToolActivityStrip(counts: model.overviewActivitySlots(for: tool, now: now), now: now,
+                                                      latestActivity: model.overviewLatestActivity(for: tool))
                                         .padding(.leading, 30)
                                 }
                             }.padding(.vertical, 8).contentShape(Rectangle())
@@ -6921,14 +6958,16 @@ private struct DashboardOverviewView: View {
                             ? "\n" + String(localized: "Recorded authorization requests in the last 24 hours. This is not a count of Tool executions.") : ""))
                         if tool.id != visibleTools.last?.id { Divider().padding(.leading, 30) }
                     }
+                    HStack {
+                        Spacer()
+                        destination(String(localized: "View all \(String(model.snapshot.hardenedTools.count)) hardened Tools →"), section: .hardenedTools)
+                    }
+                    .font(.caption)
+                    .frame(height: 24, alignment: .bottom)
                     Spacer(minLength: 0)
                 }
                 .frame(maxHeight: .infinity, alignment: .top)
             }
-            HStack {
-                Spacer()
-                destination(String(localized: "View all \(String(model.snapshot.hardenedTools.count)) hardened Tools →"), section: .hardenedTools)
-            }.font(.caption)
         }
     }
 
