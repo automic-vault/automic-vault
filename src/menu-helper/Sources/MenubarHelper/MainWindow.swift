@@ -2104,6 +2104,25 @@ private enum CLIInstallerError: LocalizedError {
 
 @MainActor
 func runUpdateToolbarSelfCheck() -> Int32 {
+    for state in [CLIInstallState.outdated, .missing, .current] {
+        let model = DashboardModel(snapshot: .empty, cliInstallState: state)
+        let host = NSHostingController(rootView: DashboardRootView(
+            model: model, checkForUpdates: {}, requestScan: {}))
+        let window = NSWindow(contentViewController: host)
+        window.setContentSize(NSSize(width: 1100, height: 700))
+        for section in [DashboardSection.overview, .doctor, .overview] {
+            model.selectedSection = section
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+            window.contentView?.layoutSubtreeIfNeeded()
+            let hasCLIAction = window.toolbar?.items.contains {
+                $0.itemIdentifier.rawValue.contains("cli-install")
+            } == true
+            guard hasCLIAction == (state.actionTitle != nil) else {
+                print("CLI toolbar missing or unexpected: \(section), \(state)")
+                return 1
+            }
+        }
+    }
     let controller = AutomicVaultMainWindowController(checkForUpdates: {}, requestScan: {})
     let checked = Date(timeIntervalSince1970: 1_790_000_000)
     controller.setAvailableUpdateVersion("2.8.0", checkedAt: checked)
@@ -2823,6 +2842,21 @@ struct DashboardRootView: View {
     let checkForUpdates: () -> Void
     let requestScan: () -> Void
 
+    @ToolbarContentBuilder
+    private var cliInstallToolbar: some ToolbarContent {
+        if let cliActionTitle = model.cliInstallState?.actionTitle {
+            ToolbarItem(id: "cli-install", placement: .primaryAction) {
+                Button {
+                    model.installCLI()
+                } label: {
+                    Label(cliActionTitle, systemImage: "terminal")
+                }
+                .labelStyle(.titleAndIcon)
+                .help("\(cliActionTitle) at /usr/local/bin/av")
+            }
+        }
+    }
+
     var body: some View {
         Group {
             if model.selectedSection == .overview {
@@ -2831,6 +2865,7 @@ struct DashboardRootView: View {
                         .navigationSplitViewColumnWidth(min: 186, ideal: 227, max: 250)
                 } detail: {
                     DashboardOverviewView(model: model, checkForUpdates: checkForUpdates)
+                        .toolbar { cliInstallToolbar }
                         .toolbar {
                             ToolbarItem(placement: .primaryAction) {
                                 Button {
@@ -2880,6 +2915,7 @@ struct DashboardRootView: View {
                 }
         } detail: {
             DashboardDetailView(model: model)
+                .toolbar { cliInstallToolbar }
                 .navigationSplitViewColumnWidth(min: 320, ideal: 320)
                 .toolbar {
                     Spacer()
@@ -2890,15 +2926,6 @@ struct DashboardRootView: View {
                         .buttonStyle(.borderedProminent)
                         .labelStyle(.titleAndIcon)
                         .help("Install Automic Vault v\(version)")
-                    }
-                    if let cliActionTitle = model.cliInstallState?.actionTitle {
-                        Button {
-                            model.installCLI()
-                        } label: {
-                            Label(cliActionTitle, systemImage: "terminal")
-                        }
-                        .labelStyle(.titleAndIcon)
-                        .help("\(cliActionTitle) at /usr/local/bin/av")
                     }
                     if model.selectedSection == .secretGates, let gate = model.selectedSecretGate {
                         if model.isDiscoveringLauncherHelpers {
