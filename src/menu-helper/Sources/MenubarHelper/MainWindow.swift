@@ -6810,6 +6810,13 @@ private struct ToolActivityStrip: View {
     }
 }
 
+private struct OverviewTextButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .brightness(configuration.isPressed ? -0.08 : 0)
+    }
+}
+
 /// Bounded summaries only: full inventories and actions stay in their existing sections.
 private struct DashboardOverviewView: View {
     @ObservedObject var model: DashboardModel
@@ -6845,6 +6852,7 @@ private struct DashboardOverviewView: View {
         }
         .background(Color(nsColor: .windowBackgroundColor))
         .tint(Color.accentColor)
+        .buttonStyle(OverviewTextButtonStyle())
         .task {
             do { news = try await BlogFeed.load() }
             catch { /* News is optional; the blog link remains available offline. */ }
@@ -6913,7 +6921,7 @@ private struct DashboardOverviewView: View {
                         } label: {
                             Label(localizedUIString(model.hasSearchQuery ? "No matching Tools · View detectors" : "Review available detectors"), systemImage: "sensor.tag.radiowaves.forward")
                                 .frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 12)
-                        }.buttonStyle(.plain)
+                        }
                     }
                     ForEach(visibleTools) { tool in
                         let issue = model.overviewDoctorIssue(for: tool)
@@ -6952,7 +6960,6 @@ private struct DashboardOverviewView: View {
                                 }
                             }.padding(.vertical, 8).contentShape(Rectangle())
                         }
-                        .buttonStyle(.plain)
                         .frame(height: 53)
                         .help((issue?.message ?? tool.subtitle) + (hasGate
                             ? "\n" + String(localized: "Recorded authorization requests in the last 24 hours. This is not a count of Tool executions.") : ""))
@@ -6981,7 +6988,7 @@ private struct DashboardOverviewView: View {
                 } label: {
                     Label("\(script.title) needs reblessing", systemImage: "exclamationmark.triangle.fill")
                         .foregroundStyle(.orange).multilineTextAlignment(.leading)
-                }.buttonStyle(.plain)
+                }
             }
             ForEach(model.overviewFindings) { finding in
                 Button {
@@ -6990,7 +6997,7 @@ private struct DashboardOverviewView: View {
                     Text("\(finding.title): \(finding.subtitle)")
                         .font(.callout).foregroundStyle(.secondary)
                         .multilineTextAlignment(.leading)
-                }.buttonStyle(.plain)
+                }
             }
             ForEach(model.snapshot.doctorIssues) { issue in
                 Button {
@@ -6999,7 +7006,7 @@ private struct DashboardOverviewView: View {
                     Text(issue.message.prefix(1).uppercased() + issue.message.dropFirst()).font(.callout).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                }.buttonStyle(.plain)
+                }
             }
             Divider()
             HStack {
@@ -7019,7 +7026,7 @@ private struct DashboardOverviewView: View {
             if let version = model.availableUpdateVersion {
                 Divider()
                 Button("Update to v\(version)", action: checkForUpdates)
-                    .buttonStyle(.link).foregroundStyle(Color.accentColor)
+                    .foregroundStyle(Color.accentColor)
             } else {
                 Divider()
                 if let checked = model.lastUpdateCheck {
@@ -7064,6 +7071,6 @@ private struct DashboardOverviewView: View {
 
     private func destination(_ title: String, section: DashboardSection) -> some View {
         Button(title) { model.navigateFromOverview(to: section) }
-            .buttonStyle(.link).foregroundStyle(Color.accentColor).lineLimit(1)
+            .foregroundStyle(Color.accentColor).lineLimit(1)
     }
 }
