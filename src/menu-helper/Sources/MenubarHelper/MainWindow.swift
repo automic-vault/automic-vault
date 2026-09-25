@@ -6786,6 +6786,15 @@ private struct DashboardOverviewView: View {
         _news = State(initialValue: news)
     }
 
+    private var cardBackground: some View {
+        RoundedRectangle(cornerRadius: 10)
+            .fill(.quaternary)
+            .overlay {
+                RoundedRectangle(cornerRadius: 10)
+                    .strokeBorder(Color(nsColor: .separatorColor), lineWidth: 1)
+            }
+    }
+
     private var projectCount: Int {
         Set(model.snapshot.secrets.flatMap(\.values).compactMap { value -> String? in
             if case .projectDirectory(let path) = value.source { return path }
@@ -6919,7 +6928,7 @@ private struct DashboardOverviewView: View {
                     Spacer(minLength: 0)
                 }
                 .frame(maxHeight: .infinity, alignment: .top)
-                .background(.background, in: RoundedRectangle(cornerRadius: 10))
+                .background(cardBackground)
             }
             HStack {
                 Spacer()
@@ -6991,7 +7000,7 @@ private struct DashboardOverviewView: View {
         .padding(compact ? 12 : 16)
         .frame(maxWidth: .infinity, alignment: .leading)
         .fixedSize(horizontal: false, vertical: true)
-        .background(.quaternary.opacity(0.3), in: RoundedRectangle(cornerRadius: 10))
+        .background(cardBackground)
     }
 
     private func summary(_ section: DashboardSection, value: String, caption: String, projects: Int? = nil) -> some View {
@@ -7014,7 +7023,7 @@ private struct DashboardOverviewView: View {
                 }
             }
             .padding(12).frame(maxWidth: .infinity, alignment: .leading)
-            .background(.background, in: RoundedRectangle(cornerRadius: 10))
+            .background(cardBackground)
             .contentShape(Rectangle())
         }.buttonStyle(.plain)
     }
