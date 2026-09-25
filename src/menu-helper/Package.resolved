@@ -1,13 +1,13 @@
 {
-  "originHash" : "e3ade26efd290aad63a74f3066c1792df65841ea112dd89a1e493c59c6299ccd",
+  "originHash" : "4c67289bfe8ec9a10ad0ea88f1641cbacab70aadd2530978546a5570c61ef2d8",
   "pins" : [
     {
       "identity" : "appupdater",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/mxcl/AppUpdater.git",
       "state" : {
-        "revision" : "4826e7205ed0159347de84b19960f4ba0e535504",
-        "version" : "4.1.2"
+        "revision" : "685dff9ee6f86c79f7481379d6bd48a39b4452f7",
+        "version" : "4.2.0"
       }
     },
     {
