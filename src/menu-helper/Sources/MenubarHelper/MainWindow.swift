@@ -7101,7 +7101,7 @@ private struct DashboardOverviewView: View {
             }
             Divider()
             if let version = model.availableUpdateVersion {
-                Text("Update to v\(version)").font(.headline)
+                Text("Update Available").font(.headline)
                 AvailableReleaseNotesView(version: version, compact: compact)
                     .id(version)
                 Button(action: checkForUpdates) {
