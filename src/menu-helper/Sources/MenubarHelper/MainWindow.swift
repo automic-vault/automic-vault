@@ -7091,25 +7091,27 @@ private struct DashboardOverviewView: View {
                 }
             }
             Divider()
-            HStack {
-                Text("What’s new").font(.headline)
-                Spacer()
-                Link("Blog ↗", destination: URL(string: "https://www.automicvault.com/blog/")!)
-                    .foregroundStyle(Color.accentColor)
-                    .font(.caption)
-            }
-            ForEach(news.prefix(2)) { post in
-                Link(destination: post.url) {
-                    Text(post.title + " ↗").font(.callout).foregroundStyle(Color.accentColor)
-                        .multilineTextAlignment(.leading).lineLimit(nil)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
             if let version = model.availableUpdateVersion {
-                Divider()
+                Text("Update to v\(version)").font(.headline)
+                AvailableReleaseNotesView(version: version)
+                    .id(version)
                 Button("Update to v\(version)", action: checkForUpdates)
-                    .foregroundStyle(Color.accentColor)
+                    .buttonStyle(.borderedProminent)
             } else {
+                HStack {
+                    Text("What’s new").font(.headline)
+                    Spacer()
+                    Link("Blog ↗", destination: URL(string: "https://www.automicvault.com/blog/")!)
+                        .foregroundStyle(Color.accentColor)
+                        .font(.caption)
+                }
+                ForEach(news.prefix(2)) { post in
+                    Link(destination: post.url) {
+                        Text(post.title + " ↗").font(.callout).foregroundStyle(Color.accentColor)
+                            .multilineTextAlignment(.leading).lineLimit(nil)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
                 Divider()
                 if let checked = model.lastUpdateCheck {
                     Text("Last update check: \(shortDashboardTimestamp(checked))")
@@ -7154,5 +7156,41 @@ private struct DashboardOverviewView: View {
     private func destination(_ title: String, section: DashboardSection) -> some View {
         Button(title) { model.navigateFromOverview(to: section) }
             .foregroundStyle(Color.accentColor).lineLimit(1)
+    }
+}
+
+private struct AvailableReleaseNotesView: View {
+    let version: String
+    @State private var notes: String?
+
+    var body: some View {
+        Group {
+            if let notes, !notes.isEmpty {
+                ScrollView {
+                    RenderedMarkdown(markdown: notes)
+                        // Release metadata must not trigger arbitrary remote image requests.
+                        .markdownImageProvider(.asset)
+                        .markdownInlineImageProvider(.asset)
+                        .environment(\.openURL, OpenURLAction { url in
+                            url.scheme == "https" ? .systemAction : .discarded
+                        })
+                        .font(.callout)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(height: 180)
+            } else if notes == nil {
+                ProgressView().controlSize(.small)
+            } else {
+                Link("View Release Notes", destination: URL(string:
+                    "https://github.com/automic-vault/automic-vault/releases/tag/"
+                )!.appendingPathComponent(version))
+                    .font(.callout)
+            }
+        }
+        .task {
+            let loaded = (try? await ReleaseNotes.load(version: version)) ?? ""
+            guard !Task.isCancelled else { return }
+            notes = loaded
+        }
     }
 }
