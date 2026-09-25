@@ -6843,7 +6843,6 @@ private struct ToolActivityStrip: View {
 }
 
 private struct InitialLoadingView: View {
-    @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
@@ -6854,23 +6853,32 @@ private struct InitialLoadingView: View {
             if let shield = Self.shield {
                 ZStack {
                     Image(nsImage: shield)
+                        .renderingMode(.template)
                         .resizable()
                         .scaledToFit()
-                        .saturation(0)
-                        .colorMultiply(colorScheme == .dark ? .white : .gray)
-                        .opacity(reduceTransparency ? 1 : 0.45)
+                        .foregroundStyle(.primary)
+                        // Keep the silhouettes, clearing the baked-in eye and its reflections.
+                        .mask {
+                            HStack(spacing: 6) {
+                                Rectangle()
+                                Rectangle()
+                            }
+                        }
+                        .opacity(reduceTransparency ? 1 : 0.2)
 
                     // Match the eye in the original 1024 × 1024 icon artwork.
                     Capsule()
                         .fill(.primary)
-                        .frame(width: 1.5, height: 32)
-                        .shadow(color: .primary.opacity(0.6), radius: 4)
-                        // Keyframes animate only opacity, never the initial layout position.
-                        .keyframeAnimator(initialValue: 0.9, repeating: !reduceMotion) { eye, opacity in
-                            eye.opacity(opacity)
+                        .frame(width: 3, height: 36)
+                        // Keyframes keep the pulse centered without animating initial layout.
+                        .keyframeAnimator(initialValue: 1.0, repeating: !reduceMotion) { eye, intensity in
+                            eye
+                                .scaleEffect(x: 0.8 + 0.2 * intensity, y: 0.7 + 0.3 * intensity)
+                                .shadow(color: .primary.opacity(0.6 * intensity), radius: 2 + 6 * intensity)
+                                .opacity(0.15 + 0.85 * intensity)
                         } keyframes: { _ in
-                            CubicKeyframe(0.3, duration: 1.4, startVelocity: 0, endVelocity: 0)
-                            CubicKeyframe(0.9, duration: 1.4, startVelocity: 0, endVelocity: 0)
+                            CubicKeyframe(0, duration: 0.8, startVelocity: 0, endVelocity: 0)
+                            CubicKeyframe(1, duration: 0.8, startVelocity: 0, endVelocity: 0)
                         }
                         .offset(x: 0.25, y: 1.75)
                 }
