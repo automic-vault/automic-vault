@@ -6945,8 +6945,7 @@ private struct DashboardOverviewView: View {
 
     private var dashboard: some View {
         GeometryReader { geometry in
-            let compact = geometry.size.height < 550
-            VStack(alignment: .leading, spacing: compact ? 12 : 20) {
+            VStack(alignment: .leading, spacing: 12) {
                 HStack(spacing: 12) {
                     summary(.allSecrets, value: "\(model.snapshot.secrets.count)", caption: "Secrets", projects: projectCount)
                     summary(.blessedScripts, value: "\(model.count(for: .blessedScripts))", caption: "Blessed Scripts")
@@ -7102,10 +7101,13 @@ private struct DashboardOverviewView: View {
             Divider()
             if let version = model.availableUpdateVersion {
                 Text("Update to v\(version)").font(.headline)
-                AvailableReleaseNotesView(version: version)
+                AvailableReleaseNotesView(version: version, compact: compact)
                     .id(version)
-                Button("Update to v\(version)", action: checkForUpdates)
-                    .buttonStyle(.borderedProminent)
+                Button(action: checkForUpdates) {
+                    Text("Update to v\(version)")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
             } else {
                 HStack {
                     Text("What’s new").font(.headline)
@@ -7131,9 +7133,9 @@ private struct DashboardOverviewView: View {
                 }
             }
         }
-        .padding(compact ? 12 : 16)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .fixedSize(horizontal: false, vertical: true)
+        .padding(12)
+        .frame(maxWidth: .infinity, maxHeight: compact ? nil : .infinity, alignment: .topLeading)
+        .fixedSize(horizontal: false, vertical: compact)
         .background(cardBackground)
     }
 
@@ -7170,6 +7172,7 @@ private struct DashboardOverviewView: View {
 
 private struct AvailableReleaseNotesView: View {
     let version: String
+    let compact: Bool
     @State private var notes: String?
 
     var body: some View {
@@ -7183,19 +7186,20 @@ private struct AvailableReleaseNotesView: View {
                         .environment(\.openURL, OpenURLAction { url in
                             url.scheme == "https" ? .systemAction : .discarded
                         })
-                        .font(.callout)
+                        .markdownTextStyle { FontSize(NSFont.smallSystemFontSize) }
+                        .font(.caption)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .frame(height: 180)
             } else if notes == nil {
                 ProgressView().controlSize(.small)
             } else {
                 Link("View Release Notes", destination: URL(string:
                     "https://github.com/automic-vault/automic-vault/releases/tag/"
                 )!.appendingPathComponent(version))
-                    .font(.callout)
+                    .font(.caption)
             }
         }
+        .frame(minHeight: compact ? 180 : 80, maxHeight: compact ? 180 : .infinity, alignment: .topLeading)
         .task {
             let loaded = (try? await ReleaseNotes.load(version: version)) ?? ""
             guard !Task.isCancelled else { return }
