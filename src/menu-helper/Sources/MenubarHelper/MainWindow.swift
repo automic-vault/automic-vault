@@ -2887,6 +2887,7 @@ struct DashboardRootView: View {
                         Button(action: checkForUpdates) {
                             Label("Update to v\(version)", systemImage: "arrow.down.circle")
                         }
+                        .buttonStyle(.borderedProminent)
                         .labelStyle(.titleAndIcon)
                         .help("Install Automic Vault v\(version)")
                     }
