@@ -190,6 +190,7 @@ if [[ "$release_artifact" -eq 1 ]]; then
 fi
 cp "$MENU_HELPER/LaunchAgent.plist" "$LAUNCH_AGENT_PLIST"
 cp "$MENU_HELPER/Resources/NSMenuItem.png" "$RESOURCES/NSMenuItem.png"
+cp "$MENU_HELPER/Resources/AppIcon.icon/Assets/Shield.png" "$RESOURCES/LoadingShield.png"
 # SwiftUI and AppKit look up UI strings in the signed app's main bundle.
 for localization in "$MENU_HELPER"/Resources/*.lproj; do
   ditto "$localization" "$RESOURCES/$(basename "$localization")"

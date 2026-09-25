@@ -2339,6 +2339,20 @@ func runDashboardSearchSelfCheck() -> Int32 {
     model.navigateFromOverview(to: .overview)
     // Render the actual SwiftUI layout at the minimum detail area and a larger window.
     if let directory = ProcessInfo.processInfo.environment["AV_OVERVIEW_RENDER_DIR"] {
+        guard NSImage(named: "LoadingShield") != nil else { return 1 }
+        for scheme in [ColorScheme.light, .dark] {
+            let renderer = ImageRenderer(content: InitialLoadingView()
+                .environment(\.colorScheme, scheme)
+                .frame(width: 420, height: 300)
+                .background(scheme == .dark ? Color(white: 0.13) : Color(white: 0.93)))
+            renderer.scale = 2
+            guard let data = renderer.nsImage?.tiffRepresentation,
+                  let png = NSBitmapImageRep(data: data)?.representation(using: .png, properties: [:]) else { return 1 }
+            do {
+                try png.write(to: URL(fileURLWithPath: directory)
+                    .appendingPathComponent("loading-\(scheme == .dark ? "dark" : "light").png"))
+            } catch { return 1 }
+        }
         var renderSnapshot = findingSnapshot
         renderSnapshot.secretGates.append(SecretGate(id: "aws", keyPatterns: [], routes: [],
             defaultProtection: .noAccess, appPolicies: []))
@@ -6827,6 +6841,46 @@ private struct ToolActivityStrip: View {
     }
 }
 
+private struct InitialLoadingView: View {
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+
+    private static let shield = NSImage(named: "LoadingShield")
+
+    var body: some View {
+        Group {
+            if let shield = Self.shield {
+                ZStack {
+                    Image(nsImage: shield)
+                        .resizable()
+                        .scaledToFit()
+                        .saturation(0)
+                        .colorMultiply(colorScheme == .dark ? .white : .gray)
+                        .opacity(reduceTransparency ? 1 : 0.45)
+
+                    // Match the eye in the original 1024 × 1024 icon artwork.
+                    Capsule()
+                        .fill(.primary)
+                        .frame(width: 1.5, height: 32)
+                        .shadow(color: .primary.opacity(0.6), radius: 4)
+                        .phaseAnimator(reduceMotion ? [true] : [false, true]) { eye, bright in
+                            eye.opacity(bright ? 0.9 : 0.3)
+                        } animation: { _ in
+                            .easeInOut(duration: 1.4)
+                        }
+                        .offset(x: 0.25, y: 1.75)
+                }
+            } else {
+                ProgressView()
+            }
+        }
+        .frame(width: 128, height: 128)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Loading Automic Vault…")
+    }
+}
+
 private struct OverviewTextButtonStyle: ButtonStyle {
     @Environment(\.colorScheme) private var colorScheme
 
@@ -6865,7 +6919,7 @@ private struct DashboardOverviewView: View {
             if model.hasLoadedInitialSnapshot {
                 dashboard
             } else {
-                ProgressView("Loading Automic Vault…")
+                InitialLoadingView()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
