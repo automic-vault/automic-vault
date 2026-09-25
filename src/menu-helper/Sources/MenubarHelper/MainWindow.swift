@@ -2885,7 +2885,7 @@ struct DashboardRootView: View {
                     Spacer()
                     if let version = model.availableUpdateVersion {
                         Button(action: checkForUpdates) {
-                            Label("Update to v\(version)", systemImage: "arrow.down.circle")
+                            Label("Update to v\(version)…", systemImage: "arrow.down.circle")
                         }
                         .buttonStyle(.borderedProminent)
                         .labelStyle(.titleAndIcon)
@@ -7105,7 +7105,7 @@ private struct DashboardOverviewView: View {
                 AvailableReleaseNotesView(version: version, compact: compact)
                     .id(version)
                 Button(action: checkForUpdates) {
-                    Text("Update to v\(version)")
+                    Text("Update to v\(version)…")
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)

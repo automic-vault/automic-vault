@@ -462,7 +462,7 @@
 "Blog ↗" = "Blog ↗";
 "Documentation ↗" = "Documentation ↗";
 "GitHub ↗" = "GitHub ↗";
-"Update to v%@" = "Update to v%@";
+"Update to v%@…" = "Update to v%@…";
 "Update Available" = "Update Available";
 "Last update check: %@" = "Last update check: %@";
 "Last update check: Not yet checked" = "Last update check: Not yet checked";

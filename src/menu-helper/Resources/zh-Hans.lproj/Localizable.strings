@@ -462,7 +462,7 @@
 "Blog ↗" = "博客 ↗";
 "Documentation ↗" = "文档 ↗";
 "GitHub ↗" = "GitHub ↗";
-"Update to v%@" = "更新至 v%@";
+"Update to v%@…" = "更新至 v%@…";
 "Update Available" = "有可用更新";
 "Last update check: %@" = "上次检查更新：%@";
 "Last update check: Not yet checked" = "上次检查更新：尚未检查";
