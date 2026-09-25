@@ -6986,7 +6986,12 @@ private struct DashboardOverviewView: View {
                     }
                     HStack {
                         Spacer()
-                        destination(String(localized: "View all \(String(model.snapshot.hardenedTools.count)) hardened Tools →"), section: .hardenedTools)
+                        if model.snapshot.hardenedTools.isEmpty {
+                            Link("Learn about hardening tools →", destination: URL(string: "https://www.automicvault.com/docs/hardeners/")!)
+                                .foregroundStyle(Color.accentColor)
+                        } else {
+                            destination(String(localized: "View all \(String(model.snapshot.hardenedTools.count)) hardened Tools →"), section: .hardenedTools)
+                        }
                     }
                     .font(.caption)
                     .frame(height: 24, alignment: .bottom)

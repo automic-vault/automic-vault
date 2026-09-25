@@ -477,3 +477,5 @@
 "%@: %@ recorded requests" = "%@: %@ recorded requests";
 
 "Retained Authorization Records, including denials. Older records may have been removed by the storage limit." = "Retained Authorization Records, including denials. Older records may have been removed by the storage limit.";
+
+"Learn about hardening tools →" = "Learn about hardening tools →";
