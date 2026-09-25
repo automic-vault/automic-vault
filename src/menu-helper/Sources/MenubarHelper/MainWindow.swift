@@ -6929,6 +6929,16 @@ private struct OverviewTextButtonStyle: ButtonStyle {
     }
 }
 
+private struct OverviewToolButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .frame(maxWidth: .infinity, minHeight: 53)
+            .background(.primary.opacity(configuration.isPressed ? 0.12 : 0),
+                        in: RoundedRectangle(cornerRadius: 6))
+            .contentShape(Rectangle())
+    }
+}
+
 /// Bounded summaries only: full inventories and actions stay in their existing sections.
 private struct DashboardOverviewView: View {
     @ObservedObject var model: DashboardModel
@@ -7073,6 +7083,7 @@ private struct DashboardOverviewView: View {
                                 }
                             }.padding(.vertical, 8).contentShape(Rectangle())
                         }
+                        .buttonStyle(OverviewToolButtonStyle())
                         .frame(height: 53)
                         .help((issue?.message ?? tool.subtitle) + (hasGate
                             ? "\n" + String(localized: "Recorded authorization requests in the last 24 hours. This is not a count of Tool executions.") : ""))
