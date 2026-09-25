@@ -6828,9 +6828,11 @@ private struct ToolActivityStrip: View {
 }
 
 private struct OverviewTextButtonStyle: ButtonStyle {
+    @Environment(\.colorScheme) private var colorScheme
+
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .brightness(configuration.isPressed ? -0.08 : 0)
+            .brightness(configuration.isPressed ? (colorScheme == .light ? -0.22 : -0.08) : 0)
     }
 }
 
