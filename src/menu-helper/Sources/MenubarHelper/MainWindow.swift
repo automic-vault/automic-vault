@@ -1810,7 +1810,8 @@ final class DashboardModel: ObservableObject {
                 }
                 let severity = detectorSeverityLevel(findings.map(\.severity))
                 let affectedCount = findings.flatMap(\.affected).count
-                let subtitle = affectedCount == 1 ? "1 trigger tripped" : "\(affectedCount) triggers tripped"
+                let subtitle = affectedCount == 0 ? "detector tripped"
+                    : affectedCount == 1 ? "1 trigger tripped" : "\(affectedCount) triggers tripped"
                 return DashboardItem(
                     id: detector.name,
                     title: displayName.packageName,
@@ -2254,6 +2255,8 @@ func runDashboardSearchSelfCheck() -> Int32 {
     let findingModel = DashboardModel(snapshot: findingSnapshot)
     guard findingModel.overviewTools.prefix(3).map(\.title) == ["aws", "git", "wrangler"] else { return 1 }
     guard let gitFinding = findingModel.overviewTools.first(where: { $0.title == "git" }),
+          gitFinding.subtitle == "detector tripped",
+          findingModel.overviewFindings.first(where: { $0.id == gitFinding.id })?.subtitle == "detector tripped",
           findingModel.overviewVerification(for: gitFinding) == "Git credentials are exposed.",
           detectorSeverityColor(gitFinding.severity) == .red,
           detectorSeverityColor("medium") == .orange,
