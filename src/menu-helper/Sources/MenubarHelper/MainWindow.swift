@@ -6876,7 +6876,7 @@ private struct DashboardOverviewView: View {
                             model.navigateFromOverview(to: .detectors)
                         } label: {
                             Label(localizedUIString(model.hasSearchQuery ? "No matching Tools · View detectors" : "Review available detectors"), systemImage: "sensor.tag.radiowaves.forward")
-                                .frame(maxWidth: .infinity, alignment: .leading).padding(12)
+                                .frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 12)
                         }.buttonStyle(.plain)
                     }
                     ForEach(visibleTools) { tool in
@@ -6913,13 +6913,13 @@ private struct DashboardOverviewView: View {
                                     ToolActivityStrip(counts: model.overviewActivitySlots(for: tool, now: now), now: now)
                                         .padding(.leading, 30)
                                 }
-                            }.padding(.horizontal, 12).padding(.vertical, 8).contentShape(Rectangle())
+                            }.padding(.vertical, 8).contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
                         .frame(height: 53)
                         .help((issue?.message ?? tool.subtitle) + (hasGate
                             ? "\n" + String(localized: "Recorded authorization requests in the last 24 hours. This is not a count of Tool executions.") : ""))
-                        if tool.id != visibleTools.last?.id { Divider().padding(.leading, 42) }
+                        if tool.id != visibleTools.last?.id { Divider().padding(.leading, 30) }
                     }
                     Spacer(minLength: 0)
                 }
