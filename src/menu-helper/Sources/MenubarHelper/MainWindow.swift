@@ -6788,11 +6788,7 @@ private struct DashboardOverviewView: View {
 
     private var cardBackground: some View {
         RoundedRectangle(cornerRadius: 10)
-            .fill(.quaternary)
-            .overlay {
-                RoundedRectangle(cornerRadius: 10)
-                    .strokeBorder(Color(nsColor: .separatorColor), lineWidth: 1)
-            }
+            .fill(.quaternary.opacity(0.3))
     }
 
     private var projectCount: Int {
@@ -6928,7 +6924,6 @@ private struct DashboardOverviewView: View {
                     Spacer(minLength: 0)
                 }
                 .frame(maxHeight: .infinity, alignment: .top)
-                .background(cardBackground)
             }
             HStack {
                 Spacer()
