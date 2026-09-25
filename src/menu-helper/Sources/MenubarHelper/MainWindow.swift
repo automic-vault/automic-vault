@@ -6870,11 +6870,10 @@ private struct InitialLoadingView: View {
                     Capsule()
                         .fill(.primary)
                         .frame(width: 3, height: 36)
-                        // Keyframes keep the pulse centered without animating initial layout.
+                        // Animate intensity only; eye dimensions and glow radius stay fixed.
                         .keyframeAnimator(initialValue: 1.0, repeating: !reduceMotion) { eye, intensity in
                             eye
-                                .scaleEffect(x: 0.8 + 0.2 * intensity, y: 0.7 + 0.3 * intensity)
-                                .shadow(color: .primary.opacity(0.6 * intensity), radius: 2 + 6 * intensity)
+                                .shadow(color: .primary.opacity(0.6 * intensity), radius: 8)
                                 .opacity(0.15 + 0.85 * intensity)
                         } keyframes: { _ in
                             CubicKeyframe(0, duration: 0.8, startVelocity: 0, endVelocity: 0)
