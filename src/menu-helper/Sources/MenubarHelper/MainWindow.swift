@@ -6876,8 +6876,9 @@ private struct InitialLoadingView: View {
                                 .shadow(color: .primary.opacity(0.6 * intensity), radius: 8)
                                 .opacity(0.15 + 0.85 * intensity)
                         } keyframes: { _ in
-                            CubicKeyframe(0, duration: 0.8, startVelocity: 0, endVelocity: 0)
-                            CubicKeyframe(1, duration: 0.8, startVelocity: 0, endVelocity: 0)
+                            LinearKeyframe(1, duration: 0.8)
+                            CubicKeyframe(0, duration: 0.45, startVelocity: 0, endVelocity: 0)
+                            CubicKeyframe(1, duration: 0.35, startVelocity: 0, endVelocity: 0)
                         }
                         .offset(x: 0.25, y: 1.75)
                 }
@@ -6886,6 +6887,7 @@ private struct InitialLoadingView: View {
             }
         }
         .frame(width: 128, height: 128)
+        .scaleEffect(0.8)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Loading Automic Vault…")
     }
