@@ -1731,6 +1731,10 @@ final class DashboardModel: ObservableObject {
 
 
     func overviewVerification(for tool: DashboardItem) -> String {
+        guard tool.isHardened else {
+            return snapshot.detectorFindings.first { $0.source == tool.id }?.explanation
+                ?? tool.subtitle
+        }
         guard let refreshed = lastHardeningRefresh else { return String(localized: "Hardening not yet refreshed") }
         let timestamp = shortDashboardTimestamp(refreshed)
         return tool.isHardened && overviewDoctorIssue(for: tool) == nil
@@ -2246,9 +2250,19 @@ func runDashboardSearchSelfCheck() -> Int32 {
     else { return 1 }
     var findingSnapshot = attentionSnapshot
     findingSnapshot.detectorFindings = try! JSONDecoder().decode([DetectorFinding].self,
-        from: Data(#"[{"source":"git","severity":"high"}]"#.utf8))
+        from: Data(#"[{"source":"git","severity":"high","explanation":"Git credentials are exposed."}]"#.utf8))
     let findingModel = DashboardModel(snapshot: findingSnapshot)
     guard findingModel.overviewTools.prefix(3).map(\.title) == ["aws", "git", "wrangler"] else { return 1 }
+    guard let gitFinding = findingModel.overviewTools.first(where: { $0.title == "git" }),
+          findingModel.overviewVerification(for: gitFinding) == "Git credentials are exposed.",
+          detectorSeverityColor(gitFinding.severity) == .red,
+          detectorSeverityColor("medium") == .orange,
+          findingModel.overviewVerification(for: DashboardItem(id: "no-explanation", title: "SIP",
+              subtitle: "SIP is disabled", detail: "", isTriggered: true)) == "SIP is disabled"
+    else {
+        print("Overview must show detection text for an unhardened tool")
+        return 1
+    }
     guard !model.overviewHasGate(awsOverview),
           model.overviewVerification(for: awsOverview) == "Hardening not yet refreshed" else { return 1 }
     var statusSnapshot = model.snapshot
@@ -2322,7 +2336,7 @@ func runDashboardSearchSelfCheck() -> Int32 {
     model.navigateFromOverview(to: .overview)
     // Render the actual SwiftUI layout at the minimum detail area and a larger window.
     if let directory = ProcessInfo.processInfo.environment["AV_OVERVIEW_RENDER_DIR"] {
-        var renderSnapshot = attentionSnapshot
+        var renderSnapshot = findingSnapshot
         renderSnapshot.secretGates.append(SecretGate(id: "aws", keyPatterns: [], routes: [],
             defaultProtection: .noAccess, appPolicies: []))
         renderSnapshot.hardenedTools += (1...12).map {
@@ -6926,6 +6940,7 @@ private struct DashboardOverviewView: View {
                     ForEach(visibleTools) { tool in
                         let issue = model.overviewDoctorIssue(for: tool)
                         let needsAttention = tool.isTriggered || issue != nil
+                        let attentionColor = tool.isTriggered ? detectorSeverityColor(tool.severity) : Color.orange
                         let hasGate = model.overviewHasGate(tool)
                         Button {
                             model.openOverviewTool(tool)
@@ -6933,15 +6948,16 @@ private struct DashboardOverviewView: View {
                             VStack(alignment: .leading, spacing: 6) {
                                 HStack(spacing: 4) {
                                     Image(systemName: needsAttention ? "exclamationmark.triangle.fill" : "hammer")
-                                        .foregroundStyle(needsAttention ? Color.orange : Color.secondary)
+                                        .foregroundStyle(needsAttention ? attentionColor : Color.secondary)
                                         .frame(width: 20)
                                         .padding(.trailing, 6)
                                     VStack(alignment: .leading, spacing: 3) {
                                         Text(tool.title).fontWeight(.medium).lineLimit(1)
-                                        if !hasGate {
+                                        if !hasGate || !tool.isHardened {
                                             Text(model.overviewVerification(for: tool))
                                                 .font(.caption2)
-                                                .foregroundStyle(.tertiary).lineLimit(1)
+                                                .foregroundStyle(.secondary).lineLimit(1)
+                                                .help(model.overviewVerification(for: tool))
                                         }
                                     }
                                     Spacer(minLength: 0)
@@ -6950,7 +6966,7 @@ private struct DashboardOverviewView: View {
                                             Text(localizedUIString(issue != nil ? (tool.isTriggered ? "Finding · Doctor report" : "Doctor report") : (tool.isTriggered ? "Finding" : "Hardened")))
                                         }
                                         .font(.caption)
-                                        .foregroundStyle(needsAttention ? Color.orange : Color.secondary)
+                                        .foregroundStyle(needsAttention ? attentionColor : Color.secondary)
                                     Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary)
                                 }
                                 if hasGate {
