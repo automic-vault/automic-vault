@@ -6864,7 +6864,7 @@ private struct InitialLoadingView: View {
                                 Rectangle()
                             }
                         }
-                        .opacity(reduceTransparency ? 1 : 0.2)
+                        .opacity(reduceTransparency ? 1 : 0.17)
 
                     // Match the eye in the original 1024 × 1024 icon artwork.
                     Capsule()
@@ -6873,12 +6873,12 @@ private struct InitialLoadingView: View {
                         // Animate intensity only; eye dimensions and glow radius stay fixed.
                         .keyframeAnimator(initialValue: 1.0, repeating: !reduceMotion) { eye, intensity in
                             eye
-                                .shadow(color: .primary.opacity(0.6 * intensity), radius: 8)
+                                .shadow(color: .primary.opacity(0.89 * intensity), radius: 7.5)
                                 .opacity(0.15 + 0.85 * intensity)
                         } keyframes: { _ in
-                            LinearKeyframe(1, duration: 0.8)
-                            CubicKeyframe(0, duration: 0.45, startVelocity: 0, endVelocity: 0)
-                            CubicKeyframe(1, duration: 0.35, startVelocity: 0, endVelocity: 0)
+                            LinearKeyframe(1, duration: 1.0)
+                            CubicKeyframe(0, duration: 1.15, startVelocity: 0, endVelocity: 0)
+                            CubicKeyframe(1, duration: 0.4, startVelocity: 0, endVelocity: 0)
                         }
                         .offset(x: 0.25, y: 1.75)
                 }
