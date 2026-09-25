@@ -6864,10 +6864,12 @@ private struct InitialLoadingView: View {
                         .fill(.primary)
                         .frame(width: 1.5, height: 32)
                         .shadow(color: .primary.opacity(0.6), radius: 4)
-                        .phaseAnimator(reduceMotion ? [true] : [false, true]) { eye, bright in
-                            eye.opacity(bright ? 0.9 : 0.3)
-                        } animation: { _ in
-                            .easeInOut(duration: 1.4)
+                        // Keyframes animate only opacity, never the initial layout position.
+                        .keyframeAnimator(initialValue: 0.9, repeating: !reduceMotion) { eye, opacity in
+                            eye.opacity(opacity)
+                        } keyframes: { _ in
+                            CubicKeyframe(0.3, duration: 1.4, startVelocity: 0, endVelocity: 0)
+                            CubicKeyframe(0.9, duration: 1.4, startVelocity: 0, endVelocity: 0)
                         }
                         .offset(x: 0.25, y: 1.75)
                 }
