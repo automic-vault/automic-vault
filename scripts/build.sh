@@ -7,6 +7,7 @@ dmg=0
 notarize=0
 release_artifact=0
 wmo=0
+universal=0
 version_supplied=0
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CURRENT_VERSION="$(
@@ -27,6 +28,7 @@ while [[ $# -gt 0 ]]; do
     --notarize) notarize=1 ;;
     --release-artifact) release_artifact=1; dmg=1; notarize=1 ;;
     --wmo) wmo=1 ;;
+    --universal) universal=1 ;;
     --version)
       if [[ $# -lt 2 || "$2" == --* ]]; then
         echo "error: --version requires a value" >&2
@@ -37,7 +39,7 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     *)
-      echo "usage: $0 [--run] [--install] [--dmg] [--notarize] [--release-artifact] [--wmo] [--version VERSION]" >&2
+      echo "usage: $0 [--run] [--install] [--dmg] [--notarize] [--release-artifact] [--wmo] [--universal] [--version VERSION]" >&2
       exit 64
       ;;
   esac
@@ -56,6 +58,7 @@ if [[ "$notarize" -eq 1 && "$dmg" -ne 1 ]]; then
   exit 64
 fi
 if [[ "$release_artifact" -eq 1 ]]; then
+  universal=1
   if [[ "${GITHUB_ACTIONS:-}" != "true" ]]; then
     echo "error: release artifacts may only be built by GitHub Actions" >&2
     exit 64
@@ -151,8 +154,23 @@ assert_private_keychain_entitlement() {
   fi
 }
 
-cargo build --release --locked --manifest-path "$ROOT/Cargo.toml"
-AV_CLI_REVISION="$("$ROOT/target/release/av" __version)"
+RUST_BIN="$ROOT/target/release"
+swift_arch_args=(--arch "$(uname -m)")
+if [[ "$universal" -eq 1 ]]; then
+  swift_arch_args=(--arch arm64 --arch x86_64)
+  for target in aarch64-apple-darwin x86_64-apple-darwin; do
+    cargo build --release --locked --manifest-path "$ROOT/Cargo.toml" --target "$target"
+  done
+  RUST_BIN="$ROOT/target/universal/release"
+  mkdir -p "$RUST_BIN"
+  for binary in av av-gpg av-brew-stub av-proxy-helper; do
+    lipo -create "$ROOT/target/aarch64-apple-darwin/release/$binary" \
+      "$ROOT/target/x86_64-apple-darwin/release/$binary" -output "$RUST_BIN/$binary"
+  done
+else
+  cargo build --release --locked --manifest-path "$ROOT/Cargo.toml"
+fi
+AV_CLI_REVISION="$("$RUST_BIN/av" __version)"
 if [[ ! "$AV_CLI_REVISION" =~ ^[0-9]+$ ]]; then
   echo "error: invalid av install revision: $AV_CLI_REVISION" >&2
   exit 64
@@ -163,7 +181,7 @@ swift_build_args=(
   --disable-automatic-resolution
   --package-path "$MENU_HELPER"
   --build-path "$SWIFT_TARGET"
-  --arch arm64
+  "${swift_arch_args[@]}"
 )
 if [[ "$wmo" -eq 1 ]]; then
   swift_build_args+=(-Xswiftc -whole-module-optimization)
@@ -282,10 +300,10 @@ fi
 sign_code "${codesign_args[@]}" --identifier com.automicvault.launcher-bundle-runner "$RESOURCES/AutomicVaultLauncher"
 sign_code "${codesign_args[@]}" --identifier com.automicvault.varlock-plugin-helper "$RESOURCES/AutomicVaultVarlockPlugin"
 assert_no_embedded_entitlements "$RESOURCES/AutomicVaultVarlockPlugin"
-cp "$ROOT/target/release/av" "$MACOS/av"
-cp "$ROOT/target/release/av-gpg" "$MACOS/av-gpg"
-cp "$ROOT/target/release/av-brew-stub" "$MACOS/av-brew-stub"
-cp "$ROOT/target/release/av-proxy-helper" "$MACOS/av-proxy-helper"
+cp "$RUST_BIN/av" "$MACOS/av"
+cp "$RUST_BIN/av-gpg" "$MACOS/av-gpg"
+cp "$RUST_BIN/av-brew-stub" "$MACOS/av-brew-stub"
+cp "$RUST_BIN/av-proxy-helper" "$MACOS/av-proxy-helper"
 sign_code "${codesign_args[@]}" --identifier com.automicvault.av "$MACOS/av"
 sign_code "${codesign_args[@]}" --identifier com.automicvault.av-gpg "$MACOS/av-gpg"
 sign_code "${codesign_args[@]}" --identifier com.automicvault.av-brew-stub "$MACOS/av-brew-stub"
@@ -323,6 +341,9 @@ codesign --verify --strict "$MACOS/av-proxy-helper"
 codesign --verify --strict "$APP"
 if [[ -f "$MENU_HELPER_PROFILE" && "$identity" != "-" ]]; then
   assert_private_keychain_entitlement "$APP"
+fi
+if [[ "$universal" -eq 1 ]]; then
+  "$ROOT/scripts/verify-universal-app.sh" "$APP"
 fi
 if [[ "$dmg" -eq 1 ]]; then
   rm -rf "$DMG" "$DMG_STAGE"

@@ -138,6 +138,7 @@ jobs:
           set -euo pipefail
           rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal
           rustup override set "$RUST_TOOLCHAIN"
+          rustup target add aarch64-apple-darwin x86_64-apple-darwin
 
           create_dmg_archive="$RUNNER_TEMP/create-dmg-1.3.0.tar.gz"
           curl --fail --location --silent --show-error \

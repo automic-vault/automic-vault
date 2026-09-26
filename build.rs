@@ -22,12 +22,24 @@ fn main() {
     );
     println!("cargo:rerun-if-changed={}", proxy_info.display());
 
+    let architecture = match env::var("CARGO_CFG_TARGET_ARCH").unwrap().as_str() {
+        "aarch64" => "arm64",
+        "x86_64" => "x86_64",
+        other => panic!("unsupported macOS architecture: {other}"),
+    };
     let object = out.join("xpc_shim.o");
     let library = out.join("libav_xpc_shim.a");
 
     assert!(
         Command::new("cc")
-            .args(["-fblocks", "-c", "src/cli/xpc_shim.c", "-o"])
+            .args([
+                "-arch",
+                architecture,
+                "-fblocks",
+                "-c",
+                "src/cli/xpc_shim.c",
+                "-o"
+            ])
             .arg(&object)
             .status()
             .unwrap()
