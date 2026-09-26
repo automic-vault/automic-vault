@@ -20,13 +20,19 @@ public extension SecretGate {
 /// Only explicit user actions populate denials. Prompt counts never authorize or deny.
 public final class TemporaryLauncherDenials: @unchecked Sendable {
     public static let shared = TemporaryLauncherDenials()
+    private static let clockOrigin = ContinuousClock.now
+    /// Continuous elapsed time includes sleep and is unaffected by wall-clock changes.
+    public static var now: TimeInterval {
+        let elapsed = clockOrigin.duration(to: .now).components
+        return Double(elapsed.seconds) + Double(elapsed.attoseconds) / 1e18
+    }
     private let lock = NSLock()
     private var deadlines: [String: TimeInterval] = [:]
     private var prompts: [String: [TimeInterval]] = [:]
 
     public init() {}
 
-    public func deny(_ requirement: String, now: TimeInterval = ProcessInfo.processInfo.systemUptime) {
+    public func deny(_ requirement: String, now: TimeInterval = TemporaryLauncherDenials.now) {
         guard !requirement.isEmpty else { return }
         lock.withLock {
             deadlines = deadlines.filter { $0.value > now }
@@ -36,12 +42,12 @@ public final class TemporaryLauncherDenials: @unchecked Sendable {
         NotificationCenter.default.post(name: launcherDenialDidChange, object: nil)
     }
 
-    public func isDenied(_ requirement: String, now: TimeInterval = ProcessInfo.processInfo.systemUptime) -> Bool {
+    public func isDenied(_ requirement: String, now: TimeInterval = TemporaryLauncherDenials.now) -> Bool {
         lock.withLock { (deadlines[requirement] ?? 0) > now }
     }
 
     /// Three presentations within thirty seconds, capped at three timestamps per identity.
-    public func recordPrompt(_ requirement: String, now: TimeInterval = ProcessInfo.processInfo.systemUptime) -> Bool {
+    public func recordPrompt(_ requirement: String, now: TimeInterval = TemporaryLauncherDenials.now) -> Bool {
         guard !requirement.isEmpty else { return false }
         return lock.withLock {
             prompts = prompts.filter { ($0.value.last ?? 0) >= now - 30 }

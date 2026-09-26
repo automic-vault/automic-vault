@@ -469,6 +469,7 @@ public struct SecretGatePolicy: Equatable, Sendable {
     public let requirement: String
     public let protection: SecretGateProtection
     public let denialThreshold: SecretGateProtection?
+    public let usesGateDefault: Bool
     public let runtimeRequirement: LauncherRuntimeRequirement
 
     public var requiresHardenedRuntime: Bool { runtimeRequirement != .legacyUnchecked }
@@ -478,14 +479,16 @@ public struct SecretGatePolicy: Equatable, Sendable {
         requirement: String,
         protection: SecretGateProtection,
         requiresHardenedRuntime: Bool = false,
-        denialThreshold: SecretGateProtection? = nil
+        denialThreshold: SecretGateProtection? = nil,
+        usesGateDefault: Bool = false
     ) {
         self.init(
             bundleIdentifier: bundleIdentifier,
             requirement: requirement,
             protection: protection,
             runtimeRequirement: requiresHardenedRuntime ? .hardened : .legacyUnchecked,
-            denialThreshold: denialThreshold
+            denialThreshold: denialThreshold,
+            usesGateDefault: usesGateDefault
         )
     }
 
@@ -494,12 +497,14 @@ public struct SecretGatePolicy: Equatable, Sendable {
         requirement: String,
         protection: SecretGateProtection,
         runtimeRequirement: LauncherRuntimeRequirement,
-        denialThreshold: SecretGateProtection? = nil
+        denialThreshold: SecretGateProtection? = nil,
+        usesGateDefault: Bool = false
     ) {
         self.bundleIdentifier = bundleIdentifier
         self.requirement = requirement
         self.protection = protection
         self.denialThreshold = denialThreshold
+        self.usesGateDefault = usesGateDefault
         self.runtimeRequirement = runtimeRequirement
     }
 }
@@ -1179,22 +1184,24 @@ private func loadedSecretGate(
         defaultProtection: .noAccess,
         appPolicies: []
     )
+    let defaultProtection = prototype.normalizedProtection(
+        gateRecords.last(where: { $0.requirement == nil })?.protection
+            ?? (policiesAreReadable ? prototype.initialProtection : .noAccess)
+    )
     return SecretGate(
         id: prototype.id,
         keyPatterns: prototype.keyPatterns,
         routes: prototype.routes,
-        defaultProtection: prototype.normalizedProtection(
-            gateRecords.last(where: { $0.requirement == nil })?.protection
-                ?? (policiesAreReadable ? prototype.initialProtection : .noAccess)
-        ),
+        defaultProtection: defaultProtection,
         appPolicies: gateRecords.compactMap { record in
             record.requirement.map {
                 SecretGatePolicy(
                     bundleIdentifier: appIdentifier(from: $0) ?? "unknown",
                     requirement: $0,
-                    protection: prototype.normalizedProtection(record.protection),
+                    protection: record.usesGateDefault == true ? defaultProtection : prototype.normalizedProtection(record.protection),
                     runtimeRequirement: record.resolvedRuntimeRequirement,
-                    denialThreshold: record.denialThreshold
+                    denialThreshold: record.denialThreshold,
+                    usesGateDefault: record.usesGateDefault == true
                 )
             }
         }.uniqueSorted()
@@ -1337,6 +1344,10 @@ public func setSecretGateDenialThreshold(
     service: String = secretGatePoliciesKeychainService,
     account: String = secretGatePoliciesKeychainAccount
 ) -> OSStatus {
+    var didChange = false
+    defer {
+        if didChange { NotificationCenter.default.post(name: launcherDenialDidChange, object: nil) }
+    }
     secretGatePolicyLock.lock()
     defer { secretGatePolicyLock.unlock() }
     guard !requirement.isEmpty,
@@ -1349,17 +1360,16 @@ public func setSecretGateDenialThreshold(
     }
     let index = records.firstIndex { $0.gateID == gate.id && $0.requirement == requirement }
     var record = index.map { records[$0] } ?? SecretGatePolicyRecord(
-        gateID: gate.id, requirement: requirement, protection: gate.defaultProtection,
+        gateID: gate.id, requirement: requirement, protection: .noAccess,
         runtimeRequirement: runtimeRequirement
     )
+    if index == nil { record.usesGateDefault = true }
     guard allowWeakening || !gate.weakeningDenial(from: record.denialThreshold, to: threshold)
     else { return errSecAuthFailed }
     record.denialThreshold = threshold
     if let index { records[index] = record } else { records.append(record) }
     let status = saveSecretGatePolicyRecords(records, service: service, account: account)
-    if status == errSecSuccess {
-        NotificationCenter.default.post(name: launcherDenialDidChange, object: nil)
-    }
+    didChange = status == errSecSuccess
     return status
 }
 
@@ -1437,7 +1447,7 @@ public func secretGateProtection(
     for requirement: String?,
     in gate: SecretGate
 ) -> (protection: SecretGateProtection, source: String) {
-    if let requirement, let policy = gate.appPolicies.first(where: { $0.requirement == requirement }) {
+    if let requirement, let policy = gate.appPolicies.first(where: { $0.requirement == requirement && !$0.usesGateDefault }) {
         return (policy.protection, policy.bundleIdentifier)
     }
     return (gate.defaultProtection, gate.defaultPolicyLabel)
@@ -1447,6 +1457,7 @@ struct SecretGatePolicyRecord: Codable, Equatable {
     let gateID: String
     let requirement: String?
     let protection: SecretGateProtection
+    var usesGateDefault: Bool?
     var denialThreshold: SecretGateProtection?
     let requiresHardenedRuntime: Bool?
     let runtimeRequirement: LauncherRuntimeRequirement?

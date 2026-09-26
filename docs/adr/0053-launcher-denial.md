@@ -20,7 +20,9 @@ sources. Existing policies decode with no threshold. Invalid or unreadable
 policy must not bypass denial by falling through to Approval.
 
 Use the existing protected policy store and authority-change approval for
-removing or weakening denial. Allow-preset edits preserve denial. Rule deletion
+removing or weakening denial. Allow-preset edits preserve denial. A denial-only rule continues to inherit the
+gate default rather than creating an allow override. Launcher Bundle authority
+cleanup removes allows while retaining denials. Rule deletion
 that removes denial also requires that approval.
 
 After three prompts from the same eligible Verified Launcher within thirty
