@@ -14,11 +14,10 @@ show_method = "    func showAccessRequest(" + model_source.split(
 pending_status = "    var pendingAccessRequestStatus:" + model_source.split(
     "    var pendingAccessRequestStatus:", 1
 )[1].split("    var selectedProxySession:", 1)[0]
-reload_method = model_source.split(
+reload_method, reload_boundary, _ = model_source.split(
     "    func reload() {", 1
-)[1].split(
-    "    private func reloadAuthorizationState()", 1
-)[0]
+)[1].partition("    fileprivate func reloadAuthorizationState()")
+assert reload_boundary, "DashboardModel reload extraction boundary not found"
 
 fixture = r"""
 import Foundation

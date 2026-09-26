@@ -19,6 +19,7 @@ struct ProxySessionLaunch: Sendable {
     let cwd: String
     let selectedSecretValues: SelectedSecretValues
     let targetCodeIdentity: Data?
+    var launcherRequirements: [String] = []
     let identity: ProxyTargetIdentity
 }
 
@@ -375,6 +376,20 @@ actor SecretProxyCoordinator {
             return
         }
         let sortedNames = secretNames.sorted()
+        func denyTemporarily(_ session: Session) -> Bool {
+            guard session.launch.launcherRequirements.contains(where: {
+                TemporaryLauncherDenials.shared.isDenied($0)
+            }) else { return false }
+            let reason = "Denied by two-minute Temporary Launcher Denial"
+            _ = recordAccessRequest(proxyRecord(
+                session: session, method: method, origin: origin, path: path,
+                queryNames: queryNames, secretNames: sortedNames,
+                decision: "Denied", approvalSource: "Auto", reason: reason
+            ))
+            deny(sessionID: sessionID, requestID: requestID, reason: reason)
+            return true
+        }
+        if denyTemporarily(session) { return }
         let rule = DestinationRule(origin: origin, secretNames: sortedNames)
         let decision: ProxyDestinationDecision
         let approvalSource: String
@@ -416,6 +431,7 @@ actor SecretProxyCoordinator {
             }
         }
         guard !cancellation.isCanceled else { return }
+        if denyTemporarily(session) { return }
         guard decision != .deny else {
             _ = recordAccessRequest(proxyRecord(
                 session: session,
@@ -484,6 +500,7 @@ actor SecretProxyCoordinator {
             return
         }
         guard !cancellation.isCanceled else { return }
+        if denyTemporarily(liveSession) { return }
         if decision == .allowForSession { liveSession.rules.insert(rule) }
         liveSession.authorizedRequestCount += 1
         liveSession.authorizedOrigins.insert(origin)

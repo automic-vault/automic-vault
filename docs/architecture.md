@@ -517,6 +517,23 @@ Unconstrained Secret Application for exact Secret Names in the matching
 Launcher’s Direct Access Rules. It does not turn unknown Tool operations into
 recognized operations and does not apply to Tool-specific Gate Clients.
 
+### Denial precedence
+
+Launcher-specific Denial Thresholds are stored alongside allow presets in the
+Data Protection Keychain. An absent threshold preserves existing behavior.
+An unreadable policy store denies gated requests rather than bypassing a possible
+denial through manual Approval. Thresholds use each gate's supported preset
+order, including its existing compatibility classifications; they do not create
+a universal ranking of operation characteristics.
+
+Denial is checked before Blessings, policy, Temporary Access Grants, decision
+reuse, and human Approval, and checked again for queued requests and before
+Secret release. Temporary Launcher Denials override authority across gates for
+two elapsed minutes. Three Approval presentations for the same eligible Launcher
+within thirty seconds offer the action; cancellation never activates it.
+History records automatic denials and their source without generating another
+Approval notification. See [ADR 0053](adr/0053-launcher-denial.md).
+
 ### Current compatibility model
 
 The shipped policy store encodes one legacy classification per request and persists legacy access-level raw values in Keychain. The product retains those raw values while mapping them to canonical Access Levels:

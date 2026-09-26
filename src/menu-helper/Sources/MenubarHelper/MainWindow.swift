@@ -1143,7 +1143,7 @@ final class DashboardModel: ObservableObject {
         isReloading = false
     }
 
-    private func reloadAuthorizationState() {
+    fileprivate func reloadAuthorizationState() {
         invalidateReload()
         snapshot = reloadDashboardAuthorizationState(from: snapshot)
         launcherBundles = loadLauncherBundleEnrollments()
@@ -1615,7 +1615,8 @@ final class DashboardModel: ObservableObject {
                 error: "Could not update \(app.bundleIdentifier)"
             )
         }
-        guard protection.addsAuthority(over: app.protection) else { update(); return }
+        // A denial-only row creates no allow override, even if its displayed gate default is broad.
+        guard protection.addsAuthority(over: app.usesGateDefault ? .noAccess : app.protection) else { update(); return }
         approveAuthorityChange(
             action: "gate-policy:\(gate.id):\(app.requirement)",
             "Broaden \(app.bundleIdentifier) to \(protection.title)",
@@ -1624,11 +1625,39 @@ final class DashboardModel: ObservableObject {
         )
     }
 
+    func setDenialThreshold(_ threshold: SecretGateProtection?, for app: SecretGatePolicy, in gate: SecretGate) {
+        let needsApproval = gate.weakeningDenial(from: app.denialThreshold, to: threshold)
+        let update = { [weak self] in
+            guard let self else { return }
+            self.finishSecretGatePolicyUpdate(
+                setSecretGateDenialThreshold(threshold, requirement: app.requirement, in: gate,
+                                            runtimeRequirement: app.runtimeRequirement, allowWeakening: needsApproval),
+                gate: gate, error: "Could not update the Denial Threshold"
+            )
+        }
+        guard needsApproval else { update(); return }
+        approveAuthorityChange(
+            action: "gate-denial:\(gate.id):\(app.requirement)",
+            "Reduce denial for \(app.bundleIdentifier)",
+            detail: "Existing allow rules may authorize requests again. The new Denial Threshold is \(threshold.map { gate.protectionTitle($0) + " and above" } ?? "None").",
+            perform: update
+        )
+    }
+
     func removeAppPolicy(_ app: SecretGatePolicy, from gate: SecretGate) {
-        finishSecretGatePolicyUpdate(
-            removeSecretGateAppPolicy(app, from: gate),
-            gate: gate,
-            error: "Could not delete the Launcher-specific rule for \(app.bundleIdentifier)"
+        let update = { [weak self] in
+            self?.finishSecretGatePolicyUpdate(
+                removeSecretGateAppPolicy(app, from: gate, allowRemovingDenial: app.denialThreshold != nil), gate: gate,
+                error: "Could not delete the Launcher-specific rule for \(app.bundleIdentifier)"
+            )
+        }
+        guard app.denialThreshold != nil || gate.defaultProtection.addsAuthority(over: app.protection)
+        else { update(); return }
+        approveAuthorityChange(
+            action: "gate-policy:\(gate.id):\(app.requirement)",
+            "Remove Launcher-specific policy for \(app.bundleIdentifier)",
+            detail: "The gate's default Access Level and other existing authority will apply. Any Denial Threshold in this rule will be removed.",
+            perform: { update() }
         )
     }
 
@@ -2992,6 +3021,9 @@ struct DashboardRootView: View {
         }
         .navigationTitle(model.selectedSection == .overview ? "Automic Vault" : model.selectedSection.title)
         .searchable(text: $model.searchText, placement: .sidebar, prompt: "Search")
+        .onReceive(NotificationCenter.default.publisher(for: launcherDenialDidChange).receive(on: RunLoop.main)) { _ in
+            model.reloadAuthorizationState()
+        }
         .onChange(of: proxySessions.historyRevision) { _, _ in
             model.reloadAccessRequests()
         }
@@ -4706,6 +4738,18 @@ private struct AccessRequestRow: View {
                 Text(record.reason)
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
+                if let requirement = record.launcherRequirement, !requirement.isEmpty {
+                    TimelineView(.periodic(from: .now, by: 1)) { _ in
+                        let denied = TemporaryLauncherDenials.shared.isDenied(requirement)
+                        Button(denied
+                            ? "Two-minute Launcher denial active"
+                            : "Deny all requests from \(record.launcher ?? "this Verified Launcher") for 2 minutes") {
+                            TemporaryLauncherDenials.shared.deny(requirement)
+                        }
+                        .disabled(denied)
+                        .help("Applies across Authorization Gates to the recorded Launcher Identity. Ordinary policy resumes after two minutes.")
+                    }
+                }
                 VStack(alignment: .leading, spacing: 3) {
                     AccessMetaLine("Launcher", record.launcher ?? "unknown")
                     AccessMetaLine("Decision source", record.approvalSourceLabel)
@@ -6330,6 +6374,7 @@ private struct SecretGateDetailView: View {
                             gate: gate,
                             approval: model.authorityApproval,
                             setProtection: { model.setProtection($0, for: app, in: gate) },
+                            setDenialThreshold: { model.setDenialThreshold($0, for: app, in: gate) },
                             remove: { model.removeAppPolicy(app, from: gate) }
                         )
                         if app.requirement != gate.appPolicies.last?.requirement {
@@ -6380,6 +6425,7 @@ private struct ApprovedAppRow: View {
     let gate: SecretGate
     let approval: AuthorityApprovalState
     let setProtection: (SecretGateProtection) -> Void
+    var setDenialThreshold: (SecretGateProtection?) -> Void = { _ in }
     let remove: () -> Void
     @State private var isConfirmingDelete = false
 
@@ -6410,8 +6456,27 @@ private struct ApprovedAppRow: View {
                     .textSelection(.enabled)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            ProtectionMenu(gate: gate, protection: app.protection, approval: approval, action: "gate-policy:\(gate.id):\(app.requirement)", setProtection: setProtection)
-                .frame(minWidth: 132, alignment: .trailing)
+            VStack(alignment: .trailing, spacing: 6) {
+                ProtectionMenu(gate: gate, protection: app.protection, approval: approval, action: "gate-policy:\(gate.id):\(app.requirement)", setProtection: setProtection)
+                if app.usesGateDefault {
+                    Text("Auto-allow uses gate default").font(.caption).foregroundStyle(.secondary)
+                }
+                Menu {
+                    Button("None") { setDenialThreshold(nil) }
+                    ForEach(gate.availableProtections, id: \.self) { threshold in
+                        Button("\(gate.protectionTitle(threshold)) and above") { setDenialThreshold(threshold) }
+                    }
+                } label: {
+                    AuthorityApprovalLabel(
+                        title: "Auto-deny: \(app.denialThreshold.map { gate.protectionTitle($0) + " and above" } ?? "None")",
+                        approval: approval, action: "gate-denial:\(gate.id):\(app.requirement)",
+                        requiresApproval: false
+                    )
+                }
+                .disabled(approval.isPending("gate-denial:\(gate.id):\(app.requirement)"))
+                .help("Denial wins over allow rules. Reducing denial requires Approval.")
+            }
+            .frame(minWidth: 132, alignment: .trailing)
         }
         .padding(.vertical, 10)
         .contentShape(Rectangle())
