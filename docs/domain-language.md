@@ -491,6 +491,27 @@ broader authority.
 
 The final allow or deny result and its source. An allowed request is either **automically authorized** by policy or **approved** by the user.
 
+### Denial Threshold
+
+A durable, Keychain-protected Launcher-specific rule at one Authorization Gate
+that denies operations at the selected Access Level and above without Approval.
+The gate's supported presets define the order: the selected level denies every
+operation not allowed by its preceding preset. Approval Required means deny all.
+Unknown operations are denied whenever a threshold is set. A matching denial
+wins over every source of allow authority, including Blessings and reused
+Authorization Decisions. Removing or weakening a threshold requires the same
+human authority as broadening an Access Level.
+
+### Temporary Launcher Denial
+
+An explicit user decision to deny new requests attributable to one Verified
+Launcher across Authorization Gates for two elapsed minutes. It follows Launcher
+Identity across Gate Client restarts, remains in memory, and ends on expiry or
+service restart. It overrides allow authority without revoking existing grants
+or already released Secrets. Expiry restores ordinary policy; it never approves
+a request. Repeated Approval presentations offer this action but never activate
+it automatically. Caller cancellation is not a denial rule.
+
 ### Temporary Access Grant
 
 An in-memory, user-confirmed delegation of Write Access to one exact
