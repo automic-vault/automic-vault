@@ -2944,6 +2944,7 @@ private func performApprovedSecretMutation(
             signing: signing,
             scriptApproval: nil,
             launcher: launcher,
+            denialLaunchers: launchers,
             launcherFallbackPath: launcherFallbackPath,
             automaticApprovalExplanation: nil,
             cancellation: cancellation,
@@ -4348,6 +4349,7 @@ private final class ApprovalServer: @unchecked Sendable {
                 signing: signing,
                 scriptApproval: nil,
                 launcher: launcher,
+                denialLaunchers: launchers,
                 launcherFallbackPath: ancestorFallbackPath ?? callerPath,
                 automaticApprovalExplanation: nil,
                 cancellation: cancellation
@@ -4807,7 +4809,7 @@ private final class ApprovalServer: @unchecked Sendable {
                     request: request,
                     signing: signing,
                     descriptors: secretGateDescriptors,
-                    launchers: launchers,
+                    launchers: policyLaunchers,
                     launcher: launcher,
                     callerPath: callerPath,
                     awsRegistration: awsRegistration,
@@ -4863,7 +4865,7 @@ private final class ApprovalServer: @unchecked Sendable {
                     pid: pid,
                     identity: identity,
                     record: record,
-                    launchers: launchers,
+                    launchers: policyLaunchers,
                     launcher: matchedLauncher,
                     activateAfterRecording: {
                         registerBlessedExecution(script, pid: pid, identity: identity)
@@ -4986,6 +4988,7 @@ private final class ApprovalServer: @unchecked Sendable {
                classification: classification,
                agentTaskContext: currentAgentTaskContext,
                launchers: launchers,
+               denialLaunchers: policyLaunchers,
                callerPath: callerPath,
                awsRegistration: awsRegistration,
                scriptApproval: scriptApproval,
@@ -5017,7 +5020,7 @@ private final class ApprovalServer: @unchecked Sendable {
                     pid: pid,
                     identity: identity,
                     record: record,
-                    launchers: launchers,
+                    launchers: policyLaunchers,
                     launcher: directAccessLauncher,
                     activateAfterRecording: {
                         rememberRetainedProvenance(
@@ -5093,7 +5096,7 @@ private final class ApprovalServer: @unchecked Sendable {
                     pid: pid,
                     identity: identity,
                     record: record,
-                    launchers: launchers,
+                    launchers: policyLaunchers,
                     launcher: authorizingLauncher,
                     sshScriptAuthorization: request.sshPeer == nil ? nil : .inheritedPolicy,
                     activateAfterRecording: {
@@ -5256,6 +5259,7 @@ private final class ApprovalServer: @unchecked Sendable {
                            classification: classification,
                            agentTaskContext: currentAgentTaskContext,
                            launchers: currentLaunchers,
+                           denialLaunchers: policyLaunchers + currentLaunchers,
                            callerPath: currentCallerPath,
                            awsRegistration: awsRegistration,
                            scriptApproval: scriptApproval,
@@ -5299,7 +5303,7 @@ private final class ApprovalServer: @unchecked Sendable {
                             pid: pid,
                             identity: identity,
                             record: record,
-                            launchers: launchers,
+                            launchers: policyLaunchers,
                             launcher: promptLauncher,
                             release: { payload in
                                 self.reply(
@@ -5361,6 +5365,7 @@ private final class ApprovalServer: @unchecked Sendable {
                 scriptApproval: scriptApproval,
                 blessing: promptBlessing,
                 launcher: promptLauncher,
+                denialLaunchers: policyLaunchers,
                 launcherFallbackPath: launcherFallbackPath,
                 automaticApprovalExplanation: lostBlessingExplanation(for: scriptApproval)
                     ?? retainedProcessExplanation
@@ -5462,7 +5467,7 @@ private final class ApprovalServer: @unchecked Sendable {
                         pid: pid,
                         identity: identity,
                         record: record,
-                        launchers: launchers,
+                        launchers: policyLaunchers,
                         launcher: refreshedCandidate.launcher,
                         release: { payload in
                             self.temporaryAccessGrants.startWithLease(
@@ -5526,7 +5531,7 @@ private final class ApprovalServer: @unchecked Sendable {
                     pid: pid,
                     identity: identity,
                     record: record,
-                    launchers: launchers,
+                    launchers: policyLaunchers,
                     launcher: promptLauncher,
                     activateAfterRecording: {
                         if let scriptApproval,
@@ -5589,6 +5594,7 @@ private final class ApprovalServer: @unchecked Sendable {
         classification: SecretGateRequestClassification,
         agentTaskContext: AgentTaskContext,
         launchers: [LauncherIdentity],
+        denialLaunchers: [LauncherIdentity],
         callerPath: String,
         awsRegistration: AWSRegistrationCandidate?,
         scriptApproval: ScriptApproval?,
@@ -5624,7 +5630,7 @@ private final class ApprovalServer: @unchecked Sendable {
                         pid: pid,
                         identity: identity,
                         record: record,
-                        launchers: launchers,
+                        launchers: denialLaunchers,
                         launcher: launcher,
                         activateAfterRecording: {
                             rememberRetainedProvenance(
@@ -5814,6 +5820,7 @@ private final class ApprovalServer: @unchecked Sendable {
                     signing: signing,
                     scriptApproval: nil,
                     launcher: launcher,
+                    denialLaunchers: launchers,
                     launcherFallbackPath: ancestorFallbackPath ?? applicationPath,
                     automaticApprovalExplanation: nil,
                     cancellation: cancellation
@@ -6014,6 +6021,7 @@ private final class ApprovalServer: @unchecked Sendable {
                 signing: signing,
                 scriptApproval: nil,
                 launcher: launcher,
+                denialLaunchers: launchers,
                 launcherFallbackPath: ancestorFallbackPath ?? callerPath,
                 automaticApprovalExplanation: warning,
                 cancellation: cancellation
@@ -6107,6 +6115,7 @@ private final class ApprovalServer: @unchecked Sendable {
                                 signing: signing,
                                 scriptApproval: nil,
                                 launcher: launcher,
+                                denialLaunchers: launchers,
                                 launcherFallbackPath: ancestorFallbackPath ?? callerPath,
                                 automaticApprovalExplanation: warning,
                                 allowsPersistentApproval: true,
@@ -12965,6 +12974,7 @@ private func showApprovalAlert(
     scriptApproval: ScriptApproval?,
     blessing: BlessedScriptPromptContext? = nil,
     launcher: LauncherIdentity?,
+    denialLaunchers: [LauncherIdentity] = [],
     launcherFallbackPath: String,
     automaticApprovalExplanation: String?,
     accessLevel: String? = nil,
@@ -13018,11 +13028,13 @@ private func showApprovalAlert(
         return terminalApprovalDecision(.canceled, cancellation: cancellation)
     }
 
+    let attributedLaunchers = denialLaunchers + (launcher.map { [$0] } ?? [])
+    if evaluateLauncherDenial(gate: denialGate, classification: classification ?? .unknown,
+                             launchers: attributedLaunchers) != nil {
+        return .denied
+    }
     if reevaluate?() == true {
         return .reevaluated
-    }
-    if let launcher, TemporaryLauncherDenials.shared.isDenied(launcher.designatedRequirement) {
-        return .denied
     }
     let eligibleDenialLauncher = launcher.flatMap {
         $0.runtimeProtection.allowsSecretGateAccess ? $0 : nil
@@ -13078,15 +13090,8 @@ private func showApprovalAlert(
         forName: launcherDenialDidChange, object: nil, queue: .main
     ) { _ in
         MainActor.assumeIsolated {
-            guard let launcher else { return }
-            let temporary = TemporaryLauncherDenials.shared.isDenied(launcher.designatedRequirement)
-            let persistent = denialGate.flatMap { gate in
-                classification.flatMap { classification in
-                    secretGateDenialReason(gate: gate, classification: classification,
-                                           launcherRequirements: [launcher.designatedRequirement])
-                }
-            }
-            if temporary || persistent != nil {
+            if evaluateLauncherDenial(gate: denialGate, classification: classification ?? .unknown,
+                                     launchers: attributedLaunchers) != nil {
                 ActiveApprovalPrompt.current?.resolve(.denied, source: .programmatic)
             }
         }
@@ -16452,6 +16457,35 @@ private func runApprovalCallsiteSelfCheck() async -> Int32 {
         decision: "Denied", approvalSource: "Manual", reason: "Destination denied"
     )
     guard unverifiedRecord.launcherRequirement == nil else { return 19 }
+    // A retained ancestor may be absent from the live chain and display identity.
+    // Activating its denial while queued must prevent presentation altogether.
+    let queuedAncestor = LauncherIdentity(pid: 1, path: "/retained-parent", identifier: "retained", teamIdentifier: "TEST",
+        designatedRequirement: "queued-denial-\(UUID().uuidString)", runtimeProtection: .hardened)
+    HumanApprovalQueue.shared.resetForTesting()
+    guard await HumanApprovalQueue.shared.acquire() else { return 19 }
+    let ancestorCancellation = ApprovalCancellation()
+    let ancestorPrompt = Task { @MainActor in
+        await showApprovalAlert(
+            request: deniedRequest, callerPath: "/self-check", pid: getpid(),
+            signing: SigningInfo(identifier: "self-check", teamIdentifier: "TEST"), scriptApproval: nil,
+            launcher: unverifiedChild, denialLaunchers: [unverifiedChild, queuedAncestor],
+            launcherFallbackPath: unverifiedChild.path, automaticApprovalExplanation: nil,
+            cancellation: ancestorCancellation
+        )
+    }
+    let ancestorDeadline = Date().addingTimeInterval(5)
+    while HumanApprovalQueue.shared.pendingCount == 0 && Date() < ancestorDeadline { await Task.yield() }
+    guard HumanApprovalQueue.shared.pendingCount == 1 else {
+        ancestorCancellation.cancel()
+        ancestorPrompt.cancel()
+        HumanApprovalQueue.shared.release()
+        return 19
+    }
+    TemporaryLauncherDenials.shared.deny(queuedAncestor.designatedRequirement)
+    HumanApprovalQueue.shared.release()
+    let ancestorDecision = await awaitWithTimeout(duration: .seconds(5), cancellation: ancestorCancellation, task: ancestorPrompt)
+    guard ancestorDecision == .denied, ActiveApprovalPrompt.current == nil,
+          !HumanApprovalQueue.shared.hasActiveSlot else { return 19 }
     // 1. Queued-transition focus invariant: every freshly created alert starts non-key
     // and does not inherit focus from a previously key window.
     let panel1 = makeApprovalPanel()
