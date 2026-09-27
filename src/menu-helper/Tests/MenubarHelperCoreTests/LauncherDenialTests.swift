@@ -88,6 +88,8 @@ func persistentDenialOverridesFullAccessAndSurvivesAllowEdits() throws {
     defer { _ = deleteStoredSecret(account: account, service: service) }
     let gate = denialGate()
     let requirement = "identifier com.example.launcher"
+    #expect(setSecretGateDefaultProtection(gate.defaultProtection, for: gate,
+        service: service, account: account) == errSecSuccess)
     #expect(setSecretGateDenialThreshold(.fullIncludingSecretDumps, requirement: requirement,
         in: gate, runtimeRequirement: .hardened, service: service, account: account) == errSecSuccess)
     #expect(removeSecretGatePolicies(forLauncherRequirement: requirement, service: service, account: account) == errSecSuccess)

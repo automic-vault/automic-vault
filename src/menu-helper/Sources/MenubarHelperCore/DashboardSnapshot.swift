@@ -1381,6 +1381,8 @@ public func secretGateDenial(
     service: String = secretGatePoliciesKeychainService,
     account: String = secretGatePoliciesKeychainAccount
 ) -> (reason: String, launcherRequirement: String?)? {
+    secretGatePolicyLock.lock()
+    defer { secretGatePolicyLock.unlock() }
     let records: [SecretGatePolicyRecord]
     switch loadSecretGatePolicyRecords(service: service, account: account) {
     case .success(let loaded): records = loaded

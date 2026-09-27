@@ -2805,7 +2805,23 @@ enum SecretMutation {
 
 private struct LauncherDenialError: LocalizedError {
     let reason: String
+    let launcher: LauncherIdentity?
     var errorDescription: String? { reason }
+}
+
+private func evaluateLauncherDenial(
+    gate: SecretGate?, classification: SecretGateRequestClassification, launchers: [LauncherIdentity]
+) -> LauncherDenialError? {
+    if let launcher = launchers.first(where: {
+        TemporaryLauncherDenials.shared.isDenied($0.designatedRequirement)
+    }) { return LauncherDenialError(reason: "Denied by two-minute Temporary Launcher Denial", launcher: launcher) }
+    // Direct Secret requests have no tool-gate policy. A failed read of an
+    // existing gate remains a denial, as enforced by secretGateDenial.
+    guard let gate, let denial = secretGateDenial(
+        gate: gate, classification: classification, launcherRequirements: launchers.map(\.designatedRequirement)
+    ) else { return nil }
+    return LauncherDenialError(reason: denial.reason,
+        launcher: launchers.first { $0.designatedRequirement == denial.launcherRequirement })
 }
 
 private enum ApprovalDecision: Equatable {
@@ -3583,7 +3599,7 @@ private struct AWSRegistration: Sendable {
     var credentials: AWSCredentials?
     var denialGate: SecretGate? = nil
     var denialClassification: SecretGateRequestClassification = .unknown
-    var launcherRequirements: [String] = []
+    var launchers: [LauncherIdentity] = []
     var authorizationRecord: AccessRequestRecord? = nil
 }
 
@@ -4480,18 +4496,13 @@ private final class ApprovalServer: @unchecked Sendable {
 
     private func launcherDenial(
         _ request: ApprovalRequest, signing: SigningInfo, launchers: [LauncherIdentity]
-    ) -> (reason: String, launcher: LauncherIdentity?)? {
-        if let launcher = launchers.first(where: {
-            TemporaryLauncherDenials.shared.isDenied($0.designatedRequirement)
-        }) { return ("Denied by two-minute Temporary Launcher Denial", launcher) }
-        guard let gate = matchingSecretGateDefinition(
+    ) -> LauncherDenialError? {
+        let gate = matchingSecretGateDefinition(
             request: request, signing: signing, descriptors: secretGateDescriptors
-        ) else { return nil }
-        guard let denial = secretGateDenial(
-            gate: gate, classification: classifySecretGateRequest(gateID: gate.id, request: request),
-            launcherRequirements: launchers.map(\.designatedRequirement)
-        ) else { return nil }
-        return (denial.reason, launchers.first { $0.designatedRequirement == denial.launcherRequirement })
+        )
+        return evaluateLauncherDenial(gate: gate,
+            classification: gate.map { classifySecretGateRequest(gateID: $0.id, request: request) } ?? .unknown,
+            launchers: launchers)
     }
 
     private func denyRequestIfNeeded(
@@ -4894,7 +4905,7 @@ private final class ApprovalServer: @unchecked Sendable {
                     decision: error is LauncherDenialError ? "Denied" : "Failed",
                     approvalSource: "Auto",
                     reason: error.localizedDescription,
-                    launcher: matchedLauncher
+                    launcher: error is LauncherDenialError ? (error as? LauncherDenialError)?.launcher : matchedLauncher
                 ))
                 reply(peer, to: message, ok: false, error: error.localizedDescription)
             }
@@ -5048,7 +5059,7 @@ private final class ApprovalServer: @unchecked Sendable {
                     decision: error is LauncherDenialError ? "Denied" : "Failed",
                     approvalSource: "Auto",
                     reason: error.localizedDescription,
-                    launcher: directAccessLauncher
+                    launcher: error is LauncherDenialError ? (error as? LauncherDenialError)?.launcher : directAccessLauncher
                 ))
                 reply(peer, to: message, ok: false, error: error.localizedDescription)
             }
@@ -5127,7 +5138,7 @@ private final class ApprovalServer: @unchecked Sendable {
                     decision: error is LauncherDenialError ? "Denied" : "Failed",
                     approvalSource: "Auto",
                     reason: error.localizedDescription,
-                    launcher: authorizingLauncher
+                    launcher: error is LauncherDenialError ? (error as? LauncherDenialError)?.launcher : authorizingLauncher
                 ))
                 reply(peer, to: message, ok: false, error: error.localizedDescription)
             }
@@ -5311,7 +5322,7 @@ private final class ApprovalServer: @unchecked Sendable {
                             decision: error is LauncherDenialError ? "Denied" : "Failed",
                             approvalSource: "Auto",
                             reason: error.localizedDescription,
-                            launcher: promptLauncher
+                            launcher: error is LauncherDenialError ? (error as? LauncherDenialError)?.launcher : promptLauncher
                         ))
                         self.reply(peer, to: message, ok: false, error: error.localizedDescription)
                     }
@@ -5486,9 +5497,9 @@ private final class ApprovalServer: @unchecked Sendable {
                         request: request,
                         callerPath: callerPath,
                         decision: error is LauncherDenialError ? "Denied" : "Failed",
-                        approvalSource: "Manual",
+                        approvalSource: error is LauncherDenialError ? "Auto" : "Manual",
                         reason: error.localizedDescription,
-                        launcher: refreshedCandidate.launcher
+                        launcher: error is LauncherDenialError ? (error as? LauncherDenialError)?.launcher : refreshedCandidate.launcher
                     ))
                     self.reply(
                         peer,
@@ -5557,9 +5568,9 @@ private final class ApprovalServer: @unchecked Sendable {
                     request: request,
                     callerPath: callerPath,
                     decision: error is LauncherDenialError ? "Denied" : "Failed",
-                    approvalSource: "Manual",
+                    approvalSource: error is LauncherDenialError ? "Auto" : "Manual",
                     reason: error.localizedDescription,
-                    launcher: promptLauncher
+                    launcher: error is LauncherDenialError ? (error as? LauncherDenialError)?.launcher : promptLauncher
                 ))
                 self.reply(
                     peer,
@@ -5656,7 +5667,7 @@ private final class ApprovalServer: @unchecked Sendable {
                     decision: error is LauncherDenialError ? "Denied" : "Failed",
                     approvalSource: "Auto",
                     reason: error.localizedDescription,
-                    launcher: launcher
+                    launcher: error is LauncherDenialError ? (error as? LauncherDenialError)?.launcher : launcher
                 ))
                 reply(peer, to: message, ok: false, error: error.localizedDescription)
                 return true
@@ -5897,9 +5908,9 @@ private final class ApprovalServer: @unchecked Sendable {
                         request: request,
                         callerPath: callerPath,
                         decision: error is LauncherDenialError ? "Denied" : "Failed",
-                        approvalSource: "Manual",
+                        approvalSource: error is LauncherDenialError ? "Auto" : "Manual",
                         reason: error.localizedDescription,
-                        launcher: launcher
+                        launcher: error is LauncherDenialError ? (error as? LauncherDenialError)?.launcher : launcher
                     ))
                     self.reply(
                         peer,
@@ -6353,7 +6364,7 @@ private final class ApprovalServer: @unchecked Sendable {
                 decision: error is LauncherDenialError ? "Denied" : "Failed",
                 approvalSource: "Auto",
                 reason: error.localizedDescription,
-                launcher: launcher
+                launcher: error is LauncherDenialError ? (error as? LauncherDenialError)?.launcher : launcher
             ))
             reply(peer, to: message, ok: false, error: error.localizedDescription)
         }
@@ -9147,7 +9158,7 @@ private final class ApprovalServer: @unchecked Sendable {
             }) { attributedLaunchers.append(launcher) }
             if let denial = launcherDenial(request, signing: signingInfo(path: pathString(identity)),
                                          launchers: attributedLaunchers) {
-                throw LauncherDenialError(reason: denial.reason)
+                throw denial
             }
         }
         try validateDenial()
@@ -9186,8 +9197,8 @@ private final class ApprovalServer: @unchecked Sendable {
                     registration.denialClassification = registration.denialGate.map {
                         classifySecretGateRequest(gateID: $0.id, request: request)
                     } ?? .unknown
-                    registration.launcherRequirements = (launchers + launcherIdentities(for: identity)).map(\.designatedRequirement)
-                    if let launcher { registration.launcherRequirements.append(launcher.designatedRequirement) }
+                    registration.launchers = launchers + launcherIdentities(for: identity)
+                    if let launcher { registration.launchers.append(launcher) }
                     registration.authorizationRecord = record
                     installAWSRegistration(registration, pid: pid, identity: identity)
                 }
@@ -9348,22 +9359,20 @@ private final class ApprovalServer: @unchecked Sendable {
             return
         }
         func denyIfNeeded() -> Bool {
-            let requirements = registration.launcherRequirements
-                + launcherIdentities(for: identity).map(\.designatedRequirement)
-            let reason: String?
-            if requirements.contains(where: { TemporaryLauncherDenials.shared.isDenied($0) }) {
-                reason = "Denied by two-minute Temporary Launcher Denial"
-            } else if let gate = registration.denialGate {
-                reason = secretGateDenialReason(gate: gate, classification: registration.denialClassification,
-                                               launcherRequirements: requirements)
-            } else { reason = "Denied because AWS Authorization Policy is unavailable" }
-            guard let reason else { return false }
+            guard let denial = evaluateLauncherDenial(
+                gate: registration.denialGate, classification: registration.denialClassification,
+                launchers: registration.launchers + launcherIdentities(for: identity)
+            ) else { return false }
+            let reason = denial.reason
             if let original = registration.authorizationRecord {
                 _ = self.onAccessRequest(AccessRequestRecord(
                     date: Date(), tool: original.tool, command: original.command,
                     displayCommand: original.displayCommand, decision: "Denied", approvalSource: "Auto", reason: reason,
-                    launcher: original.launcher, launcherIconPath: original.launcherIconPath,
-                    launcherRequirement: original.launcherRequirement,
+                    launcher: denial.launcher.map { approvalPromptRequester(launcher: $0, fallback: $0.path).name },
+                    launcherIconPath: denial.launcher.map { approvalPromptRequester(launcher: $0, fallback: $0.path).iconPath },
+                    launcherRequirement: denial.launcher.flatMap {
+                        $0.runtimeProtection.allowsSecretGateAccess ? $0.designatedRequirement : nil
+                    },
                     callerPath: pathString(identity), target: original.target, cwd: original.cwd,
                     keys: original.keys, detail: original.detail, secretValueSources: original.secretValueSources
                 ))
@@ -16420,6 +16429,11 @@ private func runApprovalCallsiteSelfCheck() async -> Int32 {
         pid: getpid(), path: "/unverified-child", identifier: "child", teamIdentifier: "TEST",
         designatedRequirement: "child", runtimeProtection: .hardenedRuntimeMissing
     )
+    guard evaluateLauncherDenial(gate: nil, classification: .unknown, launchers: [unverifiedChild]) == nil,
+          let releaseDenial = evaluateLauncherDenial(gate: nil, classification: .unknown,
+              launchers: [unverifiedChild, deniedLauncher]),
+          releaseDenial.launcher?.designatedRequirement == deniedLauncher.designatedRequirement
+    else { return 19 }
     let proxyLaunch = ProxySessionLaunch(
         keys: [], target: "/different-target", arguments: [], cwd: "/", selectedSecretValues: SelectedSecretValues(values: [:]),
         targetCodeIdentity: nil, launchers: [unverifiedChild, deniedLauncher], launcher: unverifiedChild,
