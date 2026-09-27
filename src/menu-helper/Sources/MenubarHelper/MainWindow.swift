@@ -4698,6 +4698,38 @@ private struct AuthorizationHistoryDetailView: View {
     }
 }
 
+private struct TemporaryLauncherDenialButton: View {
+    let requirement: String
+    let launcherName: String?
+    @State private var deadline: TimeInterval?
+
+    var body: some View {
+        Button(deadline != nil
+            ? "Two-minute Launcher denial active"
+            : "Deny all requests from \(launcherName ?? "this Verified Launcher") for 2 minutes") {
+            TemporaryLauncherDenials.shared.deny(requirement)
+            refresh()
+        }
+        .disabled(deadline != nil)
+        .help("Applies across Authorization Gates to the recorded Launcher Identity. Ordinary policy resumes after two minutes.")
+        .onAppear { refresh() }
+        .onReceive(NotificationCenter.default.publisher(for: launcherDenialDidChange).receive(on: RunLoop.main)) { _ in
+            refresh()
+        }
+        .task(id: deadline) {
+            guard let deadline else { return }
+            do {
+                try await Task.sleep(for: .seconds(max(0, deadline - TemporaryLauncherDenials.now)))
+            } catch { return }
+            refresh()
+        }
+    }
+
+    private func refresh() {
+        deadline = TemporaryLauncherDenials.shared.deadline(for: requirement)
+    }
+}
+
 private struct AccessRequestRow: View {
     let record: AccessRequestRecord
 
@@ -4739,16 +4771,8 @@ private struct AccessRequestRow: View {
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
                 if let requirement = record.launcherRequirement, !requirement.isEmpty {
-                    TimelineView(.periodic(from: .now, by: 1)) { _ in
-                        let denied = TemporaryLauncherDenials.shared.isDenied(requirement)
-                        Button(denied
-                            ? "Two-minute Launcher denial active"
-                            : "Deny all requests from \(record.launcher ?? "this Verified Launcher") for 2 minutes") {
-                            TemporaryLauncherDenials.shared.deny(requirement)
-                        }
-                        .disabled(denied)
-                        .help("Applies across Authorization Gates to the recorded Launcher Identity. Ordinary policy resumes after two minutes.")
-                    }
+                    TemporaryLauncherDenialButton(requirement: requirement, launcherName: record.launcher)
+                        .id(requirement)
                 }
                 VStack(alignment: .leading, spacing: 3) {
                     AccessMetaLine("Launcher", record.launcher ?? "unknown")

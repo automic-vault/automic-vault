@@ -43,9 +43,13 @@ public final class TemporaryLauncherDenials: @unchecked Sendable {
     }
 
     public func isDenied(_ requirement: String, now: TimeInterval = TemporaryLauncherDenials.now) -> Bool {
+        deadline(for: requirement, now: now) != nil
+    }
+
+    public func deadline(for requirement: String, now: TimeInterval = TemporaryLauncherDenials.now) -> TimeInterval? {
         lock.withLock {
             deadlines = deadlines.filter { $0.value > now }
-            return deadlines[requirement] != nil
+            return deadlines[requirement]
         }
     }
 

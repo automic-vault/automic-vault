@@ -13102,6 +13102,13 @@ private func showApprovalAlert(
         ActiveApprovalPrompt.current = state
         state.usesIPhoneApproval = usesIPhoneApproval
         state.cancellation = cancellation
+        // Close the gap between the queued check and observer registration.
+        // Later changes are observed; an earlier notification may have been missed.
+        if evaluateLauncherDenial(gate: denialGate, classification: classification ?? .unknown,
+                                 launchers: attributedLaunchers) != nil {
+            state.resolve(.denied, source: .programmatic)
+            return
+        }
 
         let presentationToken = UUID()
         state.presentationToken = presentationToken
@@ -16486,6 +16493,26 @@ private func runApprovalCallsiteSelfCheck() async -> Int32 {
     let ancestorDecision = await awaitWithTimeout(duration: .seconds(5), cancellation: ancestorCancellation, task: ancestorPrompt)
     guard ancestorDecision == .denied, ActiveApprovalPrompt.current == nil,
           !HumanApprovalQueue.shared.hasActiveSlot else { return 19 }
+    let registrationRaceLauncher = LauncherIdentity(pid: 1, path: "/race", identifier: "race", teamIdentifier: "TEST",
+        designatedRequirement: "observer-race-\(UUID().uuidString)", runtimeProtection: .hardened)
+    let registrationRaceCancellation = ApprovalCancellation()
+    let registrationRaceTask = Task { @MainActor in
+        await showApprovalAlert(
+            request: deniedRequest, callerPath: "/self-check", pid: getpid(),
+            signing: SigningInfo(identifier: "self-check", teamIdentifier: "TEST"), scriptApproval: nil,
+            launcher: unverifiedChild, denialLaunchers: [registrationRaceLauncher],
+            launcherFallbackPath: unverifiedChild.path, automaticApprovalExplanation: nil,
+            cancellation: registrationRaceCancellation,
+            reevaluate: {
+                TemporaryLauncherDenials.shared.deny(registrationRaceLauncher.designatedRequirement)
+                return false
+            }
+        )
+    }
+    let registrationRaceDecision = await awaitWithTimeout(
+        duration: .seconds(5), cancellation: registrationRaceCancellation, task: registrationRaceTask
+    )
+    guard registrationRaceDecision == .denied, ActiveApprovalPrompt.current == nil else { return 19 }
     // 1. Queued-transition focus invariant: every freshly created alert starts non-key
     // and does not inherit focus from a previously key window.
     let panel1 = makeApprovalPanel()

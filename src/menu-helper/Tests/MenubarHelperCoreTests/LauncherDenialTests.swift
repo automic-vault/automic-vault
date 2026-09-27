@@ -59,12 +59,15 @@ private func denialGate(_ id: String = "gh") -> SecretGate {
 @Test func temporaryDenialSurvivesRetriesAndExpiresWithoutApproving() {
     let state = TemporaryLauncherDenials()
     state.deny("claude", now: 100)
+    #expect(state.deadline(for: "claude", now: 100) == 220)
+    #expect(state.deadline(for: "other", now: 100) == nil)
     for retry in 0..<10_000 {
         #expect(state.isDenied("claude", now: 100 + Double(retry) / 100))
         #expect(!state.isDenied("other", now: 101))
     }
     #expect(state.isDenied("claude", now: 219.999))
     #expect(!state.isDenied("claude", now: 220))
+    #expect(state.deadline(for: "claude", now: 220) == nil)
     #expect(!TemporaryLauncherDenials().isDenied("claude", now: 101))
     state.deny("", now: 100)
     #expect(!state.isDenied("", now: 101))
