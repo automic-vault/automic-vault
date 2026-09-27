@@ -853,7 +853,9 @@ extension ProxySessionLaunch {
         reason: String,
         launcher: LauncherIdentity? = nil
     ) -> AccessRequestRecord {
-        let launcher = launcher ?? self.launcher
+        let launcher = launcher ?? denialActionLauncher(
+            displayedLauncher: self.launcher, attributedLaunchers: self.launchers
+        ) ?? self.launcher
         let query = queryNames.isEmpty ? "" : "?" + queryNames.sorted().map { "\($0)=…" }.joined(separator: "&")
         return AccessRequestRecord(
             date: Date(),

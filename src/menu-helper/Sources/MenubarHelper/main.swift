@@ -6017,6 +6017,7 @@ private final class ApprovalServer: @unchecked Sendable {
             callerPID: pid,
             ancestorFallbackPath: ancestorFallbackPath
         )
+        let historyLauncher = denialActionLauncher(displayedLauncher: launcher, attributedLaunchers: launchers) ?? launcher
         if denyRequestIfNeeded(request, signing: signing, launchers: launchers,
                                callerPath: callerPath, peer: peer, message: message) { return }
         let targetProtection = executableSigningInfo(path: request.target)?.runtimeProtection
@@ -6025,7 +6026,13 @@ private final class ApprovalServer: @unchecked Sendable {
             "The target does not meet Automic Vault’s Hardened Runtime requirements. Code injected into it may steal this Proxy Session’s references and credential, then reuse destinations you allow for the session."
 
         Task { @MainActor in
-            guard !cancellation.isCanceled, self.canRequestHumanApproval() else {
+            guard !cancellation.isCanceled else {
+                _ = self.onAccessRequest(canceledAccessRequestRecord(
+                    request: request, callerPath: callerPath, launcher: launcher, launchers: launchers
+                ))
+                return
+            }
+            guard self.canRequestHumanApproval() else {
                 self.reply(peer, to: message, ok: false, error: "Proxy Session approval unavailable")
                 return
             }
@@ -6058,7 +6065,7 @@ private final class ApprovalServer: @unchecked Sendable {
                     decision: canceled ? "Canceled" : "Denied",
                     approvalSource: "Manual",
                     reason: canceled ? "Approval canceled" : "Denied in prompt",
-                    launcher: canceled ? (denialActionLauncher(displayedLauncher: launcher, attributedLaunchers: launchers) ?? launcher) : launcher
+                    launcher: historyLauncher
                 ))
                 if !canceled {
                     self.reply(
@@ -6077,7 +6084,7 @@ private final class ApprovalServer: @unchecked Sendable {
                 decision: "Approved",
                 approvalSource: "Manual",
                 reason: "Proxy Session approved once",
-                launcher: launcher
+                launcher: historyLauncher
             )) else {
                 self.reply(peer, to: message, ok: false, error: "Authorization History is unavailable")
                 return
@@ -12981,7 +12988,7 @@ private final class ApprovalPromptState: @unchecked Sendable {
     }
 }
 
-private func denialActionLauncher(
+func denialActionLauncher(
     displayedLauncher: LauncherIdentity?,
     attributedLaunchers: [LauncherIdentity]
 ) -> LauncherIdentity? {
@@ -16527,7 +16534,8 @@ private func runApprovalCallsiteSelfCheck() async -> Int32 {
         sessionID: UUID(), method: "GET", origin: "https://example.com", path: "/", queryNames: [], secretNames: [],
         decision: "Denied", approvalSource: "Manual", reason: "Destination denied"
     )
-    guard unverifiedRecord.launcherRequirement == nil else { return 19 }
+    guard unverifiedRecord.launcherRequirement == deniedLauncher.designatedRequirement,
+          unverifiedRecord.launcher == deniedRecord.launcher else { return 19 }
     // A retained ancestor may be absent from the live chain and display identity.
     // Activating its denial while queued must prevent presentation altogether.
     let queuedAncestor = LauncherIdentity(pid: 1, path: "/retained-parent", identifier: "retained", teamIdentifier: "TEST",
