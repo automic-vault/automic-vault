@@ -43,7 +43,10 @@ public final class TemporaryLauncherDenials: @unchecked Sendable {
     }
 
     public func isDenied(_ requirement: String, now: TimeInterval = TemporaryLauncherDenials.now) -> Bool {
-        lock.withLock { (deadlines[requirement] ?? 0) > now }
+        lock.withLock {
+            deadlines = deadlines.filter { $0.value > now }
+            return deadlines[requirement] != nil
+        }
     }
 
     /// Three presentations within thirty seconds, capped at three timestamps per identity.

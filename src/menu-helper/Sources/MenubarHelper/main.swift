@@ -2878,6 +2878,7 @@ private func performApprovedSecretMutation(
     pid: pid_t,
     signing: SigningInfo,
     launcher: LauncherIdentity?,
+    launchers: [LauncherIdentity] = [],
     launcherFallbackPath: String,
     canRequestHumanApproval: () -> Bool,
     onAccessRequest: (AccessRequestRecord) -> Bool,
@@ -2889,7 +2890,9 @@ private func performApprovedSecretMutation(
 ) async -> (status: OSStatus?, error: String?) {
     let request = requestOverride ?? mutation.approvalRequest(callerPath: callerPath)
     func denyTemporarilyIfNeeded() -> Bool {
-        guard let launcher, TemporaryLauncherDenials.shared.isDenied(launcher.designatedRequirement) else { return false }
+        guard let launcher = (launchers + (launcher.map { [$0] } ?? [])).first(where: {
+            TemporaryLauncherDenials.shared.isDenied($0.designatedRequirement)
+        }) else { return false }
         _ = onAccessRequest(accessRequestRecord(
             request: request, callerPath: callerPath, decision: "Denied", approvalSource: "Auto",
             reason: "Denied by two-minute Temporary Launcher Denial", launcher: launcher
@@ -2971,6 +2974,7 @@ private func performApprovedSecretMutation(
     )) else {
         return (nil, "Authorization History is unavailable")
     }
+    if denyTemporarilyIfNeeded() { return (nil, "Temporary Launcher Denial") }
     return (perform?(mutation) ?? mutation.perform(), nil)
 }
 
@@ -4286,11 +4290,12 @@ private final class ApprovalServer: @unchecked Sendable {
                                callerPath: callerPath, peer: peer, message: message) { return }
         if hasAutomaticAccess
         {
-            Task {
+            Task { @MainActor in
                 await discloseMetadata(
                     request: request,
                     callerPath: callerPath,
                     launcher: launcher,
+                    launchers: launchers,
                     approvalSource: "Auto",
                     reason: "Always allowed in Settings",
                     peer: peer,
@@ -4362,6 +4367,7 @@ private final class ApprovalServer: @unchecked Sendable {
                 request: request,
                 callerPath: callerPath,
                 launcher: launcher,
+                launchers: launchers,
                 approvalSource: "Manual",
                 reason: "Allowed once in prompt",
                 peer: peer,
@@ -4377,6 +4383,7 @@ private final class ApprovalServer: @unchecked Sendable {
         request: ApprovalRequest,
         callerPath: String,
         launcher: LauncherIdentity?,
+        launchers: [LauncherIdentity],
         approvalSource: String,
         reason: String,
         peer: xpc_connection_t,
@@ -4391,7 +4398,7 @@ private final class ApprovalServer: @unchecked Sendable {
             return
         }
         if denyRequestIfNeeded(request, signing: signingInfo(path: callerPath),
-                               launchers: launcher.map { [$0] } ?? [],
+                               launchers: launchers,
                                callerPath: callerPath, peer: peer, message: message) { return }
         var names: [String]?
         if case .secretNames(let globalOnly) = kind {
@@ -4450,7 +4457,7 @@ private final class ApprovalServer: @unchecked Sendable {
                 return
             }
             if denyRequestIfNeeded(request, signing: signingInfo(path: callerPath),
-                                   launchers: launcher.map { [$0] } ?? [],
+                                   launchers: launchers,
                                    callerPath: callerPath, peer: peer, message: message) { return }
             reply(peer, to: message, ok: true, error: nil, value: value)
             return
@@ -4466,7 +4473,7 @@ private final class ApprovalServer: @unchecked Sendable {
             return
         }
         if denyRequestIfNeeded(request, signing: signingInfo(path: callerPath),
-                               launchers: launcher.map { [$0] } ?? [],
+                               launchers: launchers,
                                callerPath: callerPath, peer: peer, message: message) { return }
         reply(peer, to: message, ok: true, error: nil, names: names)
     }
@@ -4789,6 +4796,7 @@ private final class ApprovalServer: @unchecked Sendable {
                     request: request,
                     signing: signing,
                     descriptors: secretGateDescriptors,
+                    launchers: launchers,
                     launcher: launcher,
                     callerPath: callerPath,
                     awsRegistration: awsRegistration,
@@ -4844,6 +4852,7 @@ private final class ApprovalServer: @unchecked Sendable {
                     pid: pid,
                     identity: identity,
                     record: record,
+                    launchers: launchers,
                     launcher: matchedLauncher,
                     activateAfterRecording: {
                         registerBlessedExecution(script, pid: pid, identity: identity)
@@ -4997,6 +5006,7 @@ private final class ApprovalServer: @unchecked Sendable {
                     pid: pid,
                     identity: identity,
                     record: record,
+                    launchers: launchers,
                     launcher: directAccessLauncher,
                     activateAfterRecording: {
                         rememberRetainedProvenance(
@@ -5072,6 +5082,7 @@ private final class ApprovalServer: @unchecked Sendable {
                     pid: pid,
                     identity: identity,
                     record: record,
+                    launchers: launchers,
                     launcher: authorizingLauncher,
                     sshScriptAuthorization: request.sshPeer == nil ? nil : .inheritedPolicy,
                     activateAfterRecording: {
@@ -5277,6 +5288,7 @@ private final class ApprovalServer: @unchecked Sendable {
                             pid: pid,
                             identity: identity,
                             record: record,
+                            launchers: launchers,
                             launcher: promptLauncher,
                             release: { payload in
                                 self.reply(
@@ -5439,6 +5451,7 @@ private final class ApprovalServer: @unchecked Sendable {
                         pid: pid,
                         identity: identity,
                         record: record,
+                        launchers: launchers,
                         launcher: refreshedCandidate.launcher,
                         release: { payload in
                             self.temporaryAccessGrants.startWithLease(
@@ -5502,6 +5515,7 @@ private final class ApprovalServer: @unchecked Sendable {
                     pid: pid,
                     identity: identity,
                     record: record,
+                    launchers: launchers,
                     launcher: promptLauncher,
                     activateAfterRecording: {
                         if let scriptApproval,
@@ -5599,6 +5613,7 @@ private final class ApprovalServer: @unchecked Sendable {
                         pid: pid,
                         identity: identity,
                         record: record,
+                        launchers: launchers,
                         launcher: launcher,
                         activateAfterRecording: {
                             rememberRetainedProvenance(
@@ -5753,7 +5768,7 @@ private final class ApprovalServer: @unchecked Sendable {
                 detail: "This Secret Disclosure returns the selected Secret Values to Varlock for one application process. Schema SHA-256: \(schemaDigest).",
                 selectedSecretValues: selected
             )
-            if denyRequestIfNeeded(request, signing: signing, launchers: [launcher],
+            if denyRequestIfNeeded(request, signing: signing, launchers: launchers,
                                    callerPath: callerPath, peer: peer, message: message) { return }
             RunLoop.main.perform(inModes: [.modalPanel, .default]) {
                 MainActor.assumeIsolated {
@@ -5792,7 +5807,7 @@ private final class ApprovalServer: @unchecked Sendable {
                     automaticApprovalExplanation: nil,
                     cancellation: cancellation
                 )
-                if self.denyRequestIfNeeded(request, signing: signing, launchers: [launcher],
+                if self.denyRequestIfNeeded(request, signing: signing, launchers: launchers,
                                            callerPath: callerPath, peer: peer, message: message) { return }
                 if decision == .canceled {
                     _ = self.onAccessRequest(canceledAccessRequestRecord(
@@ -5862,7 +5877,7 @@ private final class ApprovalServer: @unchecked Sendable {
                             )
                         },
                         release: { secrets in
-                            if self.denyRequestIfNeeded(request, signing: signing, launchers: [launcher],
+                            if self.denyRequestIfNeeded(request, signing: signing, launchers: launchers,
                                                        callerPath: callerPath, peer: peer, message: message) { return }
                             self.reply(
                                 peer,
@@ -6266,6 +6281,7 @@ private final class ApprovalServer: @unchecked Sendable {
         request: ApprovalRequest,
         signing: SigningInfo,
         descriptors: [SecretGateDescriptor],
+        launchers: [LauncherIdentity],
         launcher: LauncherIdentity?,
         callerPath: String,
         awsRegistration: AWSRegistrationCandidate?,
@@ -6298,6 +6314,7 @@ private final class ApprovalServer: @unchecked Sendable {
                 pid: pid,
                 identity: identity,
                 record: record,
+                launchers: launchers,
                 launcher: launcher,
                 sshScriptAuthorization: request.sshPeer == nil ? nil : .blessing(script),
                 activateAfterRecording: {
@@ -7197,11 +7214,12 @@ private final class ApprovalServer: @unchecked Sendable {
             return
         }
         let cwd = String(cString: cwdPointer)
+        let launchers = launcherIdentities(for: caller.identity)
         let launcher = requiredCredentialParent.flatMap { parent in
             var identity = AVProcessIdentity()
             guard av_process_identity(parent.pid, &identity) else { return nil }
             return launcherIdentity(pid: parent.pid, identity: identity)
-        } ?? launcherIdentities(for: caller.identity).first
+        } ?? launchers.first
         let launcherFallbackPath = launcherFallbackPath(for: caller.identity) ?? caller.path
         let request = mutation.approvalRequest(callerPath: caller.path, requestCWD: cwd)
         let requestOverride = requiredCredentialParent.map { parent in
@@ -7233,6 +7251,7 @@ private final class ApprovalServer: @unchecked Sendable {
                 pid: caller.pid,
                 signing: caller.signing,
                 launcher: launcher,
+                launchers: launchers,
                 launcherFallbackPath: launcherFallbackPath,
                 canRequestHumanApproval: self.canRequestHumanApproval,
                 onAccessRequest: self.onAccessRequest,
@@ -9114,6 +9133,7 @@ private final class ApprovalServer: @unchecked Sendable {
         pid: pid_t,
         identity: AVProcessIdentity,
         record: AccessRequestRecord,
+        launchers: [LauncherIdentity],
         launcher: LauncherIdentity?,
         sshScriptAuthorization: SSHScriptAuthorization? = nil,
         activateAfterRecording: () -> Void = {},
@@ -9121,7 +9141,7 @@ private final class ApprovalServer: @unchecked Sendable {
     ) throws -> Bool {
         func validateDenial() throws {
             let currentLaunchers = request.sshPeer?.launchers ?? launcherIdentities(for: identity)
-            var attributedLaunchers = currentLaunchers
+            var attributedLaunchers = launchers + currentLaunchers
             if let launcher, !attributedLaunchers.contains(where: {
                 $0.designatedRequirement == launcher.designatedRequirement
             }) { attributedLaunchers.append(launcher) }
@@ -9166,7 +9186,7 @@ private final class ApprovalServer: @unchecked Sendable {
                     registration.denialClassification = registration.denialGate.map {
                         classifySecretGateRequest(gateID: $0.id, request: request)
                     } ?? .unknown
-                    registration.launcherRequirements = launcherIdentities(for: identity).map(\.designatedRequirement)
+                    registration.launcherRequirements = (launchers + launcherIdentities(for: identity)).map(\.designatedRequirement)
                     if let launcher { registration.launcherRequirements.append(launcher.designatedRequirement) }
                     registration.authorizationRecord = record
                     installAWSRegistration(registration, pid: pid, identity: identity)
@@ -14562,6 +14582,36 @@ private func showAutomaticAccessToast(
 
 @MainActor
 private func runSecretMutationSelfCheck() async -> Int32 {
+    // An ancestor denial must survive selection of a different display Launcher,
+    // including a denial introduced while approval or recording is in progress.
+    for phase in 0..<3 {
+        let ancestor = LauncherIdentity(pid: 1, path: "/ancestor", identifier: "ancestor", teamIdentifier: "TEST",
+            designatedRequirement: "mutation-denial-\(UUID().uuidString)", runtimeProtection: .hardened)
+        let child = LauncherIdentity(pid: 2, path: "/child", identifier: "child", teamIdentifier: "TEST",
+            designatedRequirement: "child", runtimeProtection: .hardened)
+        if phase == 0 { TemporaryLauncherDenials.shared.deny(ancestor.designatedRequirement) }
+        var performed = false
+        var deniedRecord: AccessRequestRecord?
+        let result = await performApprovedSecretMutation(
+            .delete(account: "TEST_SECRET"), callerPath: "/usr/local/bin/av", pid: 42,
+            signing: SigningInfo(identifier: "com.automicvault.av", teamIdentifier: "TEST"),
+            launcher: child, launchers: [child, ancestor], launcherFallbackPath: child.path,
+            canRequestHumanApproval: { true },
+            onAccessRequest: { record in
+                if record.decision == "Denied" { deniedRecord = record }
+                if phase == 2 { TemporaryLauncherDenials.shared.deny(ancestor.designatedRequirement) }
+                return true
+            },
+            decision: { _ in
+                if phase == 1 { TemporaryLauncherDenials.shared.deny(ancestor.designatedRequirement) }
+                return .approved
+            },
+            perform: { _ in performed = true; return errSecSuccess }
+        )
+        guard result.status == nil, !performed,
+              deniedRecord?.launcherRequirement == ancestor.designatedRequirement else { return 20 }
+    }
+
     let credentialMutationRequest = SecretMutation.terraformDelete(
         account: terraformCredentialSecretName("registry.example"),
         hostname: "registry.example"
