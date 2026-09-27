@@ -146,6 +146,6 @@ func persistentDenialOverridesFullAccessAndSurvivesAllowEdits() throws {
     #expect(setSecretGateDenialThreshold(nil, requirement: requirement, in: gate, runtimeRequirement: .hardened,
         approvedDenialThreshold: .fullIncludingSecretDumps, service: service, account: account) == errSecSuccess)
     #expect(reason(.secretDump) == nil)
-    #expect(saveKeychainData(Data("malformed".utf8), service: service, account: account) == errSecSuccess)
+    #expect(saveKeychainData(Data("malformed".utf8), service: service, account: account, accessibility: .afterFirstUnlock) == errSecSuccess)
     #expect(reason(.readOnly) == "Denied because Authorization Policy is unavailable")
 }

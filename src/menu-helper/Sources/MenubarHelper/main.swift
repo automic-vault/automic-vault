@@ -14866,7 +14866,7 @@ private func runKeychainPersistenceSelfCheck() -> Int32 {
           setSecretGateDenialThreshold(nil, requirement: requirement, in: gate, runtimeRequirement: .hardened,
               approvedDenialThreshold: .fullIncludingSecretDumps, service: service, account: account) == errSecSuccess,
           denial(.secretDump) == nil,
-          saveStoredSecret(account: account, value: "malformed", service: service) == errSecSuccess,
+          saveStoredSecret(account: account, value: "malformed", accessibility: .afterFirstUnlock, service: service) == errSecSuccess,
           denial(.readOnly) == "Denied because Authorization Policy is unavailable"
     else { return 4 }
     return 0
