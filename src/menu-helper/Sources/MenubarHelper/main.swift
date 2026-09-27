@@ -2860,7 +2860,8 @@ private func terminalApprovalDecision(
 private func canceledAccessRequestRecord(
     request: ApprovalRequest,
     callerPath: String,
-    launcher: LauncherIdentity?
+    launcher: LauncherIdentity?,
+    launchers: [LauncherIdentity]
 ) -> AccessRequestRecord {
     accessRequestRecord(
         request: request,
@@ -2868,14 +2869,15 @@ private func canceledAccessRequestRecord(
         decision: "Canceled",
         approvalSource: "Manual",
         reason: "Gate client exited",
-        launcher: launcher
+        launcher: denialActionLauncher(displayedLauncher: launcher, attributedLaunchers: launchers) ?? launcher
     )
 }
 
 private func interruptedAccessRequestRecord(
     request: ApprovalRequest,
     callerPath: String,
-    launcher: LauncherIdentity?
+    launcher: LauncherIdentity?,
+    launchers: [LauncherIdentity]
 ) -> AccessRequestRecord {
     accessRequestRecord(
         request: request,
@@ -2883,7 +2885,7 @@ private func interruptedAccessRequestRecord(
         decision: "Failed",
         approvalSource: "Auto",
         reason: "Approval presentation interrupted",
-        launcher: launcher
+        launcher: denialActionLauncher(displayedLauncher: launcher, attributedLaunchers: launchers) ?? launcher
     )
 }
 
@@ -2918,7 +2920,7 @@ private func performApprovedSecretMutation(
     if denyTemporarilyIfNeeded() { return (nil, "Temporary Launcher Denial") }
     if cancellation?.isCanceled == true {
         _ = onAccessRequest(canceledAccessRequestRecord(
-            request: request, callerPath: callerPath, launcher: launcher
+            request: request, callerPath: callerPath, launcher: launcher, launchers: launchers
         ))
         return (nil, "secret mutation canceled")
     }
@@ -2954,7 +2956,7 @@ private func performApprovedSecretMutation(
     if denyTemporarilyIfNeeded() { return (nil, "Temporary Launcher Denial") }
     if approval == .interrupted {
         _ = onAccessRequest(interruptedAccessRequestRecord(
-            request: request, callerPath: callerPath, launcher: launcher
+            request: request, callerPath: callerPath, launcher: launcher, launchers: launchers
         ))
         return (nil, "approval presentation interrupted")
     }
@@ -2966,7 +2968,7 @@ private func performApprovedSecretMutation(
             decision: canceled ? "Canceled" : "Denied",
             approvalSource: "Manual",
             reason: canceled ? "Gate client exited" : "Denied in prompt",
-            launcher: launcher
+            launcher: canceled ? (denialActionLauncher(displayedLauncher: launcher, attributedLaunchers: launchers) ?? launcher) : launcher
         ))
         return (nil, canceled ? "secret mutation canceled" : "secret mutation denied")
     }
@@ -4310,6 +4312,7 @@ private final class ApprovalServer: @unchecked Sendable {
             Task { @MainActor in
                 await discloseMetadata(
                     request: request,
+                    signing: signing,
                     callerPath: callerPath,
                     launcher: launcher,
                     launchers: launchers,
@@ -4326,7 +4329,7 @@ private final class ApprovalServer: @unchecked Sendable {
         Task { @MainActor in
             if cancellation.isCanceled {
                 _ = self.onAccessRequest(canceledAccessRequestRecord(
-                    request: request, callerPath: callerPath, launcher: launcher
+                    request: request, callerPath: callerPath, launcher: launcher, launchers: launchers
                 ))
                 return
             }
@@ -4356,13 +4359,13 @@ private final class ApprovalServer: @unchecked Sendable {
             )
             if decision == .canceled {
                 _ = self.onAccessRequest(canceledAccessRequestRecord(
-                    request: request, callerPath: callerPath, launcher: launcher
+                    request: request, callerPath: callerPath, launcher: launcher, launchers: launchers
                 ))
                 return
             }
             if decision == .interrupted {
                 _ = self.onAccessRequest(interruptedAccessRequestRecord(
-                    request: request, callerPath: callerPath, launcher: launcher
+                    request: request, callerPath: callerPath, launcher: launcher, launchers: launchers
                 ))
                 self.reply(peer, to: message, ok: false, error: "approval presentation interrupted")
                 return
@@ -4383,6 +4386,7 @@ private final class ApprovalServer: @unchecked Sendable {
             }
             await self.discloseMetadata(
                 request: request,
+                signing: signing,
                 callerPath: callerPath,
                 launcher: launcher,
                 launchers: launchers,
@@ -4399,6 +4403,7 @@ private final class ApprovalServer: @unchecked Sendable {
     @MainActor
     private func discloseMetadata(
         request: ApprovalRequest,
+        signing: SigningInfo,
         callerPath: String,
         launcher: LauncherIdentity?,
         launchers: [LauncherIdentity],
@@ -4411,11 +4416,11 @@ private final class ApprovalServer: @unchecked Sendable {
     ) async {
         guard !cancellation.isCanceled else {
             _ = onAccessRequest(canceledAccessRequestRecord(
-                request: request, callerPath: callerPath, launcher: launcher
+                request: request, callerPath: callerPath, launcher: launcher, launchers: launchers
             ))
             return
         }
-        if denyRequestIfNeeded(request, signing: signingInfo(path: callerPath),
+        if denyRequestIfNeeded(request, signing: signing,
                                launchers: launchers,
                                callerPath: callerPath, peer: peer, message: message) { return }
         var names: [String]?
@@ -4449,7 +4454,7 @@ private final class ApprovalServer: @unchecked Sendable {
         )
         guard !cancellation.isCanceled else {
             _ = onAccessRequest(canceledAccessRequestRecord(
-                request: request, callerPath: callerPath, launcher: launcher
+                request: request, callerPath: callerPath, launcher: launcher, launchers: launchers
             ))
             return
         }
@@ -4466,7 +4471,7 @@ private final class ApprovalServer: @unchecked Sendable {
             }).value
             guard !cancellation.isCanceled else {
                 _ = onAccessRequest(canceledAccessRequestRecord(
-                    request: request, callerPath: callerPath, launcher: launcher
+                    request: request, callerPath: callerPath, launcher: launcher, launchers: launchers
                 ))
                 return
             }
@@ -4474,7 +4479,7 @@ private final class ApprovalServer: @unchecked Sendable {
                 reply(peer, to: message, ok: false, error: "Authorization History is unavailable or exceeds the 1 MiB reply limit; try a narrower --since window")
                 return
             }
-            if denyRequestIfNeeded(request, signing: signingInfo(path: callerPath),
+            if denyRequestIfNeeded(request, signing: signing,
                                    launchers: launchers,
                                    callerPath: callerPath, peer: peer, message: message) { return }
             reply(peer, to: message, ok: true, error: nil, value: value)
@@ -4486,11 +4491,11 @@ private final class ApprovalServer: @unchecked Sendable {
         }
         guard !cancellation.isCanceled else {
             _ = onAccessRequest(canceledAccessRequestRecord(
-                request: request, callerPath: callerPath, launcher: launcher
+                request: request, callerPath: callerPath, launcher: launcher, launchers: launchers
             ))
             return
         }
-        if denyRequestIfNeeded(request, signing: signingInfo(path: callerPath),
+        if denyRequestIfNeeded(request, signing: signing,
                                launchers: launchers,
                                callerPath: callerPath, peer: peer, message: message) { return }
         reply(peer, to: message, ok: true, error: nil, names: names)
@@ -4861,6 +4866,7 @@ private final class ApprovalServer: @unchecked Sendable {
                 )
                 guard try fulfillApprovedRequest(
                     request: request,
+                    signing: signing,
                     awsRegistration: awsRegistration,
                     pid: pid,
                     identity: identity,
@@ -4984,6 +4990,7 @@ private final class ApprovalServer: @unchecked Sendable {
            let currentAgentTaskContext,
            handleTemporaryAccessGrant(
                request: request,
+               signing: signing,
                gate: configuredGate,
                classification: classification,
                agentTaskContext: currentAgentTaskContext,
@@ -5016,6 +5023,7 @@ private final class ApprovalServer: @unchecked Sendable {
                 )
                 guard try fulfillApprovedRequest(
                     request: request,
+                    signing: signing,
                     awsRegistration: awsRegistration,
                     pid: pid,
                     identity: identity,
@@ -5092,6 +5100,7 @@ private final class ApprovalServer: @unchecked Sendable {
                 )
                 guard try fulfillApprovedRequest(
                     request: request,
+                    signing: signing,
                     awsRegistration: awsRegistration,
                     pid: pid,
                     identity: identity,
@@ -5218,7 +5227,7 @@ private final class ApprovalServer: @unchecked Sendable {
         Task { @MainActor in
             if cancellation.isCanceled {
                 _ = self.onAccessRequest(canceledAccessRequestRecord(
-                    request: request, callerPath: callerPath, launcher: promptLauncher
+                    request: request, callerPath: callerPath, launcher: promptLauncher, launchers: policyLaunchers
                 ))
                 return
             }
@@ -5255,6 +5264,7 @@ private final class ApprovalServer: @unchecked Sendable {
                        ),
                        self.handleTemporaryAccessGrant(
                            request: request,
+                           signing: signing,
                            gate: configuredGate,
                            classification: classification,
                            agentTaskContext: currentAgentTaskContext,
@@ -5299,6 +5309,7 @@ private final class ApprovalServer: @unchecked Sendable {
                         )
                         guard try self.fulfillApprovedRequest(
                             request: request,
+                            signing: signing,
                             awsRegistration: awsRegistration,
                             pid: pid,
                             identity: identity,
@@ -5383,13 +5394,13 @@ private final class ApprovalServer: @unchecked Sendable {
             }
             if decision == .canceled {
                 _ = self.onAccessRequest(canceledAccessRequestRecord(
-                    request: request, callerPath: callerPath, launcher: promptLauncher
+                    request: request, callerPath: callerPath, launcher: promptLauncher, launchers: policyLaunchers
                 ))
                 return
             }
             if decision == .interrupted {
                 _ = self.onAccessRequest(interruptedAccessRequestRecord(
-                    request: request, callerPath: callerPath, launcher: promptLauncher
+                    request: request, callerPath: callerPath, launcher: promptLauncher, launchers: policyLaunchers
                 ))
                 self.reply(peer, to: message, ok: false, error: "approval presentation interrupted")
                 return
@@ -5463,6 +5474,7 @@ private final class ApprovalServer: @unchecked Sendable {
                     )
                     guard try self.fulfillApprovedRequest(
                         request: request,
+                        signing: signing,
                         awsRegistration: awsRegistration,
                         pid: pid,
                         identity: identity,
@@ -5527,6 +5539,7 @@ private final class ApprovalServer: @unchecked Sendable {
                 )
                 guard try self.fulfillApprovedRequest(
                     request: request,
+                    signing: signing,
                     awsRegistration: awsRegistration,
                     pid: pid,
                     identity: identity,
@@ -5590,6 +5603,7 @@ private final class ApprovalServer: @unchecked Sendable {
 
     private func handleTemporaryAccessGrant(
         request: ApprovalRequest,
+        signing: SigningInfo,
         gate: SecretGate,
         classification: SecretGateRequestClassification,
         agentTaskContext: AgentTaskContext,
@@ -5626,6 +5640,7 @@ private final class ApprovalServer: @unchecked Sendable {
                     )
                     let committed = try fulfillApprovedRequest(
                         request: request,
+                        signing: signing,
                         awsRegistration: awsRegistration,
                         pid: pid,
                         identity: identity,
@@ -5796,7 +5811,7 @@ private final class ApprovalServer: @unchecked Sendable {
             Task { @MainActor in
                 if cancellation.isCanceled {
                     _ = self.onAccessRequest(canceledAccessRequestRecord(
-                        request: request, callerPath: callerPath, launcher: launcher
+                        request: request, callerPath: callerPath, launcher: launcher, launchers: launchers
                     ))
                     return
                 }
@@ -5829,13 +5844,13 @@ private final class ApprovalServer: @unchecked Sendable {
                                            callerPath: callerPath, peer: peer, message: message) { return }
                 if decision == .canceled {
                     _ = self.onAccessRequest(canceledAccessRequestRecord(
-                        request: request, callerPath: callerPath, launcher: launcher
+                        request: request, callerPath: callerPath, launcher: launcher, launchers: launchers
                     ))
                     return
                 }
                 if decision == .interrupted {
                     _ = self.onAccessRequest(interruptedAccessRequestRecord(
-                        request: request, callerPath: callerPath, launcher: launcher
+                        request: request, callerPath: callerPath, launcher: launcher, launchers: launchers
                     ))
                     self.reply(peer, to: message, ok: false, error: "approval presentation interrupted")
                     return
@@ -6030,7 +6045,7 @@ private final class ApprovalServer: @unchecked Sendable {
                                        callerPath: callerPath, peer: peer, message: message) { return }
             if decision == .interrupted {
                 _ = self.onAccessRequest(interruptedAccessRequestRecord(
-                    request: request, callerPath: callerPath, launcher: launcher
+                    request: request, callerPath: callerPath, launcher: launcher, launchers: launchers
                 ))
                 self.reply(peer, to: message, ok: false, error: "approval presentation interrupted")
                 return
@@ -6043,7 +6058,7 @@ private final class ApprovalServer: @unchecked Sendable {
                     decision: canceled ? "Canceled" : "Denied",
                     approvalSource: "Manual",
                     reason: canceled ? "Approval canceled" : "Denied in prompt",
-                    launcher: launcher
+                    launcher: canceled ? (denialActionLauncher(displayedLauncher: launcher, attributedLaunchers: launchers) ?? launcher) : launcher
                 ))
                 if !canceled {
                     self.reply(
@@ -6330,6 +6345,7 @@ private final class ApprovalServer: @unchecked Sendable {
             )
             guard try fulfillApprovedRequest(
                 request: request,
+                signing: signing,
                 awsRegistration: awsRegistration,
                 pid: pid,
                 identity: identity,
@@ -9149,6 +9165,7 @@ private final class ApprovalServer: @unchecked Sendable {
 
     private func fulfillApprovedRequest(
         request: ApprovalRequest,
+        signing: SigningInfo,
         awsRegistration: AWSRegistrationCandidate?,
         pid: pid_t,
         identity: AVProcessIdentity,
@@ -9165,7 +9182,7 @@ private final class ApprovalServer: @unchecked Sendable {
             if let launcher, !attributedLaunchers.contains(where: {
                 $0.designatedRequirement == launcher.designatedRequirement
             }) { attributedLaunchers.append(launcher) }
-            if let denial = launcherDenial(request, signing: signingInfo(path: pathString(identity)),
+            if let denial = launcherDenial(request, signing: signing,
                                          launchers: attributedLaunchers) {
                 throw denial
             }
@@ -9201,7 +9218,7 @@ private final class ApprovalServer: @unchecked Sendable {
             activate: { material in
                 if var registration = material.awsRegistration {
                     registration.denialGate = matchingSecretGateDefinition(
-                        request: request, signing: signingInfo(path: pathString(identity)), descriptors: secretGateDescriptors
+                        request: request, signing: signing, descriptors: secretGateDescriptors
                     )
                     registration.denialClassification = registration.denialGate.map {
                         classifySecretGateRequest(gateID: $0.id, request: request)
@@ -16486,6 +16503,13 @@ private func runApprovalCallsiteSelfCheck() async -> Int32 {
               launchers: [unverifiedChild, deniedLauncher]),
           releaseDenial.launcher?.designatedRequirement == deniedLauncher.designatedRequirement
     else { return 19 }
+    let canceledRecord = canceledAccessRequestRecord(request: deniedRequest, callerPath: "/self-check",
+        launcher: unverifiedChild, launchers: [unverifiedChild, deniedLauncher])
+    let interruptedRecord = interruptedAccessRequestRecord(request: deniedRequest, callerPath: "/self-check",
+        launcher: unverifiedChild, launchers: [unverifiedChild, deniedLauncher])
+    guard [canceledRecord, interruptedRecord].allSatisfy({
+        $0.launcherRequirement == deniedLauncher.designatedRequirement && $0.launcher == deniedRecord.launcher
+    }) else { return 19 }
     let proxyLaunch = ProxySessionLaunch(
         keys: [], target: "/different-target", arguments: [], cwd: "/", selectedSecretValues: SelectedSecretValues(values: [:]),
         targetCodeIdentity: nil, launchers: [unverifiedChild, deniedLauncher], launcher: unverifiedChild,
