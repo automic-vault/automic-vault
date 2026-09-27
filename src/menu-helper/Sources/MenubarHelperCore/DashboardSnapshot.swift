@@ -1374,6 +1374,28 @@ public func setSecretGateDenialThreshold(
 }
 
 /// A policy read failure cannot be interpreted as absence of a denial.
+public func secretGateDenial(
+    gate: SecretGate,
+    classification: SecretGateRequestClassification,
+    launcherRequirements: [String],
+    service: String = secretGatePoliciesKeychainService,
+    account: String = secretGatePoliciesKeychainAccount
+) -> (reason: String, launcherRequirement: String?)? {
+    let records: [SecretGatePolicyRecord]
+    switch loadSecretGatePolicyRecords(service: service, account: account) {
+    case .success(let loaded): records = loaded
+    case .failure: return ("Denied because Authorization Policy is unavailable", nil)
+    }
+    for record in records where record.gateID == gate.id {
+        guard let requirement = record.requirement, launcherRequirements.contains(requirement),
+              let threshold = record.denialThreshold else { continue }
+        if gate.denies(classification, at: threshold) {
+            return ("Denied by Launcher rule: \(gate.protectionTitle(threshold)) and above at \(gate.authorizationGateName)", requirement)
+        }
+    }
+    return nil
+}
+
 public func secretGateDenialReason(
     gate: SecretGate,
     classification: SecretGateRequestClassification,
@@ -1381,19 +1403,8 @@ public func secretGateDenialReason(
     service: String = secretGatePoliciesKeychainService,
     account: String = secretGatePoliciesKeychainAccount
 ) -> String? {
-    let records: [SecretGatePolicyRecord]
-    switch loadSecretGatePolicyRecords(service: service, account: account) {
-    case .success(let loaded): records = loaded
-    case .failure: return "Denied because Authorization Policy is unavailable"
-    }
-    for record in records where record.gateID == gate.id {
-        guard let requirement = record.requirement, launcherRequirements.contains(requirement),
-              let threshold = record.denialThreshold else { continue }
-        if gate.denies(classification, at: threshold) {
-            return "Denied by Launcher rule: \(gate.protectionTitle(threshold)) and above at \(gate.authorizationGateName)"
-        }
-    }
-    return nil
+    secretGateDenial(gate: gate, classification: classification,
+                     launcherRequirements: launcherRequirements, service: service, account: account)?.reason
 }
 
 public func removeSecretGateAppPolicy(
@@ -1435,6 +1446,9 @@ public func removeSecretGatePolicies(
             guard let threshold = record.denialThreshold else { return nil }
             var denied = SecretGatePolicyRecord(gateID: record.gateID, requirement: requirement,
                                                  protection: .noAccess, runtimeRequirement: record.resolvedRuntimeRequirement)
+            // Preserve existing inheritance, but never turn a removed explicit allow
+            // into a potentially broader gate default without Approval.
+            denied.usesGateDefault = record.usesGateDefault
             denied.denialThreshold = threshold
             return denied
         }

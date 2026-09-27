@@ -19,7 +19,8 @@ struct ProxySessionLaunch: Sendable {
     let cwd: String
     let selectedSecretValues: SelectedSecretValues
     let targetCodeIdentity: Data?
-    var launcherRequirements: [String] = []
+    let launchers: [LauncherIdentity]
+    let launcher: LauncherIdentity?
     let identity: ProxyTargetIdentity
 }
 
@@ -376,15 +377,17 @@ actor SecretProxyCoordinator {
             return
         }
         let sortedNames = secretNames.sorted()
+        // The Secret Proxy Gate has no durable Access Levels. Only the cross-gate
+        // Temporary Launcher Denial applies; tool-gate thresholds do not transfer here.
         func denyTemporarily(_ session: Session) -> Bool {
-            guard session.launch.launcherRequirements.contains(where: {
-                TemporaryLauncherDenials.shared.isDenied($0)
+            guard let launcher = session.launch.launchers.first(where: {
+                TemporaryLauncherDenials.shared.isDenied($0.designatedRequirement)
             }) else { return false }
             let reason = "Denied by two-minute Temporary Launcher Denial"
-            _ = recordAccessRequest(proxyRecord(
-                session: session, method: method, origin: origin, path: path,
+            _ = recordAccessRequest(session.launch.accessRequestRecord(
+                sessionID: session.id, method: method, origin: origin, path: path,
                 queryNames: queryNames, secretNames: sortedNames,
-                decision: "Denied", approvalSource: "Auto", reason: reason
+                decision: "Denied", approvalSource: "Auto", reason: reason, launcher: launcher
             ))
             deny(sessionID: sessionID, requestID: requestID, reason: reason)
             return true
@@ -433,8 +436,8 @@ actor SecretProxyCoordinator {
         guard !cancellation.isCanceled else { return }
         if denyTemporarily(session) { return }
         guard decision != .deny else {
-            _ = recordAccessRequest(proxyRecord(
-                session: session,
+            _ = recordAccessRequest(session.launch.accessRequestRecord(
+                sessionID: session.id,
                 method: method,
                 origin: origin,
                 path: path,
@@ -463,8 +466,8 @@ actor SecretProxyCoordinator {
                 names: sortedNames
             )
         } catch {
-            _ = recordAccessRequest(proxyRecord(
-                session: session,
+            _ = recordAccessRequest(session.launch.accessRequestRecord(
+                sessionID: session.id,
                 method: method,
                 origin: origin,
                 path: path,
@@ -484,8 +487,8 @@ actor SecretProxyCoordinator {
             deny(sessionID: sessionID, requestID: requestID, reason: "Proxy Session expired before release")
             return
         }
-        let record = proxyRecord(
-            session: liveSession,
+        let record = liveSession.launch.accessRequestRecord(
+            sessionID: liveSession.id,
             method: method,
             origin: origin,
             path: path,
@@ -548,38 +551,6 @@ actor SecretProxyCoordinator {
         } else {
             destinationPromptWaiters.removeFirst().resume()
         }
-    }
-
-    private func proxyRecord(
-        session: Session,
-        method: String,
-        origin: String,
-        path: String,
-        queryNames: [String],
-        secretNames: [String],
-        decision: String,
-        approvalSource: String,
-        reason: String
-    ) -> AccessRequestRecord {
-        let query = queryNames.isEmpty ? "" : "?" + queryNames.sorted().map { "\($0)=…" }.joined(separator: "&")
-        return AccessRequestRecord(
-            date: Date(),
-            tool: "Secret Proxy",
-            command: "\(method) \(origin)\(path)\(query)",
-            displayCommand: "\(method) \(origin)\(path)\(query)",
-            decision: decision,
-            approvalSource: approvalSource,
-            reason: reason,
-            launcher: URL(fileURLWithPath: session.launch.target).lastPathComponent,
-            callerPath: session.launch.target,
-            target: origin,
-            cwd: session.launch.cwd,
-            keys: secretNames,
-            detail: "Proxy Session \(session.id.uuidString.lowercased())",
-            secretValueSources: session.launch.selectedSecretValues
-                .selecting(names: secretNames)
-                .sourceDisplayNames
-        )
     }
 
     private func publishSessions() {
@@ -867,4 +838,44 @@ private struct SecretProxyError: LocalizedError {
 
     init(_ message: String) { self.message = message }
     var errorDescription: String? { message }
+}
+
+extension ProxySessionLaunch {
+    func accessRequestRecord(
+        sessionID: UUID,
+        method: String,
+        origin: String,
+        path: String,
+        queryNames: [String],
+        secretNames: [String],
+        decision: String,
+        approvalSource: String,
+        reason: String,
+        launcher: LauncherIdentity? = nil
+    ) -> AccessRequestRecord {
+        let launcher = launcher ?? self.launcher
+        let query = queryNames.isEmpty ? "" : "?" + queryNames.sorted().map { "\($0)=…" }.joined(separator: "&")
+        return AccessRequestRecord(
+            date: Date(),
+            tool: "Secret Proxy",
+            command: "\(method) \(origin)\(path)\(query)",
+            displayCommand: "\(method) \(origin)\(path)\(query)",
+            decision: decision,
+            approvalSource: approvalSource,
+            reason: reason,
+            launcher: launcher.map { approvalPromptRequester(launcher: $0, fallback: $0.path).name },
+            launcherIconPath: launcher.map { approvalPromptRequester(launcher: $0, fallback: $0.path).iconPath },
+            launcherRequirement: launcher.flatMap {
+                $0.runtimeProtection.allowsSecretGateAccess ? $0.designatedRequirement : nil
+            },
+            callerPath: self.target,
+            target: origin,
+            cwd: self.cwd,
+            keys: secretNames,
+            detail: "Proxy Session \(sessionID.uuidString.lowercased())",
+            secretValueSources: self.selectedSecretValues
+                .selecting(names: secretNames)
+                .sourceDisplayNames
+        )
+    }
 }

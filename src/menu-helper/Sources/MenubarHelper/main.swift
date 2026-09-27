@@ -3177,7 +3177,7 @@ private struct MutationCaller {
     let signing: SigningInfo
 }
 
-private struct LauncherIdentity {
+struct LauncherIdentity: Sendable {
     let pid: pid_t
     let path: String
     let identifier: String
@@ -4471,31 +4471,32 @@ private final class ApprovalServer: @unchecked Sendable {
         reply(peer, to: message, ok: true, error: nil, names: names)
     }
 
-    private func denialReason(
+    private func launcherDenial(
         _ request: ApprovalRequest, signing: SigningInfo, launchers: [LauncherIdentity]
-    ) -> String? {
-        if launchers.contains(where: {
+    ) -> (reason: String, launcher: LauncherIdentity?)? {
+        if let launcher = launchers.first(where: {
             TemporaryLauncherDenials.shared.isDenied($0.designatedRequirement)
-        }) { return "Denied by two-minute Temporary Launcher Denial" }
+        }) { return ("Denied by two-minute Temporary Launcher Denial", launcher) }
         guard let gate = matchingSecretGateDefinition(
             request: request, signing: signing, descriptors: secretGateDescriptors
         ) else { return nil }
-        return secretGateDenialReason(
+        guard let denial = secretGateDenial(
             gate: gate, classification: classifySecretGateRequest(gateID: gate.id, request: request),
             launcherRequirements: launchers.map(\.designatedRequirement)
-        )
+        ) else { return nil }
+        return (denial.reason, launchers.first { $0.designatedRequirement == denial.launcherRequirement })
     }
 
     private func denyRequestIfNeeded(
         _ request: ApprovalRequest, signing: SigningInfo, launchers: [LauncherIdentity],
         callerPath: String, peer: xpc_connection_t, message: xpc_object_t
     ) -> Bool {
-        guard let reason = denialReason(request, signing: signing, launchers: launchers) else { return false }
+        guard let denial = launcherDenial(request, signing: signing, launchers: launchers) else { return false }
         _ = onAccessRequest(accessRequestRecord(
             request: request, callerPath: callerPath, decision: "Denied",
-            approvalSource: "Auto", reason: reason, launcher: launchers.first
+            approvalSource: "Auto", reason: denial.reason, launcher: denial.launcher
         ))
-        reply(peer, to: message, ok: false, error: reason)
+        reply(peer, to: message, ok: false, error: denial.reason)
         return true
     }
 
@@ -6039,7 +6040,8 @@ private final class ApprovalServer: @unchecked Sendable {
                 cwd: request.cwd,
                 selectedSecretValues: request.selectedSecretValues,
                 targetCodeIdentity: targetCodeIdentity,
-                launcherRequirements: launchers.map(\.designatedRequirement),
+                launchers: launchers,
+                launcher: launcher,
                 identity: ProxyTargetIdentity(
                     pid: identity.pid,
                     pidVersion: identity.pidversion,
@@ -9123,9 +9125,9 @@ private final class ApprovalServer: @unchecked Sendable {
             if let launcher, !attributedLaunchers.contains(where: {
                 $0.designatedRequirement == launcher.designatedRequirement
             }) { attributedLaunchers.append(launcher) }
-            if let reason = denialReason(request, signing: signingInfo(path: pathString(identity)),
+            if let denial = launcherDenial(request, signing: signingInfo(path: pathString(identity)),
                                          launchers: attributedLaunchers) {
-                throw LauncherDenialError(reason: reason)
+                throw LauncherDenialError(reason: denial.reason)
             }
         }
         try validateDenial()
@@ -13182,7 +13184,7 @@ private func phoneApprovalRisks(
     }
 }
 
-private func approvalPromptRequester(
+func approvalPromptRequester(
     launcher: LauncherIdentity?,
     fallback: String
 ) -> (name: String, iconPath: String) {
@@ -14746,6 +14748,9 @@ private func runKeychainPersistenceSelfCheck() -> Int32 {
     let inherited = reloadSecretGatePolicy(for: gate, service: service, account: account)
     guard inherited.appPolicies.first?.usesGateDefault == true,
           inherited.appPolicies.first?.protection == .readOnly,
+          removeSecretGatePolicies(forLauncherRequirement: requirement, service: service, account: account) == errSecSuccess,
+          reloadSecretGatePolicy(for: gate, service: service, account: account).appPolicies.first?.usesGateDefault == true,
+          reloadSecretGatePolicy(for: gate, service: service, account: account).appPolicies.first?.protection == .readOnly,
           setSecretGateDefaultProtection(.noAccess, for: gate, service: service, account: account) == errSecSuccess,
           reloadSecretGatePolicy(for: gate, service: service, account: account).appPolicies.first?.protection == .noAccess,
           setSecretGateAppProtection(requirement: requirement, protection: .fullIncludingSecretDumps,
@@ -14756,12 +14761,17 @@ private func runKeychainPersistenceSelfCheck() -> Int32 {
                               service: service, account: account)
     }
     guard denial(.secretDump) != nil, denial(.readOnly) == nil,
+          secretGateDenial(gate: gate, classification: .secretDump,
+              launcherRequirements: ["unmatched child", requirement], service: service, account: account)?.launcherRequirement == requirement,
           let policy = reloadSecretGatePolicy(for: gate, service: service, account: account).appPolicies.first,
           policy.denialThreshold == .fullIncludingSecretDumps,
           setSecretGateDenialThreshold(nil, requirement: requirement, in: gate, runtimeRequirement: .hardened,
               service: service, account: account) == errSecAuthFailed,
           removeSecretGateAppPolicy(policy, from: gate, service: service, account: account) == errSecAuthFailed,
+          setSecretGateDefaultProtection(.fullIncludingSecretDumps, for: gate, service: service, account: account) == errSecSuccess,
           removeSecretGatePolicies(forLauncherRequirement: requirement, service: service, account: account) == errSecSuccess,
+          reloadSecretGatePolicy(for: gate, service: service, account: account).appPolicies.first?.usesGateDefault == false,
+          reloadSecretGatePolicy(for: gate, service: service, account: account).appPolicies.first?.protection == .noAccess,
           denial(.secretDump) != nil,
           setSecretGateDenialThreshold(nil, requirement: requirement, in: gate, runtimeRequirement: .hardened,
               allowWeakening: true, service: service, account: account) == errSecSuccess,
@@ -16356,6 +16366,28 @@ private func runApprovalCallsiteSelfCheck() async -> Int32 {
         approvalSource: "Auto", reason: "Denied by two-minute Temporary Launcher Denial", launcher: deniedLauncher)
     guard !shouldShowAutomaticAccessToast(deniedRecord),
           deniedRecord.launcherRequirement == deniedLauncher.designatedRequirement else { return 19 }
+    let unverifiedChild = LauncherIdentity(
+        pid: getpid(), path: "/unverified-child", identifier: "child", teamIdentifier: "TEST",
+        designatedRequirement: "child", runtimeProtection: .hardenedRuntimeMissing
+    )
+    let proxyLaunch = ProxySessionLaunch(
+        keys: [], target: "/different-target", arguments: [], cwd: "/", selectedSecretValues: SelectedSecretValues(values: [:]),
+        targetCodeIdentity: nil, launchers: [unverifiedChild, deniedLauncher], launcher: unverifiedChild,
+        identity: ProxyTargetIdentity(pid: getpid(), pidVersion: 0, startUsec: 0, effectiveUserID: getuid(), auditSessionID: 0)
+    )
+    let proxyRecord = proxyLaunch.accessRequestRecord(
+        sessionID: UUID(), method: "GET", origin: "https://example.com", path: "/", queryNames: [], secretNames: [],
+        decision: "Denied", approvalSource: "Auto", reason: deniedRecord.reason, launcher: deniedLauncher
+    )
+    guard proxyRecord.launcher == deniedRecord.launcher,
+          proxyRecord.launcherIconPath == deniedRecord.launcherIconPath,
+          proxyRecord.launcherRequirement == deniedLauncher.designatedRequirement,
+          proxyRecord.callerPath == proxyLaunch.target else { return 19 }
+    let unverifiedRecord = proxyLaunch.accessRequestRecord(
+        sessionID: UUID(), method: "GET", origin: "https://example.com", path: "/", queryNames: [], secretNames: [],
+        decision: "Denied", approvalSource: "Manual", reason: "Destination denied"
+    )
+    guard unverifiedRecord.launcherRequirement == nil else { return 19 }
     // 1. Queued-transition focus invariant: every freshly created alert starts non-key
     // and does not inherit focus from a previously key window.
     let panel1 = makeApprovalPanel()

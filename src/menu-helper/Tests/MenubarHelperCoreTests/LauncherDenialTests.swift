@@ -90,6 +90,10 @@ func persistentDenialOverridesFullAccessAndSurvivesAllowEdits() throws {
     let requirement = "identifier com.example.launcher"
     #expect(setSecretGateDenialThreshold(.fullIncludingSecretDumps, requirement: requirement,
         in: gate, runtimeRequirement: .hardened, service: service, account: account) == errSecSuccess)
+    #expect(removeSecretGatePolicies(forLauncherRequirement: requirement, service: service, account: account) == errSecSuccess)
+    let inherited = reloadSecretGatePolicy(for: gate, service: service, account: account)
+    #expect(inherited.appPolicies.first?.usesGateDefault == true)
+    #expect(inherited.appPolicies.first?.protection == gate.defaultProtection)
     #expect(setSecretGateAppProtection(requirement: requirement, protection: .fullIncludingSecretDumps,
         for: gate, service: service, account: account) == errSecSuccess)
     func reason(_ classification: SecretGateRequestClassification, _ launcher: String = requirement) -> String? {
@@ -97,6 +101,8 @@ func persistentDenialOverridesFullAccessAndSurvivesAllowEdits() throws {
                               service: service, account: account)
     }
     #expect(reason(.secretDump)?.hasPrefix("Denied by Launcher rule:") == true)
+    #expect(secretGateDenial(gate: gate, classification: .secretDump,
+        launcherRequirements: ["unmatched child", requirement], service: service, account: account)?.launcherRequirement == requirement)
     #expect(reason(.readOnly) == nil)
     #expect(reason(.secretDump, "identifier com.example.other") == nil)
     let loaded = reloadSecretGatePolicy(for: gate, service: service, account: account)
@@ -107,6 +113,9 @@ func persistentDenialOverridesFullAccessAndSurvivesAllowEdits() throws {
     #expect(removeSecretGateAppPolicy(policy, from: gate, service: service, account: account) == errSecAuthFailed)
     #expect(removeSecretGatePolicies(forLauncherRequirement: requirement, service: service, account: account) == errSecSuccess)
     #expect(reason(.secretDump) != nil)
+    let removedAllow = reloadSecretGatePolicy(for: gate, service: service, account: account)
+    #expect(removedAllow.appPolicies.first?.usesGateDefault == false)
+    #expect(removedAllow.appPolicies.first?.protection == .noAccess)
     #expect(setSecretGateDenialThreshold(nil, requirement: requirement, in: gate, runtimeRequirement: .hardened,
         allowWeakening: true, service: service, account: account) == errSecSuccess)
     #expect(reason(.secretDump) == nil)
