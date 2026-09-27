@@ -13040,7 +13040,7 @@ private func showApprovalAlert(
         $0.runtimeProtection.allowsSecretGateAccess ? $0 : nil
     }
     let offersTemporaryDenial = eligibleDenialLauncher.map {
-        TemporaryLauncherDenials.shared.recordPrompt($0.designatedRequirement)
+        TemporaryLauncherDenials.shared.shouldOfferDenialOnNextPrompt($0.designatedRequirement)
     } ?? false
     let receivedAt = Date()
     let requester = approvalPromptRequester(launcher: launcher, fallback: launcherFallbackPath)
@@ -13203,6 +13203,9 @@ private func showApprovalAlert(
         fitApprovalPanel(panel, maximumHeight: maximumHeight, animate: false)
         panel.center()
         panel.orderFrontRegardless()
+        if panel.isVisible, ActiveApprovalPrompt.current === state, let eligibleDenialLauncher {
+            _ = TemporaryLauncherDenials.shared.recordPrompt(eligibleDenialLauncher.designatedRequirement)
+        }
     }
 
     return terminalApprovalDecision(decision, cancellation: cancellation)

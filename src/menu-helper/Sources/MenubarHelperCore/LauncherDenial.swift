@@ -53,6 +53,11 @@ public final class TemporaryLauncherDenials: @unchecked Sendable {
         }
     }
 
+    /// Preview the next prompt's action without counting an attempted presentation.
+    public func shouldOfferDenialOnNextPrompt(_ requirement: String, now: TimeInterval = TemporaryLauncherDenials.now) -> Bool {
+        lock.withLock { (prompts[requirement] ?? []).filter { $0 >= now - 30 }.count >= 2 }
+    }
+
     /// Three presentations within thirty seconds, capped at three timestamps per identity.
     public func recordPrompt(_ requirement: String, now: TimeInterval = TemporaryLauncherDenials.now) -> Bool {
         guard !requirement.isEmpty else { return false }

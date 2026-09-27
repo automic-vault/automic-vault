@@ -47,8 +47,14 @@ private func denialGate(_ id: String = "gh") -> SecretGate {
 
 @Test func promptFloodOnlyOffersDenialAndNeverActivatesIt() {
     let state = TemporaryLauncherDenials()
+    for _ in 0..<100 {
+        #expect(!state.shouldOfferDenialOnNextPrompt("claude", now: 100))
+    }
     #expect(!state.recordPrompt("claude", now: 100))
+    #expect(!state.shouldOfferDenialOnNextPrompt("claude", now: 110))
     #expect(!state.recordPrompt("claude", now: 110))
+    #expect(state.shouldOfferDenialOnNextPrompt("claude", now: 120))
+    #expect(!state.shouldOfferDenialOnNextPrompt("claude", now: 141))
     #expect(!state.recordPrompt("other", now: 115))
     #expect(state.recordPrompt("claude", now: 120))
     #expect(!state.isDenied("claude", now: 120))
