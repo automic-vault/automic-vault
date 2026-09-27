@@ -105,6 +105,12 @@ func persistentDenialOverridesFullAccessAndSurvivesAllowEdits() throws {
     let inherited = reloadSecretGatePolicy(for: gate, service: service, account: account)
     #expect(inherited.appPolicies.first?.usesGateDefault == true)
     #expect(inherited.appPolicies.first?.protection == gate.defaultProtection)
+    #expect(inherited.defaultPolicyLabel == "All Verified Launchers")
+    #expect(setSecretGateDenialThreshold(nil, requirement: requirement, in: gate, runtimeRequirement: .hardened,
+        approvedDenialThreshold: .fullIncludingSecretDumps, service: service, account: account) == errSecSuccess)
+    #expect(reloadSecretGatePolicy(for: gate, service: service, account: account).appPolicies.isEmpty)
+    #expect(setSecretGateDenialThreshold(.fullIncludingSecretDumps, requirement: requirement,
+        in: gate, runtimeRequirement: .hardened, service: service, account: account) == errSecSuccess)
     #expect(setSecretGateAppProtection(requirement: requirement, protection: .fullIncludingSecretDumps,
         for: gate, service: service, account: account) == errSecSuccess)
     func reason(_ classification: SecretGateRequestClassification, _ launcher: String = requirement) -> String? {
@@ -119,6 +125,16 @@ func persistentDenialOverridesFullAccessAndSurvivesAllowEdits() throws {
     let loaded = reloadSecretGatePolicy(for: gate, service: service, account: account)
     let policy = try #require(loaded.appPolicies.first)
     #expect(policy.denialThreshold == .fullIncludingSecretDumps)
+    #expect(setSecretGateDenialThreshold(.fullExceptSecretDumps, requirement: requirement,
+        in: gate, runtimeRequirement: .hardened, service: service, account: account) == errSecSuccess)
+    #expect(setSecretGateDenialThreshold(nil, requirement: requirement, in: gate, runtimeRequirement: .hardened,
+        approvedDenialThreshold: policy.denialThreshold, service: service, account: account) == errSecAuthFailed)
+    #expect(removeSecretGateAppPolicy(policy, from: gate, approvedDenialThreshold: policy.denialThreshold,
+        service: service, account: account) == errSecAuthFailed)
+    #expect(reason(.mutating) != nil)
+    #expect(setSecretGateDenialThreshold(.fullIncludingSecretDumps, requirement: requirement, in: gate,
+        runtimeRequirement: .hardened, approvedDenialThreshold: .fullExceptSecretDumps,
+        service: service, account: account) == errSecSuccess)
     #expect(setSecretGateDenialThreshold(nil, requirement: requirement, in: gate, runtimeRequirement: .hardened,
         service: service, account: account) == errSecAuthFailed)
     #expect(removeSecretGateAppPolicy(policy, from: gate, service: service, account: account) == errSecAuthFailed)
@@ -128,7 +144,7 @@ func persistentDenialOverridesFullAccessAndSurvivesAllowEdits() throws {
     #expect(removedAllow.appPolicies.first?.usesGateDefault == false)
     #expect(removedAllow.appPolicies.first?.protection == .noAccess)
     #expect(setSecretGateDenialThreshold(nil, requirement: requirement, in: gate, runtimeRequirement: .hardened,
-        allowWeakening: true, service: service, account: account) == errSecSuccess)
+        approvedDenialThreshold: .fullIncludingSecretDumps, service: service, account: account) == errSecSuccess)
     #expect(reason(.secretDump) == nil)
     #expect(saveKeychainData(Data("malformed".utf8), service: service, account: account) == errSecSuccess)
     #expect(reason(.readOnly) == "Denied because Authorization Policy is unavailable")

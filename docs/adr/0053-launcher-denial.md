@@ -25,7 +25,9 @@ gate default rather than creating an allow override. Launcher Bundle authority
 cleanup removes allows while retaining denials. Existing denial-only inheritance
 is preserved; removing an explicit allow leaves Approval Required, so cleanup
 cannot silently restore a broader gate default. Rule deletion
-that removes denial also requires that approval.
+that removes denial also requires that approval. Weakening or removal checks the
+approved threshold against the stored threshold under the policy lock; a newer
+threshold requires fresh Approval.
 
 After three prompts from the same eligible Verified Launcher within thirty
 seconds, offer a two-minute Temporary Launcher Denial. Only an explicit user

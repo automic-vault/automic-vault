@@ -1631,7 +1631,8 @@ final class DashboardModel: ObservableObject {
             guard let self else { return }
             self.finishSecretGatePolicyUpdate(
                 setSecretGateDenialThreshold(threshold, requirement: app.requirement, in: gate,
-                                            runtimeRequirement: app.runtimeRequirement, allowWeakening: needsApproval),
+                                            runtimeRequirement: app.runtimeRequirement,
+                                            approvedDenialThreshold: needsApproval ? app.denialThreshold : nil),
                 gate: gate, error: "Could not update the Denial Threshold"
             )
         }
@@ -1647,7 +1648,7 @@ final class DashboardModel: ObservableObject {
     func removeAppPolicy(_ app: SecretGatePolicy, from gate: SecretGate) {
         let update = { [weak self] in
             self?.finishSecretGatePolicyUpdate(
-                removeSecretGateAppPolicy(app, from: gate, allowRemovingDenial: app.denialThreshold != nil), gate: gate,
+                removeSecretGateAppPolicy(app, from: gate, approvedDenialThreshold: app.denialThreshold), gate: gate,
                 error: "Could not delete the Launcher-specific rule for \(app.bundleIdentifier)"
             )
         }

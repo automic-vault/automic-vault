@@ -633,7 +633,7 @@ public struct SecretGate: Equatable, Identifiable, Sendable {
     public var scriptPaths: [String] { routes.compactMap(\.scriptPath).uniqueSorted() }
     public var targetPaths: [String] { routes.map(\.targetPath).uniqueSorted() }
     public var defaultPolicyLabel: String {
-        appPolicies.isEmpty ? "All Verified Launchers" : "All Other Verified Launchers"
+        appPolicies.contains { !$0.usesGateDefault } ? "All Other Verified Launchers" : "All Verified Launchers"
     }
     public var displayName: String { id == "node" ? "npm" : id }
     public var authorizationGateName: String {
@@ -1335,12 +1335,13 @@ public func setSecretGateAppProtection(
 }
 
 /// Only the attended UI may weaken this rule, after authority-change Approval.
+/// The approved threshold must still match under the lock; a newer rule needs fresh Approval.
 public func setSecretGateDenialThreshold(
     _ threshold: SecretGateProtection?,
     requirement: String,
     in gate: SecretGate,
     runtimeRequirement: LauncherRuntimeRequirement,
-    allowWeakening: Bool = false,
+    approvedDenialThreshold: SecretGateProtection? = nil,
     service: String = secretGatePoliciesKeychainService,
     account: String = secretGatePoliciesKeychainAccount
 ) -> OSStatus {
@@ -1364,10 +1365,17 @@ public func setSecretGateDenialThreshold(
         runtimeRequirement: runtimeRequirement
     )
     if index == nil { record.usesGateDefault = true }
-    guard allowWeakening || !gate.weakeningDenial(from: record.denialThreshold, to: threshold)
+    guard !gate.weakeningDenial(from: record.denialThreshold, to: threshold)
+        || record.denialThreshold == approvedDenialThreshold
     else { return errSecAuthFailed }
     record.denialThreshold = threshold
-    if let index { records[index] = record } else { records.append(record) }
+    if threshold == nil, record.usesGateDefault == true {
+        if let index { records.remove(at: index) }
+    } else if let index {
+        records[index] = record
+    } else {
+        records.append(record)
+    }
     let status = saveSecretGatePolicyRecords(records, service: service, account: account)
     didChange = status == errSecSuccess
     return status
@@ -1412,7 +1420,7 @@ public func secretGateDenialReason(
 public func removeSecretGateAppPolicy(
     _ policy: SecretGatePolicy,
     from gate: SecretGate,
-    allowRemovingDenial: Bool = false,
+    approvedDenialThreshold: SecretGateProtection? = nil,
     service: String = secretGatePoliciesKeychainService,
     account: String = secretGatePoliciesKeychainAccount
 ) -> OSStatus {
@@ -1423,8 +1431,9 @@ public func removeSecretGateAppPolicy(
     case .success(let records): loaded = records
     case .failure(let status): return status
     }
-    guard allowRemovingDenial || !loaded.contains(where: {
-        $0.gateID == gate.id && $0.requirement == policy.requirement && $0.denialThreshold != nil
+    guard !loaded.contains(where: {
+        $0.gateID == gate.id && $0.requirement == policy.requirement
+            && $0.denialThreshold != nil && $0.denialThreshold != approvedDenialThreshold
     }) else { return errSecAuthFailed }
     let records = loaded.filter {
         !($0.gateID == gate.id && $0.requirement == policy.requirement)
