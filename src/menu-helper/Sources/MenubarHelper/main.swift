@@ -12964,6 +12964,15 @@ private final class ApprovalPromptState: @unchecked Sendable {
     }
 }
 
+private func denialActionLauncher(
+    displayedLauncher: LauncherIdentity?,
+    attributedLaunchers: [LauncherIdentity]
+) -> LauncherIdentity? {
+    ((displayedLauncher.map { [$0] } ?? []) + attributedLaunchers).first {
+        $0.runtimeProtection.allowsSecretGateAccess && !$0.designatedRequirement.isEmpty
+    }
+}
+
 @MainActor
 private func showApprovalAlert(
     request: ApprovalRequest,
@@ -13036,9 +13045,9 @@ private func showApprovalAlert(
     if reevaluate?() == true {
         return .reevaluated
     }
-    let eligibleDenialLauncher = launcher.flatMap {
-        $0.runtimeProtection.allowsSecretGateAccess ? $0 : nil
-    }
+    let eligibleDenialLauncher = denialActionLauncher(
+        displayedLauncher: launcher, attributedLaunchers: denialLaunchers
+    )
     let offersTemporaryDenial = eligibleDenialLauncher.map {
         TemporaryLauncherDenials.shared.shouldOfferDenialOnNextPrompt($0.designatedRequirement)
     } ?? false
@@ -13123,6 +13132,9 @@ private func showApprovalAlert(
                 usesIPhoneApproval: usesIPhoneApproval,
                 usesTouchIDApproval: usesTouchIDApproval,
                 compact: compact,
+                denialLauncherName: eligibleDenialLauncher.map {
+                    approvalPromptRequester(launcher: $0, fallback: $0.path).name
+                },
                 temporaryDenial: offersTemporaryDenial ? {
                     guard let eligibleDenialLauncher else { return }
                     TemporaryLauncherDenials.shared.deny(eligibleDenialLauncher.designatedRequirement)
@@ -13824,6 +13836,7 @@ private struct ApprovalPromptView: View {
     var usesIPhoneApproval = false
     var usesTouchIDApproval = false
     var compact = false
+    var denialLauncherName: String? = nil
     var temporaryDenial: (() -> Void)? = nil
     var denialGate: SecretGate? = nil
     var setDenialThreshold: ((SecretGateProtection) -> OSStatus)? = nil
@@ -13912,12 +13925,12 @@ private struct ApprovalPromptView: View {
             }
 
             if let denialSaveError { Text(denialSaveError).foregroundStyle(.red) }
-            if let temporaryDenial {
-                Button("Deny all requests from \(content.requesterName) for 2 minutes", action: temporaryDenial)
+            if let temporaryDenial, let denialLauncherName {
+                Button("Deny all requests from \(denialLauncherName) for 2 minutes", action: temporaryDenial)
                     .help("Overrides allow rules across Authorization Gates. Ordinary policy resumes after two minutes.")
             }
-            if let denialGate, let setDenialThreshold {
-                Menu("Always Deny…") {
+            if let denialGate, let setDenialThreshold, let denialLauncherName {
+                Menu("Always Deny \(denialLauncherName)…") {
                     ForEach(denialGate.availableProtections, id: \.self) { threshold in
                         Button("\(denialGate.protectionTitle(threshold)) and above") {
                             let status = setDenialThreshold(threshold)
@@ -16460,6 +16473,14 @@ private func runApprovalCallsiteSelfCheck() async -> Int32 {
         pid: getpid(), path: "/unverified-child", identifier: "child", teamIdentifier: "TEST",
         designatedRequirement: "child", runtimeProtection: .hardenedRuntimeMissing
     )
+    guard denialActionLauncher(displayedLauncher: unverifiedChild,
+              attributedLaunchers: [unverifiedChild, deniedLauncher])?.designatedRequirement == deniedLauncher.designatedRequirement,
+          denialActionLauncher(displayedLauncher: deniedLauncher,
+              attributedLaunchers: [unverifiedChild])?.designatedRequirement == deniedLauncher.designatedRequirement,
+          denialActionLauncher(displayedLauncher: nil,
+              attributedLaunchers: [deniedLauncher])?.designatedRequirement == deniedLauncher.designatedRequirement,
+          denialActionLauncher(displayedLauncher: unverifiedChild, attributedLaunchers: []) == nil
+    else { return 19 }
     guard evaluateLauncherDenial(gate: nil, classification: .unknown, launchers: [unverifiedChild]) == nil,
           let releaseDenial = evaluateLauncherDenial(gate: nil, classification: .unknown,
               launchers: [unverifiedChild, deniedLauncher]),
