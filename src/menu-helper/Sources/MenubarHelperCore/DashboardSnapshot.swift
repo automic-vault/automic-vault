@@ -817,6 +817,7 @@ public struct AccessRequestRecord: Codable, Equatable, Identifiable, Sendable {
     public let launcher: String?
     public let launcherIconPath: String?
     public let launcherRequirement: String?
+    public let temporaryDenialScope: TemporaryLauncherDenialScope?
     public let callerPath: String
     public let target: String
     public let targetRuntimeProtection: String?
@@ -837,6 +838,7 @@ public struct AccessRequestRecord: Codable, Equatable, Identifiable, Sendable {
         launcher: String?,
         launcherIconPath: String? = nil,
         launcherRequirement: String? = nil,
+        temporaryDenialScope: TemporaryLauncherDenialScope? = nil,
         callerPath: String,
         target: String,
         targetRuntimeProtection: String? = nil,
@@ -856,6 +858,7 @@ public struct AccessRequestRecord: Codable, Equatable, Identifiable, Sendable {
         self.launcher = launcher
         self.launcherIconPath = launcherIconPath
         self.launcherRequirement = launcherRequirement
+        self.temporaryDenialScope = temporaryDenialScope
         self.callerPath = callerPath
         self.target = target
         self.targetRuntimeProtection = targetRuntimeProtection
@@ -882,6 +885,7 @@ public struct AccessRequestRecord: Codable, Equatable, Identifiable, Sendable {
             launcher: launcher,
             launcherIconPath: launcherIconPath,
             launcherRequirement: launcherRequirement,
+            temporaryDenialScope: temporaryDenialScope,
             callerPath: callerPath,
             target: target,
             targetRuntimeProtection: targetRuntimeProtection,

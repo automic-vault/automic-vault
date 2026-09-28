@@ -505,12 +505,16 @@ human authority as broadening an Access Level.
 ### Temporary Launcher Denial
 
 An explicit user decision to deny new requests attributable to one Verified
-Launcher across Authorization Gates for two elapsed minutes. It follows Launcher
+Launcher at one Authorization Gate, at the selected operation level and above,
+for two elapsed minutes. It follows Launcher
 Identity across Gate Client restarts, remains in memory, and ends on expiry or
-service restart. It overrides allow authority without revoking existing grants
+service restart, or explicit cancellation from the menu bar. It overrides allow authority without revoking existing grants
 or already released Secrets. Expiry restores ordinary policy; it never approves
-a request. Repeated Approval presentations offer this action but never activate
-it automatically. Caller cancellation is not a denial rule.
+a request. Three Approval presentations for that Launcher at that gate within thirty
+seconds offer this action in the Deny button’s disclosure, but never activate it
+automatically. The level comes from the requested operation, not the configured
+allow preset. Requests without a recognized operation level do not offer it.
+Durable Denial Thresholds are configured only in the main app’s Authorization Gates. Caller cancellation is not a denial rule.
 
 ### Temporary Access Grant
 
@@ -704,7 +708,8 @@ returned.
 A local record of an Authorization Request and its Authorization Decision. It includes the decision source, Launcher, Gate Client, Target, Secret Names, and operation. For an automically authorized Secret Use, it also records the Target's available Hardened Runtime posture at authorization time. This posture is diagnostic metadata, not Target identity evidence or an authorization input.
 
 New records may retain the eligible Verified Launcher’s designated requirement
-so History can offer a Temporary Launcher Denial after the caller exits. This
+and explicit gate/threshold scope so History can offer a Temporary Launcher
+Denial after the caller exits. Older records without a scope do not offer it. This
 recorded identity may narrow access only; History never grants authority.
 
 Automic Vault persists and verifies a record of allowed Secret Use before releasing a Secret. Failure to persist that required record denies the request. Records of denials and failures are best effort. Authorization History is bounded and local; it is not an append-only, tamper-proof, or complete forensic log.

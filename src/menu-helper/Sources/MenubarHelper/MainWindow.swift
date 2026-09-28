@@ -4702,17 +4702,18 @@ private struct AuthorizationHistoryDetailView: View {
 private struct TemporaryLauncherDenialButton: View {
     let requirement: String
     let launcherName: String?
+    let scope: TemporaryLauncherDenialScope
     @State private var deadline: TimeInterval?
 
     var body: some View {
         Button(deadline != nil
             ? "Two-minute Launcher denial active"
-            : "Deny all requests from \(launcherName ?? "this Verified Launcher") for 2 minutes") {
-            TemporaryLauncherDenials.shared.deny(requirement)
+            : scope.actionTitle) {
+            TemporaryLauncherDenials.shared.deny(requirement, launcherName: launcherName ?? "Verified Launcher", scope: scope)
             refresh()
         }
         .disabled(deadline != nil)
-        .help("Applies across Authorization Gates to the recorded Launcher Identity. Ordinary policy resumes after two minutes.")
+        .help("Only \(launcherName ?? "this Verified Launcher") at \(scope.gateName). Ordinary policy resumes after two minutes; end early from the menu bar.")
         .onAppear { refresh() }
         .onReceive(NotificationCenter.default.publisher(for: launcherDenialDidChange).receive(on: RunLoop.main)) { _ in
             refresh()
@@ -4727,7 +4728,7 @@ private struct TemporaryLauncherDenialButton: View {
     }
 
     private func refresh() {
-        deadline = TemporaryLauncherDenials.shared.deadline(for: requirement)
+        deadline = TemporaryLauncherDenials.shared.deadline(for: requirement, scope: scope)
     }
 }
 
@@ -4771,8 +4772,8 @@ private struct AccessRequestRow: View {
                 Text(record.reason)
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
-                if let requirement = record.launcherRequirement, !requirement.isEmpty {
-                    TemporaryLauncherDenialButton(requirement: requirement, launcherName: record.launcher)
+                if let requirement = record.launcherRequirement, !requirement.isEmpty, let scope = record.temporaryDenialScope {
+                    TemporaryLauncherDenialButton(requirement: requirement, launcherName: record.launcher, scope: scope)
                         .id(requirement)
                 }
                 VStack(alignment: .leading, spacing: 3) {

@@ -528,11 +528,15 @@ a universal ranking of operation characteristics.
 
 Denial is checked before Blessings, policy, Temporary Access Grants, decision
 reuse, and human Approval, and checked again for queued requests and before
-Secret release. Temporary Launcher Denials override authority across gates for
-two elapsed minutes. Three Approval presentations for the same eligible Launcher
-within thirty seconds offer the action; cancellation never activates it.
+Secret release. Temporary Launcher Denials override authority only for their
+exact Launcher requirement, gate ID, and operation threshold for two elapsed
+minutes. Three Approval presentations for the same eligible Launcher at that gate
+within thirty seconds offer the Deny disclosure; cancellation never activates it.
+Menu-bar cancellation removes only the selected temporary rule. Expiry and
+cancellation restore ordinary policy, including persistent denial.
 History records automatic denials and their source without generating another
-Approval notification. See [ADR 0053](adr/0053-launcher-denial.md).
+Approval notification. See [ADR 0053](adr/0053-launcher-denial.md) and
+[ADR 0054](adr/0054-scoped-temporary-denial.md).
 
 ### Current compatibility model
 

@@ -45,38 +45,72 @@ private func denialGate(_ id: String = "gh") -> SecretGate {
     #expect(!gate.weakeningDenial(from: .noAccess, to: .readOnly)) // Both deny everything.
 }
 
-@Test func promptFloodOnlyOffersDenialAndNeverActivatesIt() {
+@Test func promptFloodOnlyOffersScopedDenialAndNeverActivatesIt() {
     let state = TemporaryLauncherDenials()
     for _ in 0..<100 {
-        #expect(!state.shouldOfferDenialOnNextPrompt("claude", now: 100))
+        #expect(!state.shouldOfferDenialOnNextPrompt("claude", gateID: "gh", now: 100))
     }
-    #expect(!state.recordPrompt("claude", now: 100))
-    #expect(!state.shouldOfferDenialOnNextPrompt("claude", now: 110))
-    #expect(!state.recordPrompt("claude", now: 110))
-    #expect(state.shouldOfferDenialOnNextPrompt("claude", now: 120))
-    #expect(!state.shouldOfferDenialOnNextPrompt("claude", now: 141))
-    #expect(!state.recordPrompt("other", now: 115))
-    #expect(state.recordPrompt("claude", now: 120))
-    #expect(!state.isDenied("claude", now: 120))
-    #expect(!state.recordPrompt("claude", now: 151))
-    #expect(!state.recordPrompt("", now: 151))
+    #expect(!state.recordPrompt("claude", gateID: "gh", now: 100))
+    #expect(!state.shouldOfferDenialOnNextPrompt("claude", gateID: "gh", now: 110))
+    #expect(!state.recordPrompt("claude", gateID: "gh", now: 110))
+    #expect(state.shouldOfferDenialOnNextPrompt("claude", gateID: "gh", now: 120))
+    #expect(!state.shouldOfferDenialOnNextPrompt("claude", gateID: "ssh-agent", now: 120))
+    #expect(!state.shouldOfferDenialOnNextPrompt("other", gateID: "gh", now: 120))
+    #expect(!state.shouldOfferDenialOnNextPrompt("claude", gateID: "gh", now: 141))
+    #expect(state.recordPrompt("claude", gateID: "gh", now: 120))
+    #expect(state.active(now: 120).isEmpty)
+    #expect(!state.recordPrompt("claude", gateID: "gh", now: 151))
+    #expect(!state.recordPrompt("", gateID: "gh", now: 151))
 }
 
-@Test func temporaryDenialSurvivesRetriesAndExpiresWithoutApproving() {
+@Test func temporaryDenialScopeExpiryAndCancellation() throws {
     let state = TemporaryLauncherDenials()
-    state.deny("claude", now: 100)
-    #expect(state.deadline(for: "claude", now: 100) == 220)
-    #expect(state.deadline(for: "other", now: 100) == nil)
-    for retry in 0..<10_000 {
-        #expect(state.isDenied("claude", now: 100 + Double(retry) / 100))
-        #expect(!state.isDenied("other", now: 101))
-    }
-    #expect(state.isDenied("claude", now: 219.999))
-    #expect(!state.isDenied("claude", now: 220))
-    #expect(state.deadline(for: "claude", now: 220) == nil)
-    #expect(!TemporaryLauncherDenials().isDenied("claude", now: 101))
-    state.deny("", now: 100)
-    #expect(!state.isDenied("", now: 101))
+    let gate = denialGate()
+    let writes = try #require(TemporaryLauncherDenialScope(gate: gate, classification: .mutating))
+    let reads = try #require(TemporaryLauncherDenialScope(gate: gate, classification: .readOnly))
+    #expect(writes.threshold == .fullExceptSecretDumps)
+    #expect(TemporaryLauncherDenialScope(gate: gate, classification: .unknown) == nil)
+    #expect(TemporaryLauncherDenialScope(gate: denialGate("ssh-agent"), classification: .mutating)?.actionTitle
+        == "Deny SSH authentication for 2 minutes")
+    state.deny("claude", launcherName: "Claude", scope: writes, now: 100)
+    #expect(state.deadline(for: "claude", scope: writes, now: 100) == 220)
+    #expect(state.isDenied("claude", gate: gate, classification: .mutating, now: 219.999))
+    #expect(state.isDenied("claude", gate: gate, classification: .unknown, now: 101))
+    #expect(!state.isDenied("claude", gate: gate, classification: .localWrite, now: 101))
+    #expect(!state.isDenied("claude", gate: denialGate("ssh-agent"), classification: .mutating, now: 101))
+    #expect(!state.isDenied("other", gate: gate, classification: .mutating, now: 101))
+    #expect(!state.isDenied("claude", gate: gate, classification: .mutating, now: 220))
+    #expect(state.active(now: 220).isEmpty)
+    state.deny("claude", launcherName: "Claude", scope: reads, now: 300)
+    let old = try #require(state.active(now: 300).first)
+    state.deny("claude", launcherName: "Claude", scope: reads, now: 310)
+    state.cancel(old.id) // A stale menu action cannot remove a replacement rule.
+    #expect(state.active(now: 310).count == 1)
+    let broad = try #require(state.active(now: 310).first)
+    state.deny("claude", launcherName: "Claude", scope: writes, now: 320)
+    #expect(state.active(now: 320).count == 2)
+    #expect(state.isDenied("claude", gate: gate, classification: .readOnly, now: 320))
+    state.cancel(broad.id)
+    #expect(!state.isDenied("claude", gate: gate, classification: .readOnly, now: 320))
+    #expect(state.isDenied("claude", gate: gate, classification: .secretDump, now: 320))
+    state.cancel(try #require(state.active(now: 320).first).id)
+    #expect(state.active(now: 320).isEmpty)
+    state.deny("", launcherName: "Invalid", scope: writes, now: 320)
+    #expect(state.active(now: 320).isEmpty)
+}
+
+@Test func denialHistoryScopeIsExplicitAndBackwardCompatible() throws {
+    let scope = try #require(TemporaryLauncherDenialScope(gate: denialGate(), classification: .mutating))
+    let record = AccessRequestRecord(date: Date(), tool: "gh", command: "gh", decision: "Denied", reason: "Test",
+        launcher: "Claude", launcherRequirement: "claude", temporaryDenialScope: scope,
+        callerPath: "/gh", target: "/gh", cwd: "/", keys: [], detail: nil)
+    #expect(record.redactedForDisclosure.temporaryDenialScope == scope)
+    let data = try JSONEncoder().encode(record)
+    #expect(try JSONDecoder().decode(AccessRequestRecord.self, from: data).temporaryDenialScope == scope)
+    var legacy = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+    legacy.removeValue(forKey: "temporaryDenialScope")
+    let decoded = try JSONDecoder().decode(AccessRequestRecord.self, from: JSONSerialization.data(withJSONObject: legacy))
+    #expect(decoded.temporaryDenialScope == nil)
 }
 
 @Test func denialPolicyDecodesOldRecordsAndRejectsUnknownThresholds() throws {

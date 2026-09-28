@@ -377,22 +377,6 @@ actor SecretProxyCoordinator {
             return
         }
         let sortedNames = secretNames.sorted()
-        // The Secret Proxy Gate has no durable Access Levels. Only the cross-gate
-        // Temporary Launcher Denial applies; tool-gate thresholds do not transfer here.
-        func denyTemporarily(_ session: Session) -> Bool {
-            guard let launcher = session.launch.launchers.first(where: {
-                TemporaryLauncherDenials.shared.isDenied($0.designatedRequirement)
-            }) else { return false }
-            let reason = "Denied by two-minute Temporary Launcher Denial"
-            _ = recordAccessRequest(session.launch.accessRequestRecord(
-                sessionID: session.id, method: method, origin: origin, path: path,
-                queryNames: queryNames, secretNames: sortedNames,
-                decision: "Denied", approvalSource: "Auto", reason: reason, launcher: launcher
-            ))
-            deny(sessionID: sessionID, requestID: requestID, reason: reason)
-            return true
-        }
-        if denyTemporarily(session) { return }
         let rule = DestinationRule(origin: origin, secretNames: sortedNames)
         let decision: ProxyDestinationDecision
         let approvalSource: String
@@ -434,7 +418,6 @@ actor SecretProxyCoordinator {
             }
         }
         guard !cancellation.isCanceled else { return }
-        if denyTemporarily(session) { return }
         guard decision != .deny else {
             _ = recordAccessRequest(session.launch.accessRequestRecord(
                 sessionID: session.id,
@@ -503,7 +486,6 @@ actor SecretProxyCoordinator {
             return
         }
         guard !cancellation.isCanceled else { return }
-        if denyTemporarily(liveSession) { return }
         if decision == .allowForSession { liveSession.rules.insert(rule) }
         liveSession.authorizedRequestCount += 1
         liveSession.authorizedOrigins.insert(origin)

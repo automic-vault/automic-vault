@@ -119,6 +119,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var temporaryAccessGrantSeparator: NSMenuItem?
     private var temporaryAccessGrantPanel: TemporaryAccessGrantPanel?
     private var temporaryAccessGrantTimer: Timer?
+    private let temporaryDenialsItem = NSMenuItem(title: "Temporary denials", action: nil, keyEquivalent: "")
+    private var temporaryDenialTimer: Timer?
     private var temporaryAccessGrantCollapseWorkItem: DispatchWorkItem?
     private var isTemporaryAccessGrantStripCollapsed = false
     private let liveSecretUses = LiveSecretUseController<LiveSecretUseProcess>()
@@ -241,10 +243,64 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         installCLIItem.target = self
         installCLIItem.isHidden = FileManager.default.fileExists(atPath: installedAVCLIPath)
         menu.addItem(installCLIItem)
+        temporaryDenialsItem.isHidden = true
+        menu.addItem(temporaryDenialsItem)
+        NotificationCenter.default.addObserver(self, selector: #selector(refreshTemporaryDenials),
+            name: launcherDenialDidChange, object: nil)
         menu.addItem(quitSeparator)
         menu.addItem(quitItem)
         menu.delegate = self
         statusItem.menu = menu
+    }
+
+    @objc private func refreshTemporaryDenials() {
+        // Policy notifications may originate off the main thread.
+        guard Thread.isMainThread else {
+            DispatchQueue.main.async { [weak self] in self?.refreshTemporaryDenials() }
+            return
+        }
+        let now = TemporaryLauncherDenials.now
+        let active = TemporaryLauncherDenials.shared.active(now: now)
+        temporaryDenialsItem.isHidden = active.isEmpty || isStartingUp || isUpdating
+        if active.isEmpty {
+            temporaryDenialTimer?.invalidate()
+            temporaryDenialTimer = nil
+        } else if temporaryDenialTimer == nil {
+            let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
+                MainActor.assumeIsolated { self?.refreshTemporaryDenials() }
+            }
+            RunLoop.main.add(timer, forMode: .common)
+            temporaryDenialTimer = timer
+        }
+        if !isStatusMenuOpen {
+            let submenu = NSMenu()
+            for denial in active {
+                let item = NSMenuItem(title: "\(denial.launcherName) — \(denial.scope.gateName)", action: nil, keyEquivalent: "")
+                item.representedObject = denial.id
+                let details = NSMenu()
+                details.addItem(NSMenuItem(title: "Deny \(denial.scope.operationTitle)", action: nil, keyEquivalent: ""))
+                details.addItem(NSMenuItem(title: "", action: nil, keyEquivalent: ""))
+                let end = NSMenuItem(title: "End temporary denial", action: #selector(endTemporaryDenial(_:)), keyEquivalent: "")
+                end.target = self
+                end.representedObject = denial.id
+                details.addItem(end)
+                item.submenu = details
+                submenu.addItem(item)
+            }
+            temporaryDenialsItem.submenu = submenu
+        }
+        for item in temporaryDenialsItem.submenu?.items ?? [] {
+            let denial = active.first { $0.id == item.representedObject as? UUID }
+            let remaining = denial.map { max(0, Int(ceil($0.deadline - now))) } ?? 0
+            item.submenu?.item(at: 1)?.title = remaining > 0
+                ? "\(remaining / 60):\(String(format: "%02d", remaining % 60)) remaining" : "Ended"
+            item.isEnabled = denial != nil
+        }
+    }
+
+    @objc private func endTemporaryDenial(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? UUID else { return }
+        TemporaryLauncherDenials.shared.cancel(id)
     }
 
     private func handOffToLaunchAgent() {
@@ -399,6 +455,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         refreshTemporaryAccessGrants()
         temporaryAccessGrantTimer?.invalidate()
         temporaryAccessGrantTimer = nil
+        temporaryDenialTimer?.invalidate()
+        NotificationCenter.default.removeObserver(self, name: launcherDenialDidChange, object: nil)
         temporaryAccessGrantCollapseWorkItem?.cancel()
         temporaryAccessGrantCollapseWorkItem = nil
         liveSecretUses.cancelAll()
@@ -1652,6 +1710,7 @@ private func scanDetectorGroup(_ detectors: Set<String>) -> Set<String> {
 extension AppDelegate: NSMenuDelegate {
     func menuWillOpen(_ menu: NSMenu) {
         if !isStartingUp, !isUpdating {
+            refreshTemporaryDenials()
             refreshAutoApprovalMenuItems()
             refreshTemporaryAccessGrantMenuItems()
             refreshLiveSecretUses()
@@ -1663,6 +1722,7 @@ extension AppDelegate: NSMenuDelegate {
     func menuDidClose(_ menu: NSMenu) {
         isStatusMenuOpen = false
         guard !isStartingUp, !isUpdating else { return }
+        refreshTemporaryDenials()
         refreshAutoApprovalMenuItems()
         refreshTemporaryAccessGrantMenuItems()
         refreshLiveSecretUseMenuItems()
@@ -1889,6 +1949,7 @@ private func accessRequestRecord(
         launcherRequirement: launcher.flatMap {
             $0.runtimeProtection.allowsSecretGateAccess ? $0.designatedRequirement : nil
         },
+        temporaryDenialScope: request.temporaryDenialScope,
         callerPath: callerPath,
         target: request.target,
         targetRuntimeProtection: automaticTargetRuntimeProtection(
@@ -2244,6 +2305,7 @@ private struct ApprovalRequest {
     let credentialParent: CredentialHelperParent?
     let selectedSecretValues: SelectedSecretValues
     let sshPeer: SSHAgentPeer?
+    var temporaryDenialScope: TemporaryLauncherDenialScope?
 
     init(
         op: String,
@@ -2263,7 +2325,8 @@ private struct ApprovalRequest {
         credentialScope: String? = nil,
         credentialParent: CredentialHelperParent? = nil,
         selectedSecretValues: SelectedSecretValues = SelectedSecretValues(values: [:]),
-        sshPeer: SSHAgentPeer? = nil
+        sshPeer: SSHAgentPeer? = nil,
+        temporaryDenialScope: TemporaryLauncherDenialScope? = nil
     ) {
         self.op = op
         self.keys = keys
@@ -2283,6 +2346,7 @@ private struct ApprovalRequest {
         self.credentialParent = credentialParent
         self.selectedSecretValues = selectedSecretValues
         self.sshPeer = sshPeer
+        self.temporaryDenialScope = temporaryDenialScope
     }
 
     func selecting(_ values: SelectedSecretValues) -> ApprovalRequest {
@@ -2304,7 +2368,8 @@ private struct ApprovalRequest {
             credentialScope: credentialScope,
             credentialParent: credentialParent,
             selectedSecretValues: values,
-            sshPeer: sshPeer
+            sshPeer: sshPeer,
+            temporaryDenialScope: temporaryDenialScope
         )
     }
 
@@ -2327,7 +2392,8 @@ private struct ApprovalRequest {
             credentialScope: credentialScope,
             credentialParent: credentialParent,
             selectedSecretValues: selectedSecretValues,
-            sshPeer: sshPeer
+            sshPeer: sshPeer,
+            temporaryDenialScope: temporaryDenialScope
         )
     }
 
@@ -2812,8 +2878,8 @@ private struct LauncherDenialError: LocalizedError {
 private func evaluateLauncherDenial(
     gate: SecretGate?, classification: SecretGateRequestClassification, launchers: [LauncherIdentity]
 ) -> LauncherDenialError? {
-    if let launcher = launchers.first(where: {
-        TemporaryLauncherDenials.shared.isDenied($0.designatedRequirement)
+    if let gate, let launcher = launchers.first(where: {
+        TemporaryLauncherDenials.shared.isDenied($0.designatedRequirement, gate: gate, classification: classification)
     }) { return LauncherDenialError(reason: "Denied by two-minute Temporary Launcher Denial", launcher: launcher) }
     // Direct Secret requests have no tool-gate policy. A failed read of an
     // existing gate remains a denial, as enforced by secretGateDenial.
@@ -2907,17 +2973,6 @@ private func performApprovedSecretMutation(
     requestOverride: ApprovalRequest? = nil
 ) async -> (status: OSStatus?, error: String?) {
     let request = requestOverride ?? mutation.approvalRequest(callerPath: callerPath)
-    func denyTemporarilyIfNeeded() -> Bool {
-        guard let launcher = (launchers + (launcher.map { [$0] } ?? [])).first(where: {
-            TemporaryLauncherDenials.shared.isDenied($0.designatedRequirement)
-        }) else { return false }
-        _ = onAccessRequest(accessRequestRecord(
-            request: request, callerPath: callerPath, decision: "Denied", approvalSource: "Auto",
-            reason: "Denied by two-minute Temporary Launcher Denial", launcher: launcher
-        ))
-        return true
-    }
-    if denyTemporarilyIfNeeded() { return (nil, "Temporary Launcher Denial") }
     if cancellation?.isCanceled == true {
         _ = onAccessRequest(canceledAccessRequestRecord(
             request: request, callerPath: callerPath, launcher: launcher, launchers: launchers
@@ -2953,7 +3008,6 @@ private func performApprovedSecretMutation(
             compact: mutation.usesCompactApproval
         )
     }
-    if denyTemporarilyIfNeeded() { return (nil, "Temporary Launcher Denial") }
     if approval == .interrupted {
         _ = onAccessRequest(interruptedAccessRequestRecord(
             request: request, callerPath: callerPath, launcher: launcher, launchers: launchers
@@ -2993,7 +3047,6 @@ private func performApprovedSecretMutation(
     )) else {
         return (nil, "Authorization History is unavailable")
     }
-    if denyTemporarilyIfNeeded() { return (nil, "Temporary Launcher Denial") }
     return (perform?(mutation) ?? mutation.perform(), nil)
 }
 
@@ -4592,7 +4645,7 @@ private final class ApprovalServer: @unchecked Sendable {
                     : "Automic Vault will use your default GPG signing credential."
             )
         }
-        let request: ApprovalRequest
+        let preparedRequest: ApprovalRequest
         do {
             let dockerRequest = try dockerCredentialRequest(
                 from: message,
@@ -4718,30 +4771,30 @@ private final class ApprovalServer: @unchecked Sendable {
                !wranglerCredentialSelectionIsSupported(selected) {
                 throw AppError("Wrangler OAuth requires Global Values in the Wrangler namespace")
             }
-            request = approvalRequestWithCredentialContext(uvRequest.selecting(selected))
+            preparedRequest = approvalRequestWithCredentialContext(uvRequest.selecting(selected))
         } catch {
             reply(peer, to: message, ok: false, error: error.localizedDescription)
             return
         }
         let awsRegistration: AWSRegistrationCandidate?
         do {
-            awsRegistration = try awsRegistrationCandidate(from: message, request: request)
+            awsRegistration = try awsRegistrationCandidate(from: message, request: preparedRequest)
         } catch {
             reply(peer, to: message, ok: false, error: error.localizedDescription)
             return
         }
-        let scriptApproval = request.sshPeer == nil ? scriptApproval(for: request) : nil
-        if request.sshPeer == nil, let scriptDeclaration = scriptStartingWithoutApproval(for: request) {
+        let scriptApproval = preparedRequest.sshPeer == nil ? scriptApproval(for: preparedRequest) : nil
+        if preparedRequest.sshPeer == nil, let scriptDeclaration = scriptStartingWithoutApproval(for: preparedRequest) {
             if scriptDeclaration.manifest.hasEmptyCapabilityCeiling {
                 registerEmptyCapabilityCeiling(pid: pid, identity: identity)
             }
             reply(peer, to: message, ok: true, error: nil, secrets: [:])
             return
         }
-        if request.op != "gpg-sign" {
+        if preparedRequest.op != "gpg-sign" {
             launchers = requestLaunchers()
         }
-        let processChains = request.sshPeer == nil ? retainedProcessChains(for: identity) : []
+        let processChains = preparedRequest.sshPeer == nil ? retainedProcessChains(for: identity) : []
         let keepsDetachedProcessAccess = UserDefaults.standard.bool(
             forKey: keepLauncherAccessForDetachedProcessesDefaultsKey
         )
@@ -4753,11 +4806,11 @@ private final class ApprovalServer: @unchecked Sendable {
             ancestorFallbackPath: ancestorFallbackPath
         )
         let configuredGate = matchingSecretGate(
-            request: request,
+            request: preparedRequest,
             signing: signing,
             descriptors: secretGateDescriptors
         )
-        if request.sshPeer != nil, configuredGate?.id != "ssh-agent" {
+        if preparedRequest.sshPeer != nil, configuredGate?.id != "ssh-agent" {
             reply(peer, to: message, ok: false, error: "SSH Agent Gate is unavailable")
             return
         }
@@ -4784,7 +4837,7 @@ private final class ApprovalServer: @unchecked Sendable {
         ) ?? launcher
         let directAccessRules = loadDirectAccessRules()
         let directAccessLauncher = matchingDirectAccessLauncher(
-            request: request,
+            request: preparedRequest,
             configuredGate: configuredGate,
             trustedAVGateClient: isTrustedAvCaller(path: callerPath, signing: signing),
             launchers: policyLaunchers,
@@ -4794,8 +4847,15 @@ private final class ApprovalServer: @unchecked Sendable {
             resolveSecretGatePolicy(gate: $0, launchers: policyLaunchers)
         }
         let classification = configuredGate.map {
-            classifySecretGateRequest(gateID: $0.id, request: request)
+            classifySecretGateRequest(gateID: $0.id, request: preparedRequest)
         }
+        let request: ApprovalRequest = {
+            var scoped = preparedRequest
+            scoped.temporaryDenialScope = configuredGate.flatMap {
+                TemporaryLauncherDenialScope(gate: $0, classification: classification ?? .unknown)
+            }
+            return scoped
+        }()
         if denyRequestIfNeeded(request, signing: signing, launchers: policyLaunchers,
                                callerPath: callerPath, peer: peer, message: message) { return }
         let scriptAuthority = if let sshPeer = request.sshPeer {
@@ -13072,8 +13132,12 @@ private func showApprovalAlert(
     let eligibleDenialLauncher = denialActionLauncher(
         displayedLauncher: launcher, attributedLaunchers: denialLaunchers
     )
+    let temporaryDenialScope = denialGate.flatMap {
+        TemporaryLauncherDenialScope(gate: $0, classification: classification ?? .unknown)
+    }
     let offersTemporaryDenial = eligibleDenialLauncher.map {
-        TemporaryLauncherDenials.shared.shouldOfferDenialOnNextPrompt($0.designatedRequirement)
+        guard let scope = temporaryDenialScope else { return false }
+        return TemporaryLauncherDenials.shared.shouldOfferDenialOnNextPrompt($0.designatedRequirement, gateID: scope.gateID)
     } ?? false
     let receivedAt = Date()
     let requester = approvalPromptRequester(launcher: launcher, fallback: launcherFallbackPath)
@@ -13160,19 +13224,13 @@ private func showApprovalAlert(
                     approvalPromptRequester(launcher: $0, fallback: $0.path).name
                 },
                 temporaryDenial: offersTemporaryDenial ? {
-                    guard let eligibleDenialLauncher else { return }
-                    TemporaryLauncherDenials.shared.deny(eligibleDenialLauncher.designatedRequirement)
+                    guard let eligibleDenialLauncher, let temporaryDenialScope else { return }
+                    TemporaryLauncherDenials.shared.deny(eligibleDenialLauncher.designatedRequirement,
+                        launcherName: approvalPromptRequester(launcher: eligibleDenialLauncher, fallback: eligibleDenialLauncher.path).name,
+                        scope: temporaryDenialScope)
                     state.resolve(.denied, source: .standardMac)
                 } : nil,
-                denialGate: eligibleDenialLauncher == nil ? nil : denialGate,
-                setDenialThreshold: { threshold in
-                    guard let gate = denialGate, let launcher = eligibleDenialLauncher,
-                          let runtime = launcher.runtimeProtection.secretGateAdmissionRequirement else { return errSecAuthFailed }
-                    let status = setSecretGateDenialThreshold(threshold, requirement: launcher.designatedRequirement,
-                                                             in: gate, runtimeRequirement: runtime)
-                    if status == errSecSuccess { state.resolve(.denied, source: .standardMac) }
-                    return status
-                },
+                temporaryDenialScope: temporaryDenialScope,
                 decide: { userDecision, source in
                     state.resolve(userDecision, source: source)
                 }
@@ -13239,8 +13297,8 @@ private func showApprovalAlert(
         fitApprovalPanel(panel, maximumHeight: maximumHeight, animate: false)
         panel.center()
         panel.orderFrontRegardless()
-        if panel.isVisible, ActiveApprovalPrompt.current === state, let eligibleDenialLauncher {
-            _ = TemporaryLauncherDenials.shared.recordPrompt(eligibleDenialLauncher.designatedRequirement)
+        if panel.isVisible, ActiveApprovalPrompt.current === state, let eligibleDenialLauncher, let temporaryDenialScope {
+            _ = TemporaryLauncherDenials.shared.recordPrompt(eligibleDenialLauncher.designatedRequirement, gateID: temporaryDenialScope.gateID)
         }
     }
 
@@ -13862,9 +13920,7 @@ private struct ApprovalPromptView: View {
     var compact = false
     var denialLauncherName: String? = nil
     var temporaryDenial: (() -> Void)? = nil
-    var denialGate: SecretGate? = nil
-    var setDenialThreshold: ((SecretGateProtection) -> OSStatus)? = nil
-    @State private var denialSaveError: String?
+    var temporaryDenialScope: TemporaryLauncherDenialScope? = nil
     let decide: (ApprovalDecision, ApprovalDecisionSource) -> Void
     @State private var isAuthenticatingWithTouchID = false
     @StateObject private var embeddedTouchID = EmbeddedTouchIDAttempt()
@@ -13948,32 +14004,17 @@ private struct ApprovalPromptView: View {
                     .multilineTextAlignment(.center)
             }
 
-            if let denialSaveError { Text(denialSaveError).foregroundStyle(.red) }
-            if let temporaryDenial, let denialLauncherName {
-                Button("Deny all requests from \(denialLauncherName) for 2 minutes", action: temporaryDenial)
-                    .help("Overrides allow rules across Authorization Gates. Ordinary policy resumes after two minutes.")
-            }
-            if let denialGate, let setDenialThreshold, let denialLauncherName {
-                Menu("Always Deny \(denialLauncherName)…") {
-                    ForEach(denialGate.availableProtections, id: \.self) { threshold in
-                        Button("\(denialGate.protectionTitle(threshold)) and above") {
-                            let status = setDenialThreshold(threshold)
-                            if status != errSecSuccess { denialSaveError = "Could not save Denial Threshold: \(status)" }
-                        }
-                    }
-                }
-                .help("Deny this Verified Launcher's requests at the selected level and above at this gate. Denial overrides approval rules.")
+            if temporaryDenial != nil, let denialLauncherName, let temporaryDenialScope {
+                Text("Repeated requests from \(denialLauncherName) at \(temporaryDenialScope.gateName). Use the Deny menu to stop matching requests for 2 minutes. You can end this early from the menu bar.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             if usesTouchIDApproval {
                 HStack(spacing: 12) {
-                    Button(usesIPhoneApproval ? String(localized: "Cancel Request") : String(localized: "Deny"), role: .cancel) {
-                        decide(.denied, .standardMac)
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.large)
-                    .frame(maxWidth: .infinity)
-                    .keyboardShortcut(.cancelAction)
+                    denyButton
                     if usesEmbeddedTouchID {
                         HStack(spacing: 8) {
                             HStack(spacing: 8) {
@@ -14028,10 +14069,7 @@ private struct ApprovalPromptView: View {
                     }
                 }
             } else if usesIPhoneApproval {
-                Button("Cancel Request", role: .cancel) { decide(.denied, .standardMac) }
-                    .buttonStyle(.bordered)
-                    .controlSize(.large)
-                    .keyboardShortcut(.cancelAction)
+                denyButton
 
                 Text("This Mac cannot approve while iPhone Approval is enabled.")
                     .font(.footnote)
@@ -14039,11 +14077,7 @@ private struct ApprovalPromptView: View {
                     .multilineTextAlignment(.center)
             } else {
                 HStack(alignment: .top, spacing: 18) {
-                    Button("Deny", role: .cancel) { decide(.denied, .standardMac) }
-                        .buttonStyle(.bordered)
-                        .controlSize(.large)
-                        .frame(maxWidth: .infinity)
-                        .keyboardShortcut(.cancelAction)
+                    denyButton
 
                     VStack(spacing: 6) {
                         ApprovalPromptApprovalMenu(
@@ -14102,6 +14136,30 @@ private struct ApprovalPromptView: View {
                 .accessibilityHidden(true)
         }
         .contentShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
+    }
+
+    private var denyButton: some View {
+        Group {
+            if let temporaryDenial, let temporaryDenialScope {
+                Menu {
+                    Button("Deny Once") { decide(.denied, .standardMac) }
+                    Button(temporaryDenialScope.actionTitle, action: temporaryDenial)
+                    Text("Only \(denialLauncherName ?? "this Verified Launcher") at \(temporaryDenialScope.gateName)")
+                } label: {
+                    Text("Deny").frame(maxWidth: .infinity)
+                } primaryAction: {
+                    decide(.denied, .standardMac)
+                }
+                .accessibilityLabel("Deny and more denial options")
+                .accessibilityHint("Deny this request once, or open the menu for a two-minute denial")
+            } else {
+                Button("Deny", role: .cancel) { decide(.denied, .standardMac) }
+            }
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.large)
+        .frame(maxWidth: .infinity)
+        .keyboardShortcut(.cancelAction)
     }
 
     private func authenticateWithTouchID(_ decision: ApprovalDecision) {
@@ -14643,14 +14701,15 @@ private func showAutomaticAccessToast(
 
 @MainActor
 private func runSecretMutationSelfCheck() async -> Int32 {
-    // An ancestor denial must survive selection of a different display Launcher,
-    // including a denial introduced while approval or recording is in progress.
+    // Tool-gate denial must not transfer to an unrelated Secret mutation.
+    let gate = SecretGate(id: "gh", keyPatterns: ["TOKEN"], routes: [], defaultProtection: .noAccess, appPolicies: [])
+    let scope = TemporaryLauncherDenialScope(gate: gate, classification: .mutating)!
     for phase in 0..<3 {
         let ancestor = LauncherIdentity(pid: 1, path: "/ancestor", identifier: "ancestor", teamIdentifier: "TEST",
             designatedRequirement: "mutation-denial-\(UUID().uuidString)", runtimeProtection: .hardened)
         let child = LauncherIdentity(pid: 2, path: "/child", identifier: "child", teamIdentifier: "TEST",
             designatedRequirement: "child", runtimeProtection: .hardened)
-        if phase == 0 { TemporaryLauncherDenials.shared.deny(ancestor.designatedRequirement) }
+        if phase == 0 { TemporaryLauncherDenials.shared.deny(ancestor.designatedRequirement, launcherName: "Ancestor", scope: scope) }
         var performed = false
         var deniedRecord: AccessRequestRecord?
         let result = await performApprovedSecretMutation(
@@ -14660,17 +14719,16 @@ private func runSecretMutationSelfCheck() async -> Int32 {
             canRequestHumanApproval: { true },
             onAccessRequest: { record in
                 if record.decision == "Denied" { deniedRecord = record }
-                if phase == 2 { TemporaryLauncherDenials.shared.deny(ancestor.designatedRequirement) }
+                if phase == 2 { TemporaryLauncherDenials.shared.deny(ancestor.designatedRequirement, launcherName: "Ancestor", scope: scope) }
                 return true
             },
             decision: { _ in
-                if phase == 1 { TemporaryLauncherDenials.shared.deny(ancestor.designatedRequirement) }
+                if phase == 1 { TemporaryLauncherDenials.shared.deny(ancestor.designatedRequirement, launcherName: "Ancestor", scope: scope) }
                 return .approved
             },
             perform: { _ in performed = true; return errSecSuccess }
         )
-        guard result.status == nil, !performed,
-              deniedRecord?.launcherRequirement == ancestor.designatedRequirement else { return 20 }
+        guard result.status == errSecSuccess, performed, deniedRecord == nil else { return 20 }
     }
 
     let credentialMutationRequest = SecretMutation.terraformDelete(
@@ -16475,18 +16533,21 @@ private func awaitWithTimeout<T: Sendable>(
 
 @MainActor
 private func runApprovalCallsiteSelfCheck() async -> Int32 {
+    let denialGate = SecretGate(id: "gh", keyPatterns: ["TOKEN"], routes: [], defaultProtection: .noAccess, appPolicies: [])
+    let denialScope = TemporaryLauncherDenialScope(gate: denialGate, classification: .mutating)!
     let deniedLauncher = LauncherIdentity(
         pid: getpid(), path: "/self-check", identifier: "self-check", teamIdentifier: "TEST",
         designatedRequirement: "denial-self-check-\(UUID().uuidString)", runtimeProtection: .hardened
     )
-    TemporaryLauncherDenials.shared.deny(deniedLauncher.designatedRequirement)
+    TemporaryLauncherDenials.shared.deny(deniedLauncher.designatedRequirement, launcherName: "Self check", scope: denialScope)
     let deniedRequest = ApprovalRequest(op: "inject", keys: [], target: "/self-check", args: [], cwd: "/",
         replaceExistingEnv: false, allowMissingKeys: false, envConflicts: [], shebangScript: nil,
         scriptData: nil, tool: "self-check", title: nil, detail: nil)
     let deniedDecision = await showApprovalAlert(
         request: deniedRequest, callerPath: "/self-check", pid: getpid(),
         signing: SigningInfo(identifier: "self-check", teamIdentifier: "TEST"), scriptApproval: nil,
-        launcher: deniedLauncher, launcherFallbackPath: "/self-check", automaticApprovalExplanation: nil
+        launcher: deniedLauncher, launcherFallbackPath: "/self-check", automaticApprovalExplanation: nil,
+        classification: .mutating, denialGate: denialGate
     )
     guard deniedDecision == .denied, ActiveApprovalPrompt.current == nil else { return 19 }
     let deniedRecord = accessRequestRecord(request: deniedRequest, callerPath: "/self-check", decision: "Denied",
@@ -16506,7 +16567,8 @@ private func runApprovalCallsiteSelfCheck() async -> Int32 {
           denialActionLauncher(displayedLauncher: unverifiedChild, attributedLaunchers: []) == nil
     else { return 19 }
     guard evaluateLauncherDenial(gate: nil, classification: .unknown, launchers: [unverifiedChild]) == nil,
-          let releaseDenial = evaluateLauncherDenial(gate: nil, classification: .unknown,
+          evaluateLauncherDenial(gate: nil, classification: .unknown, launchers: [deniedLauncher]) == nil,
+          let releaseDenial = evaluateLauncherDenial(gate: denialGate, classification: .mutating,
               launchers: [unverifiedChild, deniedLauncher]),
           releaseDenial.launcher?.designatedRequirement == deniedLauncher.designatedRequirement
     else { return 19 }
@@ -16549,6 +16611,7 @@ private func runApprovalCallsiteSelfCheck() async -> Int32 {
             signing: SigningInfo(identifier: "self-check", teamIdentifier: "TEST"), scriptApproval: nil,
             launcher: unverifiedChild, denialLaunchers: [unverifiedChild, queuedAncestor],
             launcherFallbackPath: unverifiedChild.path, automaticApprovalExplanation: nil,
+            classification: .mutating, denialGate: denialGate,
             cancellation: ancestorCancellation
         )
     }
@@ -16560,7 +16623,7 @@ private func runApprovalCallsiteSelfCheck() async -> Int32 {
         HumanApprovalQueue.shared.release()
         return 19
     }
-    TemporaryLauncherDenials.shared.deny(queuedAncestor.designatedRequirement)
+    TemporaryLauncherDenials.shared.deny(queuedAncestor.designatedRequirement, launcherName: "Self check", scope: denialScope)
     HumanApprovalQueue.shared.release()
     let ancestorDecision = await awaitWithTimeout(duration: .seconds(5), cancellation: ancestorCancellation, task: ancestorPrompt)
     guard ancestorDecision == .denied, ActiveApprovalPrompt.current == nil,
@@ -16574,9 +16637,10 @@ private func runApprovalCallsiteSelfCheck() async -> Int32 {
             signing: SigningInfo(identifier: "self-check", teamIdentifier: "TEST"), scriptApproval: nil,
             launcher: unverifiedChild, denialLaunchers: [registrationRaceLauncher],
             launcherFallbackPath: unverifiedChild.path, automaticApprovalExplanation: nil,
+            classification: .mutating, denialGate: denialGate,
             cancellation: registrationRaceCancellation,
             reevaluate: {
-                TemporaryLauncherDenials.shared.deny(registrationRaceLauncher.designatedRequirement)
+                TemporaryLauncherDenials.shared.deny(registrationRaceLauncher.designatedRequirement, launcherName: "Self check", scope: denialScope)
                 return false
             }
         )
