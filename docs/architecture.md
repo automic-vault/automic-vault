@@ -530,7 +530,7 @@ Denial is checked before Blessings, policy, Temporary Access Grants, decision
 reuse, and human Approval, and checked again for queued requests and before
 Secret release. Temporary Launcher Denials override authority only for their
 exact Launcher requirement, gate ID, and operation threshold for two elapsed
-minutes. Three Approval presentations for the same eligible Launcher at that gate
+minutes. Two Approval presentations for the same eligible Launcher at that gate
 within thirty seconds offer the Deny disclosure; cancellation never activates it.
 Menu-bar cancellation removes only the selected temporary rule. Expiry and
 cancellation restore ordinary policy, including persistent denial.

@@ -6,7 +6,7 @@ Status: accepted; supersedes the temporary-denial scope and UI in ADR 0053.
 
 Configure durable Denial Thresholds only in the main app’s Authorization Gates.
 An Approval window offers temporary denial through the Deny button’s disclosure
-only after three visible prompts for the same eligible Verified Launcher and
+only after two visible prompts for the same eligible Verified Launcher and
 gate within thirty seconds. Clicking Deny still denies only the current request.
 
 A temporary rule matches an exact designated requirement, gate ID, and threshold

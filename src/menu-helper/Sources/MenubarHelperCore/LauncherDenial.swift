@@ -120,10 +120,10 @@ public final class TemporaryLauncherDenials: @unchecked Sendable {
     /// Preview the next prompt's action without counting an attempted presentation.
     public func shouldOfferDenialOnNextPrompt(_ requirement: String, gateID: String,
                                             now: TimeInterval = TemporaryLauncherDenials.now) -> Bool {
-        lock.withLock { (prompts[PromptKey(requirement: requirement, gateID: gateID)] ?? []).filter { $0 >= now - 30 }.count >= 2 }
+        lock.withLock { (prompts[PromptKey(requirement: requirement, gateID: gateID)] ?? []).filter { $0 >= now - 30 }.count >= 1 }
     }
 
-    /// Three presentations within thirty seconds, capped at three timestamps per Launcher/gate.
+    /// Two presentations within thirty seconds, capped at two timestamps per Launcher/gate.
     public func recordPrompt(_ requirement: String, gateID: String, now: TimeInterval = TemporaryLauncherDenials.now) -> Bool {
         guard !requirement.isEmpty, !gateID.isEmpty else { return false }
         let key = PromptKey(requirement: requirement, gateID: gateID)
@@ -134,8 +134,8 @@ public final class TemporaryLauncherDenials: @unchecked Sendable {
                 prompts.removeValue(forKey: oldest)
             }
             let recent = (prompts[key] ?? []).filter { $0 >= now - 30 }
-            prompts[key] = Array((recent + [now]).suffix(3))
-            return recent.count >= 2
+            prompts[key] = Array((recent + [now]).suffix(2))
+            return recent.count >= 1
         }
     }
 }

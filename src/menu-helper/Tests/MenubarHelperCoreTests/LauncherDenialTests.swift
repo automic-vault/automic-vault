@@ -45,14 +45,14 @@ private func denialGate(_ id: String = "gh") -> SecretGate {
     #expect(!gate.weakeningDenial(from: .noAccess, to: .readOnly)) // Both deny everything.
 }
 
-@Test func promptFloodOnlyOffersScopedDenialAndNeverActivatesIt() {
+@Test func secondPromptOffersScopedDenialButNeverActivatesIt() {
     let state = TemporaryLauncherDenials()
     for _ in 0..<100 {
         #expect(!state.shouldOfferDenialOnNextPrompt("claude", gateID: "gh", now: 100))
     }
     #expect(!state.recordPrompt("claude", gateID: "gh", now: 100))
-    #expect(!state.shouldOfferDenialOnNextPrompt("claude", gateID: "gh", now: 110))
-    #expect(!state.recordPrompt("claude", gateID: "gh", now: 110))
+    #expect(state.shouldOfferDenialOnNextPrompt("claude", gateID: "gh", now: 110))
+    #expect(state.recordPrompt("claude", gateID: "gh", now: 110))
     #expect(state.shouldOfferDenialOnNextPrompt("claude", gateID: "gh", now: 120))
     #expect(!state.shouldOfferDenialOnNextPrompt("claude", gateID: "ssh-agent", now: 120))
     #expect(!state.shouldOfferDenialOnNextPrompt("other", gateID: "gh", now: 120))

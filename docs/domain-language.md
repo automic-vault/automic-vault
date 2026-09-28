@@ -510,7 +510,7 @@ for two elapsed minutes. It follows Launcher
 Identity across Gate Client restarts, remains in memory, and ends on expiry or
 service restart, or explicit cancellation from the menu bar. It overrides allow authority without revoking existing grants
 or already released Secrets. Expiry restores ordinary policy; it never approves
-a request. Three Approval presentations for that Launcher at that gate within thirty
+a request. Two Approval presentations for that Launcher at that gate within thirty
 seconds offer this action in the Deny button’s disclosure, but never activate it
 automatically. The level comes from the requested operation, not the configured
 allow preset. Requests without a recognized operation level do not offer it.
