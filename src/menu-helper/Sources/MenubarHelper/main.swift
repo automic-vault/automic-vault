@@ -121,6 +121,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var temporaryAccessGrantTimer: Timer?
     private let temporaryDenialsItem = NSMenuItem(title: "Temporary denials", action: nil, keyEquivalent: "")
     private var temporaryDenialTimer: Timer?
+    private var temporaryDenialObserver: NSObjectProtocol?
     private var temporaryAccessGrantCollapseWorkItem: DispatchWorkItem?
     private var isTemporaryAccessGrantStripCollapsed = false
     private let liveSecretUses = LiveSecretUseController<LiveSecretUseProcess>()
@@ -245,20 +246,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(installCLIItem)
         temporaryDenialsItem.isHidden = true
         menu.addItem(temporaryDenialsItem)
-        NotificationCenter.default.addObserver(self, selector: #selector(refreshTemporaryDenials),
-            name: launcherDenialDidChange, object: nil)
+        temporaryDenialObserver = NotificationCenter.default.addObserver(
+            forName: launcherDenialDidChange, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.refreshTemporaryDenials() }
+        }
         menu.addItem(quitSeparator)
         menu.addItem(quitItem)
         menu.delegate = self
         statusItem.menu = menu
     }
 
-    @objc private func refreshTemporaryDenials() {
-        // Policy notifications may originate off the main thread.
-        guard Thread.isMainThread else {
-            DispatchQueue.main.async { [weak self] in self?.refreshTemporaryDenials() }
-            return
-        }
+    private func refreshTemporaryDenials() {
         let now = TemporaryLauncherDenials.now
         let active = TemporaryLauncherDenials.shared.active(now: now)
         temporaryDenialsItem.isHidden = active.isEmpty || isStartingUp || isUpdating
@@ -456,7 +455,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         temporaryAccessGrantTimer?.invalidate()
         temporaryAccessGrantTimer = nil
         temporaryDenialTimer?.invalidate()
-        NotificationCenter.default.removeObserver(self, name: launcherDenialDidChange, object: nil)
+        if let temporaryDenialObserver { NotificationCenter.default.removeObserver(temporaryDenialObserver) }
         temporaryAccessGrantCollapseWorkItem?.cancel()
         temporaryAccessGrantCollapseWorkItem = nil
         liveSecretUses.cancelAll()
@@ -1673,6 +1672,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard doctorStatusItem.isHidden, reblessingStatusItem.isHidden,
               scanStatusItem.action == nil, !scanStatusItem.isEnabled else { return false }
 
+        let requirement = "menu-denial-self-check-\(UUID().uuidString)"
+        let gh = SecretGate(id: "gh", keyPatterns: ["TOKEN"], routes: [], defaultProtection: .noAccess, appPolicies: [])
+        let ssh = SecretGate(id: "ssh-agent", keyPatterns: ["KEY"], routes: [], defaultProtection: .noAccess, appPolicies: [])
+        guard let writes = TemporaryLauncherDenialScope(gate: gh, classification: .mutating),
+              let authentication = TemporaryLauncherDenialScope(gate: ssh, classification: .mutating) else { return false }
+        defer {
+            for denial in TemporaryLauncherDenials.shared.active() where denial.requirement == requirement {
+                TemporaryLauncherDenials.shared.cancel(denial.id)
+            }
+            temporaryDenialTimer?.invalidate()
+            if let temporaryDenialObserver { NotificationCenter.default.removeObserver(temporaryDenialObserver) }
+        }
+        TemporaryLauncherDenials.shared.deny(requirement, launcherName: "Self Check", scope: writes)
+        TemporaryLauncherDenials.shared.deny(requirement, launcherName: "Self Check", scope: authentication)
+        guard !temporaryDenialsItem.isHidden, let denialMenu = temporaryDenialsItem.submenu,
+              denialMenu.items.count == 2,
+              denialMenu.item(at: 0)?.submenu?.item(at: 0)?.title == "Deny writes and above",
+              let end = denialMenu.item(at: 0)?.submenu?.item(at: 2),
+              end.action == #selector(endTemporaryDenial(_:)), end.target === self else { return false }
+        menuWillOpen(menu)
+        endTemporaryDenial(end)
+        guard !TemporaryLauncherDenials.shared.isDenied(requirement, gate: gh, classification: .mutating),
+              TemporaryLauncherDenials.shared.isDenied(requirement, gate: ssh, classification: .mutating),
+              temporaryDenialsItem.submenu?.items.count == 2 else { return false }
+        menuDidClose(menu)
+        guard temporaryDenialsItem.submenu?.items.count == 1 else { return false }
+        for denial in TemporaryLauncherDenials.shared.active() where denial.requirement == requirement {
+            TemporaryLauncherDenials.shared.cancel(denial.id)
+        }
+        guard temporaryDenialsItem.isHidden, temporaryDenialTimer == nil else { return false }
+
         menuWillOpen(menu)
         let presentedItems = menu.items
         let process = LiveSecretUseProcess(
@@ -2305,6 +2335,7 @@ private struct ApprovalRequest {
     let credentialParent: CredentialHelperParent?
     let selectedSecretValues: SelectedSecretValues
     let sshPeer: SSHAgentPeer?
+    // History metadata only; enforcement resolves the gate and classification independently.
     var temporaryDenialScope: TemporaryLauncherDenialScope?
 
     init(
@@ -9466,6 +9497,7 @@ private final class ApprovalServer: @unchecked Sendable {
                     launcherRequirement: denial.launcher.flatMap {
                         $0.runtimeProtection.allowsSecretGateAccess ? $0.designatedRequirement : nil
                     },
+                    temporaryDenialScope: original.temporaryDenialScope,
                     callerPath: pathString(identity), target: original.target, cwd: original.cwd,
                     keys: original.keys, detail: original.detail, secretValueSources: original.secretValueSources
                 ))
@@ -15708,6 +15740,22 @@ private func runApprovalSelfCheck() -> Int32 {
     )
     collapsedPrompt.layoutSubtreeIfNeeded()
     let collapsedHeight = collapsedPrompt.fittingSize.height
+    let sshDenialGate = SecretGate(id: "ssh-agent", keyPatterns: ["KEY"], routes: [], defaultProtection: .noAccess, appPolicies: [])
+    let sshDenialScope = TemporaryLauncherDenialScope(gate: sshDenialGate, classification: .mutating)
+    for (phone, touchID) in [(false, false), (true, false), (false, true), (true, true)] {
+        let denialPrompt = NSHostingView(rootView: ApprovalPromptView(
+            content: sshPromptContent, maximumHeight: 600, temporaryGrantCandidate: nil,
+            usesIPhoneApproval: phone, usesTouchIDApproval: touchID,
+            denialLauncherName: "Example", temporaryDenial: {}, temporaryDenialScope: sshDenialScope,
+            decide: { _, _ in }
+        ))
+        let size = denialPrompt.fittingSize
+        guard size.width == 680, size.height > 0, size.height <= 600 else {
+            print("Temporary denial Approval layout self-check failed: \(size)")
+            return 1
+        }
+    }
+
     let narrowedPrompt = NSHostingView(
         rootView: ApprovalPromptView(
             content: ApprovalPromptContent(
