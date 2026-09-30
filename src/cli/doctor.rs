@@ -394,6 +394,13 @@ fn diagnose(
     Ok(hardeners
         .into_iter()
         .filter(|hardener| {
+            if matches!(hardener.name, "hcloud" | "doctl") {
+                return hardener
+                    .detection
+                    .commands
+                    .iter()
+                    .any(native_release_installation_present);
+            }
             !hardener.detection.diagnostics.is_empty()
                 || hardener.detection.commands.iter().any(|command| {
                     if hardener.name == "uv" {
@@ -408,6 +415,21 @@ fn diagnose(
         })
         .map(|hardener| diagnose_one(hardener, None, path))
         .collect())
+}
+
+fn native_release_installation_present(command: &HardenerCommand) -> bool {
+    // Missing current binaries can mean a damaged or older installation. Only
+    // omit the tool when both its entire managed prefix and launcher are absent.
+    command.hardened
+        || Path::new(&command.target_path)
+            .ancestors()
+            .nth(2)
+            .into_iter()
+            .chain(command.stub_path.as_deref().map(Path::new))
+            .any(|path| {
+                !matches!(fs::symlink_metadata(path), Err(error)
+                    if error.kind() == std::io::ErrorKind::NotFound)
+            })
 }
 
 fn uv_installation_present(command: &HardenerCommand) -> bool {
@@ -1379,6 +1401,70 @@ mod tests {
 
         assert_eq!(results[0].issues[0].kind, "target_unavailable");
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn native_releases_skip_absent_tools_but_report_installation_remnants() {
+        let _guard = crate::global_test_env_lock().lock().unwrap();
+        for name in ["hcloud", "doctl"] {
+            let dir = temp_dir(name);
+            let root = dir.join("opt/av").join(name);
+            let target = root.join("current").join(name);
+            let stub = dir.join("bin").join(name);
+            fs::create_dir_all(stub.parent().unwrap()).unwrap();
+            let metadata = || {
+                let mut metadata = hardeners::metadata_for(name).unwrap();
+                let command = &mut metadata.detection.commands[0];
+                command.target_path = target.to_str().unwrap().into();
+                command.stub_path = Some(stub.to_str().unwrap().into());
+                command.hardened = false;
+                command.stub_valid = false;
+                metadata.detection.diagnostics = vec![hardeners::HardenerDiagnostic {
+                    kind: "missing-release",
+                    message: "missing release".into(),
+                    remediation: "reinstall".into(),
+                    path: Some(target.to_str().unwrap().into()),
+                }];
+                metadata
+            };
+            let aggregate = || diagnose(vec![metadata()], None, OsStr::new("")).unwrap();
+            assert!(aggregate().is_empty(), "{name}: never installed");
+            assert!(
+                !diagnose(vec![metadata()], Some(name), OsStr::new("")).unwrap()[0]
+                    .issues
+                    .is_empty(),
+                "explicit checks still report absence"
+            );
+
+            // A prefix without the current generation is still a damaged installation.
+            fs::create_dir_all(root.join("older")).unwrap();
+            assert!(!aggregate()[0].issues.is_empty(), "{name}: old generation");
+            fs::remove_dir_all(&root).unwrap();
+            std::os::unix::fs::symlink(dir.join("missing"), &root).unwrap();
+            assert!(!aggregate()[0].issues.is_empty(), "{name}: dangling prefix");
+            fs::remove_file(&root).unwrap();
+            std::os::unix::fs::symlink(dir.join("missing"), &stub).unwrap();
+            assert!(
+                !aggregate()[0].issues.is_empty(),
+                "{name}: dangling launcher"
+            );
+            fs::remove_file(&stub).unwrap();
+            executable_file(&stub);
+            assert!(!aggregate()[0].issues.is_empty(), "{name}: launcher only");
+            fs::remove_file(&stub).unwrap();
+            assert!(aggregate().is_empty(), "{name}: no remnants");
+            if unsafe { libc::geteuid() } != 0 {
+                let parent = root.parent().unwrap();
+                fs::set_permissions(parent, fs::Permissions::from_mode(0o000)).unwrap();
+                let inaccessible = aggregate();
+                fs::set_permissions(parent, fs::Permissions::from_mode(0o755)).unwrap();
+                assert!(
+                    !inaccessible[0].issues.is_empty(),
+                    "{name}: inspection denied"
+                );
+            }
+            fs::remove_dir_all(dir).unwrap();
+        }
     }
 
     #[test]
