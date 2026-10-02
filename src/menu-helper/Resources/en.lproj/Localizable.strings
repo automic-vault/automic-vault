@@ -250,7 +250,7 @@
 "Open Authorization Gate" = "Open Authorization Gate";
 "Open Automic Vault" = "Open Automic Vault";
 "OpenSSH private key" = "OpenSSH private key";
-"Opens options to add time or pause Write Access" = "Opens options to add time or pause Write Access";
+"Opens options to add time, pause Write Access, or collapse the strip" = "Opens options to add time, pause Write Access, or collapse the strip";
 "Opens the complete Temporary Access Grant Strip" = "Opens the complete Temporary Access Grant Strip";
 "Operation" = "Operation";
 "Passphrase (leave empty if none)" = "Passphrase (leave empty if none)";
@@ -564,3 +564,4 @@
 "This Launcher no longer exists or its verified identity has changed." = "This Launcher no longer exists or its verified identity has changed.";
 
 "This Launcher has no rule at the %@ Authorization Gate. Review its identity and approve a new rule to configure its Access Level." = "This Launcher has no rule at the %@ Authorization Gate. Review its identity and approve a new rule to configure its Access Level.";
+"Collapse Strip" = "Collapse Strip";

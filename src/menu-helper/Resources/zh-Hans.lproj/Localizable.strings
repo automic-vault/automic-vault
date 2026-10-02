@@ -250,7 +250,7 @@
 "Open Authorization Gate" = "打开授权关卡";
 "Open Automic Vault" = "打开 Automic Vault";
 "OpenSSH private key" = "OpenSSH 私钥";
-"Opens options to add time or pause Write Access" = "打开增加时间或暂停写入权限的选项";
+"Opens options to add time, pause Write Access, or collapse the strip" = "打开增加时间、暂停写入权限或折叠授权栏的选项";
 "Opens the complete Temporary Access Grant Strip" = "打开完整的临时访问授权栏";
 "Operation" = "操作";
 "Passphrase (leave empty if none)" = "口令（没有则留空）";
@@ -564,3 +564,4 @@
 "This Launcher no longer exists or its verified identity has changed." = "此启动程序已不存在，或其经过验证的身份已更改。";
 
 "This Launcher has no rule at the %@ Authorization Gate. Review its identity and approve a new rule to configure its Access Level." = "此启动程序在 %@ 授权关卡没有规则。请审查其身份并批准新规则，以配置其访问级别。";
+"Collapse Strip" = "折叠授权栏";

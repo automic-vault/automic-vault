@@ -559,6 +559,8 @@ every active grant. By default, a persistent strip shows each grant's
 successful-use count and last-use time. The user may opt to collapse the strip
 after five seconds into a visible warning tab at the nearest screen edge; the
 menu-bar item remains orange and continues to expose every grant and action.
+The strip's disclosure menu can collapse the current strip to the same warning
+tab immediately without changing the global auto-collapse preference.
 The user can add ten minutes of active countdown time, suspend or resume its
 countdown, or end each grant immediately. Automic Vault revokes all grants when
 the user session becomes inactive, displays sleep, an update begins, or the

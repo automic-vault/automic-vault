@@ -197,6 +197,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func temporaryAccessGrantStripPresentationChanged(_ notification: Notification) {
+        revealTemporaryAccessGrantStrip()
+    }
+
+    private func collapseTemporaryAccessGrantStrip() {
+        temporaryAccessGrantCollapseWorkItem?.cancel()
+        temporaryAccessGrantCollapseWorkItem = nil
+        isTemporaryAccessGrantStripCollapsed = true
         refreshTemporaryAccessGrantPanel()
         refreshTemporaryAccessGrantMenuItems()
     }
@@ -1505,7 +1512,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if !autoCollapse {
             temporaryAccessGrantCollapseWorkItem?.cancel()
             temporaryAccessGrantCollapseWorkItem = nil
-            isTemporaryAccessGrantStripCollapsed = false
         }
         let panel = temporaryAccessGrantPanel ?? makeTemporaryAccessGrantPanel()
         temporaryAccessGrantPanel = panel
@@ -1522,6 +1528,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 grants: temporaryAccessGrantSnapshots,
                 wallNow: wallNow,
                 monotonicNow: monotonicNow,
+                collapse: { [weak self] in self?.collapseTemporaryAccessGrantStrip() },
                 addTenMinutes: { [weak self] id in
                     guard let self else { return }
                     _ = self.temporaryAccessGrants.addTenMinutes(id: id)
@@ -1577,9 +1584,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     forKey: autoCollapseTemporaryAccessGrantStripDefaultsKey
                 ), !self.temporaryAccessGrantSnapshots.isEmpty
                 else { return }
-                self.isTemporaryAccessGrantStripCollapsed = true
-                self.refreshTemporaryAccessGrantPanel()
-                self.refreshTemporaryAccessGrantMenuItems()
+                self.collapseTemporaryAccessGrantStrip()
             }
             temporaryAccessGrantCollapseWorkItem = workItem
             DispatchQueue.main.asyncAfter(
@@ -14618,11 +14623,10 @@ private func makeTemporaryAccessGrantPanel() -> TemporaryAccessGrantPanel {
 }
 
 private struct TemporaryAccessGrantStripView: View {
-    @AppStorage(autoCollapseTemporaryAccessGrantStripDefaultsKey)
-    private var autoCollapseTemporaryAccessGrantStrip = false
     let grants: [TemporaryAccessGrantSnapshot]
     let wallNow: Date
     let monotonicNow: TimeInterval
+    let collapse: () -> Void
     let addTenMinutes: (UUID) -> Void
     let end: (UUID) -> Void
     let setCountdownSuspended: (UUID, Bool) -> Void
@@ -14646,6 +14650,7 @@ private struct TemporaryAccessGrantStripView: View {
                 TemporaryAccessGrantRow(
                     grant: grant,
                     remaining: grant.remaining(wallNow: wallNow, monotonicNow: monotonicNow),
+                    collapse: collapse,
                     addTenMinutes: { addTenMinutes(grant.id) },
                     end: { end(grant.id) },
                     setCountdownSuspended: { setCountdownSuspended(grant.id, $0) }
@@ -14654,23 +14659,6 @@ private struct TemporaryAccessGrantStripView: View {
                     Divider().padding(.leading, 42)
                 }
             }
-
-            Divider()
-            Toggle(
-                "Auto-collapse Temporary Access Grant Strip",
-                isOn: $autoCollapseTemporaryAccessGrantStrip
-            )
-            .toggleStyle(.checkbox)
-            .font(.caption)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
-            .help("After five seconds, the strip becomes a warning tab at the nearest screen edge. Select the tab or use the menu bar to restore it. New grants always show the complete strip.")
-        }
-        .onChange(of: autoCollapseTemporaryAccessGrantStrip) {
-            NotificationCenter.default.post(
-                name: temporaryAccessGrantStripPresentationDidChange,
-                object: nil
-            )
         }
         .frame(width: 430)
         .background {
@@ -14726,6 +14714,7 @@ private struct CollapsedTemporaryAccessGrantStripView: View {
 private struct TemporaryAccessGrantRow: View {
     let grant: TemporaryAccessGrantSnapshot
     let remaining: TimeInterval
+    let collapse: () -> Void
     let addTenMinutes: () -> Void
     let end: () -> Void
     let setCountdownSuspended: (Bool) -> Void
@@ -14775,12 +14764,14 @@ private struct TemporaryAccessGrantRow: View {
                     ) {
                         setCountdownSuspended(!grant.isCountdownSuspended)
                     }
+                    Divider()
+                    Button("Collapse Strip", action: collapse)
                 } label: {
                     Label("Temporary Write Access options", systemImage: "chevron.down")
                         .labelStyle(.iconOnly)
                 }
                 .menuIndicator(.hidden)
-                .accessibilityHint("Opens options to add time or pause Write Access")
+                .accessibilityHint("Opens options to add time, pause Write Access, or collapse the strip")
             }
             .controlSize(.small)
         }
@@ -19009,6 +19000,7 @@ private func runMenuStatusSelfCheck() -> Int32 {
         grants: grantSnapshots,
         wallNow: grantWallNow,
         monotonicNow: grantMonotonicNow,
+        collapse: {},
         addTenMinutes: { _ in },
         end: { _ in },
         setCountdownSuspended: { _, _ in }

@@ -884,7 +884,10 @@ turns orange. Automatic-request notifications stack below the strip.
 An off-by-default setting may collapse the strip after five seconds into a
 visible warning tab at the nearest horizontal screen edge. Selecting that tab,
 or the matching menu action, restores the complete strip and restarts the delay.
-A newly created grant always restores the complete strip. The orange menu-bar
+A newly created grant always restores the complete strip.
+The strip's disclosure menu can also collapse the current strip immediately
+without changing the global auto-collapse setting.
+The orange menu-bar
 shield, active-grant menu entries, and immediate End action remain continuously
 available. This continuous indication is part of the temporary escalation's
 safety model, not a source of authority. See [ADR 0041](adr/0041-collapsible-temporary-access-grant-strip.md).
