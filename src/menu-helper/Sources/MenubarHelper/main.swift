@@ -14618,6 +14618,8 @@ private func makeTemporaryAccessGrantPanel() -> TemporaryAccessGrantPanel {
 }
 
 private struct TemporaryAccessGrantStripView: View {
+    @AppStorage(autoCollapseTemporaryAccessGrantStripDefaultsKey)
+    private var autoCollapseTemporaryAccessGrantStrip = false
     let grants: [TemporaryAccessGrantSnapshot]
     let wallNow: Date
     let monotonicNow: TimeInterval
@@ -14652,6 +14654,23 @@ private struct TemporaryAccessGrantStripView: View {
                     Divider().padding(.leading, 42)
                 }
             }
+
+            Divider()
+            Toggle(
+                "Auto-collapse Temporary Access Grant Strip",
+                isOn: $autoCollapseTemporaryAccessGrantStrip
+            )
+            .toggleStyle(.checkbox)
+            .font(.caption)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .help("After five seconds, the strip becomes a warning tab at the nearest screen edge. Select the tab or use the menu bar to restore it. New grants always show the complete strip.")
+        }
+        .onChange(of: autoCollapseTemporaryAccessGrantStrip) {
+            NotificationCenter.default.post(
+                name: temporaryAccessGrantStripPresentationDidChange,
+                object: nil
+            )
         }
         .frame(width: 430)
         .background {
