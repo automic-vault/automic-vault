@@ -14648,7 +14648,6 @@ private struct TemporaryAccessGrantStripView: View {
                 TemporaryAccessGrantRow(
                     grant: grant,
                     remaining: grant.remaining(wallNow: wallNow, monotonicNow: monotonicNow),
-                    collapse: collapse,
                     addTenMinutes: { addTenMinutes(grant.id) },
                     end: { end(grant.id) },
                     setCountdownSuspended: { setCountdownSuspended(grant.id, $0) }
@@ -14672,6 +14671,7 @@ private struct TemporaryAccessGrantStripView: View {
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         .onTapGesture(perform: collapse)
+        .accessibilityAction(named: Text("Collapse Strip"), collapse)
     }
 }
 
@@ -14714,7 +14714,6 @@ private struct CollapsedTemporaryAccessGrantStripView: View {
 private struct TemporaryAccessGrantRow: View {
     let grant: TemporaryAccessGrantSnapshot
     let remaining: TimeInterval
-    let collapse: () -> Void
     let addTenMinutes: () -> Void
     let end: () -> Void
     let setCountdownSuspended: (Bool) -> Void
@@ -14764,14 +14763,12 @@ private struct TemporaryAccessGrantRow: View {
                     ) {
                         setCountdownSuspended(!grant.isCountdownSuspended)
                     }
-                    Divider()
-                    Button("Collapse Strip", action: collapse)
                 } label: {
                     Label("Temporary Write Access options", systemImage: "chevron.down")
                         .labelStyle(.iconOnly)
                 }
                 .menuIndicator(.hidden)
-                .accessibilityHint("Opens options to add time, pause Write Access, or collapse the strip")
+                .accessibilityHint("Opens options to add time or pause Write Access")
             }
             .controlSize(.small)
         }
