@@ -72,6 +72,7 @@ checks=(
   --self-check-update-toolbar
   --self-check-launch-agent-handoff
   --self-check-menu-status
+  --self-check-grant-panel-layout
   --self-check-scan-scheduling
   --self-check-text-paste
 )
