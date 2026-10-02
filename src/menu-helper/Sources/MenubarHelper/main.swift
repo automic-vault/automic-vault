@@ -14670,6 +14670,8 @@ private struct TemporaryAccessGrantStripView: View {
                 .stroke(.separator.opacity(0.8), lineWidth: 1)
         }
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .onTapGesture(perform: collapse)
     }
 }
 

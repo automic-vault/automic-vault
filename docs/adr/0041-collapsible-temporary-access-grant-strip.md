@@ -18,6 +18,7 @@ horizontal screen edge. Selecting the tab or the menu action restores the
 complete strip and restarts the delay. Creating a new grant also restores it.
 
 The strip's disclosure menu also offers Collapse Strip for the current strip.
+Clicking the strip outside its controls performs the same action.
 This immediately shows the same warning tab without changing the global
 auto-collapse preference. Ordinary countdown and usage refreshes preserve this
 choice until the user restores the strip or a new grant is created.
