@@ -95,7 +95,7 @@ agent sandboxing is outside the product's scope.
   capability declaration is present. `capabilities: {}` opts into an empty
   capability ceiling so later gated operations attributable to that live script
   execution require Approval regardless of the calling Launcher.
-- A Blessed Script with an explicit `ssh-agent: trusted` Capability can
+- A Blessed Script with an explicit `ssh-agent: trusted` Capability for the original SSH credential can
   authenticate through the SSH Agent Gate while its verified execution remains
   in the SSH client's live ancestor chain. The Capability does not restrict SSH
   destinations.
@@ -114,9 +114,10 @@ agent sandboxing is outside the product's scope.
   authorizes private-key use and may select an alternate credential for exact
   Verified Launchers.
 
-- The optional SSH agent authorizes each authentication signature using one
-  credential shared across Verified Launchers. SSH clients receive signatures,
-  never the private key. Destination-specific restrictions are not provided.
+- The optional SSH agent authorizes each authentication signature using the
+  requested credential’s own Default Policy and Verified Launcher rules. Separate
+  keys can carry separate authority. SSH clients receive signatures, never the
+  private key. Key names do not enforce destination-specific restrictions.
 
 ## Claim boundaries
 

@@ -32,6 +32,7 @@ public struct TemporaryLauncherDenialScope: Codable, Equatable, Sendable {
     }
 
     public var operationTitle: String {
+        if isSSHAgentGateID(gateID) { return "SSH authentication" }
         switch gateID {
         case "ssh-agent": return "SSH authentication"
         case "gpg-signing": return "GPG signing"

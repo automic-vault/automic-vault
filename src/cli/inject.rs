@@ -1525,15 +1525,12 @@ pub(super) fn approve_ssh_agent(
             kubectl_scope: None,
             wakatime_api_url: None,
         };
-        xpc_approve_request_with_socket(
-            &request,
-            &[if signing {
-                "AV_SSH_CREDENTIAL".into()
-            } else {
-                "public_key".into()
-            }],
-            Some(socket),
-        )
+        let response_keys = if signing {
+            vec!["AV_SSH_CREDENTIAL".into()]
+        } else {
+            vec!["public_keys".into(), "public_key".into()]
+        };
+        xpc_approve_request_with_socket(&request, &response_keys, Some(socket))
     }
     #[cfg(not(target_os = "macos"))]
     {

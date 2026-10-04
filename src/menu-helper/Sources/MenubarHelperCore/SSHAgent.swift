@@ -1,17 +1,109 @@
 import Foundation
 import Darwin
 import Security
+import CryptoKit
 
 public let sshCredentialSecretName = "AV_SSH_CREDENTIAL"
 public let sshAgentConfigurationService = "com.automicvault.ssh-agent-configuration"
 
+/// The legacy identity is reserved for the original credential and its policy.
+public struct SSHAgentCredential: Codable, Equatable, Identifiable, Sendable {
+    public let id: String
+    public var name: String
+    public let publicKey: String
+    public var secretName: String { id == "legacy" ? sshCredentialSecretName : "AV_SSH_CREDENTIAL_" + id }
+    public var gateID: String { id == "legacy" ? "ssh-agent" : "ssh-agent/" + id }
+    public var publicKeyData: Data? {
+        let fields = publicKey.split(separator: " ")
+        guard fields.count >= 2 else { return nil }
+        return Data(base64Encoded: String(fields[1]))
+    }
+    public var publicKeyDigest: String? {
+        publicKeyData.map { SHA256.hash(data: $0).map { String(format: "%02x", $0) }.joined() }
+    }
+    public var fingerprint: String {
+        publicKeyData.map { "SHA256:" + Data(SHA256.hash(data: $0)).base64EncodedString()
+            .replacingOccurrences(of: "=", with: "") } ?? "Invalid public key"
+    }
+    public init(id: String = UUID().uuidString, name: String, publicKey: String) {
+        self.id = id
+        self.name = name
+        self.publicKey = publicKey
+    }
+}
+
+public func isSSHAgentGateID(_ id: String) -> Bool {
+    id == "ssh-agent" || id.hasPrefix("ssh-agent/")
+}
+
 public struct SSHAgentConfiguration: Codable, Equatable, Sendable {
     public var generation: UUID = UUID()
     public var enabled: Bool
-    public var publicKey: String
+    public var credentials: [SSHAgentCredential]
     public init(enabled: Bool = false, publicKey: String = "") {
         self.enabled = enabled
-        self.publicKey = publicKey
+        credentials = publicKey.isEmpty ? [] : [SSHAgentCredential(id: "legacy", name: "Original Key", publicKey: publicKey)]
+    }
+    public init(enabled: Bool, credentials: [SSHAgentCredential]) {
+        self.enabled = enabled
+        self.credentials = credentials
+    }
+    private enum CodingKeys: String, CodingKey { case generation, enabled, credentials, publicKey, version }
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        generation = try values.decode(UUID.self, forKey: .generation)
+        enabled = try values.decode(Bool.self, forKey: .enabled)
+        if values.contains(.version) {
+            guard try values.decode(Int.self, forKey: .version) == 2 else { throw SSHAgentError.invalidConfiguration }
+            credentials = try values.decode([SSHAgentCredential].self, forKey: .credentials)
+        } else {
+            // Never interpret a damaged new catalog as legacy, losing denial or key identity.
+            guard !values.contains(.credentials) else { throw SSHAgentError.invalidConfiguration }
+            let publicKey = try values.decode(String.self, forKey: .publicKey)
+            credentials = publicKey.isEmpty ? [] : [SSHAgentCredential(id: "legacy", name: "Original Key", publicKey: publicKey)]
+        }
+        guard isValid else { throw SSHAgentError.invalidConfiguration }
+    }
+    public func encode(to encoder: Encoder) throws {
+        guard isValid else { throw SSHAgentError.invalidConfiguration }
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(2, forKey: .version)
+        try values.encode(generation, forKey: .generation)
+        try values.encode(enabled, forKey: .enabled)
+        try values.encode(credentials, forKey: .credentials)
+    }
+    public var isValid: Bool {
+        credentials.count <= 32
+            && Set(credentials.map(\.id)).count == credentials.count
+            && Set(credentials.compactMap(\.publicKeyDigest)).count == credentials.count
+            && credentials.allSatisfy {
+                ($0.id == "legacy" || UUID(uuidString: $0.id)?.uuidString == $0.id)
+                    && !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    && $0.name.utf8.count <= 128 && !$0.name.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) })
+                    && $0.publicKey.utf8.count <= 4096 && $0.publicKeyData?.isEmpty == false
+            }
+    }
+    public func credential(publicKeyDigest: String) -> SSHAgentCredential? {
+        guard enabled, isValid else { return nil }
+        return credentials.first { $0.publicKeyDigest == publicKeyDigest }
+    }
+}
+
+/// Derive exact routes from the signed static SSH definition, never from user paths.
+public func sshAgentGateDescriptors(_ descriptors: [SecretGateDescriptor],
+                                    configuration: SSHAgentConfiguration) -> [SecretGateDescriptor] {
+    descriptors.flatMap { descriptor in
+        guard descriptor.id == "ssh-agent" else { return [descriptor] }
+        guard configuration.isValid else { return [] }
+        return configuration.credentials.map { credential in
+            SecretGateDescriptor(id: credential.gateID, keyPatterns: [credential.secretName],
+                routes: descriptor.routes.map { route in
+                    SecretGateRoute(operation: route.operation, scriptPath: route.scriptPath,
+                        targetPath: route.targetPath, callerIdentifiers: route.callerIdentifiers,
+                        keyPatterns: [credential.secretName], replaceExistingEnv: route.replaceExistingEnv,
+                        allowMissingKeys: route.allowMissingKeys)
+                })
+        }
     }
 }
 
@@ -25,7 +117,7 @@ public func loadSSHAgentConfiguration() -> SSHAgentConfiguration {
 
 @discardableResult
 public func saveSSHAgentConfiguration(_ config: SSHAgentConfiguration) -> OSStatus {
-    guard let data = try? JSONEncoder().encode(config) else { return errSecParam }
+    guard config.isValid, let data = try? JSONEncoder().encode(config) else { return errSecParam }
     return saveKeychainData(data, service: sshAgentConfigurationService,
                            account: "configuration", accessibility: .afterFirstUnlock)
 }

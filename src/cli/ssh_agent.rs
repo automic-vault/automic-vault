@@ -19,7 +19,7 @@ const MAX_PACKET: usize = 256 * 1024;
 const MAX_CREDENTIAL: u64 = 1024 * 1024;
 const FAILURE: &[u8] = &[5];
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, serde::Serialize)]
 struct Credential {
     private_key: String,
     passphrase: String,
@@ -71,6 +71,30 @@ pub(super) fn public_key(stdout: &mut dyn Write, stderr: &mut dyn Write) -> i32 
             .map_err(|e| e.to_string())
     })();
     report(result, stderr)
+}
+
+pub(super) fn generate_key(stdout: &mut dyn Write, stderr: &mut dyn Write) -> i32 {
+    report(
+        (|| {
+            let key = PrivateKey::random(&mut rand::rngs::OsRng, Algorithm::Ed25519)
+                .map_err(|_| "Could not generate SSH key")?;
+            let private = key
+                .to_openssh(Default::default())
+                .map_err(|_| "Could not encode SSH key")?;
+            let credential = Credential {
+                private_key: private.to_string(),
+                passphrase: String::new(),
+            };
+            let credential = Zeroizing::new(
+                serde_json::to_string(&credential)
+                    .map_err(|_| "Could not encode SSH credential")?,
+            );
+            stdout
+                .write_all(credential.as_bytes())
+                .map_err(|e| e.to_string())
+        })(),
+        stderr,
+    )
 }
 
 pub(super) fn run(args: Vec<OsString>, stderr: &mut dyn Write) -> i32 {
@@ -275,14 +299,32 @@ fn respond(
     }
     if packet == [11] {
         let values = authorize(vec![], false)?;
-        let public = values
-            .get("public_key")
-            .ok_or("SSH agent is not configured")?;
-        let key = PublicKey::from_openssh(public).map_err(|_| "Invalid public key")?;
+        let publics: Vec<String> = if let Some(catalog) = values.get("public_keys") {
+            serde_json::from_str(catalog).map_err(|_| "Invalid SSH key catalog")?
+        } else {
+            // Support the original single-key app during an upgrade.
+            vec![
+                values
+                    .get("public_key")
+                    .ok_or("SSH agent is not configured")?
+                    .clone(),
+            ]
+        };
+        if publics.is_empty() || publics.len() > 32 {
+            return Err("Invalid SSH key catalog size".into());
+        }
         let mut response = vec![12];
-        response.extend_from_slice(&1u32.to_be_bytes());
-        string(&mut response, &key.to_bytes().map_err(|e| e.to_string())?);
-        string(&mut response, b"Automic Vault");
+        response.extend_from_slice(&(publics.len() as u32).to_be_bytes());
+        let mut seen = std::collections::BTreeSet::new();
+        for public in publics {
+            let key = PublicKey::from_openssh(&public).map_err(|_| "Invalid public key")?;
+            let blob = key.to_bytes().map_err(|e| e.to_string())?;
+            if !seen.insert(blob.clone()) {
+                return Err("Duplicate SSH key".into());
+            }
+            string(&mut response, &blob);
+            string(&mut response, b"Automic Vault");
+        }
         return Ok(response);
     }
     if packet.first() != Some(&13) {
@@ -542,6 +584,71 @@ mod tests {
         );
         assert_eq!(field(&mut input).unwrap(), b"Automic Vault");
         assert!(input.is_empty());
+    }
+
+    #[test]
+    fn enumerates_multiple_public_keys_without_signing_or_private_material() {
+        let keys: Vec<_> = (0..2)
+            .map(|_| PrivateKey::random(&mut rand::rngs::OsRng, Algorithm::Ed25519).unwrap())
+            .collect();
+        let publics: Vec<_> = keys
+            .iter()
+            .map(|key| key.public_key().to_openssh().unwrap())
+            .collect();
+        let catalog = serde_json::to_string(&publics).unwrap();
+        let response = respond(&[11], |args, signing| {
+            assert!(args.is_empty());
+            assert!(!signing);
+            Ok([("public_keys".into(), catalog.clone())].into())
+        })
+        .unwrap();
+        let mut input = &response[1..];
+        assert_eq!(uint(&mut input).unwrap(), 2);
+        for key in keys {
+            assert_eq!(
+                field(&mut input).unwrap(),
+                key.public_key().to_bytes().unwrap()
+            );
+            assert_eq!(field(&mut input).unwrap(), b"Automic Vault");
+        }
+        assert!(input.is_empty());
+        for invalid in [
+            "[]".to_string(),
+            "bad".to_string(),
+            serde_json::to_string(&vec![publics[0].clone(); 2]).unwrap(),
+            serde_json::to_string(&vec![publics[0].clone(); 33]).unwrap(),
+        ] {
+            assert!(
+                respond(&[11], |_, _| Ok(
+                    [("public_keys".into(), invalid.clone())].into()
+                ))
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn generates_ed25519_credentials_that_can_authenticate() {
+        let mut output = Vec::new();
+        let mut errors = Vec::new();
+        assert_eq!(generate_key(&mut output, &mut errors), 0);
+        assert!(errors.is_empty());
+        let value = Zeroizing::new(String::from_utf8(output).unwrap());
+        let key = decode_credential(&value).unwrap();
+        assert_eq!(key.algorithm(), Algorithm::Ed25519);
+        let (packet, payload) = request(&key);
+        let response = respond(&packet, |_, signing| {
+            assert!(signing);
+            Ok([("AV_SSH_CREDENTIAL".into(), value.to_string())].into())
+        })
+        .unwrap();
+        let mut input = &response[1..];
+        let mut blob = field(&mut input).unwrap();
+        assert_eq!(field(&mut blob).unwrap(), b"ssh-ed25519");
+        let signature =
+            ssh_key::Signature::new(Algorithm::Ed25519, field(&mut blob).unwrap().to_vec())
+                .unwrap();
+        Verifier::verify(key.public_key(), &payload, &signature).unwrap();
     }
 
     #[test]

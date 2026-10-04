@@ -642,20 +642,27 @@ public struct SecretGate: Equatable, Identifiable, Sendable {
     public var defaultPolicyLabel: String {
         "Default Policy"
     }
-    public var displayName: String { id == "node" ? "npm" : id }
+    public var displayName: String {
+        if isSSHAgentGate {
+            let name = loadSSHAgentConfiguration().credentials.first { $0.gateID == id }?.name
+            return name.map { "SSH · " + $0 } ?? "SSH Agent"
+        }
+        return id == "node" ? "npm" : id
+    }
+    public var isSSHAgentGate: Bool { isSSHAgentGateID(id) }
     public var authorizationGateName: String {
-        if id == "ssh-agent" { return "SSH Agent Authorization Gate" }
+        if isSSHAgentGate { return "SSH Agent Authorization Gate" }
         return id == "node" ? "npm Authorization Gate" : "\(id.uppercased()) Authorization Gate"
     }
 
-    public var supportsUnknownDenial: Bool { id != "gpg-signing" && id != "ssh-agent" }
+    public var supportsUnknownDenial: Bool { id != "gpg-signing" && !isSSHAgentGate }
 
     public var availableDenialThresholds: [SecretGateProtection] {
         availableProtections + (supportsUnknownDenial ? [.unknownOnly] : [])
     }
 
     public var availableProtections: [SecretGateProtection] {
-        if id == "ssh-agent" { return [.noAccess, .fullExceptSecretDumps] }
+        if isSSHAgentGate { return [.noAccess, .fullExceptSecretDumps] }
         if id == "gpg-signing" {
             return [.noAccess, .readOnlyAndLocalWrites]
         }
@@ -678,12 +685,12 @@ public struct SecretGate: Equatable, Identifiable, Sendable {
     }
 
     public var initialProtection: SecretGateProtection {
-        if id == "ssh-agent" || id == "gpg-signing" || id == "kubectl" || id == "uv" { return .noAccess }
+        if isSSHAgentGate || id == "gpg-signing" || id == "kubectl" || id == "uv" { return .noAccess }
         return id == "brew" ? .readOnlyAndUpdates : .readOnly
     }
 
     public func normalizedProtection(_ protection: SecretGateProtection) -> SecretGateProtection {
-        if id == "ssh-agent" {
+        if isSSHAgentGate {
             return protection.allows(.mutating) ? .fullExceptSecretDumps : .noAccess
         }
         if id == "gpg-signing" {
@@ -707,7 +714,7 @@ public struct SecretGate: Equatable, Identifiable, Sendable {
     public func protectionTitle(_ protection: SecretGateProtection) -> String {
         if protection == .unknownOnly { return protection.title }
         let protection = normalizedProtection(protection)
-        if id == "ssh-agent" {
+        if isSSHAgentGate {
             return protection == .fullExceptSecretDumps ? "Allow Authentication" : "Approval Required"
         }
         if id == "gpg-signing" {
@@ -721,7 +728,7 @@ public struct SecretGate: Equatable, Identifiable, Sendable {
 
     public func protectionSubtitle(_ protection: SecretGateProtection) -> String {
         let protection = normalizedProtection(protection)
-        if id == "ssh-agent" {
+        if isSSHAgentGate {
             return protection == .fullExceptSecretDumps
                 ? "Recognized SSH authentication signatures are automically authorized"
                 : "Every SSH authentication signature requires Approval"
@@ -1205,9 +1212,9 @@ public func dashboardSecretGateDescriptors(
         else { return nil }
         return descriptor
     }
-    return activeHardenerGates + catalog.filter {
+    return activeHardenerGates + sshAgentGateDescriptors(catalog, configuration: loadSSHAgentConfiguration()).filter {
         !hardenerGateIDs.contains($0.id)
-            && ($0.id != "ssh-agent" || storedSecretNames.contains(sshCredentialSecretName))
+            && (!isSSHAgentGateID($0.id) || $0.keyPatterns.allSatisfy { storedSecretNames.contains($0) })
             && ($0.id != "gpg-signing"
                 || storedSecretNames.contains(gpgDefaultPrivateKeySecretName)
                 || storedSecretNames.contains(gpgAlternatePrivateKeySecretName))
@@ -1226,7 +1233,7 @@ public func loadSecretGates(
     .sorted { $0.id.localizedStandardCompare($1.id) == .orderedAscending }
 }
 
-private func loadedSecretGate(
+func loadedSecretGate(
     from descriptor: SecretGateDescriptor,
     policyRecords loadedRecords: SecretGatePolicyRecordsLoad
 ) -> SecretGate {
@@ -1618,7 +1625,7 @@ struct SecretGatePolicyRecord: Codable, Equatable {
     }
 }
 
-private enum SecretGatePolicyRecordsLoad {
+enum SecretGatePolicyRecordsLoad {
     case success([SecretGatePolicyRecord])
     case failure(OSStatus)
 }

@@ -2,6 +2,9 @@
 
 Status: accepted; script authority amended by [ADR 0048](0048-ssh-agent-blessed-scripts.md).
 
+Per-credential authority and the scope of legacy script Capabilities are amended
+by [ADR 0063](0063-per-credential-ssh-authority.md).
+
 ## Context
 
 An encrypted SSH key with a Keychain passphrase protects the file at rest, but

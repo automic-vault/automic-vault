@@ -236,16 +236,23 @@ both original execution links verified and matching user/audit-session endpoints
 The relay grants no authority. The peer cannot be its own Launcher. Unsupported kernels and changed
 ancestry deny use. The bounded SSH authentication payload digest is bound before
 authorizing. It rechecks the
-peer and credential configuration before releasing the single Global Value of
-`AV_SSH_CREDENTIAL`. The helper signs in memory and returns only the signature.
+peer and complete credential configuration before releasing the selected
+credential’s exact Global Value. Each credential has an independent gate and
+policy identity selected by the requested public-key digest. The original key
+retains its legacy Secret Name and gate identity; new keys never inherit its
+policy or `ssh-agent: trusted` Blessing. The helper signs in memory and returns only the signature.
 Private keys are never added to the system agent. This gate has no decision
 reuse, Temporary Access Grants, or retained provenance. A live Blessed
 Script may authorize a signature when its explicit `ssh-agent: trusted`
 Capability matches an execution on the socket peer's verified original ancestor
 chain. That exact chain is rechecked before recording and signing. A script's
 empty capability ceiling suppresses automatic SSH authority from the Blessing
-and Launcher policy. Settings stores its enabled state and public key in the Data
-Protection Keychain.
+and Launcher policy. Settings stores the enabled state and bounded named public-key catalog in the
+Data Protection Keychain. Credential addition requires Approval and publishes
+the configuration only after private material is stored. Removal first unpublishes
+the key, invalidating pending requests, before deleting its Secret. Generated
+Ed25519 private material stays in the signed helper and menu app, never a file.
+See [ADR 0063](adr/0063-per-credential-ssh-authority.md).
 See [ADR 0044](adr/0044-ssh-agent-gate.md) and [ADR 0048](adr/0048-ssh-agent-blessed-scripts.md).
 
 ### Launcher Packaging

@@ -3543,7 +3543,7 @@ private func temporaryAccessGrantCandidate(
         agentTaskContext: agentTaskContext
     ) == nil,
     let gate, let launcher, let agentTaskContext,
-    gate.id != "ssh-agent",
+    !gate.isSSHAgentGate,
     let runtimeRequirement = launcher.runtimeProtection.secretGateAdmissionRequirement
     else {
         return nil
@@ -4204,11 +4204,16 @@ private final class ApprovalServer: @unchecked Sendable {
             reply(peer, to: message, ok: true, error: nil, value: "1")
         case .sshIdentities where isTrustedAvCaller(path: callerPath, signing: signing):
             let config = loadSSHAgentConfiguration()
-            guard config.enabled, !config.publicKey.isEmpty else {
+            guard config.enabled, config.isValid, !config.credentials.isEmpty else {
                 reply(peer, to: message, ok: false, error: "SSH Agent is disabled or unconfigured")
                 return
             }
-            reply(peer, to: message, ok: true, error: nil, secrets: ["public_key": config.publicKey])
+            guard let data = try? JSONEncoder().encode(config.credentials.map(\.publicKey)) else {
+                reply(peer, to: message, ok: false, error: "SSH key catalog could not be encoded")
+                return
+            }
+            reply(peer, to: message, ok: true, error: nil,
+                  secrets: ["public_keys": String(decoding: data, as: UTF8.self)])
         case .gpgSign where isTrustedAvCaller(path: callerPath, signing: signing),
              .sshSign where isTrustedAvCaller(path: callerPath, signing: signing):
             handleInject(
@@ -4857,7 +4862,7 @@ private final class ApprovalServer: @unchecked Sendable {
                 globalOnly: uvRequest.sshPeer != nil
             )
             if uvRequest.sshPeer != nil,
-               selected.source(for: sshCredentialSecretName) != .global {
+               uvRequest.keys.contains(where: { selected.source(for: $0) != .global }) {
                 throw AppError("SSH Agent requires the Global Value of its credential")
             }
             // ponytail: Global Values only until OAuth refresh mutations bind the selected source.
@@ -4912,7 +4917,7 @@ private final class ApprovalServer: @unchecked Sendable {
             reply(peer, to: message, ok: false, error: "doctl installation changed; run av harden doctl")
             return
         }
-        if preparedRequest.sshPeer != nil, configuredGate?.id != "ssh-agent" {
+        if preparedRequest.sshPeer != nil, configuredGate?.isSSHAgentGate != true {
             reply(peer, to: message, ok: false, error: "SSH Agent Gate is unavailable")
             return
         }
@@ -7981,11 +7986,7 @@ private final class ApprovalServer: @unchecked Sendable {
               let arguments = processArgumentVector(origin.pid), !arguments.isEmpty
         else { throw AppError("SSH socket peer cannot be verified") }
         let config = loadSSHAgentConfiguration()
-        let publicFields = config.publicKey.split(separator: " ")
-        guard config.enabled, publicFields.count >= 2,
-              let publicBytes = Data(base64Encoded: String(publicFields[1])),
-              request.args[1] == "public-key-sha256=" + SHA256.hash(data: publicBytes)
-                .map({ String(format: "%02x", $0) }).joined()
+        guard let credential = config.credential(publicKeyDigest: String(request.args[1].dropFirst("public-key-sha256=".count)))
         else { throw AppError("SSH Agent is disabled or the requested key does not match") }
         guard let ancestry = sshAgentAncestry(for: origin) else {
             throw AppError("SSH authentication requires a live Verified Launcher ancestor with verifiable original process ancestry")
@@ -7999,12 +8000,12 @@ private final class ApprovalServer: @unchecked Sendable {
                                      helperIdentity: helperIdentity)
         try originPeer.validate()
         return ApprovalRequest(
-            op: "ssh-sign", keys: [sshCredentialSecretName], target: helperPath,
+            op: "ssh-sign", keys: [credential.secretName], target: helperPath,
             args: request.args + ["socket-peer=\(pathString(origin))"] + arguments,
             cwd: cwd, replaceExistingEnv: false, allowMissingKeys: false,
             envConflicts: [], shebangScript: nil, scriptData: nil, tool: "ssh-agent",
-            title: "Authenticate with your SSH credential?",
-            detail: "The SSH Agent will sign this authentication request using your shared SSH credential. This can grant remote access, including writes. Destination restrictions are not configured. Shared or forwarded connections inherit the local client’s Launcher attribution.",
+            title: "Authenticate using \(credential.name)?",
+            detail: "SSH key: \(credential.name) · \(credential.fingerprint). Authentication can grant remote access, including writes, wherever this key is accepted. Key names do not restrict destinations. Shared or forwarded connections inherit the local client’s Launcher attribution.",
             sshPeer: originPeer
         )
     }
@@ -9862,7 +9863,9 @@ private final class ApprovalServer: @unchecked Sendable {
         if let secrets {
             let values = xpc_dictionary_create_empty()
             for (key, value) in secrets {
-                key.withCString { keyPointer in
+                let wireKey = xpc_dictionary_get_string(message, "op").map(String.init(cString:)) == "ssh-sign"
+                    && secrets.count == 1 ? sshCredentialSecretName : key
+                wireKey.withCString { keyPointer in
                     if xpc_dictionary_get_string(message, "op").map(String.init(cString:)) == "inject-fd" {
                         Data(value.utf8).withUnsafeBytes { bytes in
                             if let baseAddress = bytes.baseAddress {
@@ -10157,7 +10160,7 @@ private func matchingSecretGate(
     descriptors: [SecretGateDescriptor],
     service: String = secretGatePoliciesKeychainService
 ) -> SecretGate? {
-    loadSecretGates(descriptors: descriptors, service: service).first {
+    loadSecretGates(descriptors: request.sshPeer.map { sshAgentGateDescriptors(descriptors, configuration: $0.configuration) } ?? descriptors, service: service).first {
         secretGateMatches($0, request: request, signing: signing)
     }
 }
@@ -10167,7 +10170,7 @@ private func matchingSecretGateDefinition(
     signing: SigningInfo,
     descriptors: [SecretGateDescriptor]
 ) -> SecretGate? {
-    descriptors.lazy.map {
+    (request.sshPeer.map { sshAgentGateDescriptors(descriptors, configuration: $0.configuration) } ?? descriptors).lazy.map {
         SecretGate(
             id: $0.id,
             keyPatterns: $0.keyPatterns,
@@ -10292,6 +10295,7 @@ private func classifySecretGateRequest(
     gateID: String,
     request: ApprovalRequest
 ) -> SecretGateRequestClassification {
+    if isSSHAgentGateID(gateID) { return .mutating }
     switch gateID {
     case "ssh-agent":
         return .mutating
@@ -15781,7 +15785,7 @@ private func runApprovalSelfCheck() -> Int32 {
         allowMissingKeys: false, envConflicts: [], shebangScript: nil,
         scriptData: nil, tool: "ssh-agent", title: nil, detail: nil,
         sshPeer: SSHAgentPeer(
-            socket: .nullDevice, identity: selfIdentity, configuration: SSHAgentConfiguration(),
+            socket: .nullDevice, identity: selfIdentity, configuration: SSHAgentConfiguration(enabled: true, publicKey: "ssh-ed25519 " + Data(repeating: 1, count: 51).base64EncodedString()),
             launchers: [], ancestors: [], arguments: [pathString(selfIdentity), "pangolin", "true"],
             cwd: "/tmp", helperIdentity: selfIdentity
         )
@@ -15812,6 +15816,24 @@ private func runApprovalSelfCheck() -> Int32 {
         )]
     )
     let sshSigning = SigningInfo(identifier: "com.automicvault.av", teamIdentifier: "TEAM")
+    let additionalKey = SSHAgentCredential(name: "Homelab", publicKey: "ssh-ed25519 " + Data(repeating: 2, count: 51).base64EncodedString())
+    let additionalRequest = ApprovalRequest(
+        op: "ssh-sign", keys: [additionalKey.secretName], target: sshRequest.target,
+        args: sshRequest.args, cwd: sshRequest.cwd, replaceExistingEnv: false,
+        allowMissingKeys: false, envConflicts: [], shebangScript: nil,
+        scriptData: nil, tool: "ssh-agent", title: nil, detail: nil,
+        sshPeer: SSHAgentPeer(socket: .nullDevice, identity: selfIdentity,
+            configuration: SSHAgentConfiguration(enabled: true, credentials: [additionalKey]),
+            launchers: [], ancestors: [], arguments: [], cwd: "/tmp", helperIdentity: selfIdentity)
+    )
+    guard let additionalGate = matchingSecretGateDefinition(request: additionalRequest,
+            signing: sshSigning, descriptors: [sshDescriptor]),
+          additionalGate.id == additionalKey.gateID,
+          additionalGate.initialProtection == .noAccess,
+          classifySecretGateRequest(gateID: additionalGate.id, request: additionalRequest) == .mutating,
+          !blessedScriptCanAutoApprove(sshBlessing, request: additionalRequest,
+                signing: sshSigning, descriptors: [sshDescriptor])
+    else { print("Per-key SSH authority self-check failed"); return 1 }
     let executions = [scriptKey: sshBlessing]
     let innerKey = BlessedExecutionKey(pid: unrelatedAncestor.pid, startUsec: unrelatedAncestor.start_usec)
     let blockingBlessing = BlessedScript(

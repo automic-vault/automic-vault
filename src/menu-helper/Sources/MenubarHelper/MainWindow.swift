@@ -2673,6 +2673,37 @@ func runDashboardSearchSelfCheck() -> Int32 {
             } catch { return 1 }
         }
     }
+    if let directory = ProcessInfo.processInfo.environment["AV_SSH_RENDER_DIR"] {
+        let github = SSHAgentCredential(name: "GitHub", publicKey: "ssh-ed25519 " + Data(repeating: 1, count: 51).base64EncodedString())
+        let homelab = SSHAgentCredential(name: "Homelab", publicKey: "ssh-ed25519 " + Data(repeating: 2, count: 51).base64EncodedString())
+        let configuration = SSHAgentConfiguration(enabled: true, credentials: [github, homelab])
+        var fixture = DashboardSnapshot.empty
+        fixture.secretGates = [github, homelab].map { key in
+            SecretGate(id: key.gateID, keyPatterns: [key.secretName], routes: [], defaultProtection: .noAccess,
+                appPolicies: key.id == github.id ? [SecretGatePolicy(bundleIdentifier: "com.anthropic.claudefordesktop",
+                    requirement: "identifier com.anthropic.claudefordesktop", protection: .fullExceptSecretDumps)] : [])
+        }
+        let fixtureModel = DashboardModel(snapshot: fixture)
+        for dark in [false, true] {
+            for width in [590, 980] {
+                let host = NSHostingView(rootView: ScrollView {
+                    SSHAgentSettingsView(model: fixtureModel, configuration: configuration).padding(24)
+                }.frame(width: CGFloat(width), height: 900)
+                    .background(Color(nsColor: .windowBackgroundColor))
+                    .environment(\.colorScheme, dark ? .dark : .light))
+                host.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+                host.frame = NSRect(x: 0, y: 0, width: width, height: 900)
+                host.layoutSubtreeIfNeeded()
+                RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+                host.layoutSubtreeIfNeeded()
+                guard let bitmap = host.bitmapImageRepForCachingDisplay(in: host.bounds) else { return 1 }
+                host.cacheDisplay(in: host.bounds, to: bitmap)
+                guard let png = bitmap.representation(using: .png, properties: [:]) else { return 1 }
+                do { try png.write(to: URL(fileURLWithPath: directory).appendingPathComponent("ssh-\(dark ? "dark" : "light")-\(width).png")) }
+                catch { return 1 }
+            }
+        }
+    }
     let gate = SecretGate(
         id: "gh",
         keyPatterns: ["GH_TOKEN_*"],
@@ -3861,7 +3892,7 @@ private struct DashboardDetailView: View {
                         .padding(.bottom, 28)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 } else if model.selectedItem?.id == "ssh-agent" {
-                    SSHAgentSettingsView(onCredentialSaved: model.reload, onOpenGate: { model.showSecretGate(id: "ssh-agent") })
+                    SSHAgentSettingsView(model: model)
                         .padding(.horizontal, 22)
                         .padding(.top, 32)
                         .padding(.bottom, 28)
@@ -6393,99 +6424,231 @@ private struct VerifiedLauncherHelpersSettingsView: View {
 }
 
 private struct SSHAgentSettingsView: View {
-    let onCredentialSaved: () -> Void
-    let onOpenGate: () -> Void
+    @ObservedObject var model: DashboardModel
     @StateObject private var approval = AuthorityApprovalState()
     @ObservedObject private var runtime = SSHAgentRuntime.shared
     @State private var config = loadSSHAgentConfiguration()
+    @State private var selectedID: String?
     @State private var importing = false
+    @State private var renaming = false
+    @State private var removing = false
+    @State private var newName = ""
     @State private var status = ""
+
+    init(model: DashboardModel, configuration: SSHAgentConfiguration = loadSSHAgentConfiguration()) {
+        self.model = model
+        _config = State(initialValue: configuration)
+    }
+
+    private var selected: SSHAgentCredential? {
+        config.credentials.first { $0.id == selectedID } ?? config.credentials.first
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
-            Text("SSH Agent").font(.system(size: 24, weight: .semibold))
-            Text("Authorize SSH authentication with one credential shared across Verified Launchers.")
+            HStack {
+                Text("SSH Agent").font(.system(size: 24, weight: .semibold))
+                Spacer()
+                Toggle("Enable SSH Agent", isOn: Binding(get: { config.enabled }, set: { setEnabled($0) }))
+                    .disabled(config.credentials.isEmpty || approval.isPending("enable") || (!SSHAgentRuntime.isSupported && !config.enabled))
+            }
+            Text("Each SSH key has its own Default Policy and Verified Launcher rules.")
                 .foregroundStyle(.secondary)
-            Toggle("Enable SSH Agent", isOn: Binding(get: { config.enabled }, set: { setEnabled($0) }))
-                .disabled(config.publicKey.isEmpty || approval.isPending("enable") || (!SSHAgentRuntime.isSupported && !config.enabled))
             if !SSHAgentRuntime.isSupported {
                 Text("This macOS version cannot provide the original process ancestry required by SSH Agent.")
                     .font(.caption).foregroundStyle(.secondary)
             }
-            Text("Every signature requires Approval until you change the SSH Agent Authorization Gate’s Access Level. Allow Authentication can grant remote access, including writes.")
-                .font(.caption).foregroundStyle(.secondary)
-            Button(config.publicKey.isEmpty ? "Import SSH Credential…" : "Replace SSH Credential…") {
-                importing = true
-            }
-            if !config.publicKey.isEmpty {
-                Text("Public key").font(.headline)
-                Text(config.publicKey).font(.system(.caption, design: .monospaced))
-                    .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
-                Button("Copy Public Key") {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(config.publicKey, forType: .string)
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .top, spacing: 20) {
+                    keyList.frame(width: 180, alignment: .leading)
+                    Divider()
+                    selectedKeyDetail
+                }.frame(minWidth: 680)
+                VStack(alignment: .leading, spacing: 16) {
+                    if !config.credentials.isEmpty {
+                        Picker("SSH Key", selection: Binding(get: { selected?.id ?? "" }, set: { selectedID = $0 })) {
+                            ForEach(config.credentials) { Text($0.name).tag($0.id) }
+                        }
+                    }
+                    Button("Add SSH Key…", systemImage: "plus") { importing = true }
+                        .disabled(config.credentials.count >= 32)
+                    selectedKeyDetail
                 }
-                Button("Open Authorization Gate") { onOpenGate() }
             }
             Divider()
-            Button("Configure OpenSSH") {
-                do {
-                    try configureOpenSSHAgent(enabled: true)
-                    status = "Configured ~/.ssh/config to use the Automic Vault SSH agent."
-                } catch { status = error.localizedDescription }
-            }.disabled(!config.enabled)
-            Button("Remove OpenSSH Configuration") {
-                do {
-                    try configureOpenSSHAgent(enabled: false)
-                    status = "Removed Automic Vault’s SSH configuration block."
-                } catch { status = error.localizedDescription }
+            HStack {
+                Button("Configure OpenSSH") {
+                    do {
+                        try configureOpenSSHAgent(enabled: true)
+                        status = "Configured ~/.ssh/config to use the Automic Vault SSH agent."
+                    } catch { status = error.localizedDescription }
+                }.disabled(!config.enabled)
+                Button("Remove OpenSSH Configuration") {
+                    do {
+                        try configureOpenSSHAgent(enabled: false)
+                        status = "Removed Automic Vault’s SSH configuration block."
+                    } catch { status = error.localizedDescription }
+                }
             }
             Text("Other agent clients can use SSH_AUTH_SOCK=\(sshAgentSocketURL().path). Disabling the agent leaves OpenSSH configured to fail closed until you remove its configuration.")
                 .font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
             InfoBlock(title: "Existing access paths", text: String(localized: "Importing does not delete your original private key, its Keychain passphrase, or keys loaded in another agent. These remain independent access paths. After verifying the new setup, remove the old copies and agent entries yourself. Explicit IdentityFile settings may still select other keys."))
-            InfoBlock(title: "Local Launcher boundary", text: String(localized: "Destination-specific restrictions are not provided. Clients need a live Verified Launcher ancestor; a client cannot act as its own Launcher. Shared or forwarded connections carry requests under that ancestor’s attribution. OpenSSH configuration disables forwarding by default."))
+            InfoBlock(title: "Local Launcher boundary", text: String(localized: "Clients need a live Verified Launcher ancestor; a client cannot act as its own Launcher. Shared or forwarded connections carry requests under that ancestor’s attribution. OpenSSH configuration disables forwarding by default."))
             if !runtime.status.isEmpty { InfoBlock(title: "SSH Agent", text: runtime.status) }
             if !status.isEmpty { InfoBlock(title: "Status", text: status) }
+            if let error = model.errorMessage { InfoBlock(title: "Error", text: error) }
         }
         .sheet(isPresented: $importing) {
-            SSHCredentialSheetView { publicKey in
-                config = loadSSHAgentConfiguration()
-                status = "Saved SSH credential in the Data Protection Keychain."
-                onCredentialSaved()
+            SSHCredentialSheetView { credential in
+                refresh()
+                selectedID = credential.id
+                status = "Saved SSH key. Copy its public key to the services where it should authenticate."
             }
         }
+        .alert("Rename SSH Key", isPresented: $renaming) {
+            TextField("Name", text: $newName)
+            Button("Cancel", role: .cancel) { }
+            Button("Rename") { rename() }
+        }
+        .alert("Remove SSH Key?", isPresented: $removing) {
+            Button("Cancel", role: .cancel) { }
+            Button("Remove", role: .destructive) { remove() }
+        } message: {
+            Text("This removes \(selected?.name ?? "the key") from this agent and deletes its stored private key. External copies and registrations with remote services remain.")
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .sshAgentConfigurationChanged)) { _ in refresh() }
         .onDisappear { approval.cancelAll() }
     }
 
-    private func setEnabled(_ enabled: Bool) {
-        if !enabled { persistEnabled(false); return }
-        let reviewed = loadSSHAgentConfiguration()
-        approval.request("enable", title: "Enable SSH Agent?",
-                         detail: "Make this SSH credential available through its Authorization Gate: \(reviewed.publicKey). Every Verified Launcher uses the same credential. Existing gate policy applies.") { allowed in
-            guard allowed else { return }
-            guard loadSSHAgentConfiguration() == reviewed else {
-                status = "The SSH credential changed while awaiting Approval. Review it and try again."
-                return
+    private var keyList: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("SSH Keys").font(.headline)
+            ForEach(config.credentials) { credential in
+                Button { selectedID = credential.id } label: {
+                    HStack(alignment: .top) {
+                        Image(systemName: "key.fill")
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(credential.name).fontWeight(.medium)
+                            Text(keySummary(credential)).font(.caption).foregroundStyle(.secondary)
+                        }
+                        Spacer(minLength: 0)
+                    }.padding(10).frame(maxWidth: .infinity, alignment: .leading)
+                        .background(selected?.id == credential.id ? Color.accentColor.opacity(0.12) : .clear,
+                                    in: RoundedRectangle(cornerRadius: 8))
+                }.buttonStyle(.plain)
+                    .accessibilityAddTraits(selected?.id == credential.id ? .isSelected : [])
             }
-            persistEnabled(true)
+            Button("Add SSH Key…", systemImage: "plus") { importing = true }
+                .disabled(config.credentials.count >= 32)
         }
     }
 
-    private func persistEnabled(_ enabled: Bool) {
-        var next = loadSSHAgentConfiguration()
-        next.enabled = enabled
+    @ViewBuilder private var selectedKeyDetail: some View {
+        if let credential = selected {
+            keyDetail(credential).frame(maxWidth: .infinity, alignment: .leading)
+        } else {
+            ContentUnavailableView("Add an SSH Key", systemImage: "key",
+                description: Text("Import an existing key or generate a new Ed25519 key. New keys require Approval for every authentication."))
+        }
+    }
+
+    private func keySummary(_ credential: SSHAgentCredential) -> String {
+        guard let gate = model.snapshot.secretGates.first(where: { $0.id == credential.gateID }) else { return "Approval Required" }
+        let allowed = gate.appPolicies.filter { $0.protection == .fullExceptSecretDumps && $0.denialThreshold == nil }
+        if gate.defaultProtection == .fullExceptSecretDumps && gate.defaultDenialThreshold == nil { return "Default: Allow Authentication" }
+        if gate.defaultDenialThreshold != nil { return "Default: Deny" }
+        if !allowed.isEmpty { return "\(allowed.count) Launcher rule(s) allow authentication" }
+        return "Approval Required"
+    }
+
+    @ViewBuilder private func keyDetail(_ credential: SSHAgentCredential) -> some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text(credential.name).font(.title2.weight(.semibold))
+            Text(credential.publicKey.split(separator: " ").first.map(String.init) ?? "SSH key")
+                .font(.caption).foregroundStyle(.secondary)
+            Text(credential.fingerprint).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
+            Button("Copy Public Key") {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(credential.publicKey, forType: .string)
+            }
+            Divider()
+            Text("Authorization").font(.headline)
+            if let gate = model.snapshot.secretGates.first(where: { $0.id == credential.gateID }) {
+                GatePolicyTable(model: model, gate: gate, approval: model.authorityApproval).id(gate.id)
+                Button("Add Launcher…") { model.addApp(to: gate) }
+                Button("Open Authorization Gate") { model.showSecretGate(id: gate.id) }
+            } else { ProgressView("Loading Authorization Gate…") }
+            Text("Allow Authentication permits access wherever this key is accepted, including remote writes.")
+                .font(.caption).foregroundStyle(.secondary)
+            Text("Key names describe intended use. They do not restrict destinations.")
+                .font(.caption).foregroundStyle(.secondary)
+            HStack {
+                Button("Rename…") { newName = credential.name; renaming = true }
+                Button("Remove Key…", role: .destructive) { removing = true }
+            }
+        }
+    }
+
+    private func refresh() {
+        config = loadSSHAgentConfiguration()
+        if !config.credentials.contains(where: { $0.id == selectedID }) { selectedID = config.credentials.first?.id }
+        model.reload()
+    }
+
+    private func persist(_ next: SSHAgentConfiguration) -> Bool {
+        var next = next
         next.generation = UUID()
         let result = saveSSHAgentConfiguration(next)
-        guard result == errSecSuccess else { status = "Could not save SSH Agent setting: \(result)"; return }
+        guard result == errSecSuccess else { status = "Could not save SSH Agent configuration: \(result)"; return false }
         config = next
         NotificationCenter.default.post(name: .sshAgentConfigurationChanged, object: nil)
+        return true
+    }
+
+    private func rename() {
+        guard let credential = selected else { return }
+        var next = loadSSHAgentConfiguration()
+        guard let index = next.credentials.firstIndex(where: { $0.id == credential.id }) else { return }
+        next.credentials[index].name = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        _ = persist(next)
+    }
+
+    private func remove() {
+        guard let credential = selected else { return }
+        var next = loadSSHAgentConfiguration()
+        next.credentials.removeAll { $0.id == credential.id }
+        if next.credentials.isEmpty { next.enabled = false }
+        // Unpublish first. A failed deletion cannot leave usable agent authority.
+        guard persist(next) else { return }
+        let result = deleteStoredSecretRevokingDirectAccess(account: credential.secretName)
+        status = result == errSecSuccess || result == errSecItemNotFound
+            ? "Removed SSH key." : "The key is no longer available to the agent, but its stored Secret could not be deleted: \(result)."
+        model.reload()
+    }
+
+    private func setEnabled(_ enabled: Bool) {
+        let reviewed = loadSSHAgentConfiguration()
+        if !enabled { var next = reviewed; next.enabled = false; _ = persist(next); return }
+        approval.request("enable", title: "Enable SSH Agent?",
+                         detail: "Make these SSH keys available through their Authorization Gates: \(reviewed.credentials.map(\.name).joined(separator: ", ")). Each key’s existing policy applies.") { allowed in
+            guard allowed else { return }
+            guard loadSSHAgentConfiguration() == reviewed else {
+                status = "The SSH keys changed while awaiting Approval. Review them and try again."
+                return
+            }
+            var next = reviewed
+            next.enabled = true
+            _ = persist(next)
+        }
     }
 }
 
 private struct SSHCredentialSheetView: View {
-    let onSaved: (String) -> Void
+    let onSaved: (SSHAgentCredential) -> Void
     @Environment(\.dismiss) private var dismiss
     @StateObject private var approval = AuthorityApprovalState()
+    @State private var name = ""
+    @State private var generate = false
     @State private var privateKey = ""
     @State private var passphrase = ""
     @State private var busy = false
@@ -6494,68 +6657,89 @@ private struct SSHCredentialSheetView: View {
     var body: some View {
         NavigationStack {
             Form {
-                Text("OpenSSH private key").font(.caption)
-                TextEditor(text: $privateKey)
-                    .font(.system(.caption, design: .monospaced)).frame(minHeight: 130)
-                    .accessibilityLabel("SSH private key")
-                SecureField("Passphrase (leave empty if none)", text: $passphrase)
-                Text("Paste a complete OPENSSH PRIVATE KEY block. Ed25519 and ECDSA authentication are supported. Stored private keys are never displayed. Replacing the credential cannot recover the previous private key.")
+                TextField("Name (for example, GitHub or Homelab)", text: $name)
+                Picker("Key", selection: $generate) {
+                    Text("Import Existing").tag(false)
+                    Text("Generate New").tag(true)
+                }.pickerStyle(.segmented)
+                if generate {
+                    Text("Generate an Ed25519 key. Its private key is stored in the Keychain and never displayed or written to a file.")
+                        .font(.caption).foregroundStyle(.secondary)
+                } else {
+                    Text("OpenSSH private key").font(.caption)
+                    TextEditor(text: $privateKey)
+                        .font(.system(.caption, design: .monospaced)).frame(minHeight: 130)
+                        .accessibilityLabel("SSH private key")
+                    SecureField("Passphrase (leave empty if none)", text: $passphrase)
+                    Text("Paste a complete OPENSSH PRIVATE KEY block. Ed25519 and ECDSA authentication are supported. Stored private keys are never displayed.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Text("New keys start at Approval Required. Register the public key with the services where it should authenticate.")
                     .font(.caption).foregroundStyle(.secondary)
                 if !error.isEmpty { Text(error).foregroundStyle(.red) }
             }.formStyle(.grouped).disabled(busy)
-                .navigationTitle("Import SSH Credential")
+                .navigationTitle("Add SSH Key")
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) {
                         Button("Cancel") { dismiss() }.disabled(busy)
                     }
                     ToolbarItem(placement: .confirmationAction) {
                         Button(busy ? "Saving…" : "Save") { submit() }
-                            .disabled(privateKey.isEmpty || busy)
+                            .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || (!generate && privateKey.isEmpty) || busy)
                     }
                 }
-        }.frame(width: 560, height: 420)
+        }.frame(width: 560, height: 480)
             .interactiveDismissDisabled(busy)
             .onDisappear { privateKey = ""; passphrase = ""; approval.cancelAll() }
     }
 
     private func submit() {
         busy = true
-        let credential = ["private_key": privateKey, "passphrase": passphrase]
+        let requestedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let imported = ["private_key": privateKey, "passphrase": passphrase]
+        let generating = generate
         let executable = Bundle.main.executableURL
         Task {
             do {
-                let publicKey = try await validateSSHCredential(credential, executable: executable)
-                approval.request("save", title: "Store this SSH credential?",
-                                 detail: "Replace the shared SSH credential for every Verified Launcher. Public key: \(publicKey)") { allowed in
+                let credential = try await prepareSSHCredential(imported, generating: generating, executable: executable)
+                let key = SSHAgentCredential(name: requestedName, publicKey: credential.publicKey)
+                let reviewed = loadSSHAgentConfiguration()
+                var next = reviewed
+                next.credentials.append(key)
+                next.generation = UUID()
+                guard next.isValid else { throw SSHAgentError.failed("Use a unique key and a name of up to 128 bytes without control characters. At most 32 keys are supported.") }
+                approval.request("save", title: "Store this SSH key?",
+                                 detail: "Add \(key.name) · \(key.fingerprint). Its Default Policy starts at Approval Required. Existing keys and their permissions are unchanged.") { allowed in
                     guard allowed else { busy = false; return }
                     do {
-                        let data = try JSONEncoder().encode(credential)
-                        // Disable first: a partial write cannot combine an old public key with new private material.
-                        var config = loadSSHAgentConfiguration()
-                        let enabled = config.enabled
-                        config.enabled = false
-                        config.generation = UUID()
-                        var result = saveSSHAgentConfiguration(config)
+                        guard loadSSHAgentConfiguration() == reviewed else { throw SSHAgentError.failed("The SSH keys changed while awaiting Approval. Review them and try again.") }
+                        let result = saveStoredSecret(account: key.secretName, value: credential.value)
                         guard result == errSecSuccess else { throw SSHAgentError.failed("Keychain error \(result)") }
-                        result = saveStoredSecret(account: sshCredentialSecretName,
-                                                  value: String(decoding: data, as: UTF8.self))
-                        guard result == errSecSuccess else { throw SSHAgentError.failed("Keychain error \(result)") }
-                        config.publicKey = publicKey
-                        config.enabled = enabled
-                        result = saveSSHAgentConfiguration(config)
-                        guard result == errSecSuccess else { throw SSHAgentError.failed("Keychain error \(result)") }
+                        let published = saveSSHAgentConfiguration(next)
+                        guard published == errSecSuccess else {
+                            _ = deleteStoredSecret(account: key.secretName)
+                            throw SSHAgentError.failed("Could not publish SSH key: \(published)")
+                        }
                         privateKey = ""; passphrase = ""
                         NotificationCenter.default.post(name: .sshAgentConfigurationChanged, object: nil)
-                        onSaved(publicKey)
+                        onSaved(key)
                         dismiss()
-                    } catch {
-                        self.error = error.localizedDescription; busy = false
-                        NotificationCenter.default.post(name: .sshAgentConfigurationChanged, object: nil)
-                    }
+                    } catch { self.error = error.localizedDescription; busy = false }
                 }
             } catch { self.error = error.localizedDescription; busy = false }
         }
     }
+}
+
+@concurrent
+private func prepareSSHCredential(_ imported: [String: String], generating: Bool, executable: URL?) async throws -> (publicKey: String, value: String) {
+    let data = try generating
+        ? runBundledCredentialCommand(arguments: ["__ssh-generate-key"], input: Data(), mainExecutableURL: executable)
+        : JSONEncoder().encode(imported)
+    guard data.count <= 1024 * 1024 else { throw SSHAgentError.failed("SSH credential exceeds 1 MiB") }
+    let credential = try JSONDecoder().decode([String: String].self, from: data)
+    let publicKey = try await validateSSHCredential(credential, executable: executable)
+    return (publicKey, String(decoding: data, as: UTF8.self))
 }
 
 @concurrent
@@ -7230,7 +7414,7 @@ private struct GatePolicyTable: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("Drag the boundaries, or focus a handle and use the arrow keys. Changes stay pending until reviewed.")
+            Text(gate.isSSHAgentGate ? "Choose an Access Level. Changes stay pending until reviewed." : "Drag the boundaries, or focus a handle and use the arrow keys. Changes stay pending until reviewed.")
                 .font(.caption).foregroundStyle(.secondary)
             ScrollView(.horizontal) {
                 VStack(spacing: 0) {
@@ -7263,7 +7447,7 @@ private struct GatePolicyTable: View {
                     }
                     Divider()
                 }
-                .frame(width: max(720, availableWidth))
+                .frame(width: max(gate.isSSHAgentGate ? 440 : 720, availableWidth))
             }
             .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { availableWidth = $0 }
 
@@ -7333,9 +7517,18 @@ private struct GatePolicyTable: View {
                         if case .signing(let value) = change.value { return value }
                         return nil
                     }.first ?? signingAccess(for: app)
+                    if !gate.isSSHAgentGate {
                     GatePolicyTrack(gate: gate, protection: access.protection(for: gate), denial: access.denial,
                         setProtection: { stage(.signing(SigningGateAccess(protection: $0, denial: nil)), for: app) },
                         setDenial: { stage(.signing(SigningGateAccess(protection: access.protection(for: gate), denial: $0)), for: app) })
+                    } else {
+                        NativeProtectionMenu(gate: gate,
+                            protection: access == .deny ? nil : access.protection(for: gate),
+                            usesPhone: false, includesDeny: true) { level in
+                            stage(.signing(level.map { SigningGateAccess(protection: $0, denial: nil) } ?? .deny), for: app)
+                        }
+                        .frame(maxWidth: 240, alignment: .leading)
+                    }
                 } else {
                     GatePolicyTrack(gate: gate, protection: protection, denial: denial,
                                     setProtection: { stage(.allow($0), for: app) },

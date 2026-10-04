@@ -81,10 +81,15 @@ GPG-specific presentation of Local Write. The gate defaults to Approval Required
 ### SSH Agent Gate
 
 The built-in Tool-specific Secret Gate for SSH authentication signatures through
-Automic Vault's optional SSH agent. One SSH Credential is used for every
-Verified Launcher; there are no Launcher-specific credential selectors or
-Project Values at this gate. The credential contains an OpenSSH private key and
-its optional passphrase in one protected Secret, `AV_SSH_CREDENTIAL`.
+Automic Vault's optional SSH agent. Each named SSH Credential has its own
+Authorization Gate and Default Policy plus Verified Launcher rules. The client
+selects a public key; the Mac binds its exact public-key digest to that credential
+and policy. Names describe intended use, never destination restrictions. Each
+credential contains an OpenSSH private key and optional passphrase in one Global
+Value. The original credential retains `AV_SSH_CREDENTIAL` and its existing
+policy; additional credentials start at Approval Required and receive fresh
+identities. Renaming preserves identity. Replacing a key means adding a new
+credential with fresh policy, then removing the old credential.
 
 Each request binds the live local socket peer, its Verified Launcher, the signed
 `av` Gate Client and signing Target, and the exact authentication payload.
@@ -97,7 +102,7 @@ exclusive choices: **Approval Required**, **Allow Authentication**, and **Deny**
 Allow Authentication delegates authentication,
 including access that may permit remote writes; it is not Read Only authority.
 Script-derived authority may authorize authentication only through an explicit
-`ssh-agent: trusted` Capability when the SSH socket peer's verified original
+`ssh-agent: trusted` Capability for the original credential only, when the SSH socket peer's verified original
 ancestors include that exact script execution. An empty capability ceiling
 or a revoked active Blessing blocks inherited automatic authority. The ancestry
 and Blessing are rechecked before signing; a missing or changed link cannot

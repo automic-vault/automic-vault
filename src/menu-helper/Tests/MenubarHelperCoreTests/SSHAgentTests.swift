@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import Security
 @testable import MenubarHelperCore
 
 struct SSHAgentTests {
@@ -34,6 +35,92 @@ struct SSHAgentTests {
         #expect(selected[sshCredentialSecretName]?.source == .global)
         let ordinary = try resolveStoredSecretValues(names: [sshCredentialSecretName], cwd: "/", secrets: [secret])
         #expect(ordinary[sshCredentialSecretName]?.source == .projectDirectory("/"))
+    }
+
+    private func key(_ name: String, byte: UInt8) -> SSHAgentCredential {
+        SSHAgentCredential(name: name, publicKey: "ssh-ed25519 " + Data(repeating: byte, count: 51).base64EncodedString())
+    }
+
+    @Test func legacyConfigurationPreservesItsExactIdentityAndGeneration() throws {
+        let generation = UUID()
+        let publicKey = key("fixture", byte: 1).publicKey
+        let data = try JSONSerialization.data(withJSONObject: ["generation": generation.uuidString,
+            "enabled": true, "publicKey": publicKey])
+        let config = try JSONDecoder().decode(SSHAgentConfiguration.self, from: data)
+        #expect(config.enabled)
+        #expect(config.generation == generation)
+        #expect(config.credentials.count == 1)
+        #expect(config.credentials[0].secretName == sshCredentialSecretName)
+        #expect(config.credentials[0].gateID == "ssh-agent")
+        #expect(config.credentials[0].publicKey == publicKey)
+        #expect(try JSONDecoder().decode(SSHAgentConfiguration.self, from: JSONEncoder().encode(config)) == config)
+    }
+
+    @Test func exactKeySelectionFailsClosedOnDuplicateDisabledAndRemovedKeys() throws {
+        let github = key("GitHub", byte: 1)
+        let homelab = key("Homelab", byte: 2)
+        var config = SSHAgentConfiguration(enabled: true, credentials: [github, homelab])
+        #expect(config.credential(publicKeyDigest: try #require(github.publicKeyDigest)) == github)
+        #expect(config.credential(publicKeyDigest: String(repeating: "0", count: 64)) == nil)
+        let original = config
+        config.credentials[0].name = "Renamed"
+        #expect(config.credentials[0].gateID == github.gateID)
+        #expect(config.credentials[0].secretName == github.secretName)
+        #expect(config != original) // The retained configuration cannot authorize after a change.
+        config.credentials.removeFirst()
+        #expect(config.credential(publicKeyDigest: try #require(github.publicKeyDigest)) == nil)
+        config.enabled = false
+        #expect(config.credential(publicKeyDigest: try #require(homelab.publicKeyDigest)) == nil)
+        config = SSHAgentConfiguration(enabled: true, credentials: [github, github])
+        #expect(!config.isValid)
+        #expect(config.credential(publicKeyDigest: try #require(github.publicKeyDigest)) == nil)
+        #expect(throws: (any Error).self) { try JSONEncoder().encode(config) }
+        let duplicateMaterial = SSHAgentCredential(name: "Other purpose", publicKey: github.publicKey)
+        #expect(!SSHAgentConfiguration(enabled: true, credentials: [github, duplicateMaterial]).isValid)
+    }
+
+    @Test func malformedNewCatalogCannotFallBackToLegacy() throws {
+        let fixture = ["generation": UUID().uuidString, "enabled": true, "publicKey": key("fixture", byte: 1).publicKey,
+                       "version": 2, "credentials": "broken"] as [String: Any]
+        #expect(throws: (any Error).self) {
+            try JSONDecoder().decode(SSHAgentConfiguration.self, from: JSONSerialization.data(withJSONObject: fixture))
+        }
+        var config = SSHAgentConfiguration(enabled: true, credentials: [key("bad\nname", byte: 1)])
+        #expect(!config.isValid)
+        config.credentials = (0..<33).map { key("Key \($0)", byte: UInt8($0)) }
+        #expect(!config.isValid)
+    }
+
+    @Test func credentialGatesKeepIndependentPoliciesAndDenials() throws {
+        let github = key("GitHub", byte: 1)
+        let homelab = key("Homelab", byte: 2)
+        let config = SSHAgentConfiguration(enabled: true, credentials: [github, homelab])
+        let prototype = SecretGateDescriptor(id: "ssh-agent", keyPatterns: [sshCredentialSecretName],
+            routes: [SecretGateRoute(operation: "ssh-sign", scriptPath: nil, targetPath: "/signed/av",
+                callerIdentifiers: ["com.automicvault.av"], keyPatterns: [sshCredentialSecretName],
+                replaceExistingEnv: false, allowMissingKeys: false)])
+        let descriptors = sshAgentGateDescriptors([prototype], configuration: config)
+        #expect(descriptors.map(\.id) == [github.gateID, homelab.gateID])
+        #expect(descriptors.map(\.keyPatterns) == [[github.secretName], [homelab.secretName]])
+        #expect(descriptors[1].routes[0].keyPatterns == [homelab.secretName])
+        #expect(descriptors[1].routes[0].targetPath == "/signed/av")
+        let githubGate = loadedSecretGate(from: descriptors[0], policyRecords: .success([]))
+        let homelabGate = loadedSecretGate(from: descriptors[1], policyRecords: .success([]))
+        #expect(githubGate.initialProtection == .noAccess)
+        #expect(homelabGate.availableProtections == [.noAccess, .fullExceptSecretDumps])
+        #expect(!homelabGate.supportsUnknownDenial)
+        let records = [SecretGatePolicyRecord(gateID: github.gateID, requirement: "identifier claude",
+            protection: .fullExceptSecretDumps, runtimeRequirement: .hardened),
+            SecretGatePolicyRecord(gateID: "ssh-agent", requirement: nil, protection: .fullExceptSecretDumps)]
+        #expect(loadedSecretGate(from: descriptors[0], policyRecords: .success(records)).appPolicies.first?.protection == .fullExceptSecretDumps)
+        #expect(loadedSecretGate(from: descriptors[1], policyRecords: .success(records)).appPolicies.isEmpty)
+        #expect(loadedSecretGate(from: descriptors[1], policyRecords: .success(records)).defaultProtection == .noAccess)
+        #expect(loadedSecretGate(from: descriptors[0], policyRecords: .failure(errSecDecode)).defaultProtection == .noAccess)
+        let denials = TemporaryLauncherDenials()
+        let scope = try #require(TemporaryLauncherDenialScope(gate: githubGate, classification: .mutating))
+        denials.deny("claude", launcherName: "Claude", scope: scope, now: 0)
+        #expect(denials.isDenied("claude", gate: githubGate, classification: .mutating, now: 1))
+        #expect(!denials.isDenied("claude", gate: homelabGate, classification: .mutating, now: 1))
     }
 
     @Test func configurationIsReversibleAndRejectsAmbiguousBlocks() throws {
