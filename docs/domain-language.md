@@ -102,8 +102,8 @@ exclusive choices: **Approval Required**, **Allow Authentication**, and **Deny**
 Allow Authentication delegates authentication,
 including access that may permit remote writes; it is not Read Only authority.
 Script-derived authority may authorize authentication only through an explicit
-`ssh-agent: trusted` Capability for the original credential only, when the SSH socket peer's verified original
-ancestors include that exact script execution. An empty capability ceiling
+`ssh-agent: trusted` Capability for the original credential, when the SSH socket
+peer’s verified original ancestors include that exact script execution. An empty capability ceiling
 or a revoked active Blessing blocks inherited automatic authority. The ancestry
 and Blessing are rechecked before signing; a missing or changed link cannot
 borrow the script's authority.

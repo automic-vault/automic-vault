@@ -6432,8 +6432,10 @@ private struct SSHAgentSettingsView: View {
     @State private var importing = false
     @State private var renaming = false
     @State private var removing = false
+    @State private var editingCredential: SSHAgentCredential?
     @State private var newName = ""
     @State private var status = ""
+    @State private var availableWidth: CGFloat = 0
 
     init(model: DashboardModel, configuration: SSHAgentConfiguration = loadSSHAgentConfiguration()) {
         self.model = model
@@ -6458,21 +6460,24 @@ private struct SSHAgentSettingsView: View {
                 Text("This macOS version cannot provide the original process ancestry required by SSH Agent.")
                     .font(.caption).foregroundStyle(.secondary)
             }
-            ViewThatFits(in: .horizontal) {
-                HStack(alignment: .top, spacing: 20) {
-                    keyList.frame(width: 180, alignment: .leading)
-                    Divider()
-                    selectedKeyDetail
-                }.frame(minWidth: 680)
-                VStack(alignment: .leading, spacing: 16) {
-                    if !config.credentials.isEmpty {
-                        Picker("SSH Key", selection: Binding(get: { selected?.id ?? "" }, set: { selectedID = $0 })) {
-                            ForEach(config.credentials) { Text($0.name).tag($0.id) }
-                        }
+            Group {
+                if availableWidth >= 720 {
+                    HStack(alignment: .top, spacing: 20) {
+                        keyList.frame(width: 180, alignment: .leading)
+                        Divider()
+                        selectedKeyDetail
                     }
-                    Button("Add SSH Key…", systemImage: "plus") { importing = true }
-                        .disabled(config.credentials.count >= 32)
-                    selectedKeyDetail
+                } else {
+                    VStack(alignment: .leading, spacing: 16) {
+                        if !config.credentials.isEmpty {
+                            Picker("SSH Key", selection: Binding(get: { selected?.id ?? "" }, set: { selectedID = $0 })) {
+                                ForEach(config.credentials) { Text($0.name).tag($0.id) }
+                            }
+                        }
+                        Button("Add SSH Key…", systemImage: "plus") { importing = true }
+                            .disabled(config.credentials.count >= 32)
+                        selectedKeyDetail
+                    }
                 }
             }
             Divider()
@@ -6498,6 +6503,7 @@ private struct SSHAgentSettingsView: View {
             if !status.isEmpty { InfoBlock(title: "Status", text: status) }
             if let error = model.errorMessage { InfoBlock(title: "Error", text: error) }
         }
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { availableWidth = $0 }
         .sheet(isPresented: $importing) {
             SSHCredentialSheetView { credential in
                 refresh()
@@ -6514,7 +6520,7 @@ private struct SSHAgentSettingsView: View {
             Button("Cancel", role: .cancel) { }
             Button("Remove", role: .destructive) { remove() }
         } message: {
-            Text("This removes \(selected?.name ?? "the key") from this agent and deletes its stored private key. External copies and registrations with remote services remain.")
+            Text("This removes \(editingCredential?.name ?? "the key") from this agent and deletes its stored private key. External copies and registrations with remote services remain.")
         }
         .onReceive(NotificationCenter.default.publisher(for: .sshAgentConfigurationChanged)) { _ in refresh() }
         .onDisappear { approval.cancelAll() }
@@ -6557,7 +6563,7 @@ private struct SSHAgentSettingsView: View {
         let allowed = gate.appPolicies.filter { $0.protection == .fullExceptSecretDumps && $0.denialThreshold == nil }
         if gate.defaultProtection == .fullExceptSecretDumps && gate.defaultDenialThreshold == nil { return "Default: Allow Authentication" }
         if gate.defaultDenialThreshold != nil { return "Default: Deny" }
-        if !allowed.isEmpty { return "\(allowed.count) Launcher rule(s) allow authentication" }
+        if !allowed.isEmpty { return allowed.count == 1 ? "1 Launcher allowed" : "\(allowed.count) Launchers allowed" }
         return "Approval Required"
     }
 
@@ -6583,8 +6589,8 @@ private struct SSHAgentSettingsView: View {
             Text("Key names describe intended use. They do not restrict destinations.")
                 .font(.caption).foregroundStyle(.secondary)
             HStack {
-                Button("Rename…") { newName = credential.name; renaming = true }
-                Button("Remove Key…", role: .destructive) { removing = true }
+                Button("Rename…") { editingCredential = credential; newName = credential.name; renaming = true }
+                Button("Remove Key…", role: .destructive) { editingCredential = credential; removing = true }
             }
         }
     }
@@ -6606,7 +6612,7 @@ private struct SSHAgentSettingsView: View {
     }
 
     private func rename() {
-        guard let credential = selected else { return }
+        guard let credential = editingCredential else { return }
         var next = loadSSHAgentConfiguration()
         guard let index = next.credentials.firstIndex(where: { $0.id == credential.id }) else { return }
         next.credentials[index].name = newName.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -6614,7 +6620,7 @@ private struct SSHAgentSettingsView: View {
     }
 
     private func remove() {
-        guard let credential = selected else { return }
+        guard let credential = editingCredential else { return }
         var next = loadSSHAgentConfiguration()
         next.credentials.removeAll { $0.id == credential.id }
         if next.credentials.isEmpty { next.enabled = false }
@@ -7393,6 +7399,13 @@ private struct GatePolicyTable: View {
     @State private var reviewing = false
     @State private var availableWidth: CGFloat = 720
 
+    init(model: DashboardModel, gate: SecretGate, approval: AuthorityApprovalState) {
+        self.model = model
+        self.gate = gate
+        self.approval = approval
+        _availableWidth = State(initialValue: gate.isSSHAgentGate ? 480 : 720)
+    }
+
     private var levels: [SecretGateProtection] { Array(gate.availableProtections.dropFirst()) }
     // These gates admit only signing requests; unsupported requests fail validation.
     private var showsUnknownOperations: Bool { gate.supportsUnknownDenial }
@@ -7417,14 +7430,18 @@ private struct GatePolicyTable: View {
             Text(gate.isSSHAgentGate ? "Choose an Access Level. Changes stay pending until reviewed." : "Drag the boundaries, or focus a handle and use the arrow keys. Changes stay pending until reviewed.")
                 .font(.caption).foregroundStyle(.secondary)
             ScrollView(.horizontal) {
-                VStack(spacing: 0) {
+                VStack(alignment: .leading, spacing: 0) {
                     HStack(spacing: 16) {
                         Text("Verified Launcher").frame(width: 190, alignment: .leading)
                         HStack(spacing: 0) {
-                            ForEach(levels) { level in
-                                Text(localizedUIString(gate.protectionTitle(level)))
-                                    .frame(maxWidth: .infinity)
-                                    .help(localizedUIString(gate.protectionSubtitle(level)))
+                            if gate.isSSHAgentGate {
+                                Text("Access Level").frame(maxWidth: .infinity, alignment: .leading)
+                            } else {
+                                ForEach(levels) { level in
+                                    Text(localizedUIString(gate.protectionTitle(level)))
+                                        .frame(maxWidth: .infinity)
+                                        .help(localizedUIString(gate.protectionSubtitle(level)))
+                                }
                             }
                             if showsUnknownOperations {
                                 Text("Unknown").frame(maxWidth: .infinity)
@@ -7447,7 +7464,7 @@ private struct GatePolicyTable: View {
                     }
                     Divider()
                 }
-                .frame(width: max(gate.isSSHAgentGate ? 440 : 720, availableWidth))
+                .frame(width: max(gate.isSSHAgentGate ? 480 : 720, availableWidth))
             }
             .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { availableWidth = $0 }
 
