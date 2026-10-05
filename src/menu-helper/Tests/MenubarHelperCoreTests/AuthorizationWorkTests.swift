@@ -56,7 +56,9 @@ import Testing
         finishValidation.signal()
     }
     await monitor.value
-    #expect(entered.wait(timeout: .now()) == .timedOut, "A canceled monitor must not start another validation")
+    await performAuthorizationWork {
+        #expect(entered.wait(timeout: .now()) == .timedOut, "A canceled monitor must not start another validation")
+    }
 }
 
 @Test @MainActor func approvalWorkerPreservesRecordBeforeReleaseAndRechecksRevocation() async throws {
