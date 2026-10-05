@@ -29,8 +29,8 @@ import Testing
     }
 }
 
-@Test @concurrent func approvalMonitorCancellationDuringValidationStopsFurtherChecks() async throws {
-    let entered = AsyncStream<Void>.makeStream()
+@Test @MainActor func approvalMonitorCancellationDuringValidationStopsFurtherChecks() async throws {
+    let entered = DispatchSemaphore(value: 0)
     let finishValidation = DispatchSemaphore(value: 0)
     let monitor = Task {
         do {
@@ -40,33 +40,33 @@ import Testing
                     Issue.record("Validation blocked the main thread")
                     throw CancellationError()
                 }
-                entered.continuation.yield(())
+                entered.signal()
                 #expect(finishValidation.wait(timeout: .now() + 5) == .success)
             }
             Issue.record("Monitor returned without failure or cancellation")
         } catch {
             #expect(error is CancellationError)
         }
-        entered.continuation.finish()
     }
-    var iterator = entered.stream.makeAsyncIterator()
-    _ = try #require(await iterator.next())
-    // Coordinate away from the main actor so unrelated UI tests cannot delay cancellation.
-    monitor.cancel()
-    finishValidation.signal()
+    // A blocked synchronous check must not depend on the cooperative executor
+    // scheduling another test continuation to release it.
+    DispatchQueue(label: "test.authorization-cancellation").async {
+        #expect(entered.wait(timeout: .now() + 60) == .success)
+        monitor.cancel()
+        finishValidation.signal()
+    }
     await monitor.value
-    #expect(await iterator.next() == nil, "A canceled monitor must not start another validation")
+    #expect(entered.wait(timeout: .now()) == .timedOut, "A canceled monitor must not start another validation")
 }
 
-@Test @concurrent func approvalWorkerPreservesRecordBeforeReleaseAndRechecksRevocation() async throws {
-    let recording = AsyncStream<Void>.makeStream()
+@Test @MainActor func approvalWorkerPreservesRecordBeforeReleaseAndRechecksRevocation() async throws {
+    let recording = DispatchSemaphore(value: 0)
     let finishRecording = DispatchSemaphore(value: 0)
     let revoked = DispatchSemaphore(value: 0)
     let worker = Task {
         await performAuthorizationWork {
             guard !Thread.isMainThread else {
                 Issue.record("Recording blocked the main thread")
-                recording.continuation.finish()
                 return
             }
             enum Revoked: Error { case peer }
@@ -75,7 +75,7 @@ import Testing
             #expect(throws: Revoked.peer) {
                 try transaction.commit(
                     record: {
-                        recording.continuation.yield(())
+                        recording.signal()
                         #expect(finishRecording.wait(timeout: .now() + 5) == .success)
                         return true
                     },
@@ -88,14 +88,13 @@ import Testing
                 )
             }
             #expect(!released)
-            recording.continuation.finish()
         }
     }
-    var iterator = recording.stream.makeAsyncIterator()
-    _ = try #require(await iterator.next())
-    // Revoke while history is persisting, independently of unrelated main-actor work.
-    revoked.signal()
-    finishRecording.signal()
+    DispatchQueue(label: "test.authorization-revocation").async {
+        #expect(recording.wait(timeout: .now() + 60) == .success)
+        revoked.signal()
+        finishRecording.signal()
+    }
     await worker.value
 }
 
