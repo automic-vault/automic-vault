@@ -29,7 +29,7 @@ import Testing
     }
 }
 
-@Test @MainActor func approvalMonitorCancellationDuringValidationStopsFurtherChecks() async throws {
+@Test func approvalMonitorCancellationDuringValidationStopsFurtherChecks() async throws {
     let entered = AsyncStream<Void>.makeStream()
     let finishValidation = DispatchSemaphore(value: 0)
     let monitor = Task {
@@ -51,14 +51,14 @@ import Testing
     }
     var iterator = entered.stream.makeAsyncIterator()
     _ = try #require(await iterator.next())
-    // This main-actor continuation runs while the synchronous check is blocked.
+    // Coordinate away from the main actor so unrelated UI tests cannot delay cancellation.
     monitor.cancel()
     finishValidation.signal()
     await monitor.value
     #expect(await iterator.next() == nil, "A canceled monitor must not start another validation")
 }
 
-@Test @MainActor func approvalWorkerPreservesRecordBeforeReleaseAndRechecksRevocation() async throws {
+@Test func approvalWorkerPreservesRecordBeforeReleaseAndRechecksRevocation() async throws {
     let recording = AsyncStream<Void>.makeStream()
     let finishRecording = DispatchSemaphore(value: 0)
     let revoked = DispatchSemaphore(value: 0)
@@ -93,7 +93,7 @@ import Testing
     }
     var iterator = recording.stream.makeAsyncIterator()
     _ = try #require(await iterator.next())
-    // Revocation on the main actor must remain effective while history is persisting.
+    // Revoke while history is persisting, independently of unrelated main-actor work.
     revoked.signal()
     finishRecording.signal()
     await worker.value
