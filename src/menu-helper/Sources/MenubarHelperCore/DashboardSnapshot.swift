@@ -615,6 +615,7 @@ public func launcherRuntimeProtection(
 
 public struct SecretGate: Equatable, Identifiable, Sendable {
     public let id: String
+    public let credentialName: String?
     public let keyPatterns: [String]
     public let routes: [SecretGateRoute]
     public let defaultProtection: SecretGateProtection
@@ -627,9 +628,11 @@ public struct SecretGate: Equatable, Identifiable, Sendable {
         routes: [SecretGateRoute],
         defaultProtection: SecretGateProtection,
         defaultDenialThreshold: SecretGateProtection? = nil,
-        appPolicies: [SecretGatePolicy]
+        appPolicies: [SecretGatePolicy],
+        credentialName: String? = nil
     ) {
         self.id = id
+        self.credentialName = credentialName
         self.keyPatterns = keyPatterns
         self.routes = routes
         self.defaultProtection = defaultProtection
@@ -644,8 +647,7 @@ public struct SecretGate: Equatable, Identifiable, Sendable {
     }
     public var displayName: String {
         if isSSHAgentGate {
-            let name = loadSSHAgentConfiguration().credentials.first { $0.gateID == id }?.name
-            return name.map { "SSH · " + $0 } ?? "SSH Agent"
+            return credentialName.map { "SSH · " + $0 } ?? "SSH Agent"
         }
         return id == "node" ? "npm" : id
     }
@@ -1227,15 +1229,17 @@ public func loadSecretGates(
     account: String = secretGatePoliciesKeychainAccount
 ) -> [SecretGate] {
     let loadedRecords = loadSecretGatePolicyRecords(service: service, account: account)
+    let names = Dictionary(uniqueKeysWithValues: loadSSHAgentConfiguration().credentials.map { ($0.gateID, $0.name) })
     return descriptors.map {
-        loadedSecretGate(from: $0, policyRecords: loadedRecords)
+        loadedSecretGate(from: $0, policyRecords: loadedRecords, credentialName: names[$0.id])
     }
     .sorted { $0.id.localizedStandardCompare($1.id) == .orderedAscending }
 }
 
 func loadedSecretGate(
     from descriptor: SecretGateDescriptor,
-    policyRecords loadedRecords: SecretGatePolicyRecordsLoad
+    policyRecords loadedRecords: SecretGatePolicyRecordsLoad,
+    credentialName: String? = nil
 ) -> SecretGate {
     let records: [SecretGatePolicyRecord] = switch loadedRecords {
     case .success(let records): records
@@ -1271,7 +1275,8 @@ func loadedSecretGate(
                     usesGateDefault: record.usesGateDefault == true
                 )
             }
-        }.uniqueSorted()
+        }.uniqueSorted(),
+        credentialName: credentialName
     )
 }
 
@@ -1287,7 +1292,8 @@ public func reloadSecretGatePolicy(
     )
     return loadedSecretGate(
         from: descriptor,
-        policyRecords: loadSecretGatePolicyRecords(service: service, account: account)
+        policyRecords: loadSecretGatePolicyRecords(service: service, account: account),
+        credentialName: gate.credentialName
     )
 }
 

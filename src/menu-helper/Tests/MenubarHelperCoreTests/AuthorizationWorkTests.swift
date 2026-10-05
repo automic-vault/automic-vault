@@ -29,7 +29,7 @@ import Testing
     }
 }
 
-@Test func approvalMonitorCancellationDuringValidationStopsFurtherChecks() async throws {
+@Test @concurrent func approvalMonitorCancellationDuringValidationStopsFurtherChecks() async throws {
     let entered = AsyncStream<Void>.makeStream()
     let finishValidation = DispatchSemaphore(value: 0)
     let monitor = Task {
@@ -58,7 +58,7 @@ import Testing
     #expect(await iterator.next() == nil, "A canceled monitor must not start another validation")
 }
 
-@Test func approvalWorkerPreservesRecordBeforeReleaseAndRechecksRevocation() async throws {
+@Test @concurrent func approvalWorkerPreservesRecordBeforeReleaseAndRechecksRevocation() async throws {
     let recording = AsyncStream<Void>.makeStream()
     let finishRecording = DispatchSemaphore(value: 0)
     let revoked = DispatchSemaphore(value: 0)

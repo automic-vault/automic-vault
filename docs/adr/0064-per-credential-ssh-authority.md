@@ -1,4 +1,4 @@
-# ADR 0063: Independent authority for each SSH credential
+# ADR 0064: Independent authority for each SSH credential
 
 Status: accepted; amends [ADR 0044](0044-ssh-agent-gate.md) and [ADR 0048](0048-ssh-agent-blessed-scripts.md).
 
@@ -29,6 +29,8 @@ scoped to the exact credential gate. Existing `ssh-agent: trusted` script author
 covers only the original credential, never newly added keys. Empty capability
 ceilings and revoked Blessings continue to suppress inherited automatic policy.
 
+Catalog mutations abort if the existing configuration cannot be read or decoded;
+only a missing catalog can initialize an empty configuration.
 Addition requires the existing human Approval surface. Store private material
 before publishing it in configuration. Configuration publication failure leaves
 no new usable identity. Removal unpublishes first, invalidating pending signatures,

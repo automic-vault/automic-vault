@@ -3,7 +3,7 @@
 Status: accepted
 
 Per-credential authority and the scope of legacy script Capabilities are amended
-by [ADR 0063](0063-per-credential-ssh-authority.md).
+by [ADR 0064](0064-per-credential-ssh-authority.md).
 
 ## Context
 

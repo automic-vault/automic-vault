@@ -256,7 +256,7 @@ the key, invalidating pending requests, before deleting its Secret. Generated
 Ed25519 private material stays in the signed helper and menu app, never a file.
 See [ADR 0044](adr/0044-ssh-agent-gate.md),
 [ADR 0048](adr/0048-ssh-agent-blessed-scripts.md), and
-[ADR 0063](adr/0063-per-credential-ssh-authority.md).
+[ADR 0064](adr/0064-per-credential-ssh-authority.md).
 
 ### Launcher Packaging
 

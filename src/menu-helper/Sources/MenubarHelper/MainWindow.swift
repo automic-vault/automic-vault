@@ -6611,9 +6611,14 @@ private struct SSHAgentSettingsView: View {
         return true
     }
 
+    private func mutationConfiguration() -> SSHAgentConfiguration? {
+        do { return try loadSSHAgentConfigurationForMutation() }
+        catch { status = error.localizedDescription; return nil }
+    }
+
     private func rename() {
         guard let credential = editingCredential else { return }
-        var next = loadSSHAgentConfiguration()
+        guard var next = mutationConfiguration() else { return }
         guard let index = next.credentials.firstIndex(where: { $0.id == credential.id }) else { return }
         next.credentials[index].name = newName.trimmingCharacters(in: .whitespacesAndNewlines)
         _ = persist(next)
@@ -6621,7 +6626,7 @@ private struct SSHAgentSettingsView: View {
 
     private func remove() {
         guard let credential = editingCredential else { return }
-        var next = loadSSHAgentConfiguration()
+        guard var next = mutationConfiguration() else { return }
         next.credentials.removeAll { $0.id == credential.id }
         if next.credentials.isEmpty { next.enabled = false }
         // Unpublish first. A failed deletion cannot leave usable agent authority.
@@ -6633,12 +6638,13 @@ private struct SSHAgentSettingsView: View {
     }
 
     private func setEnabled(_ enabled: Bool) {
-        let reviewed = loadSSHAgentConfiguration()
+        guard let reviewed = mutationConfiguration() else { return }
         if !enabled { var next = reviewed; next.enabled = false; _ = persist(next); return }
         approval.request("enable", title: "Enable SSH Agent?",
                          detail: "Make these SSH keys available through their Authorization Gates: \(reviewed.credentials.map(\.name).joined(separator: ", ")). Each key’s existing policy applies.") { allowed in
             guard allowed else { return }
-            guard loadSSHAgentConfiguration() == reviewed else {
+            guard let current = mutationConfiguration() else { return }
+            guard current == reviewed else {
                 status = "The SSH keys changed while awaiting Approval. Review them and try again."
                 return
             }
@@ -6709,7 +6715,7 @@ private struct SSHCredentialSheetView: View {
             do {
                 let credential = try await prepareSSHCredential(imported, generating: generating, executable: executable)
                 let key = SSHAgentCredential(name: requestedName, publicKey: credential.publicKey)
-                let reviewed = loadSSHAgentConfiguration()
+                let reviewed = try loadSSHAgentConfigurationForMutation()
                 var next = reviewed
                 next.credentials.append(key)
                 next.generation = UUID()
@@ -6718,7 +6724,7 @@ private struct SSHCredentialSheetView: View {
                                  detail: "Add \(key.name) · \(key.fingerprint). Its Default Policy starts at Approval Required. Existing keys and their permissions are unchanged.") { allowed in
                     guard allowed else { busy = false; return }
                     do {
-                        guard loadSSHAgentConfiguration() == reviewed else { throw SSHAgentError.failed("The SSH keys changed while awaiting Approval. Review them and try again.") }
+                        guard try loadSSHAgentConfigurationForMutation() == reviewed else { throw SSHAgentError.failed("The SSH keys changed while awaiting Approval. Review them and try again.") }
                         let result = saveStoredSecret(account: key.secretName, value: credential.value)
                         guard result == errSecSuccess else { throw SSHAgentError.failed("Keychain error \(result)") }
                         let published = saveSSHAgentConfiguration(next)

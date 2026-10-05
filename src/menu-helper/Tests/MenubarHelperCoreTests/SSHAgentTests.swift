@@ -4,6 +4,23 @@ import Security
 @testable import MenubarHelperCore
 
 struct SSHAgentTests {
+    @Test func catalogMutationsRejectFailedAndMalformedReads() throws {
+        #expect(throws: (any Error).self) { try decodedSSHAgentConfiguration(.failure(errSecInteractionNotAllowed)) }
+        #expect(throws: (any Error).self) { try decodedSSHAgentConfiguration(.success(Data("invalid".utf8))) }
+        let absent = try decodedSSHAgentConfiguration(.notFound)
+        #expect(absent.credentials.isEmpty && !absent.enabled)
+        #expect(try absent == decodedSSHAgentConfiguration(.notFound))
+        let existing = SSHAgentConfiguration(enabled: true, publicKey: "ssh-ed25519 YWJj")
+        #expect(try decodedSSHAgentConfiguration(.success(JSONEncoder().encode(existing))) == existing)
+    }
+
+    @Test func credentialLabelsBelongToTheGateSnapshot() {
+        let descriptor = SecretGateDescriptor(id: "ssh-agent", keyPatterns: [sshCredentialSecretName], routes: [])
+        let gate = loadedSecretGate(from: descriptor, policyRecords: .success([]), credentialName: "Homelab")
+        #expect(gate.displayName == "SSH · Homelab")
+        #expect(loadedSecretGate(from: descriptor, policyRecords: .success([])).displayName == "SSH Agent")
+    }
+
     @Test func signingRequestRequiresTwoDigestsAndKnownFlags() {
         let args = ["payload-sha256=" + String(repeating: "a", count: 64),
                     "public-key-sha256=" + String(repeating: "0", count: 64), "signature-flags=0"]

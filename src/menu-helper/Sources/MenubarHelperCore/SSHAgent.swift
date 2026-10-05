@@ -107,12 +107,28 @@ public func sshAgentGateDescriptors(_ descriptors: [SecretGateDescriptor],
     }
 }
 
+/// Missing configuration is empty; unreadable or malformed configuration must never be overwritten.
+public func loadSSHAgentConfigurationForMutation() throws -> SSHAgentConfiguration {
+    try decodedSSHAgentConfiguration(loadKeychainDataResult(
+        service: sshAgentConfigurationService, account: "configuration"))
+}
+
+func decodedSSHAgentConfiguration(_ result: KeychainDataLoad) throws -> SSHAgentConfiguration {
+    switch result {
+    case .success(let data):
+        return try JSONDecoder().decode(SSHAgentConfiguration.self, from: data)
+    case .notFound:
+        var empty = SSHAgentConfiguration()
+        // Stable absence permits revalidation before publishing the first credential.
+        empty.generation = UUID(uuidString: "00000000-0000-0000-0000-000000000000")!
+        return empty
+    case .failure(let status):
+        throw SSHAgentError.failed("Could not read SSH Agent configuration: \(status)")
+    }
+}
+
 public func loadSSHAgentConfiguration() -> SSHAgentConfiguration {
-    guard case .success(let data) = loadKeychainDataResult(
-        service: sshAgentConfigurationService, account: "configuration"
-    ), let config = try? JSONDecoder().decode(SSHAgentConfiguration.self, from: data)
-    else { return SSHAgentConfiguration() }
-    return config
+    (try? loadSSHAgentConfigurationForMutation()) ?? SSHAgentConfiguration()
 }
 
 @discardableResult
