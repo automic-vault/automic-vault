@@ -120,15 +120,19 @@ fn network(
     xpc_request("git-unregister", |message| unsafe {
         xpc_set_string(message, "nonce", &nonce)
     })?;
-    let output = result?;
-    if !output.status.success() {
-        // Network diagnostics from the confined runtime have no enabled trace or
-        // alternate credential helper. Preserve useful GitHub/policy error messages.
-        stderr
-            .write_all(&output.stderr)
-            .map_err(|e| e.to_string())?;
-        return Err("protected HTTPS request failed".into());
-    }
+    transport_response(plan, result?, stdout, stderr)
+}
+
+fn transport_response(
+    plan: &RemotePlan,
+    output: std::process::Output,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+) -> Result<(), String> {
+    // The confined runtime has no enabled trace or alternate credential helper.
+    stderr
+        .write_all(&output.stderr)
+        .map_err(|e| e.to_string())?;
     let mut response = output.stdout.as_slice();
     for _ in 0..plan.options.len() + plan.leases.len() {
         let Some(rest) = response.strip_prefix(b"ok\n") else {
@@ -136,13 +140,16 @@ fn network(
         };
         response = rest;
     }
-    stderr
-        .write_all(&output.stderr)
-        .map_err(|e| e.to_string())?;
+    // Git can report successful refs alongside a rejected ref and a nonzero exit.
     stdout
         .write_all(response)
         .and_then(|_| stdout.flush())
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err("protected HTTPS request failed".into())
+    }
 }
 
 pub(super) fn run(args: &[OsString], stdout: &mut dyn Write, stderr: &mut dyn Write) -> i32 {
@@ -304,6 +311,44 @@ fn session(
         return Err("incomplete Git lease request".into());
     }
     Ok(())
+}
+
+#[test]
+fn failed_transport_preserves_partial_push_results_without_accepting_rejected_options() {
+    use std::os::unix::process::ExitStatusExt;
+
+    let plan = RemotePlan {
+        url: "https://github.com/a/b.git".into(),
+        phase: "push".into(),
+        options: BTreeMap::new(),
+        leases: BTreeMap::from([
+            ("refs/heads/a".into(), "a".repeat(40)),
+            ("refs/heads/b".into(), "b".repeat(40)),
+        ]),
+        commands: vec![],
+    };
+    let report = b"error refs/heads/a stale info\nok refs/heads/b\n\n";
+    for prefix in [b"ok\nok\n".as_slice(), b"ok\nunsupported\n"] {
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let result = transport_response(
+            &plan,
+            std::process::Output {
+                status: std::process::ExitStatus::from_raw(256),
+                stdout: [prefix, report].concat(),
+                stderr: b"transport diagnostic\n".to_vec(),
+            },
+            &mut stdout,
+            &mut stderr,
+        );
+        assert!(result.is_err());
+        assert_eq!(stderr, b"transport diagnostic\n");
+        if prefix == b"ok\nok\n" {
+            assert_eq!(stdout, report);
+        } else {
+            assert!(stdout.is_empty());
+        }
+    }
 }
 
 #[test]
