@@ -1,0 +1,287 @@
+<!-- Tool-centered navigation exploration; user brief and canonical domain docs; 2026-10-09. -->
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Automic Vault — Tools first</title><link rel="icon" href="data:,"><style>
+    
+    :root {
+      --brand-50: #ecebf2;
+      --brand-100: #d8d6e4;
+      --brand-300: #807ea0;
+      --brand-500: #3b3a52;
+      --brand-700: #26263a;
+      --accent-50: #eef6f5;
+      --accent-500: #4f9d97;
+      --accent-700: #3a7771;
+      --ink: #1a1a24;
+      --ink-soft: #4a4a5a;
+      --ink-mute: #7a7a8a;
+      --line: #e6e4dc;
+      --line-soft: #efeee7;
+      --paper: #ffffff;
+      --bg: #f7f6f1;
+      --shadow-sm: 0 1px 2px rgba(20, 16, 70, 0.04), 0 1px 1px rgba(20, 16, 70, 0.02);
+      --shadow-md: 0 4px 24px -8px rgba(20, 16, 70, 0.08), 0 2px 4px rgba(20, 16, 70, 0.03);
+    }
+
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: var(--bg);
+      color: var(--ink);
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+      line-height: 1.5;
+    }
+
+    .page {
+      max-width: 1320px;
+      margin: 0 auto;
+      padding: 72px 48px 160px;
+    }
+
+    
+    .doc-header {
+      border-bottom: 1px solid var(--line);
+      padding-bottom: 40px;
+      margin-bottom: 80px;
+    }
+    .doc-eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--brand-500);
+      background: var(--brand-50);
+      padding: 6px 12px;
+      border-radius: 999px;
+      margin-bottom: 20px;
+    }
+    .doc-eyebrow::before {
+      content: '';
+      width: 6px;
+      height: 6px;
+      border-radius: 999px;
+      background: var(--brand-500);
+    }
+    .doc-title {
+      font-family: Georgia, serif;
+      font-size: 56px;
+      line-height: 1.05;
+      font-weight: 500;
+      letter-spacing: -0.02em;
+      margin: 0 0 16px;
+      color: var(--ink);
+    }
+    .doc-subtitle {
+      font-size: 19px;
+      color: var(--ink-soft);
+      max-width: 720px;
+      margin: 0 0 32px;
+      line-height: 1.45;
+    }
+    .doc-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 24px;
+      font-size: 13px;
+      color: var(--ink-mute);
+    }
+    .doc-meta > div { display: flex; gap: 6px; }
+    .doc-meta b {
+      color: var(--ink-soft);
+      font-weight: 600;
+    }
+
+    
+    .variant {
+      margin-bottom: 96px;
+    }
+    .variant:last-child { margin-bottom: 0; }
+
+    .variant-head {
+      display: grid;
+      grid-template-columns: 64px 1fr;
+      gap: 20px;
+      align-items: start;
+      margin-bottom: 28px;
+    }
+    .variant-letter {
+      width: 48px;
+      height: 48px;
+      border-radius: 999px;
+      background: var(--ink);
+      color: white;
+      font-family: Georgia, serif;
+      font-weight: 500;
+      font-size: 22px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      letter-spacing: -0.02em;
+    }
+    .variant-meta h2 {
+      margin: 4px 0 6px;
+      font-size: 26px;
+      font-weight: 700;
+      letter-spacing: -0.015em;
+      color: var(--ink);
+    }
+    .variant-tradeoff {
+      font-size: 15px;
+      color: var(--ink-soft);
+      margin: 0;
+      max-width: 760px;
+    }
+    .variant-tradeoff b {
+      color: var(--brand-500);
+      font-weight: 600;
+    }
+
+    
+    .preview-frame {
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      box-shadow: var(--shadow-md);
+      overflow: hidden;
+      margin-left: 84px;
+      position: relative;
+    }
+    .preview-frame::before {
+      content: '';
+      position: absolute;
+      top: 14px;
+      left: 16px;
+      width: 10px;
+      height: 10px;
+      border-radius: 999px;
+      background: #f0e9e0;
+      box-shadow: 18px 0 0 #f0e9e0, 36px 0 0 #f0e9e0;
+      z-index: 2;
+    }
+    .preview-frame-bar {
+      background: #faf9f5;
+      border-bottom: 1px solid var(--line-soft);
+      padding: 14px 16px 14px 76px;
+      font-size: 11px;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--ink-mute);
+      font-weight: 600;
+    }
+    .preview {
+      padding: 0;
+      min-height: 200px;
+    }
+
+    
+    .variant-analysis {
+      margin: 24px 0 0 84px;
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 24px;
+    }
+    .analysis-block {
+      padding: 18px 20px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: var(--paper);
+    }
+    .analysis-block h4 {
+      margin: 0 0 6px;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--brand-500);
+    }
+    .analysis-block.is-risk h4 { color: #b8341f; }
+    .analysis-block.is-pick h4 { color: var(--accent-700); }
+    .analysis-block p {
+      margin: 0;
+      font-size: 14px;
+      line-height: 1.55;
+      color: var(--ink-soft);
+    }
+
+    
+    .decision {
+      margin-top: 120px;
+      padding: 40px 48px;
+      background: var(--ink);
+      color: white;
+      border-radius: 20px;
+    }
+    .decision h3 {
+      font-family: Georgia, serif;
+      font-size: 28px;
+      font-weight: 500;
+      letter-spacing: -0.01em;
+      margin: 0 0 8px;
+    }
+    .decision-sub {
+      color: rgba(255, 255, 255, 0.65);
+      font-size: 14px;
+      margin: 0 0 28px;
+    }
+    .decision-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 20px;
+    }
+    .decision-cell b {
+      display: block;
+      font-size: 12px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--brand-100);
+      margin-bottom: 6px;
+      font-weight: 600;
+    }
+    .decision-cell span {
+      font-size: 15px;
+      color: rgba(255, 255, 255, 0.85);
+      line-height: 1.45;
+    }
+
+    
+    @media (max-width: 900px) {
+      .page { padding: 40px 20px 80px; }
+      .doc-title { font-size: 36px; }
+      .variant-head { grid-template-columns: 48px 1fr; gap: 12px; }
+      .preview-frame { margin-left: 0; }
+      .variant-analysis { margin-left: 0; grid-template-columns: 1fr; }
+    }
+
+    
+  
+.av {--violet:#6351ba;--violet-bg:#eeebfb;--muted:#686875;--border:#e4e3eb;--green:#28734d;--amber:#936016;color:#242331;font:13px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#fff;}
+.av *{box-sizing:border-box}.av button,.av input{font:inherit}.av button{cursor:pointer}.av button:focus-visible,.av input:focus-visible{outline:3px solid #8270d4;outline-offset:2px}.av button:hover{filter:brightness(.96)}
+.av-top{display:flex;align-items:center;justify-content:space-between;padding:17px 22px;border-bottom:1px solid var(--border);gap:12px}.av-brand{font-weight:650;letter-spacing:-.3px;font-size:15px}.av-shield{display:inline-grid;place-items:center;width:27px;height:30px;color:white;background:var(--violet);clip-path:polygon(50% 0,95% 15%,90% 68%,50% 100%,10% 68%,5% 15%);margin-right:9px}.av-demo{font-size:11px;color:var(--muted)}
+.av-layout{display:grid;grid-template-columns:254px minmax(0,1fr);min-height:630px}.av-sidebar{background:#f6f5f9;border-right:1px solid var(--border);padding:18px 12px;display:flex;flex-direction:column}.av-search{display:flex;gap:4px;margin:0 5px 18px;background:#fff;border:1px solid #d7d5e0;border-radius:7px;padding:5px 8px}.av-search input{width:100%;min-width:0;border:0;background:transparent;outline-offset:4px}.av-search button{border:0;background:transparent}.av-group{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:1.1px;font-weight:650;padding:4px 12px 9px}.av-tool{width:100%;text-align:left;border:1px solid transparent;background:transparent;border-radius:9px;padding:10px;margin:0 0 4px;color:inherit}.av-tool[aria-pressed=true]{background:white;border-color:#d9d2ef;box-shadow:0 2px 5px #29203f09}.av-toolhead{display:flex;align-items:center;gap:9px}.av-icon{width:31px;height:31px;flex-shrink:0;background:#eeecf3;border:1px solid #dedbe9;border-radius:8px;display:grid;place-items:center;font:600 12px ui-monospace,SFMono-Regular,monospace}.av-toolname{font-weight:600}.av-tool small{display:block;font-size:10px;color:var(--muted)}.av-state{margin-left:auto;font-size:13px;color:var(--green)}.av-state.warn{color:var(--amber)}.av-spark{display:flex;align-items:end;height:23px;gap:3px;margin:8px 0 0 40px;border-bottom:1px solid #dedbe8}.av-spark i{flex:1;min-height:2px;background:#a498ce;border-radius:2px 2px 0 0}.av-tool[aria-pressed=true] .av-spark i{background:var(--violet)}.av-sparklabel{font-size:9px;color:var(--muted);margin:3px 0 0 40px;display:flex;justify-content:space-between}.av-bottom{margin-top:auto;padding:16px 9px 0;border-top:1px solid var(--border);display:flex;gap:8px;flex-wrap:wrap}.av-bottom button{background:none;border:0;color:var(--muted);padding:4px 0;font-size:11px}.av-content{padding:29px 31px;min-width:0}.av-eyebrow{font-size:10px;color:var(--muted);font-weight:650;letter-spacing:1px;text-transform:uppercase}.av-heading{display:flex;justify-content:space-between;gap:16px;align-items:center;margin-top:8px}.av h3{font-size:27px;letter-spacing:-.7px;line-height:1.2;margin:0;font-weight:650}.av-description{color:var(--muted);font-size:12px;max-width:560px;margin:12px 0 20px}.av-badge{display:inline-flex;border-radius:5px;font-size:10px;font-weight:600;padding:4px 7px;background:#eaf4ee;color:var(--green);white-space:nowrap}.av-badge.warn{background:#fcf1dc;color:var(--amber)}.av-badge.neutral{background:#efedf4;color:#635d77}.av-note{border:1px solid #ead4a6;background:#fffbf1;border-radius:8px;padding:13px 15px;margin:18px 0;color:#75501d;font-size:12px}.av-note strong{display:block;margin-bottom:4px}.av-note p{margin:0 0 8px}.av-nav{display:flex;gap:19px;border-bottom:1px solid var(--border);margin:24px 0 22px}.av-nav button{background:none;border:0;border-bottom:2px solid transparent;color:var(--muted);padding:0 0 10px;font-size:12px}.av-nav button[aria-pressed=true]{color:var(--violet);border-color:var(--violet);font-weight:600}.av-label{display:flex;align-items:center;justify-content:space-between;margin:21px 0 10px;gap:10px}.av-label h4{margin:0;font-size:13px;font-weight:650}.av-label span{color:var(--muted);font-size:11px}.av-card{border:1px solid var(--border);border-radius:9px;overflow:hidden}.av-row{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:14px 15px;border-bottom:1px solid var(--border)}.av-row:last-child{border:0}.av-row strong{font-size:12px;font-weight:600}.av-row small{display:block;font-size:11px;color:var(--muted);margin-top:3px}.av-value{text-align:right;font-size:12px;white-space:nowrap}.av-btn{border:1px solid #d8d4e3;background:#fff;color:#453d62;border-radius:6px;padding:6px 11px;font-size:11px;white-space:nowrap}.av-primary{color:#fff;background:var(--violet);border-color:var(--violet)}.av-footnote{font-size:10px;color:var(--muted);line-height:1.6;margin-top:13px}.av-timeline{padding:4px 0}.av-event{position:relative;border-left:1px solid #d9d4e7;margin-left:5px;padding:0 0 19px 15px;font-size:11px}.av-event:before{content:'';position:absolute;left:-4px;top:5px;width:7px;height:7px;border-radius:50%;background:var(--violet);box-shadow:0 0 0 3px white}.av-event time{color:var(--muted);font-size:10px}.av-event strong{display:block;font-size:11px;font-weight:550}.av-event small{color:var(--muted)}.av-subtimeline{margin:4px 7px 14px 25px;padding:8px 0 0 10px}.av-subtimeline .av-event:before{box-shadow:0 0 0 3px #f6f5f9}.av-subtimeline .av-event{padding-bottom:12px}.av-inspector{background:#fbfafd;border-left:1px solid var(--border);padding:22px 18px}.av-inspector h4{margin:0 0 5px;font-size:12px}.av-inspector p{font-size:10px;color:var(--muted);margin:0 0 23px}.vc .av-layout{grid-template-columns:204px minmax(0,1fr) 188px}.vc .av-content{padding:26px 22px}.vc .av-spark{margin-left:0;height:18px}.vc .av-sparklabel{margin-left:0}.av-empty{padding:18px 10px;color:var(--muted);font-size:12px}.av-reason{padding:20px;border-radius:10px;background:#f6f4fc;border:1px solid #e4dff3;margin:21px 0}.av-reason h4{font-size:18px;margin:0 0 8px;letter-spacing:-.3px}.av-reason p{font-size:12px;color:#625a77;margin:0 0 16px}.av code{font-family:ui-monospace,SFMono-Regular,monospace;font-size:11px;overflow-wrap:anywhere}.av ul{padding-left:18px;color:var(--muted);font-size:12px}.av li{margin:8px 0}.av-modal{border:1px solid #d9d2e9;border-radius:14px;max-width:440px;width:calc(100% - 40px);padding:25px;color:#242331;box-shadow:0 15px 70px #241b4933;font:14px/1.6 -apple-system,BlinkMacSystemFont,sans-serif}.av-modal::backdrop{background:#27213955}.av-modal h3{margin:0;font-size:20px}.av-modal button{float:right}.av-modal p{color:#625e70}.av-hidden{display:none}.av *{scrollbar-color:#bab4ca #f6f5f9;scrollbar-width:thin}
+@media(max-width:1100px){.vc .av-layout{grid-template-columns:200px minmax(0,1fr)}.vc .av-inspector{grid-column:1/-1;border-top:1px solid var(--border);border-left:0}.vc .av-inspector .av-timeline{display:flex;gap:24px}.vc .av-inspector .av-event{flex:1}}
+@media(max-width:650px){.av-layout,.vc .av-layout{grid-template-columns:1fr}.av-sidebar{border-right:0;border-bottom:1px solid var(--border)}.av-tools{display:grid;grid-template-columns:1fr 1fr;gap:4px}.av-content,.vc .av-content{padding:22px 18px}.av-top{flex-wrap:wrap}.av-row{align-items:flex-start;gap:10px}.av-value{white-space:normal}.av-nav{gap:14px;flex-wrap:wrap}.av-subtimeline{display:none}.av-heading{align-items:flex-start}.av h3{font-size:24px}.av-bottom{margin-top:14px}.vc .av-inspector .av-timeline{display:block}}
+</style></head><body><main class="page"><header class="doc-header"><div class="doc-eyebrow">Automic Vault · design exploration</div><h1 class="doc-title">Your tools, at the center.</h1><p class="doc-subtitle">One place to understand a tool’s protection, decide who may use its authority, and see the decisions already made.</p><div class="doc-meta"><div><b>Surface</b> macOS main window</div><div><b>Date</b> October 9, 2026</div><div><b>Directions</b> 3</div></div><p class="doc-subtitle" style="font-size:14px;margin-top:24px">Try selecting AWS, npm, or Docker. Switch between Authorization, Integration, and History. All values are illustrative; controls explain the proposed flow without changing your Mac.</p></header><section class="variant"><div class="variant-head"><div class="variant-letter">A</div><div class="variant-meta"><h2>Activity in the tool list</h2><p class="variant-tradeoff">A quiet, familiar split view. Every hardened tool carries its own 24-hour authorization timeline.</p></div></div><div class="preview-frame"><div class="preview-frame-bar">Variant A · interactive concept · sample data</div><div class="preview av va" data-variant="A"></div></div><div class="variant-analysis"><div class="analysis-block"><h4>What works</h4><p>Best for scanning the whole toolchain.</p></div><div class="analysis-block is-risk"><h4>Tradeoff</h4><p>Small charts trade detail for an at-a-glance comparison.</p></div><div class="analysis-block is-pick"><h4>Pick this if</h4><p>You want the most direct evolution of the current app.</p></div></div></section><section class="variant"><div class="variant-head"><div class="variant-letter">B</div><div class="variant-meta"><h2>An unfolding tool history</h2><p class="variant-tradeoff">Select a tool and its recent decisions unfold beneath it, beside the configuration they explain.</p></div></div><div class="preview-frame"><div class="preview-frame-bar">Variant B · interactive concept · sample data</div><div class="preview av vb" data-variant="B"></div></div><div class="variant-analysis"><div class="analysis-block"><h4>What works</h4><p>Recent activity stays beside the selected tool.</p></div><div class="analysis-block is-risk"><h4>Tradeoff</h4><p>The taller selected row reduces how many tools fit.</p></div><div class="analysis-block is-pick"><h4>Pick this if</h4><p>You want activity and configuration to feel like one place.</p></div></div></section><section class="variant"><div class="variant-head"><div class="variant-letter">C</div><div class="variant-meta"><h2>Tools, controls, evidence</h2><p class="variant-tradeoff">A compact tool list, a focused configuration surface, and a dedicated activity sidebar.</p></div></div><div class="preview-frame"><div class="preview-frame-bar">Variant C · interactive concept · sample data</div><div class="preview av vc" data-variant="C"></div></div><div class="variant-analysis"><div class="analysis-block"><h4>What works</h4><p>The selected tool’s decisions have room for context.</p></div><div class="analysis-block is-risk"><h4>Tradeoff</h4><p>Three columns need a wider window.</p></div><div class="analysis-block is-pick"><h4>Pick this if</h4><p>You regularly investigate why an operation was allowed.</p></div></div></section><section class="decision"><h3>Start with A.</h3><p class="decision-sub">It puts each tool’s state and recorded activity exactly where you navigate, while keeping the policy editor comfortably wide.</p><div class="decision-grid"><div class="decision-cell"><b>A · Everyday control</b><span>Compare tools, then configure one.</span></div><div class="decision-cell"><b>B · History in context</b><span>Unfold recent decisions next to a tool.</span></div><div class="decision-cell"><b>C · Investigation</b><span>Keep controls and evidence visible together.</span></div></div></section></main><dialog class="av-modal" aria-labelledby="modal-title"><h3 id="modal-title"></h3><p></p><button class="av-btn" onclick="this.closest('dialog').close()">Close preview</button></dialog><script>
+const tools=[
+{id:'gh',name:'GitHub CLI',icon:'gh',state:'Hardened',hardened:true,count:18,desc:'Your GitHub credential stays in Automic Vault custody. The gh Secret Gate authorizes its use.',gate:'gh',level:'Read Only',integration:'Automic Vault-signed gh Isotope',helper:'Git credential integration',detail:'Git may use gh auth git-credential. That route is Secret Disclosure and still requires Approval under Read Only.',events:[['14:42','gh pr list','Codex · Policy authorized'],['14:36','gh pr create','Terminal · Approved once'],['13:58','gh auth token','Codex · Denied']]},
+{id:'aws',name:'AWS CLI',icon:'aws',state:'Doctor issue',hardened:true,count:7,desc:'Hardening is installed, but another aws command resolves first. Review the Doctor finding before relying on command routing.',gate:'aws',level:'Read Only',integration:'Verified official AWS release',helper:'AWS credential_process',detail:'The helper binds to the registered AWS process. Normal commands receive temporary credentials; some operations require Elevated Secret Application.',events:[['14:18','aws s3 ls','Terminal · Policy authorized'],['12:30','aws sts get-caller-identity','Codex · Policy authorized']]},
+{id:'npm',name:'npm',icon:'npm',state:'Detector finding',hardened:false,desc:'A package-installation Hazard was found in this sample. This is separate from npm authentication-token exposure.'},
+{id:'docker',name:'Docker',icon:'dk',state:'Detected',hardened:false,desc:'Docker is present in this sample, with no supported Detector finding. That alone does not establish credential protection.'},
+{id:'brew',name:'Homebrew',icon:'🍺',state:'Hardened',hardened:true,count:4,desc:'The Homebrew Execution Gate controls supported package-management operations. It does not require a Secret.',gate:'brew',level:'Read & Update',integration:'Automic Vault Homebrew launcher',helper:'Execution Gate',detail:'Read & Update permits inspection and brew update. Installing, upgrading, reinstalling, and removing software require additional authority.',events:[['11:20','brew update','Terminal · Policy authorized'],['10:45','brew install jq','Terminal · Approved once']]},
+{id:'ssh',name:'SSH Agent',icon:'ssh',state:'Configured',hardened:true,count:0,desc:'Each SSH Credential has its own Authorization Gate. SSH clients receive authentication signatures, never the private key.',gate:'SSH · work key',level:'Approval Required',integration:'Automic Vault SSH agent',helper:'Named SSH Credentials',detail:'A key name describes intended use; it does not restrict destinations. Allow Authentication can permit access with remote-write capability.',events:[]}
+];
+const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+function spark(t){return `<div class="av-spark" aria-hidden="true">${Array.from({length:28},(_,i)=>`<i style="height:${t.count?2+((i*7+t.count)%11===0?19:(i*3+t.count)%7===0?11:2):2}px"></i>`).join('')}</div><div class="av-sparklabel"><span>${t.count} recorded requests</span><span>24h</span></div>`}
+function timeline(t){return t.events.length?`<div class="av-timeline">${t.events.map(e=>`<div class="av-event"><time>${e[0]}</time><strong><code>${esc(e[1])}</code></strong><small>${e[2]}</small></div>`).join('')}</div>`:'<div class="av-empty">No requests recorded in the last 24 hours.</div>'}
+function row(a,b,sub='',action=''){return `<div class="av-row"><div><strong>${a}</strong>${sub?`<small>${sub}</small>`:''}</div><div class="av-value">${b}${action?` <button class="av-btn" data-action="${action}">Review…</button>`:''}</div></div>`}
+function gate(t){return `<div class="av-label"><h4>Default Policy</h4><span>${t.gate} ${t.id==='brew'?'Execution':'Secret'} Gate</span></div><div class="av-card">${row('Auto-allow',t.level,'For eligible Verified Launchers without a specific rule.','policy')}${row('Deny at and above','None','Matching denials take precedence over allow authority.','denial')}</div><p class="av-footnote">Unverifiable Launchers receive no default allow authority. Unknown operations cannot be automically authorized.</p><div class="av-label"><h4>Launcher-specific rules</h4><button class="av-btn" data-action="launcher">Add Launcher…</button></div><div class="av-card">${row('Terminal',t.level,'Exact verified app identity','launcher')}${t.id==='ssh'?'':row('Codex','Approval Required','Exact verified app identity','launcher')}</div><p class="av-footnote">Changes that broaden authority require Approval. Helper associations are managed per Launcher and can apply across gates.</p>`}
+function integration(t){return `<div class="av-label"><h4>Installed integration</h4><span>Sample configuration</span></div><div class="av-card">${row('Protection mechanism',t.integration)}${row(t.helper,'Configure…',t.detail,'integration')}</div><div class="av-label"><h4>Verified Launcher Helpers</h4></div><p class="av-description">Helpers represent their associated app wherever that app has a rule. Review these shared associations in Launcher settings.</p><button class="av-btn" data-action="helpers">Review shared helper associations…</button><p class="av-footnote">A helper association is not limited to this tool. No association is enabled by opening this page.</p>`}
+function unhardened(t){if(t.id==='npm')return `<div class="av-note"><strong>Detector finding · Package release-age delay</strong><p>The configured delay is below 24 hours. Newly published packages have less time for a malicious release to be discovered.</p><code>~/.npmrc</code></div><div class="av-reason"><div class="av-eyebrow">What is worth changing?</div><h4>Fix the installation policy.</h4><p>This finding calls for a configuration change. Credential hardening addresses a different risk and does not resolve this Hazard.</p><button class="av-btn av-primary" data-action="npm">Review mitigation</button></div><div class="av-label"><h4>Recommended change</h4></div><div class="av-card">${row('Minimum release age','24 hours','Set min-release-age=1 in the reported npm config file.')}</div><p class="av-footnote">This is a Hazard, not evidence of Compromise. Authentication-token findings belong to the separate Node Detector.</p>`;
+return `<div class="av-reason"><div class="av-eyebrow">Is hardening worth it?</div><h4>Yes, if you use private registries.</h4><p>Hardening moves registry credentials into Automic Vault custody and authorizes their release to the verified Docker process.</p><button class="av-btn av-primary" data-action="harden">Review Docker hardening…</button></div><div class="av-label"><h4>What changes</h4></div><div class="av-card">${row('Docker Desktop','Keep vendor-signed CLI')}${row('Registry credentials','Move into protected custody')}${row('Credential helper','Use docker-credential-av')}</div><div class="av-label"><h4>If you only use public images</h4></div><p class="av-description">Without registry credentials, there may be no credential to migrate. Review your configuration before hardening; the presence of Docker alone is not an Exposure.</p><p class="av-footnote">Docker receives a usable registry token after authorization. Hardening does not sandbox containers or prevent a compromised Target from leaking a received token.</p>`}
+function render(app){const s=app.state,t=tools.find(t=>t.id===s.id),v=app.dataset.variant;app.innerHTML=`<div class="av-top"><span class="av-brand"><span class="av-shield">a</span>Automic Vault</span><span class="av-demo">Design preview · illustrative local state</span><button class="av-btn" data-action="scan">Scan & verify</button></div><div class="av-layout"><aside class="av-sidebar"><div class="av-search"><input type="search" placeholder="Find a tool" aria-label="Find a tool in variant ${v}" value="${esc(s.query)}"><button aria-label="Clear tool search" data-clear ${s.query?'':'hidden'}>×</button></div><div class="av-group">Your tools · 6</div><div class="av-tools"></div><div class="av-bottom"><button data-action="vault">Secrets & scripts</button><button data-action="settings">Settings</button><button data-action="catalog">All Detectors</button></div></aside><section class="av-content" aria-label="Selected tool"><div class="av-eyebrow">${t.hardened?'Tool configuration':'Tool assessment'}</div><div class="av-heading"><h3>${t.name}</h3><span class="av-badge ${t.state.includes('issue')||t.state.includes('finding')?'warn':!t.hardened?'neutral':''}">${t.state==='Doctor issue'?'Hardening installed · Doctor issue':t.state}</span></div><p class="av-description">${t.desc}</p>${t.id==='aws'?'<div class="av-note"><strong>Doctor · aws resolves to the unhardened target first</strong><p>Put /usr/local/bin before /opt/homebrew/bin in PATH. Protected credentials do not become available to the other installation.</p><button class="av-btn" data-action="doctor">Review repair…</button></div>':''}${t.hardened?`<nav class="av-nav" aria-label="${t.name} sections">${['Authorization','Integration','History'].map(x=>`<button data-tab="${x}" aria-pressed="${s.tab===x}">${x}</button>`).join('')}</nav>${s.tab==='Authorization'?gate(t):s.tab==='Integration'?integration(t):`<div class="av-label"><h4>Authorization History</h4><span>Today · sample</span></div>${timeline(t)}<p class="av-footnote">Bounded local records, not a complete execution log. No Secret Values are shown.</p>`}`:unhardened(t)}</section>${v==='C'?`<aside class="av-inspector"><h4>${t.hardened?'Recorded activity':'Why this tool is here'}</h4><p>${t.hardened?'Today · authorization decisions':'Point-in-time evidence'}</p>${t.hardened?timeline(t):`<div class="av-event"><time>Latest scan · sample</time><strong>${t.state==='Detected'?'Installation detected':'Detector reported a Hazard'}</strong><small>${t.state==='Detected'?'No supported finding in this example.':'Review the finding before choosing a remedy.'}</small></div>`}<p>History does not include every tool execution.</p></aside>`:''}</div>`;renderList(app)}
+function renderList(app){const s=app.state,v=app.dataset.variant,filtered=tools.filter(t=>(t.name+' '+t.state).toLowerCase().includes(s.query.toLowerCase()));app.querySelector('.av-tools').innerHTML=filtered.map(t=>`<div><button class="av-tool" data-tool="${t.id}" aria-pressed="${s.id===t.id}"><span class="av-toolhead"><span class="av-icon">${t.icon}</span><span><span class="av-toolname">${t.name}</span><small>${t.state}</small></span><span class="av-state ${t.state.includes('issue')||t.state.includes('finding')?'warn':''}" aria-hidden="true">${t.state.includes('issue')||t.state.includes('finding')?'!':t.hardened?'✓':'○'}</span></span>${t.hardened?spark(t):''}</button>${v==='B'&&s.id===t.id&&t.hardened?`<div class="av-subtimeline">${timeline(t)}</div>`:''}</div>`).join('')||'<p class="av-empty" role="status">No matching tools. Clear the search to see all six.</p>';app.querySelector('[data-clear]').hidden=!s.query}
+const messages={policy:['Review Default Policy','The production editor would show this gate’s supported Access Levels and require Approval before broadening authority. This concept does not save policy.'],denial:['Review Denial Threshold','Show the deny threshold alongside the allow ceiling. Weakening denial requires Approval. No policy changes are made in this preview.'],launcher:['Review Launcher rule','Reuse the existing verified-identity and Approval flow. A display name or path must never substitute for a Launcher Identity.'],integration:['Tool-specific configuration','Open the existing configuration for this integration, keeping its credential selection, validation, and Approval behavior. This preview does not edit credentials.'],helpers:['Shared helper associations','Open Verified Launcher Helpers settings with the relevant Launcher selected. Associations apply across current and future gates; keep the authority-expansion warning and Approval flow.'],npm:['Mitigation: minimum release age','Set min-release-age=1 in the reported npm config file, then scan again. This preview changes no files.'],harden:['Review Docker hardening','The real flow reviews credential migration, installs the protected helper, and configures Docker’s credsStore. Show the exact plan before invoking the existing attended hardener. No installation runs here.'],doctor:['Repair command resolution','Show the resolved command, expected launcher, and PATH remediation from Doctor. Re-run Doctor after repair before presenting verification as current. This preview makes no shell changes.'],scan:['Scan and verify','Run read-only Detectors and Doctor independently. Preserve previous results as stale while running; report unavailable checks rather than claiming success. This is sample data, so no scan runs here.'],vault:['Secrets & scripts','Keep global Secret custody, Project Values, Blessed Scripts, Direct Secret Gate, and Secret Proxy reachable in a secondary workspace. They do not belong to a single tool.'],settings:['Shared settings','Approval surfaces, Verified Launcher Helpers, Launcher Bundles, updates, and history retention stay available here. Tool-specific configuration lives with each tool.'],catalog:['Detector catalog','The full Detector catalog remains available separately. A supported Detector is not evidence that its tool is installed.']};
+const dialog=document.querySelector('dialog');document.querySelectorAll('.av').forEach(app=>{app.state={id:'gh',tab:'Authorization',query:''};render(app);app.addEventListener('input',e=>{if(e.target.matches('input')){app.state.query=e.target.value;renderList(app)}});app.addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;if(b.dataset.tool){app.state.id=b.dataset.tool;app.state.tab='Authorization';render(app);app.querySelector(`[data-tool="${b.dataset.tool}"]`).focus()}else if(b.dataset.tab){app.state.tab=b.dataset.tab;render(app);app.querySelector(`[data-tab="${b.dataset.tab}"]`).focus()}else if(b.hasAttribute('data-clear')){app.state.query='';app.querySelector('input').value='';renderList(app);app.querySelector('input').focus()}else if(b.dataset.action){const m=messages[b.dataset.action];dialog.querySelector('h3').textContent=m[0];dialog.querySelector('p').textContent=m[1];dialog.showModal()}})});
+</script></body></html>
