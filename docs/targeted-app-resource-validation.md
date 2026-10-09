@@ -73,3 +73,122 @@ Verified Launcher Helpers already make the required live-to-disk code-identifier
 ## Limits
 
 This run does not establish future SPI availability or behavior. It did not execute on Intel hardware or older macOS releases, exercise certificate expiry or revocation, or validate root-volume resource exemptions. The dynamically resolved fallback and focused regression tests remain required.
+
+## Live-process investigation, 9 October 2026
+
+Follow-up to [issue 387](https://github.com/automic-vault/automic-vault/issues/387).
+Fresh live-process validation is substantially cheaper than our targeted static
+validation, but the two checks establish different facts. This investigation
+changes no runtime authorization code or security invariant.
+
+### Reproduction and timing
+
+```sh
+scripts/validate-targeted-app-resource.swift --live
+scripts/validate-targeted-app-resource.swift --live \
+  --identity "Developer ID Application: Example (TEAMID)"
+```
+
+The opt-in mode compiles a native executable with a 32 MiB signed `__TEXT`
+payload, signs disposable app bundles with Hardened Runtime, and communicates
+with child processes over pipes. It never invokes Vault or reads Secrets.
+One test deliberately damages an unread mapped page and expects macOS to kill
+the fixture when it accesses that page. Temporary files and child processes are
+removed on ordinary completion. The original bundle-substitution test now waits
+for the child's initial execution identity before moving its bundle; otherwise
+it could race the initial `exec`.
+
+Environment: Apple silicon, macOS 27.0.1 (26A434), Xcode 27.0 (27A266a).
+The ad-hoc run passed 29 checks; the Developer ID run passed 33, including the
+original static-validation matrix. Ad-hoc signatures are fixture coverage,
+not evidence that ordinary ad-hoc Launchers qualify for authorization.
+
+Each timing uses 20 warm pairs after one discarded pair, alternating order.
+Both paths construct fresh Security objects and check the stored designated
+requirement. The static path uses the existing harness's production-equivalent
+strict, all-architecture precheck and targeted SPI. The live path obtains a new
+`SecCode` by PID and calls `SecCodeCheckValidity`.
+
+| Signature | Fresh live median | Targeted static median |
+| --- | ---: | ---: |
+| Ad hoc | 0.299 ms | 14.264 ms |
+| Developer ID | 1.267 ms | 15.306 ms |
+
+These are API microbenchmarks, not end-to-end Authorization Request timings.
+They exclude process startup, ancestry walking, helper configuration, credential
+access, Authorization History, and network requests. They do not establish a
+particular improvement to the reported three-second tool call.
+
+### Mutation and execution results
+
+Both signing modes produced the following results. Zero means `errSecSuccess`.
+
+| Change | Fresh live validation | Relevant static check |
+| --- | --- | --- |
+| Wrong designated requirement | Rejects | Already covered by original matrix |
+| Modify an ordinary sealed resource | Accepts | Targeted resource check rejects |
+| Modify `Info.plist` | Rejects (-67030) | Rejects (-67030) |
+| Modify `CodeResources` | Accepts | Targeted resource check rejects |
+| Corrupt the parent seal while its helper runs | Helper accepts | Helper membership check rejects |
+| Modify an unread page in the executable, leaving its signature intact | Accepts before the page is accessed | Rejects (-67061) |
+| Move running app A aside and put valid app B at its original path | Accepts A's requirement; rejects B's | Accepts B at the original path |
+| `exec` `/bin/sleep` in the same PID | Rejects the old requirement; accepts sleep's | Not an on-disk mutation |
+| Process exits | Fresh and retained live references reject | Not applicable |
+
+After the changed-page test asks the child to read the damaged page, the child
+dies with SIGKILL (termination reason 2, status 9). Live lookup then fails. This
+demonstrates lazy enforcement for that mapped page: a successful live check does
+not certify every byte currently on disk. It does not show that modified bytes
+can execute under the original identity.
+
+A separate result rules out caching live references by PID alone. After warming
+a `SecCode` with a successful validation, then asking the same process to `exec`
+sleep, checking the retained object against the old requirement still returns
+success. A fresh object rejects the old requirement (-67050) and accepts sleep's
+requirement. Fresh lookup and binding to the exact process execution must remain
+separate from any reuse of static evidence.
+
+### Implications for Vault
+
+Apple's [dynamic validation implementation](https://github.com/apple-oss-distributions/Security/blob/main/OSX/libsecurity_codesigning/lib/Code.cpp)
+checks signed identity components, dynamic validity, and consistency of the live
+and static CDHashes. Its [non-resource validation](https://github.com/apple-oss-distributions/Security/blob/main/OSX/libsecurity_codesigning/lib/StaticCode.cpp)
+omits the resource envelope. The observed differences are consistent with those
+separate validation roles.
+
+The next optimization candidate is the extra full executable validation in
+`verifiedLauncherHelperSigningInfo` → `staticCodeIdentity`, particularly for
+outside-bundle helpers. `liveSigningInfo` and `liveCodeIdentity` already acquire
+fresh live references and validate them. Replacing that extra scan requires an
+explicit decision about relying on kernel execution integrity instead of
+requiring all executable bytes on disk to validate before each Secret Use.
+ADR 0033 and ADR 0055 retain the current static requirements; this report does
+not supersede them.
+
+The parent app may not be running, and a valid live helper cannot authenticate
+its parent's resource seal. Keep the targeted membership check for in-bundle
+helpers and the required parent identity validation. Keep complete Launcher
+Bundle enrollment and payload checks, and static validation of Targets that
+have not started. Do not replace `executableSigningInfo` globally: callers also
+use it for pre-execution Target verification and runtime-posture reporting.
+
+For ordinary app Launchers, deriving identity from the verified live process
+deserves a separate design from verifying an arbitrary installed bundle. The
+substitution test confirms that the original path can identify a different,
+valid app while the original process remains alive; static path identity must
+not replace the live identity.
+
+Before changing production checks, record the intended invariant in an ADR,
+retain process-generation, current policy, runtime-posture, and release-time
+checks, and test the candidate through the real authorization path with
+synthetic Secrets. Measure each Launcher walk and history persistence separately.
+
+### Remaining limits
+
+No Intel or older-macOS run, Rosetta live-process test, PID-reuse test,
+same-signer `exec` test, JIT/library-validation exception test, certificate
+revocation test, or sustained mutation race test was performed. The existing
+static matrix covers a damaged non-native architecture; the new live fixture is
+native-only. Gatekeeper's current assessment-cache invalidation and App
+Management enforcement were not tested. No production speedup or complete
+replacement for static verification has been established.
