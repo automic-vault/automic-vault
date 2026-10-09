@@ -10272,12 +10272,17 @@ private func routeKeysMatch(_ patterns: [String], _ keys: [String]) -> Bool {
 private func verifiedLauncherOverrideAncestry(_ ancestor: LauncherIdentity, _ descendant: LauncherIdentity) -> Bool {
     guard ancestor.pid != descendant.pid else { return false }
     for launcher in [ancestor, descendant] {
-        guard let signing = liveSigningInfo(pid: launcher.pid),
+        var before = AVProcessIdentity(), after = AVProcessIdentity()
+        guard av_process_identity(launcher.pid, &before),
+              let signing = liveSigningInfo(pid: launcher.pid),
               launcherIdentities(pid: launcher.pid, path: launcher.path, signing: signing).contains(where: {
                   $0.designatedRequirement == launcher.designatedRequirement
                       && $0.runtimeProtection == launcher.runtimeProtection
                       && $0.verifiedHelper == launcher.verifiedHelper
-              }) else { return false }
+              }),
+              av_process_identity(launcher.pid, &after), sameProcessIdentity(before, after),
+              launcher.verifiedHelper == nil || before.pidversion > 0
+        else { return false }
     }
     var child = AVProcessIdentity()
     guard av_process_identity(descendant.pid, &child) else { return false }
@@ -12578,17 +12583,21 @@ private func launcherIdentity(pid: pid_t, identity: AVProcessIdentity) -> Launch
 
 private func launcherIdentities(pid: pid_t, identity: AVProcessIdentity) -> [LauncherIdentity] {
     let path = pathString(identity)
+    let launchers: [LauncherIdentity]
     if let signing = liveSigningInfo(pid: pid) {
-        return launcherIdentities(pid: pid, path: path, signing: signing)
+        launchers = launcherIdentities(pid: pid, path: path, signing: signing)
+    } else {
+        guard let signing = executableSigningInfo(path: path) else { return [] }
+        // A path may now name a replacement binary, so it cannot prove the running process is standalone.
+        launchers = launcherIdentities(
+            pid: pid, path: path, signing: signing, allowsStandaloneFallback: false
+        )
     }
-    guard let signing = executableSigningInfo(path: path) else { return [] }
-    // A path may now name a replacement binary, so it cannot prove the running process is standalone.
-    return launcherIdentities(
-        pid: pid,
-        path: path,
-        signing: signing,
-        allowsStandaloneFallback: false
-    )
+    var current = AVProcessIdentity()
+    guard av_process_identity(pid, &current), sameProcessIdentity(identity, current),
+          identity.pidversion > 0 || launchers.allSatisfy({ $0.verifiedHelper == nil })
+    else { return [] }
+    return launchers
 }
 
 private func launcherIdentity(
@@ -13159,12 +13168,16 @@ private func verifiedLauncherHelperSigningInfo(
     _ association: VerifiedLauncherHelperAssociation,
     pid: pid_t
 ) -> StaticSigningInfo? {
-    guard let liveCodeIdentifier = liveCodeIdentity(pid: pid),
-          let fileCodeIdentifier = staticCodeIdentity(association.executableURL),
-          liveCodeIdentifier == fileCodeIdentifier
+    var before = AVProcessIdentity()
+    guard av_process_identity(pid, &before), before.pidversion > 0,
+          let codeIdentity = liveExecutableCodeIdentity(pid: pid, executableURL: association.executableURL),
+          let app = verifiedLauncherHelperAppSigningInfo(association)
     else { return nil }
-
-    return verifiedLauncherHelperAppSigningInfo(association)
+    var after = AVProcessIdentity()
+    guard liveExecutableCodeIdentity(pid: pid, executableURL: association.executableURL) == codeIdentity,
+          av_process_identity(pid, &after), sameProcessIdentity(before, after)
+    else { return nil }
+    return app
 }
 
 private func verifiedLauncherHelperAppSigningInfo(

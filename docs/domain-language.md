@@ -272,6 +272,13 @@ the exact helper file is a required unmodified resource in the app's resource
 seal before attributing the app's Launcher Identity. If any check fails, the
 helper does not receive the app identity; an independently eligible Developer
 ID executable may still qualify under its own standalone Launcher Identity.
+Live helper verification authenticates the current process execution and relies
+on macOS to enforce the integrity of its mapped signed pages. It matches the
+selected file's signed code identity to that live identity without separately
+hashing every helper byte. This does not certify all bytes currently on disk;
+in-bundle resource membership and the parent app's integrity remain separate
+checks. See [ADR 0066](adr/0066-live-helper-executable-validation.md).
+
 An enabled association applies wherever policy names the containing app's
 Launcher Identity, across every current and future Authorization Gate. The user
 must be warned about that authority expansion before approving an association

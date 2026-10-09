@@ -469,6 +469,19 @@ enables no helper associations. Runtime
 verification binds the live helper to the on-disk executable, validates the app
 executable, and by default validates the exact helper as a required, unaltered
 member of the app's resource seal.
+Live helper executable verification uses fresh macOS dynamic code validation
+and compares the validated live CDHash with the selected file's signature
+metadata, without an additional full helper-executable scan. PID version and
+process identity must remain unchanged across discovery and parent validation;
+unavailable execution-generation evidence denies helper attribution. A second
+fresh validation rechecks the live identity and selected file after parent
+validation. No live Security object or successful decision is cached. macOS
+rejects damaged signed pages when the process accesses them; unread bytes can
+fail static validation while the live process remains valid. This narrower live
+integrity guarantee does not replace parent resource-seal membership, parent
+executable checks, Launcher Bundle enrollment, or pre-execution Target checks.
+See [ADR 0066](adr/0066-live-helper-executable-validation.md).
+
 Unrelated app resources are not Launcher Identity evidence and are not scanned.
 If targeted resource validation is unavailable, Automic Vault falls back to
 complete bundle validation. Other bundle-contained executables do not inherit

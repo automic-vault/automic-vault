@@ -1,6 +1,6 @@
 # ADR 0033: Validate only authority-bearing app resources
 
-Status: accepted
+Status: accepted; redundant live helper executable scans refined by [ADR 0066](0066-live-helper-executable-validation.md).
 
 ## Context
 
