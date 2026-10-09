@@ -7628,10 +7628,11 @@ private struct GatePolicyTable: View {
                             .help("Use this Launcher's rule when a Launcher it starts has its own rule at this Gate. Explicit Deny and runtime requirements still apply. Changing this setting requires Approval.")
                             .accessibilityIdentifier("gate-descendant-override:\(app.requirement)")
                         }
+                        Spacer(minLength: 8)
                         Menu {
                             launcherActions(for: app)
                         } label: {
-                            Text(Image(systemName: "ellipsis"))
+                            Text(Image(systemName: "gearshape"))
                         }
                         .menuStyle(.button)
                         .buttonStyle(.bordered)
