@@ -68,7 +68,12 @@ fn inspect_environment() -> Result<(), String> {
         key.starts_with("GIT_CONFIG")
             || matches!(
                 key.as_ref(),
-                "GIT_EXEC_PATH" | "GIT_DIR" | "GIT_WORK_TREE" | "GIT_COMMON_DIR"
+                "GIT_EXEC_PATH"
+                    | "GIT_DIR"
+                    | "GIT_WORK_TREE"
+                    | "GIT_COMMON_DIR"
+                    | "GIT_CEILING_DIRECTORIES"
+                    | "GIT_DISCOVERY_ACROSS_FILESYSTEM"
             )
     }) {
         return Err("Git environment overrides are set; run hardening without them".into());

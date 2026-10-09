@@ -79,6 +79,39 @@ fn gh_git_conflict_fails_before_migration_and_offers_opt_out() {
 }
 
 #[test]
+fn gh_git_rejects_repository_discovery_overrides_before_migration() {
+    let root = fixture("gh-git-discovery");
+    prepare(&root, "gh");
+    let config = root.join("gh");
+    fs::create_dir(&config).unwrap();
+    let hosts = "github.com:\n    oauth_token: ghp_fixture\n";
+    fs::write(config.join("hosts.yml"), hosts).unwrap();
+    let git_config = root.join("home/.gitconfig");
+    let original = "[user]\n name = Test\n";
+    fs::write(&git_config, original).unwrap();
+    for (key, value) in [
+        ("GIT_CEILING_DIRECTORIES", root.to_str().unwrap()),
+        ("GIT_DISCOVERY_ACROSS_FILESYSTEM", "0"),
+    ] {
+        let output = av(&root, "gh")
+            .env("AUTOMIC_VAULT_TEST_EUID", "501")
+            .env("AUTOMIC_VAULT_TEST_GH_CLI_PATH", root.join("targets/gh"))
+            .env("GH_CONFIG_DIR", &config)
+            .env(key, value)
+            .current_dir(root.join("home"))
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        assert!(stderr(&output).contains("Git environment overrides are set"));
+        assert!(stderr(&output).contains("--without-git-configuration"));
+        assert_eq!(fs::read_to_string(&git_config).unwrap(), original);
+        assert_eq!(fs::read_to_string(config.join("hosts.yml")).unwrap(), hosts);
+        assert!(!root.join("keychain").exists());
+    }
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn git_configuration_opt_out_is_only_valid_for_gh() {
     let root = fixture("gh-flag");
     let output = av(&root, "aws")
