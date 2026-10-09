@@ -10270,26 +10270,49 @@ private func routeKeysMatch(_ patterns: [String], _ keys: [String]) -> Bool {
 // An override needs actual original-parent execution links, not ordering in the
 // candidate list (which may contain helper aliases and retained provenance).
 private func verifiedLauncherOverrideAncestry(_ ancestor: LauncherIdentity, _ descendant: LauncherIdentity) -> Bool {
+    verifiedLauncherOverrideAncestry(ancestor, descendant, processIdentity: { pid in
+        var identity = AVProcessIdentity()
+        return av_process_identity(pid, &identity) ? identity : nil
+    }, validatesLauncher: { launcher in
+        guard let signing = liveSigningInfo(pid: launcher.pid) else { return false }
+        return launcherIdentities(pid: launcher.pid, path: launcher.path, signing: signing).contains {
+            $0.designatedRequirement == launcher.designatedRequirement
+                && $0.runtimeProtection == launcher.runtimeProtection
+                && $0.verifiedHelper == launcher.verifiedHelper
+        }
+    }, originalParent: { child in
+        var parent = AVProcessIdentity()
+        return verifiedOriginalLauncherParent(child, parent: &parent) ? parent : nil
+    })
+}
+
+private func verifiedLauncherOverrideAncestry(
+    _ ancestor: LauncherIdentity,
+    _ descendant: LauncherIdentity,
+    processIdentity: (pid_t) -> AVProcessIdentity?,
+    validatesLauncher: (LauncherIdentity) -> Bool,
+    originalParent: (AVProcessIdentity) -> AVProcessIdentity?
+) -> Bool {
     guard ancestor.pid != descendant.pid else { return false }
+    var validated: [AVProcessIdentity] = []
     for launcher in [ancestor, descendant] {
-        var before = AVProcessIdentity(), after = AVProcessIdentity()
-        guard av_process_identity(launcher.pid, &before),
-              let signing = liveSigningInfo(pid: launcher.pid),
-              launcherIdentities(pid: launcher.pid, path: launcher.path, signing: signing).contains(where: {
-                  $0.designatedRequirement == launcher.designatedRequirement
-                      && $0.runtimeProtection == launcher.runtimeProtection
-                      && $0.verifiedHelper == launcher.verifiedHelper
-              }),
-              av_process_identity(launcher.pid, &after), sameProcessIdentity(before, after),
+        guard let before = processIdentity(launcher.pid),
+              validatesLauncher(launcher),
+              let after = processIdentity(launcher.pid), sameProcessIdentity(before, after),
               launcher.verifiedHelper == nil || before.pidversion > 0
         else { return false }
+        validated.append(before)
     }
-    var child = AVProcessIdentity()
-    guard av_process_identity(descendant.pid, &child) else { return false }
+    // Keep the validated execution through the ancestry walk and final authority check.
+    var child = validated[1]
     for _ in 0..<32 {
-        var parent = AVProcessIdentity()
-        guard verifiedOriginalLauncherParent(child, parent: &parent) else { return false }
-        if parent.pid == ancestor.pid { return true }
+        guard let parent = originalParent(child) else { return false }
+        if parent.pid == ancestor.pid {
+            return sameProcessIdentity(validated[0], parent) && validated.allSatisfy { expected in
+                guard let current = processIdentity(expected.pid) else { return false }
+                return sameProcessIdentity(expected, current)
+            }
+        }
         child = parent
     }
     return false
@@ -18066,6 +18089,28 @@ private func runDescendantOverrideSelfCheck() -> Bool {
               launchers: [child, parent], verifiesOverride: valid)?.overriddenLaunchers.first?.pid == child.pid,
           !verifiedLauncherOverrideAncestry(parent, child)
     else { fputs("Descendant Launcher override resolution failed\n", stderr); return false }
+    // Model same-PID exec after signing validation, while the original parent chain still matches.
+    for changedPID: pid_t? in [nil, child.pid, parent.pid] {
+        func identity(_ pid: pid_t, version: Int32 = 1) -> AVProcessIdentity {
+            var value = AVProcessIdentity()
+            value.pid = pid
+            value.pidversion = version
+            value.start_usec = 100
+            return value
+        }
+        var walking = false
+        let accepted = verifiedLauncherOverrideAncestry(parent, child, processIdentity: { pid in
+            identity(pid, version: walking && changedPID == pid ? 2 : 1)
+        }, validatesLauncher: { _ in true }, originalParent: { observedChild in
+            guard sameProcessIdentity(observedChild, identity(child.pid)) else { return nil }
+            walking = true
+            return identity(parent.pid)
+        })
+        guard accepted == (changedPID == nil) else {
+            fputs("Descendant Launcher override accepted a changed execution\n", stderr)
+            return false
+        }
+    }
     return true
 }
 
