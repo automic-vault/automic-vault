@@ -7631,7 +7631,7 @@ private struct GatePolicyTable: View {
                         Menu {
                             launcherActions(for: app)
                         } label: {
-                            Image(systemName: "ellipsis")
+                            Text(Image(systemName: "ellipsis"))
                         }
                         .menuStyle(.button)
                         .buttonStyle(.bordered)
