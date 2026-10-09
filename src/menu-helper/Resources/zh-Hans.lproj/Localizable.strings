@@ -581,3 +581,11 @@
 "Override descendant Launcher rules: On → Off" = "覆盖后代启动器规则：开启 → 关闭";
 "Expanding allow, reducing deny, or changing descendant overrides requires Approval." = "扩大允许范围、缩小拒绝范围或更改后代规则覆盖均需要批准。";
 "Apply each change separately. Expanding allow, reducing deny, or changing descendant overrides requires Approval. Unapplied changes remain pending." = "请分别应用每项更改。扩大允许范围、缩小拒绝范围或更改后代规则覆盖均需要批准。未应用的更改将继续保留。";
+"Delete Launcher-specific rule?" = "删除启动器专属规则？";
+"This deletes the rule for %@ at the %@ Authorization Gate, including its Denial Threshold and descendant override. The gate’s Default Policy and other existing authority will apply. Deleting this rule does not block the Launcher. Approval is still required if removal expands authority." = "这将删除 %@ 在 %@ 授权门的规则，包括其拒绝阈值和后代覆盖设置。授权门的默认策略及其他现有权限将生效。删除此规则不会阻止该启动器。如果删除操作会扩大权限，仍需批准。";
+"Configure Helpers…" = "配置辅助程序…";
+"Configure Detached Process Access…" = "配置脱离进程访问…";
+"Review or revert proposed changes before opening Settings." = "打开设置前，请检查或还原拟议更改。";
+"Delete…" = "删除…";
+"Launcher actions for %@" = "%@ 的启动器操作";
+"Launcher actions" = "启动器操作";

@@ -581,3 +581,11 @@
 "Override descendant Launcher rules: On → Off" = "Override descendant Launcher rules: On → Off";
 "Expanding allow, reducing deny, or changing descendant overrides requires Approval." = "Expanding allow, reducing deny, or changing descendant overrides requires Approval.";
 "Apply each change separately. Expanding allow, reducing deny, or changing descendant overrides requires Approval. Unapplied changes remain pending." = "Apply each change separately. Expanding allow, reducing deny, or changing descendant overrides requires Approval. Unapplied changes remain pending.";
+"Delete Launcher-specific rule?" = "Delete Launcher-specific rule?";
+"This deletes the rule for %@ at the %@ Authorization Gate, including its Denial Threshold and descendant override. The gate’s Default Policy and other existing authority will apply. Deleting this rule does not block the Launcher. Approval is still required if removal expands authority." = "This deletes the rule for %@ at the %@ Authorization Gate, including its Denial Threshold and descendant override. The gate’s Default Policy and other existing authority will apply. Deleting this rule does not block the Launcher. Approval is still required if removal expands authority.";
+"Configure Helpers…" = "Configure Helpers…";
+"Configure Detached Process Access…" = "Configure Detached Process Access…";
+"Review or revert proposed changes before opening Settings." = "Review or revert proposed changes before opening Settings.";
+"Delete…" = "Delete…";
+"Launcher actions for %@" = "Launcher actions for %@";
+"Launcher actions" = "Launcher actions";

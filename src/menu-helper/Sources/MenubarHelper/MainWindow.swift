@@ -778,8 +778,10 @@ final class DashboardModel: ObservableObject {
         selectedItemID = id
     }
 
-    func showSettings() {
+    func showSettings(id: String? = nil) {
+        searchText = ""
         selectSection(.settings)
+        if let id { selectedItemID = id }
     }
 
     func reviewBlessing(
@@ -2366,6 +2368,14 @@ func runDashboardSearchSelfCheck() -> Int32 {
     }
     navigationModel.showSecretGate(id: "aws")
     guard navigationModel.selectedLauncherRequirement == nil else { return 1 }
+    for destination in ["verified-launcher-helpers", "detached-process-access"] {
+        navigationModel.searchText = "no match"
+        navigationModel.showSettings(id: destination)
+        guard navigationModel.selectedSection == .settings,
+              navigationModel.selectedItem?.id == destination,
+              navigationModel.searchText.isEmpty,
+              navigationModel.snapshot == navigationSnapshot else { return 1 }
+    }
     let controller = AutomicVaultMainWindowController(checkForUpdates: {}, requestScan: {})
     for section in [DashboardSection.detectors, .doctor, .blessedScripts, .secretUsage] {
         controller.rootView.model.searchText = "previous filter"
@@ -2856,10 +2866,7 @@ func runDashboardSearchSelfCheck() -> Int32 {
     )
     let appRowHeight = NSHostingView(rootView: ApprovedAppRow(
         app: appPolicy,
-        launcherBundle: nil,
-        gate: gate,
-        approval: model.authorityApproval,
-        remove: {}
+        launcherBundle: nil
     ).frame(width: 500)).fittingSize.height
     let secretDetailHeight = model.selectedStoredSecret.map {
         NSHostingView(rootView: StoredSecretDetailView(model: model, secret: $0)).fittingSize.height
@@ -7425,6 +7432,7 @@ private struct GatePolicyTable: View {
     @ObservedObject var approval: AuthorityApprovalState
     @State private var drafts: [GatePolicyChange] = []
     @State private var reviewing = false
+    @State private var deletingApp: SecretGatePolicy?
     @State private var availableWidth: CGFloat = 720
 
     init(model: DashboardModel, gate: SecretGate, approval: AuthorityApprovalState) {
@@ -7520,6 +7528,30 @@ private struct GatePolicyTable: View {
         }
         .onChange(of: gate) { _, _ in drafts = changes }
         .sheet(isPresented: $reviewing) { review }
+        .alert("Delete Launcher-specific rule?", isPresented: Binding(
+            get: { deletingApp != nil }, set: { if !$0 { deletingApp = nil } }
+        ), presenting: deletingApp) { app in
+            Button("Cancel", role: .cancel) {}
+            Button("Delete", role: .destructive) { model.removeAppPolicy(app, from: gate) }
+        } message: { app in
+            Text("This deletes the rule for \(app.bundleIdentifier) at the \(gate.displayName) Authorization Gate, including its Denial Threshold and descendant override. The gate’s Default Policy and other existing authority will apply. Deleting this rule does not block the Launcher. Approval is still required if removal expands authority.")
+        }
+    }
+
+    @ViewBuilder
+    private func launcherActions(for app: SecretGatePolicy) -> some View {
+        Group {
+            Button("Configure Helpers…") { model.showSettings(id: "verified-launcher-helpers") }
+            Button("Configure Detached Process Access…") { model.showSettings(id: "detached-process-access") }
+        }
+        .disabled(!changes.isEmpty)
+        .help("Review or revert proposed changes before opening Settings.")
+        Divider()
+        Button("Delete…", role: .destructive) { deletingApp = app }
+            .disabled(approval.isPending("gate-policy:\(gate.id):\(app.requirement)")
+                      || approval.isPending("gate-denial:\(gate.id):\(app.requirement)")
+                      || approval.isPending("gate-signing:\(gate.id):\(app.requirement)")
+                      || approval.isPending("gate-descendant-override:\(gate.id):\(app.requirement)"))
     }
 
     private func stage(_ value: GatePolicyChange.Value, for app: SecretGatePolicy?) {
@@ -7545,7 +7577,7 @@ private struct GatePolicyTable: View {
                 if let app {
                     ApprovedAppRow(app: app, launcherBundle: model.launcherBundles.first {
                         $0.launcherRequirement == app.requirement
-                    }, gate: gate, isEdited: !rowChanges.isEmpty, approval: approval, remove: { model.removeAppPolicy(app, from: gate) })
+                    }, isEdited: !rowChanges.isEmpty)
                 } else {
                     HStack(spacing: 8) {
                         Label(localizedUIString(gate.defaultPolicyLabel), systemImage: "square.stack.3d.up")
@@ -7581,18 +7613,33 @@ private struct GatePolicyTable: View {
                                     setProtection: { stage(.allow($0), for: app) },
                                     setDenial: { stage(.denial($0), for: app) })
                 }
-                if let app, !app.usesGateDefault {
-                    let override = rowChanges.compactMap { change -> Bool? in
-                        if case .descendantOverride(let enabled) = change.value { return enabled }
-                        return nil
-                    }.first ?? app.overridesDescendantRules
-                    Toggle("Override descendant Launcher rules", isOn: Binding(
-                        get: { override }, set: { stage(.descendantOverride($0), for: app) }
-                    ))
-                    .toggleStyle(.checkbox)
-                    .font(.caption)
-                    .help("Use this Launcher's rule when a Launcher it starts has its own rule at this Gate. Explicit Deny and runtime requirements still apply. Changing this setting requires Approval.")
-                    .accessibilityIdentifier("gate-descendant-override:\(app.requirement)")
+                if let app {
+                    HStack(spacing: 8) {
+                        if !app.usesGateDefault {
+                            let override = rowChanges.compactMap { change -> Bool? in
+                                if case .descendantOverride(let enabled) = change.value { return enabled }
+                                return nil
+                            }.first ?? app.overridesDescendantRules
+                            Toggle("Override descendant Launcher rules", isOn: Binding(
+                                get: { override }, set: { stage(.descendantOverride($0), for: app) }
+                            ))
+                            .toggleStyle(.checkbox)
+                            .font(.caption)
+                            .help("Use this Launcher's rule when a Launcher it starts has its own rule at this Gate. Explicit Deny and runtime requirements still apply. Changing this setting requires Approval.")
+                            .accessibilityIdentifier("gate-descendant-override:\(app.requirement)")
+                        }
+                        Menu {
+                            launcherActions(for: app)
+                        } label: {
+                            Image(systemName: "ellipsis")
+                        }
+                        .menuStyle(.borderlessButton)
+                        .menuIndicator(.hidden)
+                        .fixedSize()
+                        .accessibilityLabel("Launcher actions for \(app.bundleIdentifier)")
+                        .accessibilityIdentifier("gate-launcher-actions:\(app.requirement)")
+                        .help("Launcher actions")
+                    }
                 }
                 if app?.usesGateDefault == true && !rowChanges.contains(where: {
                     switch $0.value {
@@ -7613,6 +7660,9 @@ private struct GatePolicyTable: View {
         .accessibilityElement(children: .contain)
         .accessibilityLabel(app?.bundleIdentifier ?? localizedUIString(gate.defaultPolicyLabel))
         .preference(key: GatePolicyRowPreference.self, value: [app?.requirement ?? "default"])
+        .contextMenu {
+            if let app { launcherActions(for: app) }
+        }
         .disabled(pending)
     }
 
@@ -7864,11 +7914,7 @@ private struct PolicyEditedLabel: View {
 private struct ApprovedAppRow: View {
     let app: SecretGatePolicy
     let launcherBundle: LauncherBundleEnrollment?
-    let gate: SecretGate
     var isEdited = false
-    @ObservedObject var approval: AuthorityApprovalState
-    let remove: () -> Void
-    @State private var isConfirmingDelete = false
 
     private var display: ApprovedAppDisplay {
         ApprovedAppDisplay(app, launcherBundle: launcherBundle)
@@ -7904,20 +7950,6 @@ private struct ApprovedAppRow: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
-        }
-        .contentShape(Rectangle())
-        .contextMenu {
-            Button("Delete", role: .destructive) {
-                isConfirmingDelete = true
-            }
-            .disabled(approval.isPending("gate-policy:\(gate.id):\(app.requirement)")
-                      || approval.isPending("gate-denial:\(gate.id):\(app.requirement)"))
-        }
-        .alert("Delete \(display.name)?", isPresented: $isConfirmingDelete) {
-            Button("Cancel", role: .cancel) {}
-            Button("Delete", role: .destructive, action: remove)
-        } message: {
-            Text("This deletes the Launcher-specific rule. Future requests from this Verified Launcher at the \(gate.displayName) Authorization Gate will use the default \(gate.protectionTitle(gate.defaultProtection)) Access Level.")
         }
     }
 }
