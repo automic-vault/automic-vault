@@ -7486,7 +7486,6 @@ private struct GatePolicyTable: View {
                                     .help("Unclassified operations can require Approval or be denied, but cannot be automatically allowed.")
                             }
                         }
-                        .padding(.trailing, 16)
                     }
                     .font(.caption).foregroundStyle(.secondary).padding(.vertical, 10)
                     Divider()
@@ -7504,6 +7503,8 @@ private struct GatePolicyTable: View {
                 }
                 .frame(width: max(gate.isSSHAgentGate ? 480 : 720, availableWidth))
             }
+            // End handles extend beyond the track into the detail pane's existing margin.
+            .scrollClipDisabled()
             .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { availableWidth = $0 }
 
             Label(showsUnknownOperations
@@ -7813,8 +7814,6 @@ private struct GatePolicyTrack: View {
         }
         .frame(height: 40)
         .coordinateSpace(name: "gate-policy-track")
-        // Keep the final handle and focus outline inside the scroll view.
-        .padding(.trailing, 16)
     }
 
     private func region(_ title: String, symbol: String, color: Color, columns: Int, width: CGFloat) -> some View {
