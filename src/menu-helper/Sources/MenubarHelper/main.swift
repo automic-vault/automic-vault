@@ -20407,7 +20407,8 @@ if CommandLine.arguments.contains("--verify-update") {
 if CommandLine.arguments.count == 3, CommandLine.arguments[1] == "--self-check-git-records" {
     let url = CommandLine.arguments[2]
     guard GitTransportOperation(["fetch", url]) != nil else { exit(64) }
-    let records = loadAccessRequestRecords().filter { $0.target == gitTransportGH && $0.command.contains(url) }
+    guard let history = loadAccessRequestRecordsForDisclosure() else { exit(1) }
+    let records = history.filter { $0.target == gitTransportGH && $0.command.contains(url) }
     guard let data = try? JSONEncoder().encode(records) else { exit(1) }
     FileHandle.standardOutput.write(data)
     exit(records.isEmpty ? 1 : 0)
