@@ -2,8 +2,9 @@
 
 This follows the [domain language](domain-language.md),
 [architecture](architecture.md), and [positioning](positioning.md).
-This guide requires the signed candidate app, CLI, protected runtime and
-`/usr/local/bin/git-remote-av` to be installed. The [security boundary and measured evidence](adr/0047-protected-git-https-transport.md)
+This guide requires the signed candidate app and CLI. Run `av harden gh` to
+install or refresh the protected runtime and `/usr/local/bin/git-remote-av`,
+then enable global GitHub HTTPS routing. The [security boundary and measured evidence](adr/0047-protected-git-https-transport.md)
 apply to the narrow surface below. Your existing Vault policy is unchanged.
 
 ## Start with the private fixture
@@ -26,7 +27,11 @@ One Git command can produce several records or Approval requests because each
 HTTPS phase gets a fresh process and authorization. Public reads may require
 no credential and therefore produce no Secret-use record.
 
-## Enable another repository
+## Configure routing manually
+
+Default hardening already enables GitHub HTTPS routing globally. If you chose
+`av harden gh --without-git-configuration`, install and verify the protected
+runtime and adapter before opting individual repositories into routing.
 
 For an existing repository with a GitHub HTTPS origin ending in `.git`, run once:
 
@@ -80,14 +85,15 @@ Remote Write authority even when no update follows.
 In each opted-in repository:
 
 ```sh
-git config --local --unset-all url."av::https://github.com/".insteadOf
+git config --local --fixed-value --unset-all url."av::https://github.com/".insteadOf https://github.com/
 ```
 
 If you enabled the global setting, remove it with the same command using
 `--global`. This restores your previous transport selection. It does not grant
 ordinary Git access to Vault's protected credential provider. Keep the
-candidate app installed during testing; app/CLI/runtime distribution and
-refresh integration remain pending in the draft PR.
+candidate app installed during testing. Run
+`av harden gh --without-git-configuration` to retain manual configuration and
+stop Doctor requesting the global route. The flag itself does not undo routing.
 
 ## Repeat the automated live test
 
@@ -96,7 +102,8 @@ python3 scripts/test-git-remote-e2e.py \
   --repository OWNER/PRIVATE_TEST_REPO
 ```
 
-It creates and retains a new feature branch and local clones. It verifies
+It runs `av harden gh --yes` twice using an isolated home and global Git config,
+then creates and retains a new feature branch and local clones. It verifies
 actual GitHub commits, upstream tracking, dry-run, hostile config isolation,
 malformed request denial, copied-nonce denial, and fresh Vault records without
 reading or displaying the raw token. It also exercises force, implicit/explicit

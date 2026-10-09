@@ -4,7 +4,7 @@ use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use super::{HardenerDetection, SecretGateDescriptor, SecretGateRoute, isotope};
+use super::{HardenerDetection, SecretGateDescriptor, SecretGateRoute, gh_git, isotope};
 
 const PRIVILEGE_MODE: super::PrivilegeMode = super::PrivilegeMode::UserOnly;
 
@@ -15,8 +15,15 @@ struct GhCredential {
     token: String,
 }
 
-pub(crate) fn run(stdout: &mut dyn Write, yes: bool) -> Result<(), String> {
+pub(crate) fn run(
+    stdout: &mut dyn Write,
+    yes: bool,
+    without_git_configuration: bool,
+) -> Result<(), String> {
     PRIVILEGE_MODE.require_user("gh", false)?;
+    if !without_git_configuration {
+        gh_git::preflight()?;
+    }
     let install = isotope::plan(isotope::GH)?;
 
     let hosts_paths = gh_hosts_paths()?;
@@ -36,10 +43,15 @@ pub(crate) fn run(stdout: &mut dyn Write, yes: bool) -> Result<(), String> {
     writeln!(stdout, "╭─ harden gh").ok();
     writeln!(stdout, "│").ok();
     install.write(stdout, isotope::GH);
-    if credentials.is_empty() && !install.needed() {
-        writeln!(stdout, "╰─ no legacy gh credentials found").ok();
-        super::write_secret_gate_notice(stdout, "gh");
-        return Ok(());
+    if without_git_configuration {
+        writeln!(
+            stdout,
+            "├─ leave Git configuration unchanged (managed manually)"
+        )
+        .ok();
+    } else {
+        writeln!(stdout, "├─ install or verify the protected Git transport").ok();
+        writeln!(stdout, "├─ configure Git globally to use Automic Vault for github.com HTTPS operations, including new clones").ok();
     }
 
     let destinations = migration_destinations(&credentials, &configured_hosts)?;
@@ -77,12 +89,14 @@ pub(crate) fn run(stdout: &mut dyn Write, yes: bool) -> Result<(), String> {
 
     if credentials.is_empty() {
         install.apply(isotope::GH)?;
+        gh_git::apply(without_git_configuration, &hosts_paths[0])?;
         writeln!(stdout, "╰─ installed gh isotope").ok();
         super::write_secret_gate_notice(stdout, "gh");
         return Ok(());
     }
     store_destinations(&destinations)?;
     install.apply(isotope::GH)?;
+    gh_git::apply(without_git_configuration, &hosts_paths[0])?;
     for path in &hosts_paths {
         remove_plaintext_tokens(path)?;
     }
@@ -96,7 +110,19 @@ pub(crate) fn run(stdout: &mut dyn Write, yes: bool) -> Result<(), String> {
 }
 
 pub(crate) fn detect() -> HardenerDetection {
-    isotope::detect(isotope::GH)
+    let mut detection = isotope::detect(isotope::GH);
+    if detection.hardened {
+        match gh_hosts_paths().and_then(|paths| gh_git::diagnose(&paths[0])) {
+            Ok(()) => {}
+            Err(message) => detection.diagnostics.push(super::HardenerDiagnostic {
+                kind: "gh_git_configuration",
+                message,
+                remediation: "Run `av harden gh` to repair protected Git transport setup, or `av harden gh --without-git-configuration` to manage Git configuration yourself.".into(),
+                path: None,
+            }),
+        }
+    }
+    detection
 }
 
 pub(crate) fn secret_gate() -> SecretGateDescriptor {
@@ -669,7 +695,7 @@ mod tests {
             std::env::set_var("AUTOMIC_VAULT_TEST_GH_CLI_PATH", &gh);
         }
 
-        run(&mut Vec::new(), true).unwrap();
+        run(&mut Vec::new(), true, true).unwrap();
 
         unsafe {
             std::env::remove_var("GH_CONFIG_DIR");
@@ -714,7 +740,7 @@ mod tests {
         }
 
         let mut output = Vec::new();
-        run(&mut output, true).unwrap();
+        run(&mut output, true, true).unwrap();
 
         unsafe {
             std::env::remove_var("GH_CONFIG_DIR");
@@ -820,7 +846,7 @@ mod tests {
             std::env::set_var("AUTOMIC_VAULT_TEST_GH_CLI_PATH", &gh);
         }
 
-        let error = run(&mut Vec::new(), true).unwrap_err();
+        let error = run(&mut Vec::new(), true, true).unwrap_err();
 
         unsafe {
             std::env::remove_var("GH_CONFIG_DIR");
@@ -862,7 +888,7 @@ mod tests {
             std::env::set_var("AUTOMIC_VAULT_TEST_GH_CLI_PATH", &gh);
         }
 
-        let error = run(&mut Vec::new(), true).unwrap_err();
+        let error = run(&mut Vec::new(), true, true).unwrap_err();
 
         unsafe {
             std::env::remove_var("GH_CONFIG_DIR");

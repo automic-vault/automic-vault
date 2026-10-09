@@ -8,6 +8,11 @@ $ av harden gh
 $ av doctor gh
 ```
 
+By default, `av harden gh` also configures protected GitHub HTTPS operations,
+including fresh clones. Use `av harden gh --without-git-configuration` if you
+manage Git routing yourself. See the [gh hardener](../src/isotopes/hardeners/gh_cli.md)
+for supported operations and rollback.
+
 A Detector reports a supported Exposure or Hazard without changing the
 environment, requesting Secrets, or invoking a configured credential helper.
 Each Finding includes a mitigation. A clean Scan means no supported Detector

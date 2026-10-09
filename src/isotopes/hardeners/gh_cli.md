@@ -25,6 +25,49 @@ Use `av harden gh` to install the Isotope and migrate existing `gh` credentials
 into Automic Vault. Direct installs are updated by running the same command when
 `av doctor gh` reports a new release.
 
+## GitHub HTTPS operations
+
+`av harden gh` also configures Git globally to use Automic Vault's protected
+transport for `https://github.com/` URLs, including fresh clones. It verifies
+the installed signed CLI, installs or refreshes the protected runtime, checks
+adapter discovery, and then adds the routing rule. Saved remote URLs and SSH
+operations stay unchanged. `av doctor gh` checks this setup; rerun
+`av harden gh` to repair it.
+
+If you manage Git configuration yourself, use:
+
+```sh
+av harden gh --without-git-configuration
+```
+
+This installs the `gh` Isotope and migrates credentials while leaving Git
+configuration and the protected Git runtime untouched. Automic Vault records
+the manual choice in `av-git-configuration` beside `hosts.yml`, so Doctor does
+not request automatic Git setup. A later `av harden gh` configures Git and
+resumes those checks. The option does not remove an existing routing rule or
+grant ordinary Git permission to retrieve the token.
+
+Automatic setup stops on overlapping URL rewrites, conditional configuration,
+or Git environment overrides and offers the same option. It inspects the
+system, global, included, and current repository configuration; it cannot
+inspect every other repository or predict later configuration changes.
+
+The protected transport supports the reviewed Git build and command surface in
+the [Git workflow guide](../../../docs/git-workflow-testing.md#current-limits).
+Unsupported requests fail explicitly without falling back to a credential
+helper. Authorization still uses the existing `gh` Secret Gate.
+
+To remove only the global routing value installed by this hardener:
+
+```sh
+git config --global --fixed-value --unset-all url."av::https://github.com/".insteadOf https://github.com/
+av harden gh --without-git-configuration
+```
+
+Remove any separately configured repository-local rule separately. Rollback
+restores previous transport selection; ordinary credential-helper requests
+still require Secret Disclosure authority.
+
 ## Secret Gate
 
 The menu bar app creates a `gh` Secret Gate as soon as the hardened CLI is

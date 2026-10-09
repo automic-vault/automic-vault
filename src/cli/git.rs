@@ -8,6 +8,172 @@ use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
+const ADAPTER: &str = "/usr/local/bin/git-remote-av";
+const ADAPTER_SCRIPT: &str = "#!/bin/sh\nexec /usr/local/bin/av __git-remote \"$@\"\n";
+const AV: &str = "/usr/local/bin/av";
+const REVIEWED_GIT_VERSION: &[u8] = b"git version 2.50.1 (Apple Git-155)\n";
+
+#[test]
+fn runtime_publication_preserves_old_installation_until_swap() {
+    let directory =
+        std::env::temp_dir().join(format!("av-git-swap-{:016x}", rand::random::<u64>()));
+    let stage = directory.join("stage");
+    let installed = directory.join("installed");
+    fs::create_dir_all(&stage).unwrap();
+    fs::write(stage.join("generation"), "old").unwrap();
+    publish_runtime(&stage, &installed).unwrap();
+    assert!(!stage.exists());
+    assert!(publish_runtime(&stage, &installed).is_err());
+    assert_eq!(
+        fs::read_to_string(installed.join("generation")).unwrap(),
+        "old"
+    );
+    fs::create_dir(&stage).unwrap();
+    fs::write(stage.join("generation"), "new").unwrap();
+    assert!(rename_with_flags(&stage, &installed, libc::RENAME_EXCL).is_err());
+    assert_eq!(
+        fs::read_to_string(installed.join("generation")).unwrap(),
+        "old"
+    );
+    publish_runtime(&stage, &installed).unwrap();
+    assert_eq!(
+        fs::read_to_string(installed.join("generation")).unwrap(),
+        "new"
+    );
+    assert_eq!(fs::read_to_string(stage.join("generation")).unwrap(), "old");
+    assert!(verify_runtime_at(&installed).is_err());
+    fs::remove_dir_all(directory).unwrap();
+}
+
+pub(crate) fn verify_installed_cli() -> Result<(), String> {
+    for path in ["/usr", "/usr/local", "/usr/local/bin"] {
+        protected(Path::new(path), true)?;
+    }
+    protected(Path::new(AV), false)?;
+    signing(
+        Path::new(AV),
+        "anchor apple generic and certificate leaf[subject.OU] = ZU76A67LGU and identifier com.automicvault.av",
+    )?;
+    let mut command = Command::new(AV);
+    command.env_clear().arg("__version");
+    if checked(command)?.stdout != format!("{}\n", super::INSTALL_REVISION).as_bytes() {
+        return Err("update the installed Automic Vault CLI before configuring Git".into());
+    }
+    Ok(())
+}
+
+fn verify_adapter() -> Result<(), String> {
+    verify_installed_cli()?;
+    protected(Path::new(ADAPTER), false)?;
+    if fs::metadata(ADAPTER)
+        .map_err(|error| error.to_string())?
+        .mode()
+        & 0o555
+        != 0o555
+    {
+        return Err("Automic Vault's Git adapter is not executable".into());
+    }
+    if fs::read(ADAPTER).map_err(|error| error.to_string())? != ADAPTER_SCRIPT.as_bytes() {
+        return Err("the installed Git adapter is not Automic Vault's adapter".into());
+    }
+    verify_adapter_resolution()
+}
+
+pub(crate) fn verify_adapter_resolution() -> Result<(), String> {
+    let mut git = Command::new("/usr/bin/git");
+    git.env_clear().arg("--exec-path");
+    let exec_path = text_output(checked(git)?)?;
+    let search = std::iter::once(PathBuf::from(exec_path)).chain(
+        std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()).collect::<Vec<_>>(),
+    );
+    let resolved = search
+        .map(|path| path.join("git-remote-av"))
+        .find(|path| path == Path::new(ADAPTER) || crate::isotopes::hardeners::executable(path));
+    if resolved.as_deref() != Some(Path::new(ADAPTER)) {
+        return Err("Git cannot find Automic Vault's adapter first; put /usr/local/bin on PATH before other Git adapters".into());
+    }
+    Ok(())
+}
+
+pub(crate) fn verify_transport(gh: &Path) -> Result<(), String> {
+    verify_adapter()?;
+    verify_runtime()?;
+    let digest = crate::isotopes::hardeners::isotope::sha256_file;
+    if digest(Path::new(GH))? != digest(gh)? {
+        return Err("the protected Git runtime contains an outdated gh Isotope".into());
+    }
+    Ok(())
+}
+
+pub(crate) fn ensure_transport(gh: &Path) -> Result<(), String> {
+    verify_installed_cli()?;
+    xpc_request("git-helper-version", |message| unsafe {
+        xpc_set_u64(message, "requested_version", 3);
+        Ok(())
+    })?;
+    if verify_transport(gh).is_ok() {
+        return Ok(());
+    }
+    let (git, https) = if verify_runtime().is_ok() {
+        (PathBuf::from(GIT), PathBuf::from(HTTPS))
+    } else {
+        let mut find_git = Command::new("/usr/bin/xcrun");
+        find_git.env_clear().args(["--find", "git"]);
+        let git = text_output(checked(find_git)?)?;
+        let mut exec_path = Command::new(&git);
+        exec_path.env_clear().arg("--exec-path");
+        let https = PathBuf::from(text_output(checked(exec_path)?)?).join("git-remote-https");
+        (PathBuf::from(git), https)
+    };
+    let status = Command::new("/usr/bin/sudo")
+        .arg(AV)
+        .arg("__install-git-runtime")
+        .arg(git)
+        .arg(https)
+        .arg(gh)
+        .status()
+        .map_err(|error| format!("could not install protected Git transport: {error}"))?;
+    if !status.success() {
+        return Err("protected Git transport installation failed".into());
+    }
+    verify_transport(gh)
+}
+
+fn install_adapter() -> Result<(), String> {
+    verify_installed_cli()?;
+    if Path::new(ADAPTER).exists() {
+        protected(Path::new(ADAPTER), false)?;
+        if fs::read(ADAPTER).map_err(|error| error.to_string())? != ADAPTER_SCRIPT.as_bytes() {
+            return Err("refusing to replace an unrelated git-remote-av executable".into());
+        }
+        return fs::set_permissions(ADAPTER, fs::Permissions::from_mode(0o755))
+            .map_err(|error| error.to_string());
+    }
+    let stage = format!(
+        "/usr/local/bin/.git-remote-av-{:016x}",
+        rand::random::<u64>()
+    );
+    let mut output = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o755)
+        .open(&stage)
+        .map_err(|error| error.to_string())?;
+    let result = (|| {
+        output
+            .write_all(ADAPTER_SCRIPT.as_bytes())
+            .map_err(|error| error.to_string())?;
+        output.sync_all().map_err(|error| error.to_string())?;
+        fs::set_permissions(&stage, fs::Permissions::from_mode(0o755))
+            .map_err(|error| error.to_string())?;
+        rename_with_flags(Path::new(&stage), Path::new(ADAPTER), libc::RENAME_EXCL)
+    })();
+    if Path::new(&stage).exists() {
+        let _ = fs::remove_file(stage);
+    }
+    result
+}
+
 #[test]
 fn rejects_acl_writes_even_when_mode_is_private() {
     let file = std::env::temp_dir().join(format!("av-git-acl-{:016x}", rand::random::<u64>()));
@@ -116,6 +282,16 @@ fn no_extended_acl(path: &Path) -> bool {
 }
 
 pub(super) fn verify_runtime() -> Result<(), String> {
+    verify_runtime_at(Path::new(ROOT))
+}
+
+fn verify_runtime_at(root: &Path) -> Result<(), String> {
+    let runtime_path = |path: &str| {
+        Path::new(path)
+            .strip_prefix(ROOT)
+            .map(|relative| root.join(relative))
+            .unwrap_or_else(|_| PathBuf::from(path))
+    };
     for path in [
         "/opt",
         "/opt/av",
@@ -130,7 +306,7 @@ pub(super) fn verify_runtime() -> Result<(), String> {
         "/private/etc",
         "/private/etc/ssl",
     ] {
-        protected(Path::new(path), true)?;
+        protected(&runtime_path(path), true)?;
     }
     for path in [
         GIT,
@@ -140,12 +316,22 @@ pub(super) fn verify_runtime() -> Result<(), String> {
         "/opt/av/git/repository/HEAD",
         "/private/etc/ssl/cert.pem",
     ] {
-        protected(Path::new(path), false)?;
+        protected(&runtime_path(path), false)?;
     }
-    if fs::read_to_string(format!("{REPOSITORY}/config")).map_err(|e| e.to_string())? != CONFIG
-        || fs::read_to_string(format!("{REPOSITORY}/HEAD")).map_err(|e| e.to_string())?
+    for path in [GIT, HTTPS, GH] {
+        if fs::metadata(runtime_path(path))
+            .map_err(|error| error.to_string())?
+            .mode()
+            & 0o555
+            != 0o555
+        {
+            return Err(format!("protected Git executable is unavailable: {path}"));
+        }
+    }
+    if fs::read_to_string(root.join("repository/config")).map_err(|e| e.to_string())? != CONFIG
+        || fs::read_to_string(root.join("repository/HEAD")).map_err(|e| e.to_string())?
             != "ref: refs/heads/main\n"
-        || fs::read_dir("/opt/av/git/empty")
+        || fs::read_dir(root.join("empty"))
             .map_err(|e| e.to_string())?
             .next()
             .is_some()
@@ -158,7 +344,7 @@ pub(super) fn verify_runtime() -> Result<(), String> {
         ("/opt/av/git/repository/refs/heads", vec![]),
         ("/opt/av/git/repository/objects", vec![]),
     ] {
-        let mut names = fs::read_dir(directory)
+        let mut names = fs::read_dir(runtime_path(directory))
             .map_err(|e| e.to_string())?
             .map(|entry| entry.map(|e| e.file_name()))
             .collect::<Result<Vec<_>, _>>()
@@ -168,20 +354,57 @@ pub(super) fn verify_runtime() -> Result<(), String> {
             return Err("unexpected files in protected Git repository".into());
         }
     }
-    signing(Path::new(GIT), "anchor apple and identifier com.apple.git")?;
     signing(
-        Path::new(HTTPS),
+        &root.join("bin/git"),
+        "anchor apple and identifier com.apple.git",
+    )?;
+    signing(
+        &root.join("bin/git-remote-https"),
         "anchor apple and identifier \"com.apple.git-remote-http\"",
     )?;
     signing(
-        Path::new(GH),
+        &root.join("bin/gh"),
         "anchor apple generic and certificate leaf[subject.OU] = ZU76A67LGU and identifier gh",
     )?;
+    let mut version = Command::new(root.join("bin/git"));
+    version.env_clear().arg("--version");
+    if checked(version)?.stdout != REVIEWED_GIT_VERSION {
+        return Err("this Git build has not been reviewed for the protected transport".into());
+    }
+    Ok(())
+}
+
+fn publish_runtime(stage: &Path, destination: &Path) -> Result<(), String> {
+    if fs::symlink_metadata(destination)
+        .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
+    {
+        return rename_with_flags(stage, destination, libc::RENAME_EXCL);
+    }
+    // Swap atomically: interruption never leaves an existing route without its runtime.
+    rename_with_flags(stage, destination, libc::RENAME_SWAP)
+}
+
+fn rename_with_flags(stage: &Path, destination: &Path, flags: libc::c_uint) -> Result<(), String> {
+    let stage = CString::new(stage.as_os_str().as_bytes()).map_err(|error| error.to_string())?;
+    let destination =
+        CString::new(destination.as_os_str().as_bytes()).map_err(|error| error.to_string())?;
+    if unsafe {
+        libc::renameatx_np(
+            libc::AT_FDCWD,
+            stage.as_ptr(),
+            libc::AT_FDCWD,
+            destination.as_ptr(),
+            flags,
+        )
+    } != 0
+    {
+        return Err(std::io::Error::last_os_error().to_string());
+    }
     Ok(())
 }
 
 pub(super) fn install(args: &[OsString], stderr: &mut dyn Write) -> i32 {
-    let result = (|| {
+    let result: Result<(), String> = (|| {
         if unsafe { libc::geteuid() } != 0 || args.len() != 3 {
             return Err(
                 "usage (as root): av __install-git-runtime APPLE_GIT APPLE_HTTPS HARDENED_GH"
@@ -194,10 +417,13 @@ pub(super) fn install(args: &[OsString], stderr: &mut dyn Write) -> i32 {
             }
             protected(Path::new(path), true)?;
         }
-        if Path::new(ROOT).exists() {
-            return Err("Git runtime is already installed".into());
+        if fs::symlink_metadata(ROOT).is_ok() {
+            protected(Path::new(ROOT), true)?;
         }
-        let stage = PathBuf::from(format!("/opt/av/.git-install-{}", std::process::id()));
+        let stage = PathBuf::from(format!(
+            "/opt/av/.git-install-{:016x}",
+            rand::random::<u64>()
+        ));
         fs::create_dir(&stage).map_err(|e| e.to_string())?;
         let result = (|| {
             for directory in [
@@ -257,21 +483,11 @@ pub(super) fn install(args: &[OsString], stderr: &mut dyn Write) -> i32 {
                 fs::set_permissions(stage.join(path), fs::Permissions::from_mode(0o644))
                     .map_err(|e| e.to_string())?;
             }
-            let mut version = Command::new(stage.join("bin/git"));
-            version.env_clear().arg("--version");
-            if checked(version)?.stdout != b"git version 2.50.1 (Apple Git-155)\n" {
-                return Err(
-                    "this Git build has not been reviewed for the protected transport".into(),
-                );
-            }
             fs::set_permissions(&stage, fs::Permissions::from_mode(0o755))
                 .map_err(|e| e.to_string())?;
-            fs::rename(&stage, ROOT).map_err(|e| e.to_string())?;
-            if let Err(error) = verify_runtime() {
-                fs::remove_dir_all(ROOT)
-                    .map_err(|cleanup| format!("{error}; runtime cleanup failed: {cleanup}"))?;
-                return Err(error);
-            }
+            verify_runtime_at(&stage)?;
+            install_adapter()?;
+            publish_runtime(&stage, Path::new(ROOT))?;
             Ok(())
         })();
         if stage.exists() {

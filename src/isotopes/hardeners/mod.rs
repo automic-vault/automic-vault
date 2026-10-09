@@ -7,6 +7,7 @@ pub(crate) mod doctl;
 pub(crate) mod env_wrapper;
 pub(crate) mod fastly_cli;
 pub(crate) mod gh_cli;
+mod gh_git;
 pub(crate) mod goat;
 pub(crate) mod hcloud;
 pub(crate) mod homebrew;

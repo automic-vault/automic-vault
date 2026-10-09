@@ -30,10 +30,15 @@ def main():
     environment = {k: v for k, v in os.environ.items() if not k.startswith(('GIT_', 'GH_', 'GITHUB_', 'DYLD_'))}
     environment['PATH'] = '/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin'
     environment['GIT_TERMINAL_PROMPT'] = '0'
-    git = ['/usr/bin/git', '-c', 'url.av::https://github.com/.insteadOf=https://github.com/']
+    git = ['/usr/bin/git']
+    git_home = root / 'home'
+    git_home.mkdir()
+    git_environment = {**environment, 'HOME': str(git_home),
+                       'XDG_CONFIG_HOME': str(git_home / '.config')}
 
     def run(args, cwd=root, data=None, env=None, ok=True):
-        result = subprocess.run(args, cwd=cwd, input=data, env=env or environment, capture_output=True, timeout=180)
+        selected_environment = git_environment if args[0] == '/usr/bin/git' else environment
+        result = subprocess.run(args, cwd=cwd, input=data, env=env or selected_environment, capture_output=True, timeout=180)
         assert not secret.search(result.stdout + result.stderr), 'credential-shaped output detected; withheld'
         if ok and result.returncode:
             # Retain ordinary diagnostics, but never potential credential output.
@@ -47,12 +52,18 @@ def main():
         return json.loads(run([app, '--self-check-git-records', url], ok=False).stdout)
 
     assert api('')['private'] is True, 'fixture must be private'
+    run(git + ['config', '--global', 'user.name', 'Vault transport test'])
+    run(git + ['config', '--global', 'user.email', 'transport-test@example.invalid'])
+    for _ in range(2):
+        run(['/usr/local/bin/av', 'harden', 'gh', '--yes'], env=git_environment)
+    rule = 'url.av::https://github.com/.insteadOf'
+    assert run(git + ['config', '--global', '--get-all', rule]).stdout == b'https://github.com/\n'
+    print('PASS: gh hardening installs global routing idempotently in an isolated home', flush=True)
     baseline = {r['id'] for r in records()}
     print(f'Test directory: {root}\nRemote branch: {branch}', flush=True)
     clone = root / 'clone'
     run(git + ['clone', url, str(clone)])
-    # Keep normal origin URLs, enable the rewrite only in these disposable clones.
-    run(['/usr/bin/git', 'config', 'url.av::https://github.com/.insteadOf', 'https://github.com/'], cwd=clone)
+    assert run(git + ['config', '--local', '--get-all', rule], cwd=clone, ok=False).returncode == 1
     run(git + ['switch', '-c', branch], cwd=clone)
 
     def commit(repo, text):
@@ -68,7 +79,7 @@ def main():
     print('PASS: ordinary clone, feature branch, push -u, and upstream tracking', flush=True)
     peer = root / 'peer'
     run(git + ['clone', '--branch', branch, url, str(peer)])
-    run(['/usr/bin/git', 'config', 'url.av::https://github.com/.insteadOf', 'https://github.com/'], cwd=peer)
+    assert run(git + ['config', '--local', '--get-all', rule], cwd=peer, ok=False).returncode == 1
     second = commit(peer, 'Remote update for ordinary fetch and pull')
     run(git + ['push'], cwd=peer)
     run(git + ['fetch'], cwd=clone)
@@ -120,7 +131,7 @@ def main():
     print('PASS: signed adapter preserves multiple leases and rejects stale state in the transport', flush=True)
     capture = root / 'credential-store'
     trace = root / 'trace'
-    hostile = dict(environment, GIT_TRACE_CURL=str(trace), GIT_SSL_NO_VERIFY='1', HTTPS_PROXY='http://127.0.0.1:1')
+    hostile = dict(git_environment, GIT_TRACE_CURL=str(trace), GIT_SSL_NO_VERIFY='1', HTTPS_PROXY='http://127.0.0.1:1')
     run(git + ['-c', 'credential.helper=store --file=' + str(capture), '-c', 'http.sslVerify=false', 'fetch'], cwd=clone, env=hostile)
     assert not capture.exists()
     assert not trace.exists() or not secret.search(trace.read_bytes())
@@ -206,7 +217,7 @@ def main():
     assert any(f'push +{second}:{reference}' in r['command'] for r in fresh), 'missing force plan record'
     assert any(f'option cas {reference}:{second}' in r['command'] and
                f'option cas {leased_ref}:{third}' in r['command'] for r in fresh), 'missing complete lease record'
-    print(f'PASS: {len(fresh)} fresh Vault records, including the exact pushed OID and ref\nReady for manual testing: {clone}', flush=True)
+    print(f'PASS: {len(fresh)} fresh Vault records, including the exact pushed OID and ref\nTest clone: {clone}\nIsolated Git configuration: {git_home / ".gitconfig"}', flush=True)
 
 
 if __name__ == '__main__':

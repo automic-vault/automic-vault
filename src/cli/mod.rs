@@ -10,7 +10,7 @@ pub(crate) mod docker_credential;
 pub(crate) mod doctor;
 pub(crate) mod fastly_credential;
 #[cfg(target_os = "macos")]
-mod git;
+pub(crate) mod git;
 #[cfg(target_os = "macos")]
 mod git_remote;
 pub(crate) mod goat_credential;
@@ -60,6 +60,7 @@ commands:
   $ av history [--json] [--since 7d] [--no-pager]
   $ av save [options] KEY                 # store a global or Project Value
   $ av harden <tool> [-y|--yes]           # harden a tool; migrate credentials
+  $ av harden gh --without-git-configuration
   $ av unharden brew [-y|--yes]           # temporarily restore Homebrew for cask migration
   $ av gpg-sign [GPG options]             # authorize and sign a Git payload
   $ av open [--secret-gate <id>]          # open the Automic Vault app
@@ -71,7 +72,7 @@ modes:
 more:
   $ open https://www.automicvault.com/docs/";
 
-pub(crate) const INSTALL_REVISION: u32 = 65;
+pub(crate) const INSTALL_REVISION: u32 = 66;
 
 pub(crate) fn bash_shell_secret_insecurity_reasons() -> Result<Vec<String>, String> {
     shell_secrets::bash_reasons()
@@ -412,10 +413,20 @@ where
             }
         }
         Some("harden") => {
+            let without_git_configuration =
+                rest.iter().any(|arg| arg == "--without-git-configuration");
+            rest.retain(|arg| arg != "--without-git-configuration");
             let Some((target, yes)) = parse_harden_args(&rest) else {
                 let _ = writeln!(stderr, "{USAGE}");
                 return 2;
             };
+            if without_git_configuration && target != "gh" && target != "gh-cli" {
+                let _ = writeln!(
+                    stderr,
+                    "av harden: --without-git-configuration is only supported for gh"
+                );
+                return 2;
+            }
             let target = if target == "fly" {
                 OsString::from("flyctl")
             } else {
@@ -511,7 +522,7 @@ where
                 return finish_hardening(result, "wrangler", &mut stdout, stderr);
             }
             if target == "gh" || target == "gh-cli" {
-                let result = hardeners::gh_cli::run(&mut stdout, yes);
+                let result = hardeners::gh_cli::run(&mut stdout, yes, without_git_configuration);
                 return finish_hardening(result, "gh", &mut stdout, stderr);
             }
             if target == "stripe" || target == "stripe-cli" {
@@ -1221,6 +1232,7 @@ mod tests {
             assert_eq!(stderr, "");
             assert!(stdout.contains("\ncommands:\n"));
             assert!(stdout.contains("$ av harden <tool> [-y|--yes]"));
+            assert!(stdout.contains("$ av harden gh --without-git-configuration"));
             assert!(stdout.contains("$ av list"));
             assert!(stdout.contains("$ av open [--secret-gate <id>]"));
             assert!(stdout.contains("\nmodes:\n"));

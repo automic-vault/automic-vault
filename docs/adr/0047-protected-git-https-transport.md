@@ -164,9 +164,32 @@ credential necessarily enters gh and the HTTPS transport. Process exit cannot
 revoke bytes already applied to a Target. This is a constrained transport, not
 a general promise that signed Git cannot disclose credentials.
 
-The runtime currently requires explicit installation and supports only the
-reviewed Git build. Distribution, refresh/repair integration, and a broader
-command surface must be reviewed before extending this installation.
+### Hardener integration
+
+`av harden gh` installs or verifies the protected runtime and native adapter
+before adding a global `https://github.com/` routing rule. It checks the signed
+installed CLI revision, helper protocol compatibility, runtime signatures and
+configuration, the reviewed Git version, adapter discovery, and whether the
+runtime's gh copy matches the installed Isotope. Refresh stages and verifies a
+complete runtime before atomically exchanging directories. An interruption
+before publication retains the existing runtime; an interruption after
+publication leaves the verified new runtime in place. The adapter is a fixed,
+root-protected shell entry point that execs the signed installed av Gate Client.
+
+Git writes its routing value under its config lock only after these checks.
+Repeated runs preserve unrelated values. Overlapping rewrites, conditional
+configuration and Git environment overrides require manual setup. Inspection
+covers effective system/global configuration and the current repository, not
+all repositories or future changes.
+
+`--without-git-configuration` leaves routing and the runtime untouched and
+records a non-authoritative manual-setup preference beside gh's hosts.yml.
+Doctor skips Git setup checks for that explicit choice. Otherwise it reports
+missing routing, conflicts and missing/stale runtime components with
+`av harden gh` as the repair path. No configuration or preference grants
+authority; the credential confinement and live request checks above remain
+unchanged. This integration still requires the signed end-to-end run below
+before release, including the separate force/lease validation in ADR 0052.
 
 The configuration-selected surface currently requires explicit GitHub HTTPS
 URLs ending in `.git`, full SHA-1 repositories, and branch refs. Tags, shallow

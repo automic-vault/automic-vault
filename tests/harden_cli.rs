@@ -5,6 +5,92 @@ use std::process::{Command, Output};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[test]
+fn gh_git_opt_out_preserves_configuration_and_migrates_credentials() {
+    let root = fixture("gh-manual-git");
+    prepare(&root, "gh");
+    let config = root.join("gh");
+    fs::create_dir(&config).unwrap();
+    fs::write(
+        config.join("hosts.yml"),
+        "github.com:\n    user: test\n    oauth_token: ghp_fixture\n",
+    )
+    .unwrap();
+    let git_config = root.join("home/.gitconfig");
+    let original = "[includeIf \"gitdir:~/work/\"]\n path = work.gitconfig\n";
+    fs::write(&git_config, original).unwrap();
+    for target in ["gh", "gh-cli"] {
+        let output = av(&root, target)
+            .arg("--without-git-configuration")
+            .env("AUTOMIC_VAULT_TEST_EUID", "501")
+            .env("AUTOMIC_VAULT_TEST_GH_CLI_PATH", root.join("targets/gh"))
+            .env("GH_CONFIG_DIR", &config)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{}", stderr(&output));
+        assert!(stdout(&output).contains("leave Git configuration unchanged"));
+        assert_eq!(fs::read_to_string(&git_config).unwrap(), original);
+        assert_eq!(
+            fs::read_to_string(config.join("av-git-configuration")).unwrap(),
+            "manual\n"
+        );
+    }
+    assert_eq!(
+        fs::read_to_string(root.join("keychain/GH_TOKEN_GITHUB_COM")).unwrap(),
+        "ghp_fixture"
+    );
+    assert!(
+        !fs::read_to_string(config.join("hosts.yml"))
+            .unwrap()
+            .contains("oauth_token")
+    );
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn gh_git_conflict_fails_before_migration_and_offers_opt_out() {
+    let root = fixture("gh-git-conflict");
+    prepare(&root, "gh");
+    let config = root.join("gh");
+    fs::create_dir(&config).unwrap();
+    let hosts = "github.com:\n    oauth_token: ghp_fixture\n";
+    fs::write(config.join("hosts.yml"), hosts).unwrap();
+    let git_config = root.join("home/.gitconfig");
+    let original = "[url \"ssh://git@github.com/\"]\n insteadOf = https://github.com/\n";
+    fs::write(&git_config, original).unwrap();
+    let output = av(&root, "gh")
+        .env("AUTOMIC_VAULT_TEST_EUID", "501")
+        .env("AUTOMIC_VAULT_TEST_GH_CLI_PATH", root.join("targets/gh"))
+        .env("XDG_CONFIG_HOME", root.join("home/.config"))
+        .env("GH_CONFIG_DIR", &config)
+        .current_dir(root.join("home"))
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(
+        stderr(&output).contains("overlapping GitHub URL rewrite"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(stderr(&output).contains("--without-git-configuration"));
+    assert_eq!(fs::read_to_string(git_config).unwrap(), original);
+    assert_eq!(fs::read_to_string(config.join("hosts.yml")).unwrap(), hosts);
+    assert!(!root.join("keychain").exists());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn git_configuration_opt_out_is_only_valid_for_gh() {
+    let root = fixture("gh-flag");
+    let output = av(&root, "aws")
+        .arg("--without-git-configuration")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(stderr(&output).contains("only supported for gh"));
+    assert!(!root.exists());
+}
+
+#[test]
 fn harden_explains_launcher_collisions_without_changing_files() {
     for command in ["sentry-cli", "civo"] {
         let root = fixture(command);
