@@ -8,6 +8,92 @@ const LEGACY_AWS_STUB: &str = include_str!("../src/isotopes/hardeners/aws.legacy
 const HOMEBREW_AWS_STUB: &str = include_str!("../src/isotopes/hardeners/aws.homebrew");
 
 #[test]
+fn gh_doctor_reports_missing_global_routing_for_an_installed_isotope() {
+    let root = gh_fixture();
+    let output = gh_doctor(&root).output().unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let issue = gh_git_issue(&output).expect("installed gh must diagnose missing Git routing");
+    assert_eq!(
+        issue["message"],
+        "GitHub HTTPS operations are not globally routed through Automic Vault"
+    );
+    assert_gh_git_repair(&issue);
+    assert!(!root.join("home/.gitconfig").exists());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn gh_doctor_reports_unavailable_transport_and_respects_manual_setup() {
+    let root = gh_fixture();
+    let config = root.join("home/.gitconfig");
+    let routing = "[url \"av::https://github.com/\"]\n insteadOf = https://github.com/\n";
+    fs::write(&config, routing).unwrap();
+    // PATH contains only the fixture gh, so the protected adapter is unavailable.
+    // Machines without the signed CLI/runtime may report that earlier failure.
+    let output = gh_doctor(&root).output().unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let issue = gh_git_issue(&output).expect("a route without usable transport needs repair");
+    assert!(!issue["message"].as_str().unwrap().is_empty());
+    assert!(
+        !issue["message"]
+            .as_str()
+            .unwrap()
+            .contains("not globally routed")
+    );
+    assert_gh_git_repair(&issue);
+
+    fs::write(root.join("gh/av-git-configuration"), "manual\n").unwrap();
+    let manual = gh_doctor(&root).output().unwrap();
+    assert!(
+        gh_git_issue(&manual).is_none(),
+        "manual setup must suppress Git repair diagnostics"
+    );
+    assert_eq!(fs::read_to_string(config).unwrap(), routing);
+    fs::remove_dir_all(root).unwrap();
+}
+
+fn gh_fixture() -> PathBuf {
+    let root = temp_dir();
+    for directory in ["home", "bin", "gh"] {
+        fs::create_dir_all(root.join(directory)).unwrap();
+    }
+    executable(&root.join("bin/gh"));
+    root
+}
+
+fn gh_doctor(root: &Path) -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_av"));
+    command
+        .env_clear()
+        .args(["doctor", "gh", "--json"])
+        .env("HOME", root.join("home"))
+        .env("XDG_CONFIG_HOME", root.join("home/.config"))
+        .env("GH_CONFIG_DIR", root.join("gh"))
+        .env("PATH", root.join("bin"))
+        .env("AUTOMIC_VAULT_TEST_GH_CLI_PATH", root.join("bin/gh"))
+        .current_dir(root.join("home"));
+    command
+}
+
+fn gh_git_issue(output: &Output) -> Option<serde_json::Value> {
+    assert!(output.stderr.is_empty(), "{}", stderr(output));
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["results"][0]["name"], "gh");
+    report["results"][0]["issues"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|issue| issue["kind"] == "gh_git_configuration")
+        .cloned()
+}
+
+fn assert_gh_git_repair(issue: &serde_json::Value) {
+    let remediation = issue["remediation"].as_str().unwrap();
+    assert!(remediation.contains("Run `av harden gh`"));
+    assert!(remediation.contains("av harden gh --without-git-configuration"));
+}
+
+#[test]
 fn av_doctor_omits_unhardened_tools_and_reports_hardened_stubs() {
     let root = temp_dir();
     let targets = root.join("targets");
