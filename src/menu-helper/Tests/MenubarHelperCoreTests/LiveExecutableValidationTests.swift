@@ -142,7 +142,13 @@ private struct LiveValidationFixture {
     try #require(SecStaticCodeCreateWithPath(fixture.executable as CFURL, [], &disk) == errSecSuccess)
     #expect(SecStaticCodeCheckValidity(try #require(disk), [], nil) != errSecSuccess)
     try fixture.input.fileHandleForWriting.write(contentsOf: Data("t".utf8))
-    #expect(try fixture.response() == "")
+    let response = try fixture.response()
+    // A cached original page is safe too; the modified byte must never be readable.
+    if response == "0" {
+        #expect(fixture.identity() == original)
+        return
+    }
+    try #require(response == "", "Modified signed page became readable: \(response)")
     for _ in 0..<100 {
         if !fixture.process.isRunning { break }
         usleep(10_000)
