@@ -7633,7 +7633,9 @@ private struct GatePolicyTable: View {
                         } label: {
                             Image(systemName: "ellipsis")
                         }
-                        .menuStyle(.borderlessButton)
+                        .menuStyle(.button)
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
                         .menuIndicator(.hidden)
                         .fixedSize()
                         .accessibilityLabel("Launcher actions for \(app.bundleIdentifier)")
