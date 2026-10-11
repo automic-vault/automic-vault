@@ -147,7 +147,7 @@ final class AutomicVaultMainWindowController: NSHostingController<DashboardRootV
     }
 
     func reloadAccessRequests() {
-        model.reloadAccessRequests()
+        model.reloadAccessRequests(incremental: true)
     }
 
     func updateDetectorFindings(_ findings: [DetectorFinding]) {
@@ -344,6 +344,7 @@ final class DashboardModel: ObservableObject {
     private var reloadTask: Task<Void, Never>?
     @Published private var accessRequestsReloadTask: Task<Void, Never>?
     private var accessRequestsReloadPending = false
+    private var historyDashboard: AuthorizationHistoryDashboard?
     private var accessRequestsGeneration = 0
     @Published private(set) var historyOlderPageCursor: Int64?
     @Published private(set) var isLoadingOlderHistory = false
@@ -1060,12 +1061,16 @@ final class DashboardModel: ObservableObject {
             }.value
             guard !Task.isCancelled else { return }
             next.detectorFindings = snapshot.detectorFindings
-            let (page, activity) = await Task.detached(priority: .background) {
-                (loadAccessRequestRecordsPage(),
-                 loadAccessRequestRecordsForDisclosure(since: Date().addingTimeInterval(-86_400)))
+            let history = await Task.detached(priority: .background) {
+                loadAuthorizationHistoryDashboard()
             }.value
+            let page = history?.page
+            let activity = history?.activityRecords
             guard !Task.isCancelled else { return }
-            overviewHistory = activity
+            if generation == accessRequestsGeneration {
+                historyDashboard = history
+                overviewHistory = activity
+            }
             next.accessRequests = generation == accessRequestsGeneration
                 ? (page?.records ?? []) : snapshot.accessRequests
             snapshot = next
@@ -1087,7 +1092,8 @@ final class DashboardModel: ObservableObject {
         }
     }
 
-    func reloadAccessRequests() {
+    func reloadAccessRequests(incremental: Bool = false) {
+        if !incremental { historyDashboard = nil }
         accessRequestsGeneration += 1
         isLoadingOlderHistory = false
         guard accessRequestsReloadTask == nil else {
@@ -1095,20 +1101,23 @@ final class DashboardModel: ObservableObject {
             return
         }
         let generation = accessRequestsGeneration
+        let previous = historyDashboard
         accessRequestsReloadTask = Task { [weak self] in
             defer {
                 self?.accessRequestsReloadTask = nil
                 if self?.accessRequestsReloadPending == true {
                     self?.accessRequestsReloadPending = false
-                    self?.reloadAccessRequests()
+                    self?.reloadAccessRequests(incremental: true)
                 }
             }
-            let (page, activity) = await Task.detached(priority: .background) {
-                (loadAccessRequestRecordsPage(),
-                 loadAccessRequestRecordsForDisclosure(since: Date().addingTimeInterval(-86_400)))
+            let history = await Task.detached(priority: .background) {
+                loadAuthorizationHistoryDashboard(previous: previous)
             }.value
+            let page = history?.page
+            let activity = history?.activityRecords
             guard !Task.isCancelled, let self,
                   generation == accessRequestsGeneration else { return }
+            historyDashboard = history
             overviewHistory = activity
             if let page {
                 snapshot.accessRequests = page.records

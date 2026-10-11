@@ -893,6 +893,14 @@ new record. See [ADR 0067](adr/0067-periodic-history-maintenance.md), which revi
 [ADR 0047](adr/0047-encrypted-rolling-authorization-history.md) and
 [ADR 0050](adr/0050-configurable-authorization-history-size.md).
 
+Dashboard refreshes combine the first History page, retained-day count, and
+24-hour activity in one authenticated scan. Ciphertext is copied in bounded
+batches and decrypted outside the insertion lock. Commit notifications reuse a
+display snapshot for up to one minute and authenticate only newly appended rows;
+explicit refreshes rescan. Maintenance, imports, and SQLite commits from other
+connections invalidate that snapshot. CLI disclosure retains its existing
+verified snapshot path. See [ADR 0068](adr/0068-dashboard-history-reads.md).
+
 For an automically authorized Secret Use, the Authorization Record includes the
 Target's available Hardened Runtime posture at authorization time. Ordinary
 `av inject` requests inspect the resolved Target executable because it has not

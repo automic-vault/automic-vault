@@ -33,6 +33,30 @@ public struct AuthorizationHistoryPage: Sendable {
     public let storedDayCount: Int?
 }
 
+/// Display-only, authenticated history snapshot; never an authorization input.
+public struct AuthorizationHistoryDashboard: Sendable {
+    fileprivate struct Entry: Sendable {
+        let sequence: Int64
+        let record: AccessRequestRecord
+    }
+    fileprivate let owner: UUID
+    fileprivate let revision: UInt64
+    fileprivate let dataVersion: Int64
+    fileprivate let calendar: Calendar
+    fileprivate let scannedAt: Date
+    fileprivate var throughSequence: Int64
+    fileprivate var recent: [Entry] = []
+    fileprivate var activity: [Entry] = []
+    fileprivate var latestByDay: [Date: Date] = [:]
+
+    public var page: AuthorizationHistoryPage {
+        AuthorizationHistoryPage(records: recent.reversed().map(\.record),
+            olderPageCursor: recent.count == 50 ? recent.first?.sequence : nil,
+            storedDayCount: latestByDay.count)
+    }
+    public var activityRecords: [AccessRequestRecord] { activity.reversed().map(\.record) }
+}
+
 public enum AuthorizationHistoryStoreError: Error, Equatable {
     case invalidKey
     case sqlite(String)
@@ -52,6 +76,8 @@ public final class AuthorizationHistoryStore: @unchecked Sendable {
     private let now: @Sendable () -> Date
     private let lock = NSLock()
     private let maintenanceLock = NSLock()
+    private let dashboardOwner = UUID()
+    private var dashboardRevision: UInt64 = 0
     private var estimatedEncryptedBytes: Int64 = 0
     private var appendedBytes: Int64 = 0
 
@@ -193,6 +219,7 @@ public final class AuthorizationHistoryStore: @unchecked Sendable {
                 }
                 try verifyBeforeCommit()
                 try execute("COMMIT")
+                dashboardRevision &+= 1
             } catch {
                 try? execute("ROLLBACK")
                 throw error
@@ -307,6 +334,90 @@ public final class AuthorizationHistoryStore: @unchecked Sendable {
         }
     }
 
+    public func dashboard(previous: AuthorizationHistoryDashboard? = nil) throws -> AuthorizationHistoryDashboard {
+        try dashboard(previous: previous, afterBatch: {})
+    }
+
+    func dashboard(previous: AuthorizationHistoryDashboard?, afterBatch: () throws -> Void) throws -> AuthorizationHistoryDashboard {
+        let calendar = Calendar.current
+        let (revision, dataVersion, upperSequence, maximumAge) = try lock.withLock {
+            let version = try dashboardDataVersion()
+            var statement: OpaquePointer?
+            try prepare("SELECT COALESCE(MAX(sequence), 0) FROM authorization_history", into: &statement)
+            defer { sqlite3_finalize(statement) }
+            guard sqlite3_step(statement) == SQLITE_ROW else { throw sqliteError("dashboard boundary failed") }
+            return (dashboardRevision, version, sqlite3_column_int64(statement, 0), retention.maximumAge)
+        }
+        let currentDate = now()
+        let cutoff = currentDate.addingTimeInterval(-maximumAge)
+        let activityCutoff = max(cutoff, currentDate.addingTimeInterval(-86_400))
+        // Refresh explicit reads and snapshots older than a minute to observe external changes.
+        var result: AuthorizationHistoryDashboard
+        if let previous, previous.owner == dashboardOwner, previous.revision == revision,
+           previous.dataVersion == dataVersion, previous.calendar == calendar, previous.throughSequence <= upperSequence,
+           (0..<60).contains(currentDate.timeIntervalSince(previous.scannedAt)),
+           previous.recent.allSatisfy({ $0.record.date >= cutoff && $0.record.date <= currentDate }) {
+            result = previous
+        } else {
+            result = AuthorizationHistoryDashboard(owner: dashboardOwner, revision: revision,
+                dataVersion: dataVersion, calendar: calendar, scannedAt: currentDate, throughSequence: 0)
+        }
+        var cursor = result.throughSequence
+        while cursor < upperSequence {
+            let rows: [(Int64, String, Data, Data)] = try lock.withLock {
+                var statement: OpaquePointer?
+                try prepare("SELECT id, retention_bucket, ciphertext, sequence FROM authorization_history WHERE sequence > ? AND sequence <= ? ORDER BY sequence LIMIT 64", into: &statement)
+                defer { sqlite3_finalize(statement) }
+                sqlite3_bind_int64(statement, 1, cursor)
+                sqlite3_bind_int64(statement, 2, upperSequence)
+                var rows: [(Int64, String, Data, Data)] = []
+                var bytes = 0
+                while true {
+                    switch sqlite3_step(statement) {
+                    case SQLITE_ROW:
+                        let ciphertext = data(at: 2, from: statement)
+                        rows.append((sqlite3_column_int64(statement, 3), try storedRecordID(from: statement),
+                                     data(at: 1, from: statement), ciphertext))
+                        bytes += ciphertext.count
+                        if bytes >= 1_048_576 { return rows }
+                    case SQLITE_DONE: return rows
+                    default: throw sqliteError("dashboard scan failed")
+                    }
+                }
+            }
+            guard !rows.isEmpty else { break }
+            try afterBatch()
+            for (sequence, id, bucket, ciphertext) in rows {
+                let record = try decode(ciphertext, id: id, bucket: bucket)
+                cursor = sequence
+                guard record.date >= cutoff, record.date <= currentDate else { continue }
+                result.recent.append(.init(sequence: sequence, record: record))
+                if record.date >= activityCutoff { result.activity.append(.init(sequence: sequence, record: record)) }
+                let day = calendar.startOfDay(for: record.date)
+                result.latestByDay[day] = max(result.latestByDay[day] ?? record.date, record.date)
+            }
+            result.recent = Array(result.recent.suffix(50))
+        }
+        result.throughSequence = upperSequence
+        result.activity.removeAll { $0.record.date < activityCutoff || $0.record.date > currentDate }
+        result.latestByDay = result.latestByDay.filter { $0.value >= cutoff && $0.value <= currentDate }
+        try lock.withLock {
+            guard dashboardRevision == revision, try dashboardDataVersion() == dataVersion else {
+                throw AuthorizationHistoryStoreError.verificationFailed
+            }
+        }
+        return result
+    }
+
+    // Called under lock; commits by other SQLite connections invalidate display snapshots.
+    private func dashboardDataVersion() throws -> Int64 {
+        var statement: OpaquePointer?
+        try prepare("PRAGMA data_version", into: &statement)
+        defer { sqlite3_finalize(statement) }
+        guard sqlite3_step(statement) == SQLITE_ROW else { throw sqliteError("dashboard version failed") }
+        return sqlite3_column_int64(statement, 0)
+    }
+
     public func setMaximumEncryptedBytes(_ bytes: Int64) throws {
         guard bytes > 0 else { throw AuthorizationHistoryStoreError.invalidLimit }
         lock.withLock {
@@ -399,6 +510,7 @@ public final class AuthorizationHistoryStore: @unchecked Sendable {
                     }
                     try delete(id: candidate.id)
                     try execute("COMMIT")
+                    dashboardRevision &+= 1
                     removed += candidate.size
                 } catch {
                     try? execute("ROLLBACK")

@@ -2129,6 +2129,15 @@ public func loadAccessRequestRecordsForDisclosure(
     return records
 }
 
+public func loadAuthorizationHistoryDashboard(
+    previous: AuthorizationHistoryDashboard? = nil
+) -> AuthorizationHistoryDashboard? {
+    guard let store = productionAuthorizationHistoryStore.get() else { return nil }
+    let snapshot = try? store.dashboard(previous: previous)
+    productionAuthorizationHistoryStore.scheduleMaintenanceIfDue(store)
+    return snapshot
+}
+
 public func loadAccessRequestRecordsPage(
     beforeSequence: Int64? = nil
 ) -> AuthorizationHistoryPage? {

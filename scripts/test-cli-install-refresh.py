@@ -47,6 +47,14 @@ struct AuthorizationHistoryPage {
     let olderPageCursor: Int64?
     let storedDayCount: Int?
 }
+struct AuthorizationHistoryDashboard {
+    let page: AuthorizationHistoryPage
+    let activityRecords: [AccessRequestRecord]
+}
+func loadAuthorizationHistoryDashboard(previous: AuthorizationHistoryDashboard? = nil) -> AuthorizationHistoryDashboard? {
+    guard let page = loadAccessRequestRecordsPage() else { return nil }
+    return AuthorizationHistoryDashboard(page: page, activityRecords: ["latest"])
+}
 enum DashboardSection { case secretUsage }
 
 struct DashboardSnapshot: Sendable {
@@ -95,6 +103,7 @@ func loadAccessRequestRecordsPage(beforeSequence: Int64? = nil) -> Authorization
     var reloadTask: Task<Void, Never>?
     var accessRequestsReloadTask: Task<Void, Never>?
     var accessRequestsReloadPending = false
+    var historyDashboard: AuthorizationHistoryDashboard?
     var accessRequestsGeneration = 0
     var historyOlderPageCursor: Int64?
     var isLoadingOlderHistory = false

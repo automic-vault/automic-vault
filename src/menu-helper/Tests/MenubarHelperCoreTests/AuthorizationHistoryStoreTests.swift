@@ -601,6 +601,142 @@ func authorizationHistoryMaintenanceStopsWhenRetentionChanges() throws {
     #expect(try fixture.store.records().count == 8)
 }
 
+@Test
+func authorizationHistoryDashboardCombinesPageActivityAndDayCount() throws {
+    let fixture = try HistoryStoreFixture()
+    defer { fixture.remove() }
+    for index in 0..<75 { #expect(fixture.store.append(fixture.record(index: index))) }
+    let snapshot = try fixture.store.dashboard()
+    #expect(snapshot.page.records == (try fixture.store.page()).records)
+    #expect(snapshot.page.olderPageCursor == (try fixture.store.page()).olderPageCursor)
+    #expect(snapshot.page.storedDayCount == (try fixture.store.page()).storedDayCount)
+    #expect(snapshot.activityRecords == (try fixture.store.records()))
+    var batches = 0
+    _ = try fixture.store.dashboard(previous: snapshot, afterBatch: { batches += 1 })
+    #expect(batches == 0)
+    #expect(fixture.store.append(fixture.record(index: 76)))
+    let updated = try fixture.store.dashboard(previous: snapshot, afterBatch: { batches += 1 })
+    #expect(batches == 1)
+    #expect(updated.page.records == (try fixture.store.page()).records)
+    #expect(updated.activityRecords == (try fixture.store.records()))
+}
+
+@Test
+func authorizationHistoryDashboardYieldsToAppendAndBoundsItsScan() throws {
+    let fixture = try HistoryStoreFixture()
+    defer { fixture.remove() }
+    #expect(fixture.store.append(fixture.record(index: 1)))
+    let concurrent = fixture.record(index: 2)
+    let snapshot = try fixture.store.dashboard(previous: nil, afterBatch: {
+        #expect(fixture.store.append(concurrent))
+    })
+    #expect(!snapshot.page.records.contains(concurrent))
+    let updated = try fixture.store.dashboard(previous: snapshot)
+    #expect(updated.page.records.first == concurrent)
+}
+
+@Test
+func authorizationHistoryDashboardInvalidatesAfterMaintenance() throws {
+    let fixture = try HistoryStoreFixture()
+    defer { fixture.remove() }
+    for index in 0..<8 { #expect(fixture.store.append(fixture.record(index: index))) }
+    let snapshot = try fixture.store.dashboard()
+    try fixture.store.setMaximumEncryptedBytes(1_800)
+    try fixture.store.maintain()
+    let updated = try fixture.store.dashboard(previous: snapshot)
+    #expect(updated.page.records.count < snapshot.page.records.count)
+    #expect(updated.page.records == (try fixture.store.records()))
+}
+
+@Test
+func authorizationHistoryDashboardRejectsCorruptionOnExplicitRefreshAndDisclosure() throws {
+    let fixture = try HistoryStoreFixture()
+    defer { fixture.remove() }
+    #expect(fixture.store.append(fixture.record(index: 1)))
+    let snapshot = try fixture.store.dashboard()
+    var database: OpaquePointer?
+    try #require(sqlite3_open(fixture.url.path, &database) == SQLITE_OK)
+    defer { sqlite3_close(database) }
+    #expect(sqlite3_exec(database, "UPDATE authorization_history SET ciphertext = zeroblob(32)", nil, nil, nil) == SQLITE_OK)
+    #expect(throws: AuthorizationHistoryStoreError.self) { try fixture.store.dashboard() }
+    #expect(throws: AuthorizationHistoryStoreError.self) { try fixture.store.records() }
+    #expect(throws: AuthorizationHistoryStoreError.self) { try fixture.store.dashboard(previous: snapshot) }
+}
+
+@Test
+func authorizationHistoryDashboardInvalidatesAfterImportAndDuringMaintenance() throws {
+    let fixture = try HistoryStoreFixture()
+    defer { fixture.remove() }
+    let original = fixture.record(index: 1)
+    try #require(fixture.store.append(original))
+    let snapshot = try fixture.store.dashboard()
+    let replacement = fixture.record(index: 2, reason: "Imported")
+    try fixture.store.importRecords([replacement])
+    #expect(try fixture.store.dashboard(previous: snapshot).page.records == [replacement, original])
+    for index in 3..<8 { try #require(fixture.store.append(fixture.record(index: index))) }
+    try fixture.store.setMaximumEncryptedBytes(1_800)
+    #expect(throws: AuthorizationHistoryStoreError.verificationFailed) {
+        try fixture.store.dashboard(previous: nil, afterBatch: { try fixture.store.maintain() })
+    }
+}
+
+@Test
+func authorizationHistoryDashboardRescansAfterOneMinuteAndFiltersExpiredRecords() throws {
+    let fixture = try HistoryStoreFixture()
+    defer { fixture.remove() }
+    let clock = HistoryDashboardClock()
+    let store = try AuthorizationHistoryStore(url: fixture.url, keyData: Data(repeating: 7, count: 32),
+        now: { clock.read() })
+    let recent = fixture.record(index: 1)
+    let expiring = fixture.record(index: 2, date: clock.read().addingTimeInterval(-30 * 86_400 + 60))
+    try #require(store.append(expiring))
+    try #require(store.append(recent))
+    let snapshot = try store.dashboard()
+    clock.advance(59)
+    var batches = 0
+    let delta = try store.dashboard(previous: snapshot, afterBatch: { batches += 1 })
+    #expect(batches == 0)
+    clock.advance(1)
+    let refreshed = try store.dashboard(previous: delta, afterBatch: { batches += 1 })
+    #expect(batches == 1)
+    #expect(refreshed.page.records.count == 2)
+    clock.advance(1)
+    let expired = try store.dashboard(previous: refreshed)
+    #expect(expired.page.records == [recent])
+    #expect(expired.page.storedDayCount == 1)
+    #expect(expired.activityRecords == [recent])
+}
+
+private final class HistoryDashboardClock: @unchecked Sendable {
+    private let lock = NSLock()
+    private var date = Date(timeIntervalSince1970: 4_000_000)
+    func read() -> Date { lock.withLock { date } }
+    func advance(_ seconds: TimeInterval) { lock.withLock { date.addTimeInterval(seconds) } }
+}
+
+@Test
+func authorizationHistoryDashboardReadsOnlyNewRowsOnIncrementalRefresh() throws {
+    let fixture = try HistoryStoreFixture()
+    defer { fixture.remove() }
+    for index in 0..<1_000 {
+        try #require(fixture.store.append(fixture.record(index: index,
+            date: Date(timeIntervalSince1970: 3_999_900), reason: String(repeating: "x", count: 2_000))))
+    }
+    let start = Date()
+    _ = try fixture.store.page()
+    _ = try fixture.store.records(since: Date(timeIntervalSince1970: 4_000_000 - 86_400))
+    let oldSeconds = Date().timeIntervalSince(start)
+    let snapshot = try fixture.store.dashboard()
+    try #require(fixture.store.append(fixture.record(index: 1_001, date: Date(timeIntervalSince1970: 3_999_950))))
+    var batches = 0
+    let deltaStart = Date()
+    let updated = try fixture.store.dashboard(previous: snapshot, afterBatch: { batches += 1 })
+    let deltaSeconds = Date().timeIntervalSince(deltaStart)
+    #expect(batches == 1)
+    #expect(updated.activityRecords.count == 1_001)
+    print("History dashboard benchmark, 1000 records: old dual scan=\(oldSeconds)s, incremental=\(deltaSeconds)s")
+}
+
 private final class HistoryStoreFixture {
     let directory: URL
     let url: URL
