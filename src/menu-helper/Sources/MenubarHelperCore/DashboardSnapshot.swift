@@ -2171,8 +2171,8 @@ final class ProductionAuthorizationHistoryStore: @unchecked Sendable {
             if timer == nil {
                 let source = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
                 source.schedule(deadline: .now() + 60, repeating: 60, leeway: .seconds(10))
-                source.setEventHandler { [weak self, weak store] in
-                    guard let self, let store else { return }
+                source.setEventHandler { [weak self] in
+                    guard let self, let store = self.get() else { return }
                     self.scheduleMaintenanceIfDue(store)
                 }
                 timer = source
