@@ -792,11 +792,14 @@ metadata do not offer configuration; opening a rule grants no authority.
 
 Automic Vault persists and verifies a record of allowed Secret Use before releasing a Secret. Failure to persist that required record denies the request. Records of denials and failures are best effort. Authorization History is bounded and local; it is not an append-only, tamper-proof, or complete forensic log.
 
-The Mac makes Authorization History available for up to 30 days and a configurable
-encrypted record payload limit (1–1024 MiB, default 25 MiB), whichever bound is
-reached first. SQLite overhead is additional to this payload limit. Expired ciphertext
-is filtered from reads immediately and pruned on writes or a coalesced
-background pass after a read. A dormant database may temporarily retain it.
+The Mac makes Authorization History available for up to 30 days, with an encrypted
+record payload retention target (1–1024 MiB, default 25 MiB). SQLite overhead is
+additional. The target may be exceeded between maintenance passes. Expired records
+are filtered from reads immediately; hourly maintenance while the app is running,
+and overdue maintenance after startup or wake, removes eligible ciphertext.
+An unused database can retain expired ciphertext. Historical corruption makes
+that history unavailable and maintenance reports failure; it does not deny a new
+Secret Use whose own required record is durably persisted and verified.
 The dashboard browses all retained records, grouped by day. An unqualified
 `av history` shows the newest 50 records; `av history --since` may request an
 explicit window up to the retention limit. The CLI returns every retained record

@@ -1,6 +1,6 @@
 # ADR 0047: Encrypted Rolling Authorization History
 
-Status: accepted
+Status: accepted; write-time pruning and cap semantics superseded by [ADR 0067](0067-periodic-history-maintenance.md)
 
 ## Context
 

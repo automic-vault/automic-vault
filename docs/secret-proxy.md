@@ -69,8 +69,9 @@ output-redaction guarantee; the helper cannot recognize transformed output.
 Active sessions and their statistics appear under **Credential Proxies**. Ending a
 session terminates only the proxy helper, not the Target. Its records remain in
 the global Authorization History. The dashboard browses retained records by
-day; the rolling store makes up to 30 days or 25 MiB of encrypted payloads
-available.
+day; records are available for up to 30 days. Periodic maintenance applies the
+configured encrypted payload retention target (default 25 MiB), allowing
+temporary overshoot between passes.
 
 See [Canonical Domain Language](domain-language.md),
 [Architecture](architecture.md), and

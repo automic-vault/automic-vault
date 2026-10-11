@@ -51,6 +51,13 @@ public final class AuthorizationHistoryStore: @unchecked Sendable {
     private var retention: AuthorizationHistoryRetention
     private let now: @Sendable () -> Date
     private let lock = NSLock()
+    private let maintenanceLock = NSLock()
+    private var estimatedEncryptedBytes: Int64 = 0
+    private var appendedBytes: Int64 = 0
+
+    public var needsMaintenance: Bool {
+        lock.withLock { estimatedEncryptedBytes >= retention.maximumEncryptedBytes }
+    }
 
     public init(
         url: URL,
@@ -149,7 +156,6 @@ public final class AuthorizationHistoryStore: @unchecked Sendable {
                     guard try restoredRecord(id: record.id) == record else {
                         throw AuthorizationHistoryStoreError.verificationFailed
                     }
-                    try prune(preserving: record.id)
                     try execute("COMMIT")
                 } catch {
                     try? execute("ROLLBACK")
@@ -158,6 +164,8 @@ public final class AuthorizationHistoryStore: @unchecked Sendable {
                 guard try restoredRecord(id: record.id) == record else {
                     throw AuthorizationHistoryStoreError.verificationFailed
                 }
+                estimatedEncryptedBytes += Int64(ciphertext.count)
+                appendedBytes += Int64(ciphertext.count)
                 return true
             } catch {
                 return false
@@ -193,14 +201,6 @@ public final class AuthorizationHistoryStore: @unchecked Sendable {
                 guard try restoredRecord(id: record.id) == record else {
                     throw AuthorizationHistoryStoreError.verificationFailed
                 }
-            }
-            try execute("BEGIN IMMEDIATE")
-            do {
-                try prune(preserving: nil)
-                try execute("COMMIT")
-            } catch {
-                try? execute("ROLLBACK")
-                throw error
             }
         }
     }
@@ -309,33 +309,105 @@ public final class AuthorizationHistoryStore: @unchecked Sendable {
 
     public func setMaximumEncryptedBytes(_ bytes: Int64) throws {
         guard bytes > 0 else { throw AuthorizationHistoryStoreError.invalidLimit }
-        try lock.withLock {
-            guard bytes != retention.maximumEncryptedBytes else { return }
-            let previous = retention
-            try execute("BEGIN IMMEDIATE")
-            do {
-                retention = AuthorizationHistoryRetention(
-                    maximumAge: previous.maximumAge, maximumEncryptedBytes: bytes)
-                try prune(preserving: nil)
-                try execute("COMMIT")
-            } catch {
-                retention = previous
-                try? execute("ROLLBACK")
-                throw error
-            }
+        lock.withLock {
+            retention = AuthorizationHistoryRetention(
+                maximumAge: retention.maximumAge, maximumEncryptedBytes: bytes)
         }
     }
 
     public func maintain() throws {
-        try lock.withLock {
-            try execute("BEGIN IMMEDIATE")
-            do {
-                try prune(preserving: nil)
-                try execute("COMMIT")
-            } catch {
-                try? execute("ROLLBACK")
-                throw error
+        try maintain(afterScan: {})
+    }
+
+    // The hook exercises mutations between authentication and deletion in tests.
+    func maintain(afterScan: () throws -> Void) throws {
+        guard maintenanceLock.try() else { return }
+        defer { maintenanceLock.unlock() }
+        let (policy, appendedAtStart, upperSequence) = try lock.withLock {
+            var statement: OpaquePointer?
+            try prepare("SELECT COALESCE(MAX(sequence), 0) FROM authorization_history", into: &statement)
+            defer { sqlite3_finalize(statement) }
+            guard sqlite3_step(statement) == SQLITE_ROW else { throw sqliteError("maintenance boundary failed") }
+            return (retention, appendedBytes, sqlite3_column_int64(statement, 0))
+        }
+        struct Candidate {
+            let sequence: Int64
+            let id: String
+            let digest: SHA256.Digest
+            let date: Date
+            let size: Int64
+        }
+        let currentDate = now()
+        let cutoff = currentDate.addingTimeInterval(-policy.maximumAge)
+        var candidates: [Candidate] = []
+        var cursor: Int64 = 0
+        var total: Int64 = 0
+        while cursor < upperSequence {
+            // Copy one row, release the insertion lock, then authenticate and decode it.
+            let row: (Int64, String, Data, Data)? = try lock.withLock {
+                var statement: OpaquePointer?
+                try prepare("SELECT id, retention_bucket, ciphertext, sequence FROM authorization_history WHERE sequence > ? AND sequence <= ? ORDER BY sequence LIMIT 1", into: &statement)
+                defer { sqlite3_finalize(statement) }
+                sqlite3_bind_int64(statement, 1, cursor)
+                sqlite3_bind_int64(statement, 2, upperSequence)
+                switch sqlite3_step(statement) {
+                case SQLITE_ROW:
+                    return (sqlite3_column_int64(statement, 3), try storedRecordID(from: statement),
+                            data(at: 1, from: statement), data(at: 2, from: statement))
+                case SQLITE_DONE: return nil
+                default: throw sqliteError("maintenance scan failed")
+                }
             }
+            guard let (sequence, id, bucket, ciphertext) = row else { break }
+            let record = try decode(ciphertext, id: id, bucket: bucket)
+            candidates.append(Candidate(sequence: sequence, id: id,
+                digest: SHA256.hash(data: bucket + ciphertext), date: record.date, size: Int64(ciphertext.count)))
+            total += Int64(ciphertext.count)
+            cursor = sequence
+        }
+        try afterScan()
+        func expired(_ candidate: Candidate) -> Bool {
+            candidate.date < cutoff || candidate.date > currentDate
+        }
+        candidates.sort {
+            if expired($0) != expired($1) { return expired($0) }
+            return $0.date == $1.date ? $0.sequence < $1.sequence : $0.date < $1.date
+        }
+        var removed: Int64 = 0
+        for candidate in candidates {
+            guard expired(candidate) || total - removed > policy.maximumEncryptedBytes else { continue }
+            try lock.withLock {
+                // A changed setting requires a new selection, never deletion under the old policy.
+                guard retention.maximumEncryptedBytes == policy.maximumEncryptedBytes else {
+                    throw AuthorizationHistoryStoreError.verificationFailed
+                }
+                try execute("BEGIN IMMEDIATE")
+                do {
+                    var statement: OpaquePointer?
+                    try prepare("SELECT id, retention_bucket, ciphertext FROM authorization_history WHERE sequence = ?", into: &statement)
+                    sqlite3_bind_int64(statement, 1, candidate.sequence)
+                    do {
+                        defer { sqlite3_finalize(statement) }
+                        switch sqlite3_step(statement) {
+                        case SQLITE_ROW:
+                            guard try storedRecordID(from: statement) == candidate.id,
+                                  SHA256.hash(data: data(at: 1, from: statement) + data(at: 2, from: statement)) == candidate.digest
+                            else { throw AuthorizationHistoryStoreError.verificationFailed }
+                        case SQLITE_DONE: throw AuthorizationHistoryStoreError.verificationFailed
+                        default: throw sqliteError("maintenance recheck failed")
+                        }
+                    }
+                    try delete(id: candidate.id)
+                    try execute("COMMIT")
+                    removed += candidate.size
+                } catch {
+                    try? execute("ROLLBACK")
+                    throw error
+                }
+            }
+        }
+        lock.withLock {
+            estimatedEncryptedBytes = total - removed + (appendedBytes - appendedAtStart)
         }
     }
 
@@ -430,54 +502,6 @@ public final class AuthorizationHistoryStore: @unchecked Sendable {
               UUID(uuidString: id)?.uuidString == id
         else { throw AuthorizationHistoryStoreError.decoding }
         return id
-    }
-
-    private func prune(preserving recordID: UUID?) throws {
-        // ponytail: O(rows) inside the configured ciphertext cap; larger caps add latency. Authenticate every row
-        // before allowing Secret Use; a cleartext date index would leak activity.
-        let currentDate = now()
-        let cutoff = currentDate.addingTimeInterval(-retention.maximumAge)
-        var rows: [(id: String, size: Int64, expired: Bool, date: Date)] = []
-        var totalBytes: Int64 = 0
-        do {
-            var statement: OpaquePointer?
-            try prepare(
-                "SELECT id, retention_bucket, ciphertext FROM authorization_history ORDER BY sequence ASC",
-                into: &statement
-            )
-            defer { sqlite3_finalize(statement) }
-            scan: while true {
-                switch sqlite3_step(statement) {
-                case SQLITE_ROW:
-                    let id = try storedRecordID(from: statement)
-                    let bucket = data(at: 1, from: statement)
-                    let ciphertext = data(at: 2, from: statement)
-                    let record = try decode(ciphertext, id: id, bucket: bucket)
-                    let expired = id != recordID?.uuidString
-                        && (record.date < cutoff || record.date > currentDate)
-                    let size = Int64(ciphertext.count)
-                    totalBytes += size
-                    rows.append((id, size, expired, record.date))
-                case SQLITE_DONE:
-                    break scan
-                default:
-                    throw sqliteError("expiry query failed")
-                }
-            }
-        }
-        for row in rows where row.expired {
-            try delete(id: row.id)
-            totalBytes -= row.size
-        }
-        rows.sort { $0.date < $1.date }
-        for row in rows where !row.expired && totalBytes > retention.maximumEncryptedBytes {
-            guard row.id != recordID?.uuidString else { continue }
-            try delete(id: row.id)
-            totalBytes -= row.size
-        }
-        guard totalBytes <= retention.maximumEncryptedBytes else {
-            throw AuthorizationHistoryStoreError.recordTooLarge
-        }
     }
 
     private func delete(id: String) throws {

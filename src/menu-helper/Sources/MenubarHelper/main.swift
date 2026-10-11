@@ -154,13 +154,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         startServicesAndOpenMainWindowIfRequested()
         startAutomaticUpdateChecks()
+        maintainAuthorizationHistoryIfDue()
         #if !DEBUG
         startDailyHeartbeat()
         #endif
     }
 
+    @objc private func historyDidWake(_ notification: Notification) {
+        maintainAuthorizationHistoryIfDue()
+    }
+
     func applicationWillFinishLaunching(_ notification: Notification) {
         let center = NSWorkspace.shared.notificationCenter
+        center.addObserver(self, selector: #selector(historyDidWake(_:)),
+                           name: NSWorkspace.didWakeNotification, object: nil)
         center.addObserver(
             self,
             selector: #selector(userSessionDidResignActive(_:)),

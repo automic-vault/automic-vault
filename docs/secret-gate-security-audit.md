@@ -96,8 +96,9 @@ The single-user migration completed on 2026-07-14. The signed transitional build
 Authorization History records are AES-GCM encrypted with a key in the app's
 Data Protection Keychain access group. Allowed requests fail closed if their
 committed record cannot be authenticated, decoded, and compared with the
-expected record. Available history is bounded to 30 days and 25 MiB of encrypted
-payloads; the dashboard browses retained records by day, while `av history`
+expected record. Historical corruption does not block an independently verified
+new record. Available history is bounded to 30 days; periodic maintenance enforces
+a configurable encrypted payload retention target, default 25 MiB, with temporary overshoot; the dashboard browses retained records by day, while `av history`
 shows the newest 50 by default. This is not a remote, append-only, or complete
 forensic log. Denied and failed requests remain best effort because they never
 receive a Secret.

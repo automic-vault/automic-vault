@@ -267,8 +267,9 @@ that phone observed and does not prove that a Mac accepted a response.
 The Mac stores separately encrypted records in one SQLite database in
 Application Support. The encryption key stays in the Data Protection Keychain.
 The rolling store makes up to 30 days of encrypted record payloads available,
-subject to a configurable 1–1024 MiB payload cap (25 MiB by default), whichever
-bound comes first. SQLite overhead is additional. The dashboard browses all retained
+with a configurable 1–1024 MiB payload retention target (25 MiB by default).
+Periodic maintenance enforces the target; temporary overshoot is allowed.
+SQLite overhead is additional. The dashboard browses all retained
 records by day; `av history` shows the newest 50 by default. See the
 [canonical definition](domain-language.md#authorization-history).
 

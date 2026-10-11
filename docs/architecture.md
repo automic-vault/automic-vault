@@ -876,15 +876,22 @@ inspection or migration.
 
 Authorization History is bounded local operational history. Same-user compromise or storage failure can damage it. Product copy must not promise an append-only audit trail or complete forensic evidence.
 
-The rolling store makes at most 30 days of encrypted record payloads available,
-with a configurable payload cap of 1–1024 MiB, defaulting to 25 MiB. Size changes
-apply transactionally on the next history access; failures make that access
-unavailable. SQLite overhead is additional. See
-[ADR 0050](adr/0050-configurable-authorization-history-size.md). Reads filter expired rows; writes prune them, and a
-coalesced background pass prunes after reads. An unused database can retain
-expired ciphertext until its next access. Each allowed
-Secret Use commits and verifies its record synchronously before release. See
-[ADR 0047](adr/0047-encrypted-rolling-authorization-history.md).
+Each allowed Secret Use synchronously encrypts, commits, reads back, and verifies
+only its new Authorization Record before release. Historical rows are authenticated
+on disclosure and maintenance, not as a prerequisite for unrelated Secret Use.
+Encryption and Keychain custody are unchanged.
+
+The 1–1024 MiB setting (default 25 MiB) is an encrypted payload retention target,
+not an instantaneous cap or maximum SQLite file size. Maintenance runs hourly
+while active, after startup/wake when overdue, and earlier under estimated size
+pressure (with a one-minute retry interval). Reads always filter records outside
+the 30-day window. Maintenance authenticates a bounded sequence of rows outside
+the insertion lock, then rechecks each selected row and deletes it in a short
+transaction. Concurrent inserts are excluded from that pass. Maintenance failure
+is logged, preserves unchecked rows, and does not invalidate a separately verified
+new record. See [ADR 0067](adr/0067-periodic-history-maintenance.md), which revises
+[ADR 0047](adr/0047-encrypted-rolling-authorization-history.md) and
+[ADR 0050](adr/0050-configurable-authorization-history-size.md).
 
 For an automically authorized Secret Use, the Authorization Record includes the
 Target's available Hardened Runtime posture at authorization time. Ordinary

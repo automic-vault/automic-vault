@@ -5899,7 +5899,7 @@ private struct AuthorizationHistoryAccessSettingsView: View {
                         .disabled(!AuthorizationHistoryRetention.sizeRangeMiB.contains(draftSizeMiB)
                             || draftSizeMiB == sizeMiB)
                 }
-                Text("1–1024 MiB; default 25 MiB. Limits encrypted record payloads; SQLite adds disk overhead. Records are kept for up to 30 days. Lowering the limit removes older records on the next history access.")
+                Text("1–1024 MiB; default 25 MiB. Target for encrypted record payloads; SQLite adds disk overhead. History older than 30 days is hidden. Periodic cleanup removes older records; usage may temporarily exceed the target.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

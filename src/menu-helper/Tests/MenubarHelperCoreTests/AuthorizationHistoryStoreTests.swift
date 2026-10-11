@@ -183,6 +183,8 @@ func authorizationHistoryStorePrunesOldestRecordsAtTheByteLimit() throws {
         )
     }
 
+    #expect(try fixture.store.records().count == 8)
+    try fixture.store.maintain()
     let records = try fixture.store.records()
     #expect(records.count < 8)
     #expect(records.first?.command == "fixture 7")
@@ -202,6 +204,7 @@ func authorizationHistoryStoreEvictsByRecordDateNotCommitOrder() throws {
     #expect(fixture.store.append(newer))
     #expect(fixture.store.append(older))
     #expect(fixture.store.append(middle))
+    try fixture.store.maintain()
     #expect(Set(try fixture.store.records().map(\.id)) == Set([newer.id, middle.id]))
 }
 
@@ -261,11 +264,12 @@ func authorizationHistoryStoreRejectsCorruptRecordIDWithoutTrapping() throws {
     #expect(throws: AuthorizationHistoryStoreError.self) {
         try fixture.store.records()
     }
-    #expect(!fixture.store.append(fixture.record(index: 2)))
+    #expect(fixture.store.append(fixture.record(index: 2)))
+    #expect(throws: AuthorizationHistoryStoreError.self) { try fixture.store.maintain() }
 }
 
 @Test
-func authorizationHistoryStoreRejectsCorruptCiphertextBeforeAppend() throws {
+func authorizationHistoryStoreDefersHistoricalCorruptionToMaintenance() throws {
     let fixture = try HistoryStoreFixture()
     defer { fixture.remove() }
     #expect(fixture.store.append(fixture.record(index: 1)))
@@ -278,7 +282,8 @@ func authorizationHistoryStoreRejectsCorruptCiphertextBeforeAppend() throws {
         "UPDATE authorization_history SET ciphertext = zeroblob(32)",
         nil, nil, nil
     ) == SQLITE_OK)
-    #expect(!fixture.store.append(fixture.record(index: 2)))
+    #expect(fixture.store.append(fixture.record(index: 2)))
+    #expect(throws: AuthorizationHistoryStoreError.self) { try fixture.store.maintain() }
 }
 
 @Test
@@ -392,28 +397,23 @@ func legacyDefaultsHistoryIsImportedOnlyWhenValid() throws {
 }
 
 @Test
-func legacyHistoryImportFailsWhenAuthenticationFails() throws {
+func legacyHistoryImportOnlyAuthenticatesItsOwnRecords() throws {
     let fixture = try HistoryStoreFixture()
     defer { fixture.remove() }
-    #expect(fixture.store.append(fixture.record(index: 1)))
+    let corrupt = fixture.record(index: 1)
+    #expect(fixture.store.append(corrupt))
     var database: OpaquePointer?
-    #expect(sqlite3_open(fixture.url.path, &database) == SQLITE_OK)
+    try #require(sqlite3_open(fixture.url.path, &database) == SQLITE_OK)
     defer { sqlite3_close(database) }
-    #expect(sqlite3_exec(
-        database,
-        "UPDATE authorization_history SET ciphertext = zeroblob(32)",
-        nil, nil, nil
-    ) == SQLITE_OK)
-
+    #expect(sqlite3_exec(database, "UPDATE authorization_history SET ciphertext = zeroblob(32)", nil, nil, nil) == SQLITE_OK)
     let legacy = try JSONEncoder().encode([fixture.record(index: 2)])
+    try importLegacyAccessRequestRecords(keychainData: nil, defaultsData: legacy,
+        into: fixture.store, readKeychain: { .notFound }, readDefaults: { legacy })
+    #expect(throws: AuthorizationHistoryStoreError.self) { try fixture.store.maintain() }
+    let conflicting = try JSONEncoder().encode([corrupt])
     #expect(throws: AuthorizationHistoryStoreError.self) {
-        try importLegacyAccessRequestRecords(
-            keychainData: nil,
-            defaultsData: legacy,
-            into: fixture.store,
-            readKeychain: { .notFound },
-            readDefaults: { legacy }
-        )
+        try importLegacyAccessRequestRecords(keychainData: nil, defaultsData: conflicting,
+            into: fixture.store, readKeychain: { .notFound }, readDefaults: { conflicting })
     }
 }
 
@@ -495,6 +495,7 @@ func productionAuthorizationHistorySizeChangesReachCachedStore() throws {
     #expect(store.append(newer))
     defaults.set(1, forKey: AuthorizationHistoryRetention.sizeDefaultsKey)
     #expect(holder.get() === store)
+    try store.maintain()
     #expect(try store.records().map(\.id) == [newer.id])
     let larger = fixture.record(index: 3, reason: String(repeating: "c", count: 1_100_000))
     #expect(!store.append(larger))
@@ -508,7 +509,7 @@ func productionAuthorizationHistorySizeChangesReachCachedStore() throws {
 }
 
 @Test
-func authorizationHistorySizeChangeRollsBackOnPruningFailure() throws {
+func authorizationHistorySizeChangeDefersPruningFailure() throws {
     let fixture = try HistoryStoreFixture()
     defer { fixture.remove() }
     let record = fixture.record(index: 1)
@@ -520,11 +521,60 @@ func authorizationHistorySizeChangeRollsBackOnPruningFailure() throws {
         CREATE TRIGGER reject_history_delete BEFORE DELETE ON authorization_history
         BEGIN SELECT RAISE(ABORT, 'test deletion failure'); END
         """, nil, nil, nil) == SQLITE_OK)
+    try fixture.store.setMaximumEncryptedBytes(1)
     #expect(throws: AuthorizationHistoryStoreError.self) {
-        try fixture.store.setMaximumEncryptedBytes(1)
+        try fixture.store.maintain()
     }
     #expect(try fixture.store.records() == [record])
-    #expect(fixture.store.append(fixture.record(index: 2)))
+    #expect(!fixture.store.append(fixture.record(index: 2)))
+}
+
+@Test
+func authorizationHistoryMaintenanceDoesNotBlockAppendOrDeleteNewRows() throws {
+    let fixture = try HistoryStoreFixture(maximumEncryptedBytes: 1_800)
+    defer { fixture.remove() }
+    for index in 0..<8 { #expect(fixture.store.append(fixture.record(index: index))) }
+    let newRecord = fixture.record(index: 99)
+    try fixture.store.maintain(afterScan: {
+        // append reacquires the same store lock; this would deadlock if maintenance retained it.
+        #expect(fixture.store.append(newRecord))
+    })
+    #expect(try fixture.store.records().contains { $0.id == newRecord.id })
+}
+
+@Test
+func authorizationHistoryMaintenanceRejectsChangedDeletionCandidate() throws {
+    let fixture = try HistoryStoreFixture(maximumEncryptedBytes: 1_800)
+    defer { fixture.remove() }
+    for index in 0..<8 { #expect(fixture.store.append(fixture.record(index: index))) }
+    var database: OpaquePointer?
+    try #require(sqlite3_open(fixture.url.path, &database) == SQLITE_OK)
+    defer { sqlite3_close(database) }
+    #expect(throws: AuthorizationHistoryStoreError.verificationFailed) {
+        try fixture.store.maintain(afterScan: {
+            #expect(sqlite3_exec(database, "UPDATE authorization_history SET ciphertext = zeroblob(32)", nil, nil, nil) == SQLITE_OK)
+        })
+    }
+    var statement: OpaquePointer?
+    try #require(sqlite3_prepare_v2(database, "SELECT count(*) FROM authorization_history", -1, &statement, nil) == SQLITE_OK)
+    defer { sqlite3_finalize(statement) }
+    try #require(sqlite3_step(statement) == SQLITE_ROW)
+    #expect(sqlite3_column_int(statement, 0) == 8)
+}
+
+@Test
+func authorizationHistoryNewRecordFailureStillDeniesPersistence() throws {
+    let fixture = try HistoryStoreFixture()
+    defer { fixture.remove() }
+    var database: OpaquePointer?
+    try #require(sqlite3_open(fixture.url.path, &database) == SQLITE_OK)
+    defer { sqlite3_close(database) }
+    #expect(sqlite3_exec(database, """
+        CREATE TRIGGER corrupt_new_record AFTER INSERT ON authorization_history
+        BEGIN UPDATE authorization_history SET ciphertext = zeroblob(32) WHERE id = NEW.id; END
+        """, nil, nil, nil) == SQLITE_OK)
+    #expect(!fixture.store.append(fixture.record(index: 1)))
+    #expect(try fixture.store.records().isEmpty)
 }
 
 private final class HistoryStoreFixture {

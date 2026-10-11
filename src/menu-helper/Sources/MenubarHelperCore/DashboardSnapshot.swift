@@ -2085,7 +2085,10 @@ public func appendAccessRequestRecord(
     accessRequestLogLock.lock()
     defer { accessRequestLogLock.unlock() }
     if defaults == nil, key == accessRequestLogDefaultsKey, service == accessRequestLogKeychainService {
-        return productionAuthorizationHistoryStore.get()?.append(record) == true
+        guard let store = productionAuthorizationHistoryStore.get() else { return false }
+        let persisted = store.append(record)
+        productionAuthorizationHistoryStore.scheduleMaintenanceIfDue(store)
+        return persisted
     }
     guard case .success(let existing) = loadAccessRequestRecordsResult(
         defaults: defaults,
@@ -2139,6 +2142,8 @@ final class ProductionAuthorizationHistoryStore: @unchecked Sendable {
     private let lock = NSLock()
     private var cached: AuthorizationHistoryStore?
     private var lastMaintenance = Date.distantPast
+    private var maintenanceRunning = false
+    private var timer: DispatchSourceTimer?
     private let open: () -> AuthorizationHistoryStore?
     private let defaults: UserDefaults
 
@@ -2163,12 +2168,31 @@ final class ProductionAuthorizationHistoryStore: @unchecked Sendable {
 
     func scheduleMaintenanceIfDue(_ store: AuthorizationHistoryStore) {
         lock.withLock {
+            if timer == nil {
+                let source = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
+                source.schedule(deadline: .now() + 60, repeating: 60, leeway: .seconds(10))
+                source.setEventHandler { [weak self, weak store] in
+                    guard let self, let store else { return }
+                    self.scheduleMaintenanceIfDue(store)
+                }
+                timer = source
+                source.resume()
+            }
             let currentDate = Date()
-            guard currentDate.timeIntervalSince(lastMaintenance) >= 3_600 else { return }
+            let elapsed = currentDate.timeIntervalSince(lastMaintenance)
+            guard !maintenanceRunning,
+                  elapsed >= 3_600 || (elapsed >= 60 && store.needsMaintenance) else { return }
+            maintenanceRunning = true
             lastMaintenance = currentDate
-            Task.detached(priority: .background) { try? store.maintain() }
+            DispatchQueue.global(qos: .utility).async { [weak self] in
+                do { try store.maintain() }
+                catch { NSLog("Authorization History maintenance failed; retained history requires attention: %@", String(describing: error)) }
+                self?.lock.withLock { self?.maintenanceRunning = false }
+            }
         }
     }
+
+    deinit { timer?.cancel() }
 
     fileprivate static func openProduction() -> AuthorizationHistoryStore? {
         guard let applicationSupport = FileManager.default.urls(
@@ -2215,6 +2239,13 @@ final class ProductionAuthorizationHistoryStore: @unchecked Sendable {
             readDefaults: { UserDefaults.standard.data(forKey: accessRequestLogDefaultsKey) }
         )) != nil else { return nil }
         return store
+    }
+}
+
+public func maintainAuthorizationHistoryIfDue() {
+    DispatchQueue.global(qos: .utility).async {
+        guard let store = productionAuthorizationHistoryStore.get() else { return }
+        productionAuthorizationHistoryStore.scheduleMaintenanceIfDue(store)
     }
 }
 

@@ -202,9 +202,9 @@ Authorization History Access in Settings. This is a separate setting from
 and needs Approval. The read itself appears in the returned history.
 
 History is local, stored as encrypted rows in one SQLite file with its key in
-the Data Protection Keychain. It is available for up to 30 days or 25 MiB of
-encrypted record payloads by default, whichever comes first. Settings lets you
-choose a payload limit from 1–1024 MiB; SQLite overhead is additional. `--since` returns every retained
+the Data Protection Keychain. Records are available for up to 30 days. Settings
+lets you choose an encrypted payload retention target from 1–1024 MiB (default
+25 MiB); usage can exceed it between periodic cleanup passes. SQLite overhead is additional. `--since` returns every retained
 record in the window. Terminal tables use a pager; `--no-pager`, `--json`, and
 redirected output bypass it. History is not tamper-proof or a
 complete forensic log.
