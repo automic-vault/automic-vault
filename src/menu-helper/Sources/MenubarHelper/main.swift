@@ -17921,9 +17921,12 @@ private func runNestedLauncherHelperSelfCheck() -> Bool {
     }
     let launchers = candidates()
     let failed = candidates(valid: false, appValid: false, requireParallel: true)
+    let helperFailed = candidates(valid: false, requireParallel: true)
     guard failed.count == 1, failed[0].isStandalone,
+          helperFailed.count == 1, helperFailed[0].identifier == "codex",
+          helperFailed[0].appURL?.standardizedFileURL == nested.standardizedFileURL,
+          !helperFailed[0].isStandalone, helperFailed[0].verifiedHelper == nil,
           candidates(requireParallel: true).map(\.identifier) == launchers.map(\.identifier),
-          candidates(valid: false, requireParallel: true).map(\.identifier) == ["codex"],
           candidates(appValid: false, requireParallel: true).map(\.identifier) == ["com.openai.codex"]
     else { return false }
     let gate = SecretGate(id: "aws", keyPatterns: [], routes: [],
