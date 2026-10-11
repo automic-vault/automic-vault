@@ -1075,8 +1075,8 @@ final class DashboardModel: ObservableObject {
                 ? (page?.records ?? []) : snapshot.accessRequests
             snapshot = next
             lastHardeningRefresh = Date()
-            setHistoryRecords(next.accessRequests, storedDayCount: page?.storedDayCount)
             if generation == accessRequestsGeneration {
+                setHistoryRecords(next.accessRequests, storedDayCount: page?.storedDayCount)
                 historyOlderPageCursor = page?.olderPageCursor
                 isLoadingOlderHistory = false
                 historyLoadFailed = page == nil

@@ -31,6 +31,7 @@ let (historyStarted, historySignal) = AsyncStream<Void>.makeStream()
 let finishHistory = DispatchSemaphore(value: 0)
 let blockHistory = Mutex(false)
 let historyReads = Mutex(0)
+let historyDayCount = Mutex(30)
 let failFirstPage = Mutex(false)
 let failOlderPage = Mutex(false)
 let fixtureRecordID = UUID()
@@ -80,6 +81,7 @@ func loadAccessRequestRecordsForDisclosure(since: Date? = nil) -> [AccessRequest
     ["latest"]
 }
 func loadAccessRequestRecordsPage(beforeSequence: Int64? = nil) -> AuthorizationHistoryPage? {
+    let dayCount = historyDayCount.withLock { $0 }
     if blockHistory.withLock({ $0 }) {
         historyReads.withLock { $0 += 1 }
         historySignal.yield(())
@@ -91,12 +93,12 @@ func loadAccessRequestRecordsPage(beforeSequence: Int64? = nil) -> Authorization
         return AuthorizationHistoryPage(
             records: ["latest"] + (0..<49).map { "older-\($0)" },
             olderPageCursor: 50,
-            storedDayCount: 30)
+            storedDayCount: dayCount)
     }
     return AuthorizationHistoryPage(
         records: (49..<74).map { "older-\($0)" },
         olderPageCursor: nil,
-        storedDayCount: 30)
+        storedDayCount: dayCount)
 }
 
 @MainActor final class Model {
@@ -293,7 +295,22 @@ for _ in 0..<10_000 {
     await Task.yield()
 }
 assert(model.snapshot.accessRequests.count == 75 && !model.historyLoadFailed)
-print("PASS: early CLI status, coalesced refreshes, fresh history, and stale policy rejection")
+model.reload()
+for await _ in snapshotStarted { break }
+let staleFullReload = model.reloadTask!
+blockHistory.withLock { $0 = true }
+finishSnapshot.signal()
+for await _ in historyStarted { break }
+blockHistory.withLock { $0 = false }
+historyDayCount.withLock { $0 = 40 }
+model.reloadAccessRequests(incremental: true)
+await model.accessRequestsReloadTask!.value
+assert(model.authorizationHistoryDayCount == 40)
+finishHistory.signal()
+await staleFullReload.value
+assert(model.authorizationHistoryDayCount == 40, "stale full reload overwrote the newer day count")
+assert(model.historyDashboard?.page.storedDayCount == 40)
+print("PASS: early CLI status, coalesced refreshes, fresh history, and stale policy/history rejection")
 """
 
 with tempfile.TemporaryDirectory(prefix="av-cli-refresh-") as directory:
