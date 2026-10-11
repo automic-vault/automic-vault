@@ -577,6 +577,30 @@ func authorizationHistoryNewRecordFailureStillDeniesPersistence() throws {
     #expect(try fixture.store.records().isEmpty)
 }
 
+@Test
+func authorizationHistoryMaintenanceRemovesExpiredBeforeEvictingValidRows() throws {
+    let now = Date(timeIntervalSince1970: 4_000_000)
+    let fixture = try HistoryStoreFixture(now: now, maximumEncryptedBytes: 1_800)
+    defer { fixture.remove() }
+    let retained = fixture.record(index: 1, reason: String(repeating: "x", count: 500))
+    let future = fixture.record(index: 2, date: now.addingTimeInterval(3_600), reason: String(repeating: "x", count: 1_000))
+    #expect(fixture.store.append(retained))
+    #expect(fixture.store.append(future))
+    try fixture.store.maintain()
+    #expect(try fixture.store.records() == [retained])
+}
+
+@Test
+func authorizationHistoryMaintenanceStopsWhenRetentionChanges() throws {
+    let fixture = try HistoryStoreFixture(maximumEncryptedBytes: 1_800)
+    defer { fixture.remove() }
+    for index in 0..<8 { #expect(fixture.store.append(fixture.record(index: index))) }
+    #expect(throws: AuthorizationHistoryStoreError.verificationFailed) {
+        try fixture.store.maintain(afterScan: { try fixture.store.setMaximumEncryptedBytes(25 * 1024 * 1024) })
+    }
+    #expect(try fixture.store.records().count == 8)
+}
+
 private final class HistoryStoreFixture {
     let directory: URL
     let url: URL
