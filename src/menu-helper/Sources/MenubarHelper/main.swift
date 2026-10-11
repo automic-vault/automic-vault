@@ -6,6 +6,7 @@ import CoreServices
 import CryptoKit
 import Darwin
 import Foundation
+import os
 import MenubarHelperCore
 import Security
 import SwiftUI
@@ -12634,7 +12635,7 @@ private func launcherIdentity(
     pid: pid_t,
     path: String,
     signing: LiveSigningInfo,
-    appSigning: (URL) -> StaticSigningInfo? = staticSigningInfo,
+    appSigning: @Sendable (URL) -> StaticSigningInfo? = staticSigningInfo,
     bundleExecutableURL: (URL) -> URL? = { Bundle(url: $0)?.executableURL }
 ) -> LauncherIdentity? {
     launcherIdentities(
@@ -12650,14 +12651,14 @@ private func launcherIdentities(
     pid: pid_t,
     path: String,
     signing: LiveSigningInfo,
-    appSigning: (URL) -> StaticSigningInfo? = staticSigningInfo,
+    appSigning: @Sendable (URL) -> StaticSigningInfo? = staticSigningInfo,
     bundleExecutableURL: (URL) -> URL? = { Bundle(url: $0)?.executableURL },
     allowsStandaloneFallback: Bool = true,
     helperConfiguration: VerifiedLauncherHelperConfiguration? = nil,
     installedAppURL: (String) -> URL? = {
         NSWorkspace.shared.urlForApplication(withBundleIdentifier: $0)
     },
-    helperSigning: (VerifiedLauncherHelperAssociation, pid_t) -> StaticSigningInfo? = {
+    helperSigning: @Sendable (VerifiedLauncherHelperAssociation, pid_t) -> StaticSigningInfo? = {
         verifiedLauncherHelperSigningInfo($0, pid: $1)
     }
 ) -> [LauncherIdentity] {
@@ -12712,21 +12713,38 @@ private func launcherIdentities(
         )]
     }
     guard !signing.isAdHoc else { return [] }
-    var apps: [LauncherIdentity] = appURLs.compactMap { appURL in
-        guard let app = appSigning(appURL) else { return nil }
-        return LauncherIdentity(
-            pid: pid,
-            path: path,
-            identifier: app.identifier,
-            teamIdentifier: app.teamIdentifier,
-            designatedRequirement: app.designatedRequirement,
-            runtimeProtection: signing.runtimeProtection,
-            appURL: appURL
-        )
+    let helperToValidate = helperAssociation.flatMap {
+        seenApps.insert($0.appURL.path).inserted ? $0 : nil
     }
-    if let helperAssociation,
-       seenApps.insert(helperAssociation.appURL.path).inserted,
-       let app = helperSigning(helperAssociation, pid) {
+    let results = OSAllocatedUnfairLock(initialState: (
+        apps: [LauncherIdentity](), helper: Optional<StaticSigningInfo>.none
+    ))
+    let parallel = !appURLs.isEmpty && helperToValidate != nil
+    // Independent code objects; join both checks before publishing either identity.
+    DispatchQueue.concurrentPerform(iterations: parallel ? 2 : 1) { index in
+        if index == 0 {
+            let apps: [LauncherIdentity] = appURLs.compactMap { appURL in
+                guard let app = appSigning(appURL) else { return nil }
+                return LauncherIdentity(
+                    pid: pid,
+                    path: path,
+                    identifier: app.identifier,
+                    teamIdentifier: app.teamIdentifier,
+                    designatedRequirement: app.designatedRequirement,
+                    runtimeProtection: signing.runtimeProtection,
+                    appURL: appURL
+                )
+            }
+            results.withLock { $0.apps = apps }
+        }
+        if (index == 1 || !parallel), let helperToValidate {
+            let app = helperSigning(helperToValidate, pid)
+            results.withLock { $0.helper = app }
+        }
+    }
+    let checked = results.withLock { $0 }
+    var apps = checked.apps
+    if let helperAssociation = helperToValidate, let app = checked.helper {
         // Only a fully verified association may take precedence over the helper bundle.
         apps.insert(LauncherIdentity(
             pid: pid,
@@ -12817,7 +12835,7 @@ private extension ApprovalServiceOperation {
     }
 }
 
-private struct LiveSigningInfo {
+private struct LiveSigningInfo: Sendable {
     let identifier: String
     let teamIdentifier: String
     let designatedRequirement: String
@@ -12827,13 +12845,13 @@ private struct LiveSigningInfo {
     let isDeveloperID: Bool
 }
 
-private struct StaticSigningInfo {
+private struct StaticSigningInfo: Sendable {
     let identifier: String
     let teamIdentifier: String
     let designatedRequirement: String
 }
 
-private struct VerifiedLauncherHelperAssociation {
+private struct VerifiedLauncherHelperAssociation: Sendable {
     let helper: VerifiedLauncherHelper
     let appURL: URL
     let executableURL: URL
@@ -17867,9 +17885,12 @@ private func runNestedLauncherHelperSelfCheck() -> Bool {
     let parentSigning = StaticSigningInfo(
         identifier: "com.openai.codex", teamIdentifier: "2DC432GLL2", designatedRequirement: "parent"
     )
-    func candidates(enabled: Bool = true, valid: Bool = true,
-                    runtime: LauncherRuntimeProtection = .hardened) -> [LauncherIdentity] {
-        launcherIdentities(
+    func candidates(enabled: Bool = true, valid: Bool = true, appValid: Bool = true,
+                    runtime: LauncherRuntimeProtection = .hardened,
+                    requireParallel: Bool = false) -> [LauncherIdentity] {
+        let appStarted = DispatchSemaphore(value: 0)
+        let helperStarted = DispatchSemaphore(value: 0)
+        return launcherIdentities(
             pid: 42, path: executable.path,
             signing: LiveSigningInfo(
                 identifier: "codex", teamIdentifier: "2DC432GLL2", designatedRequirement: "helper",
@@ -17877,19 +17898,34 @@ private func runNestedLauncherHelperSelfCheck() -> Bool {
                 isDeveloperID: true
             ),
             appSigning: { _ in
-                StaticSigningInfo(identifier: "codex", teamIdentifier: "2DC432GLL2",
-                                  designatedRequirement: "helper")
+                if requireParallel {
+                    appStarted.signal()
+                    guard helperStarted.wait(timeout: .now() + 2) == .success else { return nil }
+                }
+                guard appValid else { return nil }
+                return StaticSigningInfo(identifier: "codex", teamIdentifier: "2DC432GLL2",
+                                         designatedRequirement: "helper")
             },
             helperConfiguration: VerifiedLauncherHelperConfiguration(
                 disabledHelperIDs: enabled ? [] : [codexVerifiedLauncherHelper.id],
                 userApprovedHelpers: [codexVerifiedLauncherHelper]
             ),
             helperSigning: { association, _ in
-                valid && association.appURL.path == parent.path ? parentSigning : nil
+                if requireParallel {
+                    helperStarted.signal()
+                    guard appStarted.wait(timeout: .now() + 2) == .success else { return nil }
+                }
+                return valid && association.appURL.path == parent.path ? parentSigning : nil
             }
         )
     }
     let launchers = candidates()
+    let failed = candidates(valid: false, appValid: false, requireParallel: true)
+    guard failed.count == 1, failed[0].isStandalone,
+          candidates(requireParallel: true).map(\.identifier) == launchers.map(\.identifier),
+          candidates(valid: false, requireParallel: true).map(\.identifier) == ["codex"],
+          candidates(appValid: false, requireParallel: true).map(\.identifier) == ["com.openai.codex"]
+    else { return false }
     let gate = SecretGate(id: "aws", keyPatterns: [], routes: [],
                           defaultProtection: .readOnly, appPolicies: [])
     let strictGate = SecretGate(id: "gh", keyPatterns: [], routes: [], defaultProtection: .readOnly,

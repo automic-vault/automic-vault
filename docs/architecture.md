@@ -481,6 +481,10 @@ fail static validation while the live process remains valid. This narrower live
 integrity guarantee does not replace parent resource-seal membership, parent
 executable checks, Launcher Bundle enrollment, or pre-execution Target checks.
 See [ADR 0066](adr/0066-live-helper-executable-validation.md).
+When a helper also has its own nested app identity, the nested app and parent
+association checks run concurrently and both finish before resolution returns.
+All validation and final process-identity checks remain mandatory; no result is
+reused across checkpoints. See [ADR 0069](adr/0069-parallel-nested-launcher-validation.md).
 
 Unrelated app resources are not Launcher Identity evidence and are not scanned.
 If targeted resource validation is unavailable, Automic Vault falls back to
