@@ -166,6 +166,10 @@ a general promise that signed Git cannot disclose credentials.
 
 ### Hardener integration
 
+[ADR 0070](0070-independent-gh-hardening.md) separates completion of gh hardening
+from automatic Git setup: Git setup failures warn after credential migration
+and cleanup, while runtime verification and Doctor diagnostics remain enforced.
+
 `av harden gh` installs or verifies the protected runtime and native adapter
 before adding a global `https://github.com/` routing rule. It checks the signed
 installed CLI revision, helper protocol compatibility, runtime signatures and

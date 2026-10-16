@@ -21,9 +21,6 @@ pub(crate) fn run(
     without_git_configuration: bool,
 ) -> Result<(), String> {
     PRIVILEGE_MODE.require_user("gh", false)?;
-    if !without_git_configuration {
-        gh_git::preflight()?;
-    }
     let install = isotope::plan(isotope::GH)?;
 
     let hosts_paths = gh_hosts_paths()?;
@@ -89,14 +86,13 @@ pub(crate) fn run(
 
     if credentials.is_empty() {
         install.apply(isotope::GH)?;
-        gh_git::apply(without_git_configuration, &hosts_paths[0])?;
+        configure_git(stdout, without_git_configuration, &hosts_paths[0])?;
         writeln!(stdout, "╰─ installed gh isotope").ok();
         super::write_secret_gate_notice(stdout, "gh");
         return Ok(());
     }
     store_destinations(&destinations)?;
     install.apply(isotope::GH)?;
-    gh_git::apply(without_git_configuration, &hosts_paths[0])?;
     for path in &hosts_paths {
         remove_plaintext_tokens(path)?;
     }
@@ -104,8 +100,29 @@ pub(crate) fn run(
         credential.delete()?;
     }
     verify_postconditions()?;
+    configure_git(stdout, without_git_configuration, &hosts_paths[0])?;
     writeln!(stdout, "╰─ migrated gh credentials").ok();
     super::write_secret_gate_notice(stdout, "gh");
+    Ok(())
+}
+
+fn configure_git(
+    stdout: &mut dyn Write,
+    without_configuration: bool,
+    hosts: &Path,
+) -> Result<(), String> {
+    if without_configuration {
+        return gh_git::apply(true, hosts);
+    }
+    // Git setup cannot prevent completion of gh credential custody and cleanup.
+    if let Err(error) = gh_git::preflight().and_then(|()| gh_git::apply(false, hosts)) {
+        writeln!(
+            stdout,
+            "├─ warning: gh hardening completed, but Git setup failed: {error}"
+        )
+        .ok();
+        writeln!(stdout, "├─ run `av doctor gh` to inspect Git setup; protected Git requests still require a verified transport").ok();
+    }
     Ok(())
 }
 
@@ -719,6 +736,73 @@ mod tests {
                 .contains("oauth_token")
         );
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn harden_completes_when_git_setup_fails() {
+        let _guard = crate::global_test_env_lock().lock().unwrap();
+        for migrate in [false, true] {
+            let dir = temp_path("gh-git-failure");
+            let config = dir.join("config");
+            let keychain = dir.join("keychain");
+            let gh = dir.join("gh");
+            fs::create_dir_all(&config).unwrap();
+            fs::write(&gh, "").unwrap();
+            fs::write(
+                config.join("hosts.yml"),
+                if migrate {
+                    "github.com:\n    user: monalisa\n    oauth_token: fixture-token\n"
+                } else {
+                    "github.com:\n    user: monalisa\n"
+                },
+            )
+            .unwrap();
+            let old_git_config = std::env::var_os("GIT_CONFIG_COUNT");
+            unsafe {
+                std::env::set_var("GH_CONFIG_DIR", &config);
+                std::env::set_var("AUTOMIC_VAULT_TEST_KEYCHAIN_DIR", &keychain);
+                std::env::set_var("AUTOMIC_VAULT_TEST_GH_CLI_PATH", &gh);
+                // A real preflight failure, before any privileged installation.
+                std::env::set_var("GIT_CONFIG_COUNT", "0");
+            }
+            let mut output = Vec::new();
+            let result = run(&mut output, true, false);
+            unsafe {
+                std::env::remove_var("GH_CONFIG_DIR");
+                std::env::remove_var("AUTOMIC_VAULT_TEST_KEYCHAIN_DIR");
+                std::env::remove_var("AUTOMIC_VAULT_TEST_GH_CLI_PATH");
+                if let Some(value) = old_git_config {
+                    std::env::set_var("GIT_CONFIG_COUNT", value);
+                } else {
+                    std::env::remove_var("GIT_CONFIG_COUNT");
+                }
+            }
+            result.unwrap();
+            let output = String::from_utf8(output).unwrap();
+            assert!(output.contains("gh hardening completed, but Git setup failed"));
+            assert!(output.contains("Git environment overrides are set"));
+            assert!(!output.contains("fixture-token"));
+            assert!(!config.join("av-git-configuration").exists());
+            assert!(
+                !fs::read_to_string(config.join("hosts.yml"))
+                    .unwrap()
+                    .contains("oauth_token")
+            );
+            if migrate {
+                assert_eq!(
+                    fs::read_to_string(keychain.join("GH_TOKEN_GITHUB_COM")).unwrap(),
+                    "fixture-token"
+                );
+                assert_eq!(
+                    fs::read_to_string(keychain.join("GH_TOKEN_GITHUB_COM_MONALISA")).unwrap(),
+                    "fixture-token"
+                );
+                assert!(output.contains("migrated gh credentials"));
+            } else {
+                assert!(output.contains("installed gh isotope"));
+            }
+            fs::remove_dir_all(dir).unwrap();
+        }
     }
 
     #[test]

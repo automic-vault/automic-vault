@@ -27,12 +27,20 @@ into Automic Vault. Direct installs are updated by running the same command when
 
 ## GitHub HTTPS operations
 
-`av harden gh` also configures Git globally to use Automic Vault's protected
+After completing Isotope installation and credential migration, `av harden gh`
+also attempts to configure Git globally to use Automic Vault's protected
 transport for `https://github.com/` URLs, including fresh clones. It verifies
 the installed signed CLI, installs or refreshes the protected runtime, checks
 adapter discovery, and then adds the routing rule. Saved remote URLs and SSH
 operations stay unchanged. `av doctor gh` checks this setup; rerun
 `av harden gh` to repair it.
+
+If Git setup fails, including because the available Git build has not been
+reviewed, `gh` hardening still completes and reports a warning. Migrated legacy
+credentials are removed and their cleanup verified before Git setup begins.
+Doctor continues to report incomplete Git setup. No unverified transport is
+published and no fallback credential helper is configured; protected Git
+operations retain their runtime verification requirements.
 
 If you manage Git configuration yourself, use:
 
