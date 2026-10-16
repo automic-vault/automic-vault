@@ -47,7 +47,7 @@ fn gh_git_opt_out_preserves_configuration_and_migrates_credentials() {
 }
 
 #[test]
-fn gh_git_conflict_fails_before_migration_and_offers_opt_out() {
+fn gh_git_conflict_warns_after_migration_and_offers_opt_out() {
     let root = fixture("gh-git-conflict");
     prepare(&root, "gh");
     let config = root.join("gh");
@@ -65,21 +65,35 @@ fn gh_git_conflict_fails_before_migration_and_offers_opt_out() {
         .current_dir(root.join("home"))
         .output()
         .unwrap();
-    assert!(!output.status.success());
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(stderr(&output).is_empty());
+    let message = stdout(&output)
+        .replace("\n│  ", " ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    assert!(message.contains("Git setup failed"), "{message}");
     assert!(
-        stderr(&output).contains("overlapping GitHub URL rewrite"),
-        "{}",
-        stderr(&output)
+        message.contains("overlapping GitHub URL rewrite"),
+        "{message}"
     );
-    assert!(stderr(&output).contains("--without-git-configuration"));
+    assert!(message.contains("--without-git-configuration"));
     assert_eq!(fs::read_to_string(git_config).unwrap(), original);
-    assert_eq!(fs::read_to_string(config.join("hosts.yml")).unwrap(), hosts);
-    assert!(!root.join("keychain").exists());
+    assert!(
+        !fs::read_to_string(config.join("hosts.yml"))
+            .unwrap()
+            .contains("oauth_token")
+    );
+    assert_eq!(
+        fs::read_to_string(root.join("keychain/GH_TOKEN_GITHUB_COM")).unwrap(),
+        "ghp_fixture"
+    );
+    assert!(!config.join("av-git-configuration").exists());
     fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
-fn gh_git_rejects_repository_discovery_overrides_before_migration() {
+fn gh_git_discovery_overrides_warn_after_migration() {
     let root = fixture("gh-git-discovery");
     prepare(&root, "gh");
     let config = root.join("gh");
@@ -93,6 +107,7 @@ fn gh_git_rejects_repository_discovery_overrides_before_migration() {
         ("GIT_CEILING_DIRECTORIES", root.to_str().unwrap()),
         ("GIT_DISCOVERY_ACROSS_FILESYSTEM", "0"),
     ] {
+        fs::write(config.join("hosts.yml"), hosts).unwrap();
         let output = av(&root, "gh")
             .env("AUTOMIC_VAULT_TEST_EUID", "501")
             .env("AUTOMIC_VAULT_TEST_GH_CLI_PATH", root.join("targets/gh"))
@@ -101,12 +116,27 @@ fn gh_git_rejects_repository_discovery_overrides_before_migration() {
             .current_dir(root.join("home"))
             .output()
             .unwrap();
-        assert!(!output.status.success());
-        assert!(stderr(&output).contains("Git environment overrides are set"));
-        assert!(stderr(&output).contains("--without-git-configuration"));
+        assert!(output.status.success(), "{}", stderr(&output));
+        assert!(stderr(&output).is_empty());
+        let message = stdout(&output).replace("\n│  ", " ");
+        assert!(message.contains("Git setup failed"), "{message}");
+        assert!(
+            message.contains("Git environment overrides are set"),
+            "{message}"
+        );
+        assert!(message.contains("--without-git-configuration"));
         assert_eq!(fs::read_to_string(&git_config).unwrap(), original);
-        assert_eq!(fs::read_to_string(config.join("hosts.yml")).unwrap(), hosts);
-        assert!(!root.join("keychain").exists());
+        assert!(
+            !fs::read_to_string(config.join("hosts.yml"))
+                .unwrap()
+                .contains("oauth_token")
+        );
+        assert_eq!(
+            fs::read_to_string(root.join("keychain/GH_TOKEN_GITHUB_COM")).unwrap(),
+            "ghp_fixture"
+        );
+        assert!(!config.join("av-git-configuration").exists());
+        fs::remove_dir_all(root.join("keychain")).unwrap();
     }
     fs::remove_dir_all(root).unwrap();
 }
