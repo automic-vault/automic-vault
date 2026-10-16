@@ -1,5 +1,6 @@
 #include "CProcessInfo.h"
 
+#include <arpa/inet.h>
 #include <bsm/libbsm.h>
 #include <libproc.h>
 #include <mach/mach.h>
@@ -328,4 +329,18 @@ AVProcessSigningStatus av_process_signing_status(pid_t pid) {
     }
     if (category == category_invalid) { return AV_PROCESS_SIGNING_INVALID; }
     return category == category_none ? AV_PROCESS_SIGNING_UNTRUSTED : AV_PROCESS_SIGNING_CANDIDATE;
+}
+
+bool av_process_signing_identifier(pid_t pid, char *out, size_t out_len) {
+    const unsigned int identity_operation = 11;
+    struct { uint32_t header[2]; char identifier[1024]; } blob = {0};
+    if (pid <= 0 || out == NULL || out_len == 0 ||
+        csops(pid, identity_operation, &blob, sizeof(blob)) != 0) return false;
+    size_t length = ntohl(blob.header[1]);
+    if (length <= sizeof(blob.header) || length > sizeof(blob)) return false;
+    length -= sizeof(blob.header);
+    if (length <= 1 || length > out_len || blob.identifier[length - 1] != '\0' ||
+        strnlen(blob.identifier, length) != length - 1) return false;
+    memcpy(out, blob.identifier, length);
+    return true;
 }

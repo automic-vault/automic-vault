@@ -41,3 +41,6 @@ typedef enum {
     AV_PROCESS_SIGNING_CANDIDATE
 } AVProcessSigningStatus;
 AVProcessSigningStatus av_process_signing_status(pid_t pid);
+
+// Kernel signing identifier for rejecting reserved identities, never for granting authority.
+bool av_process_signing_identifier(pid_t pid, char *out, size_t out_len);
