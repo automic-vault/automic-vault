@@ -304,3 +304,28 @@ ssize_t av_process_arguments_data(pid_t pid, char *out, size_t out_len) {
     memmove(out, start, bytes);
     return (ssize_t)bytes;
 }
+
+// Darwin SPI, exported by libSystem; constants from xnu/bsd/sys/codesign.h and osfmk/kern/cs_blobs.h.
+extern int csops(pid_t pid, unsigned int ops, void *useraddr, size_t usersize);
+
+AVProcessSigningStatus av_process_signing_status(pid_t pid) {
+    const unsigned int status_operation = 0;
+    const uint32_t valid = 0x00000001, adhoc = 0x00000002, signed_code = 0x20000000;
+    uint32_t flags = 0;
+    if (pid <= 0 || csops(pid, status_operation, &flags, sizeof(flags)) != 0) {
+        return AV_PROCESS_SIGNING_UNAVAILABLE;
+    }
+    if ((flags & (valid | signed_code)) != (valid | signed_code)) {
+        return AV_PROCESS_SIGNING_INVALID;
+    }
+    if (flags & adhoc) { return AV_PROCESS_SIGNING_UNTRUSTED; }
+    // CS_ADHOC is not reliably retained in process status; consult AMFI's kernel classification.
+    const unsigned int category_operation = 17;
+    const unsigned int category_invalid = 0, category_none = 10;
+    unsigned int category = category_invalid;
+    if (csops(pid, category_operation, &category, sizeof(category)) != 0) {
+        return AV_PROCESS_SIGNING_UNAVAILABLE;
+    }
+    if (category == category_invalid) { return AV_PROCESS_SIGNING_INVALID; }
+    return category == category_none ? AV_PROCESS_SIGNING_UNTRUSTED : AV_PROCESS_SIGNING_CANDIDATE;
+}

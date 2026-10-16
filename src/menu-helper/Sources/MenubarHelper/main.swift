@@ -12647,13 +12647,26 @@ private func launcherIdentity(pid: pid_t, identity: AVProcessIdentity) -> Launch
     launcherIdentities(pid: pid, identity: identity).first
 }
 
-private func launcherIdentities(pid: pid_t, identity: AVProcessIdentity) -> [LauncherIdentity] {
+private func launcherIdentities(
+    pid: pid_t, identity: AVProcessIdentity,
+    signingStatus: (pid_t) -> AVProcessSigningStatus = av_process_signing_status,
+    liveSigning: (pid_t) -> LiveSigningInfo? = liveSigningInfo,
+    executableSigning: (String) -> LiveSigningInfo? = executableSigningInfo
+) -> [LauncherIdentity] {
     let path = pathString(identity)
+    // Reject ineligible processes before either Security API can scan their executable's directory.
+    switch signingStatus(pid) {
+    case AV_PROCESS_SIGNING_CANDIDATE: break
+    case AV_PROCESS_SIGNING_UNTRUSTED:
+        // Preserve app/enrolled-bundle verification; a path never grants Launcher identity.
+        guard !appBundleURLs(containing: path).isEmpty else { return [] }
+    default: return []
+    }
     let launchers: [LauncherIdentity]
-    if let signing = liveSigningInfo(pid: pid) {
+    if let signing = liveSigning(pid) {
         launchers = launcherIdentities(pid: pid, path: path, signing: signing)
     } else {
-        guard let signing = executableSigningInfo(path: path) else { return [] }
+        guard let signing = executableSigning(path) else { return [] }
         // A path may now name a replacement binary, so it cannot prove the running process is standalone.
         launchers = launcherIdentities(
             pid: pid, path: path, signing: signing, allowsStandaloneFallback: false
@@ -18197,7 +18210,63 @@ private func runDescendantOverrideSelfCheck() -> Bool {
     return true
 }
 
+private func runLauncherSigningPrefilterSelfCheck() -> Bool {
+    for (path, isApp) in [("/nix/store/.links/fixture", false), ("/usr/local/bin/fixture", false),
+                         ("/nix/store/package/bin/fixture", false),
+                         ("/Applications/Example.app/Contents/MacOS/fixture", true),
+                         ("/Applications/Automic Vault/Fixture.app/Contents/MacOS/launcher", true)] {
+        for status in [AV_PROCESS_SIGNING_UNAVAILABLE, AV_PROCESS_SIGNING_INVALID,
+                       AV_PROCESS_SIGNING_UNTRUSTED, AV_PROCESS_SIGNING_CANDIDATE] {
+            var identity = AVProcessIdentity()
+            path.withCString { source in
+                withUnsafeMutableBytes(of: &identity.path) { bytes in
+                    _ = strcpy(bytes.baseAddress!.assumingMemoryBound(to: CChar.self), source)
+                }
+            }
+            var liveCalls = 0
+            var staticCalls = 0
+            let result = launcherIdentities(pid: getpid(), identity: identity,
+                signingStatus: { _ in status },
+                liveSigning: { _ in liveCalls += 1; return nil },
+                executableSigning: { _ in staticCalls += 1; return nil })
+            let shouldInspect = status == AV_PROCESS_SIGNING_CANDIDATE
+                || (status == AV_PROCESS_SIGNING_UNTRUSTED && isApp)
+            guard result.isEmpty,
+                  liveCalls == (shouldInspect ? 1 : 0),
+                  staticCalls == (shouldInspect ? 1 : 0) else {
+                fputs("Launcher prefilter entered an unexpected signing lookup\n", stderr)
+                return false
+            }
+        }
+    }
+    guard av_process_signing_status(0) == AV_PROCESS_SIGNING_UNAVAILABLE,
+          av_process_signing_status(-1) == AV_PROCESS_SIGNING_UNAVAILABLE else { return false }
+    var ownCode: SecCode?
+    var ownInfo: CFDictionary?
+    guard SecCodeCopySelf([], &ownCode) == errSecSuccess, let ownCode,
+          SecCodeCopySigningInformation(unsafeBitCast(ownCode, to: SecStaticCode.self),
+            SecCSFlags(rawValue: kSecCSSigningInformation), &ownInfo) == errSecSuccess,
+          let dictionary = ownInfo as? [CFString: Any],
+          let flags = dictionary[kSecCodeInfoFlags] as? NSNumber,
+          av_process_signing_status(getpid()) == (flags.uint32Value & secCodeSignatureAdHoc != 0
+            ? AV_PROCESS_SIGNING_UNTRUSTED : AV_PROCESS_SIGNING_CANDIDATE) else {
+        fputs("Launcher prefilter disagrees with self signing information\n", stderr)
+        return false
+    }
+    let child = Process()
+    child.executableURL = URL(fileURLWithPath: "/bin/sleep")
+    child.arguments = ["10"]
+    do { try child.run() } catch { return false }
+    defer { child.terminate(); child.waitUntilExit() }
+    guard av_process_signing_status(child.processIdentifier) == AV_PROCESS_SIGNING_CANDIDATE else {
+        fputs("Launcher prefilter rejected Apple-signed sleep\n", stderr)
+        return false
+    }
+    return true
+}
+
 private func runStandaloneLauncherSelfCheck() -> Int32 {
+    guard runLauncherSigningPrefilterSelfCheck() else { return 1 }
     guard runDescendantOverrideSelfCheck() else { return 1 }
     let codexVerifiedLauncherHelper = selfCheckCodexHelper()
     guard runClaudeHelperRuntimeSelfCheck() else { return 1 }

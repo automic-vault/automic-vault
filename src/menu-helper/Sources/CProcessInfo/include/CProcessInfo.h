@@ -32,3 +32,12 @@ bool av_peer_pid(int fd, pid_t *pid_out);
 bool av_process_identity(pid_t pid, AVProcessIdentity *identity_out);
 bool av_process_arguments(pid_t pid, char *out, size_t out_len);
 bool av_process_environment_value(pid_t pid, const char *key, char *out, size_t out_len);
+
+// A negative prefilter only; eligible processes still require full live verification.
+typedef enum {
+    AV_PROCESS_SIGNING_UNAVAILABLE,
+    AV_PROCESS_SIGNING_INVALID,
+    AV_PROCESS_SIGNING_UNTRUSTED,
+    AV_PROCESS_SIGNING_CANDIDATE
+} AVProcessSigningStatus;
+AVProcessSigningStatus av_process_signing_status(pid_t pid);
