@@ -391,6 +391,12 @@ Authorization Gates for long-running processes.
 FD delivery currently requires fresh Approval, including when invoked inside a
 Blessed Script. FD mode in an `av inject` shebang is unsupported.
 
+Blessed Scripts run from a verified `/dev/fd` snapshot. CPython builds before
+3.10.9, 3.11.1 and 3.12 (including Apple's `/usr/bin/python3`) cannot read that
+snapshot on macOS (python/cpython#87235): they run an empty script and exit 0.
+`av inject` refuses these interpreters with an error instead; use a newer
+Python in the shebang and bless the script again.
+
 <img src="./docs/img/blessed-script.png" alt="Automic Vault Blessed Script review" style="width: 589px; height: auto" />
 
 [Blessings and execution guarantees](docs/domain-language.md#blessed-script) ·

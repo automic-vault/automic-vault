@@ -297,6 +297,227 @@ fn fd_injection_missing_oversized_or_occupied_descriptors_never_start_target() {
     fs::remove_dir_all(home).unwrap();
 }
 
+#[test]
+fn av_inject_rejects_python_that_shares_the_snapshot_offset() {
+    let home = temp_home("inject-python-offset");
+    let keychain = home.join("keychain");
+    fs::create_dir_all(&keychain).unwrap();
+    let python = fake_python(&home, "3.9.6");
+    let script = home.join("tool");
+    fs::write(
+        &script,
+        format!(
+            "#!{} inject +SOME_SECRET {} -I\nprint('x')\n",
+            env!("CARGO_BIN_EXE_av"),
+            python.display()
+        ),
+    )
+    .unwrap();
+    fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+
+    let output = Command::new(&script)
+        .env("HOME", &home)
+        .env("AUTOMIC_VAULT_TEST_KEYCHAIN_DIR", &keychain)
+        .output()
+        .unwrap();
+
+    if unsafe { libc::geteuid() } == 0 {
+        assert!(!output.status.success());
+        return;
+    }
+
+    assert!(!output.status.success(), "{}", stdout(&output));
+    let stderr = stderr(&output);
+    assert!(
+        stderr.contains("cannot execute the verified /dev/fd snapshot"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("Python 3.9.6"), "{stderr}");
+    assert!(stderr.contains("bless the script again"), "{stderr}");
+    assert!(!stdout(&output).contains("RAN"), "{}", stdout(&output));
+    let _ = fs::remove_dir_all(home);
+}
+
+#[test]
+fn av_inject_keeps_the_snapshot_for_fixed_python() {
+    let home = temp_home("inject-python-fixed");
+    let keychain = home.join("keychain");
+    fs::create_dir_all(&keychain).unwrap();
+    let python = fake_python(&home, "3.12.0");
+    for (shebang_target, extra_env) in [
+        (python.display().to_string(), None),
+        (
+            "/usr/bin/env python3".to_string(),
+            Some(format!("{}:/usr/bin:/bin", home.display())),
+        ),
+    ] {
+        let script = home.join("tool");
+        fs::write(
+            &script,
+            format!(
+                "#!{} inject +SOME_SECRET {shebang_target} -I\nprint('x')\n",
+                env!("CARGO_BIN_EXE_av")
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+
+        let mut command = Command::new(&script);
+        command
+            .env("HOME", &home)
+            .env("AUTOMIC_VAULT_TEST_KEYCHAIN_DIR", &keychain)
+            .env("SOME_SECRET", "expected");
+        if let Some(path) = extra_env {
+            command.env("PATH", path);
+        }
+        let output = command.output().unwrap();
+
+        if unsafe { libc::geteuid() } == 0 {
+            assert!(!output.status.success());
+            return;
+        }
+
+        assert!(output.status.success(), "{}", stderr(&output));
+        assert!(
+            stdout(&output).contains("RAN -I /dev/fd/"),
+            "{}",
+            stdout(&output)
+        );
+    }
+    let _ = fs::remove_dir_all(home);
+}
+
+#[test]
+fn av_inject_passes_through_python_stdout_stderr_and_exit_status() {
+    let home = temp_home("inject-python-streams");
+    let keychain = home.join("keychain");
+    fs::create_dir_all(&keychain).unwrap();
+    let python = [
+        "/opt/homebrew/bin/python3",
+        "/usr/local/bin/python3",
+        "python3",
+    ]
+    .iter()
+    .find_map(|candidate| {
+        let version = python_version(candidate)?;
+        (version >= (3, 12, 0)).then(|| candidate.to_string())
+    });
+    let Some(python) = python else {
+        eprintln!("skipping: no Python >= 3.12 available");
+        return;
+    };
+    let script = home.join("tool");
+    fs::write(
+        &script,
+        format!(
+            "#!{} inject +SOME_SECRET {python} -I\nimport sys\nprint('STDOUT_MARKER')\nprint('STDERR_MARKER', file=sys.stderr)\nraise SystemExit(3)\n",
+            env!("CARGO_BIN_EXE_av")
+        ),
+    )
+    .unwrap();
+    fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+
+    let output = Command::new(&script)
+        .env("HOME", &home)
+        .env("AUTOMIC_VAULT_TEST_KEYCHAIN_DIR", &keychain)
+        .env("SOME_SECRET", "expected")
+        .output()
+        .unwrap();
+
+    if unsafe { libc::geteuid() } == 0 {
+        assert!(!output.status.success());
+        return;
+    }
+
+    assert_eq!(output.status.code(), Some(3), "{}", stderr(&output));
+    assert!(
+        stdout(&output).contains("STDOUT_MARKER"),
+        "{}",
+        stdout(&output)
+    );
+    assert!(
+        stderr(&output).contains("STDERR_MARKER"),
+        "{}",
+        stderr(&output)
+    );
+    let _ = fs::remove_dir_all(home);
+}
+
+#[test]
+fn av_inject_rejects_apple_system_python_when_present() {
+    let home = temp_home("inject-python-apple");
+    let keychain = home.join("keychain");
+    fs::create_dir_all(&keychain).unwrap();
+    match python_version("/usr/bin/python3") {
+        Some(version) if version < (3, 10, 9) || version == (3, 11, 0) => {}
+        _ => {
+            eprintln!("skipping: no affected /usr/bin/python3 available");
+            return;
+        }
+    }
+    let ran = home.join("ran");
+    let script = home.join("tool");
+    fs::write(
+        &script,
+        format!(
+            "#!{} inject +SOME_SECRET /usr/bin/python3 -I\nopen('{}', 'w').write('x')\n",
+            env!("CARGO_BIN_EXE_av"),
+            ran.display()
+        ),
+    )
+    .unwrap();
+    fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+
+    let output = Command::new(&script)
+        .env("HOME", &home)
+        .env("AUTOMIC_VAULT_TEST_KEYCHAIN_DIR", &keychain)
+        .output()
+        .unwrap();
+
+    if unsafe { libc::geteuid() } == 0 {
+        assert!(!output.status.success());
+        return;
+    }
+
+    assert!(!output.status.success(), "{}", stdout(&output));
+    assert!(
+        stderr(&output).contains("cannot execute the verified /dev/fd snapshot"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(!ran.exists());
+    let _ = fs::remove_dir_all(home);
+}
+
+fn fake_python(home: &std::path::Path, version: &str) -> std::path::PathBuf {
+    let python = home.join("python3");
+    fs::write(
+        &python,
+        format!(
+            "#!/bin/sh\ncase \"$*\" in\n  *--version*) echo 'Python {version}' ;;\n  *) printf 'RAN %s\\n' \"$*\" ;;\nesac\n"
+        ),
+    )
+    .unwrap();
+    fs::set_permissions(&python, fs::Permissions::from_mode(0o755)).unwrap();
+    python
+}
+
+fn python_version(program: &str) -> Option<(u32, u32, u32)> {
+    let output = Command::new(program).arg("--version").output().ok()?;
+    let mut combined = output.stdout;
+    combined.extend_from_slice(&output.stderr);
+    let text = String::from_utf8_lossy(&combined);
+    let version = text.split_whitespace().nth(1)?;
+    let mut parts = version.split('.');
+    let mut part = || {
+        parts.next().and_then(|part| {
+            let digits: String = part.chars().take_while(|c| c.is_ascii_digit()).collect();
+            digits.parse().ok()
+        })
+    };
+    Some((part()?, part()?, part().unwrap_or(0)))
+}
+
 fn stdout(output: &std::process::Output) -> String {
     String::from_utf8_lossy(&output.stdout).into_owned()
 }

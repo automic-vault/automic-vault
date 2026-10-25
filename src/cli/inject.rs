@@ -6,7 +6,7 @@ use std::os::fd::{AsRawFd, FromRawFd};
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 #[path = "inject_fd.rs"]
 mod fd;
@@ -377,6 +377,7 @@ fn exec(mut options: Options, stderr: &mut dyn Write) -> i32 {
     }
     let original_script = options.shebang_script.clone();
     let mut path_interpreter = None;
+    let mut script_index = None;
     if let Some(script) = &verified_script {
         if let Some(index) = options.args.iter().position(|arg| {
             original_script
@@ -384,6 +385,7 @@ fn exec(mut options: Options, stderr: &mut dyn Write) -> i32 {
                 .is_some_and(|original| arg == original)
                 || std::fs::canonicalize(arg).is_ok_and(|path| path == script.path)
         }) {
+            script_index = Some(index);
             path_interpreter =
                 path_script_interpreter(Path::new(&options.target), &options.args[..index]);
             if path_interpreter.is_some() {
@@ -397,6 +399,12 @@ fn exec(mut options: Options, stderr: &mut dyn Write) -> i32 {
             stderr,
             "av inject: warning: {interpreter} cannot execute the verified /dev/fd snapshot; using the canonical script path instead; Blessed Script authorization requires a Blessing created with this exception, and another process can change the script between verification and execution"
         );
+    }
+    if let (Some(index), None) = (script_index, path_interpreter)
+        && let Some(error) = snapshot_incompatible_python(&options, &options.args[..index])
+    {
+        let _ = writeln!(stderr, "av inject: {error}");
+        return 1;
     }
 
     let secretless = verified_script.as_ref().is_some_and(|script| {
@@ -525,6 +533,85 @@ fn path_script_interpreter(target: &Path, args_before_script: &[OsString]) -> Op
                 .copied()
                 .find(|interpreter| name == *interpreter)
         })
+}
+
+/// CPython before the fix for python/cpython#87235 (3.10.9, 3.11.1 and 3.12)
+/// shares the verified snapshot's file offset with its zip-archive probe on
+/// macOS, so it reads an empty script and exits 0. Reject rather than fall
+/// back to the canonical path: that swap requires a Blessing exception
+/// (ADR 0011). The probe only guards compatibility and fails open.
+fn is_python_interpreter_name(name: &str) -> bool {
+    name.strip_prefix("python")
+        .is_some_and(|rest| rest.is_empty() || rest.chars().all(|c| c.is_ascii_digit() || c == '.'))
+}
+
+fn parse_python_version(output: &str) -> Option<(u32, u32, u32)> {
+    let mut tokens = output.split_whitespace();
+    while let Some(token) = tokens.next() {
+        if token != "Python" {
+            continue;
+        }
+        let mut parts = tokens.next()?.split('.');
+        let digits = |part: Option<&str>| {
+            part?
+                .chars()
+                .take_while(|c| c.is_ascii_digit())
+                .collect::<String>()
+                .parse()
+                .ok()
+        };
+        let major = digits(parts.next())?;
+        let minor = digits(parts.next())?;
+        let patch = digits(parts.next()).unwrap_or(0);
+        return Some((major, minor, patch));
+    }
+    None
+}
+
+fn python_shares_snapshot_offset(version: (u32, u32, u32)) -> bool {
+    version < (3, 10, 9) || version == (3, 11, 0)
+}
+
+fn snapshot_incompatible_python(
+    options: &Options,
+    args_before_script: &[OsString],
+) -> Option<String> {
+    let target = resolve_target(&options.target).ok()?;
+    let target_is_python = target
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(is_python_interpreter_name);
+    let interpreter = if target_is_python {
+        target.display().to_string()
+    } else {
+        args_before_script
+            .iter()
+            .find(|arg| {
+                Path::new(arg)
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(is_python_interpreter_name)
+            })?
+            .to_string_lossy()
+            .into_owned()
+    };
+    let output = Command::new(&target)
+        .args(args_before_script)
+        .arg("--version")
+        .env_clear()
+        .envs(secretless_environment(options, false, false))
+        .stdin(Stdio::null())
+        .output()
+        .ok()?;
+    let mut combined = output.stdout;
+    combined.extend_from_slice(&output.stderr);
+    let (major, minor, patch) = parse_python_version(&String::from_utf8_lossy(&combined))?;
+    if !python_shares_snapshot_offset((major, minor, patch)) {
+        return None;
+    }
+    Some(format!(
+        "{interpreter} is Python {major}.{minor}.{patch}, which cannot execute the verified /dev/fd snapshot: on macOS this Python shares the snapshot's file offset with its zip-archive probe, so it runs an empty script and exits 0 (python/cpython#87235); use a Python that contains the fix (3.10.9, 3.11.1, 3.12, or later) in the shebang and bless the script again"
+    ))
 }
 
 fn prepare_injection<A, B>(
@@ -2095,6 +2182,42 @@ mod tests {
             path_script_interpreter(Path::new("/opt/homebrew/bin/python3"), &[]),
             None
         );
+    }
+
+    #[test]
+    fn python_interpreter_names_match_versioned_binaries_only() {
+        for name in [
+            "python",
+            "python2",
+            "python3",
+            "python2.7",
+            "python3.9",
+            "python3.14",
+        ] {
+            assert!(is_python_interpreter_name(name), "{name}");
+        }
+        for name in ["python3-config", "pythonw", "uv", "node", "python3.9m-x"] {
+            assert!(!is_python_interpreter_name(name), "{name}");
+        }
+    }
+
+    #[test]
+    fn python_version_parses_release_and_prerelease_output() {
+        assert_eq!(parse_python_version("Python 3.9.6"), Some((3, 9, 6)));
+        assert_eq!(parse_python_version("Python 3.12.0rc1"), Some((3, 12, 0)));
+        assert_eq!(parse_python_version("Python 2.7.18\n"), Some((2, 7, 18)));
+        assert_eq!(parse_python_version("Python 3.9.6+"), Some((3, 9, 6)));
+        assert_eq!(parse_python_version("garbage"), None);
+    }
+
+    #[test]
+    fn python_before_the_offset_fix_shares_the_snapshot_offset() {
+        for version in [(3, 9, 6), (3, 10, 8), (3, 11, 0), (2, 7, 18)] {
+            assert!(python_shares_snapshot_offset(version), "{version:?}");
+        }
+        for version in [(3, 10, 9), (3, 11, 1), (3, 12, 0), (3, 14, 8)] {
+            assert!(!python_shares_snapshot_offset(version), "{version:?}");
+        }
     }
 
     #[test]
