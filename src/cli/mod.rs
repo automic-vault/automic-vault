@@ -675,7 +675,11 @@ fn write_help(stdout: &mut dyn Write, style: scan::Style) {
 }
 
 fn print_hardening_followup(stdout: &mut dyn Write, target: &str) {
-    let _ = writeln!(stdout, "◇ next: run `av doctor {target}`");
+    if matches!(target, "sudo" | "emudhra") {
+        let _ = writeln!(stdout, "◇ next: run `av scan`");
+    } else {
+        let _ = writeln!(stdout, "◇ next: run `av doctor {target}`");
+    }
 }
 
 fn finish_hardening<W: Write + ?Sized, E: Write>(
@@ -1007,6 +1011,24 @@ mod tests {
             "╭─ harden sudo\n│\n├─ enable biometric authentication for sudo\n╰─ next: sudo av harden sudo\n"
         );
         assert_eq!(stderr, "");
+    }
+
+    #[test]
+    fn hardening_followup_recommends_the_available_check() {
+        for (target, command) in [
+            ("emudhra", "av scan"),
+            ("sudo", "av scan"),
+            ("gh", "av doctor gh"),
+            ("codex", "av doctor codex"),
+        ] {
+            let mut stdout = Vec::new();
+            print_hardening_followup(&mut stdout, target);
+            assert_eq!(
+                String::from_utf8(stdout).unwrap(),
+                format!("◇ next: run `{command}`\n"),
+                "{target}"
+            );
+        }
     }
 
     #[test]
