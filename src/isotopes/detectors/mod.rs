@@ -29,6 +29,7 @@ mod certbot;
 mod checkov;
 mod circleci;
 mod civo;
+mod cloudflare_cf;
 mod cloudflare_wrangler;
 mod cloudflared;
 mod cloudsmith_cli;
@@ -272,6 +273,7 @@ const DETECTORS: &[Detector] = &[
     detector!(checkov),
     detector!(circleci),
     detector!(civo),
+    detector!(cloudflare_cf),
     detector!(cloudflare_wrangler),
     detector!(cloudflared),
     detector!(cloudsmith_cli),
@@ -629,7 +631,7 @@ mod tests {
 
     #[test]
     fn scan_runs_every_registered_isotope() {
-        assert_eq!(DETECTORS.len(), 160);
+        assert_eq!(DETECTORS.len(), 161);
     }
 
     #[test]
@@ -721,6 +723,7 @@ mod tests {
         assert_eq!(
             periodic,
             HashSet::from([
+                "cloudflare-cf",
                 "cloudflare-wrangler",
                 "emudhra",
                 "gh-cli-keychain-access",
