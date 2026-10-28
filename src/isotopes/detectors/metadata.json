@@ -224,6 +224,18 @@
     "requires_periodic_scan": false,
     "solution": "Run `av harden civo`."
   },
+  "cloudflare-cf": {
+    "watch_paths": [
+      "~/Library/Preferences/cloudflare/config/*.json",
+      "~/Library/Preferences/cloudflare/config/*.enc",
+      "~/.config/cloudflare/config/*.json",
+      "~/.config/cloudflare/config/*.enc",
+      "$XDG_CONFIG_HOME/cloudflare/config/*.json",
+      "$XDG_CONFIG_HOME/cloudflare/config/*.enc"
+    ],
+    "requires_periodic_scan": true,
+    "solution": "`cf auth login --use-keyring` encrypts the profile on disk and stores the encryption key in the macOS Keychain. Its macOS backend creates and reads that key through `/usr/bin/security`. When the Keychain item authorizes that tool, other software running as the user can ask the same tool for the key and decrypt the profile without crossing an Authorization Gate. `cf auth logout` removes the default profile (`default.json` or `default.enc`); it does not touch a named profile. `cf auth delete <name>` removes the named profile `<name>.json` or `<name>.enc`. Remove a profile you no longer need."
+  },
   "cloudflare-wrangler": {
     "watch_paths": [
       "~/Library/Preferences/.wrangler/config/*.toml",
