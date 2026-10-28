@@ -145,8 +145,11 @@ holds the raw Secret Value.
 - An Approval prompt or denial is a decision for the user, not a bug to work
   around. Report what the script was doing and wait.
 - Quitting, restarting, or updating Automic Vault ends a running script's
-  Blessed Script state. Later gated operations in that run need fresh
-  Approval.
+  active Blessing authority and its memory-only capability ceiling, including
+  `capabilities: {}`. Later gated operations in that run use ordinary
+  authorization policy, such as Launcher policy, which may allow them or
+  require Approval. Let running Blessed Scripts finish before Automic Vault
+  quits, restarts, or updates.
 
 ## Reference
 

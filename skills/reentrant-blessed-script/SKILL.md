@@ -12,9 +12,11 @@ and exits. You produce the input, then run the continue command it printed.
 Automic Vault authorizes every invocation separately. You never need to run
 the underlying Tools yourself.
 
-Read the `blessed-script` skill first. Everything there applies: Script
-Declaration syntax, least Capability, `av bless`, and never editing a Blessed
-Script to get past a denial.
+Read the [`blessed-script`](../blessed-script/SKILL.md) skill first. Everything
+there applies: Script Declaration syntax, least Capability, `av bless`, and
+never editing a Blessed Script to get past a denial. If it is not installed,
+read it at
+<https://github.com/automic-vault/automic-vault/blob/main/skills/blessed-script/SKILL.md>.
 
 ## Following one
 
@@ -72,9 +74,16 @@ EOF
       echo "error: notes exceed 64 KiB" >&2
       exit 65
     }
-    gh release view "$VERSION" --repo "$REPOSITORY" >/dev/null 2>&1 ||
+    if ! gh release view "$VERSION" --repo "$REPOSITORY" >/dev/null 2>&1; then
       gh release create "$VERSION" --repo "$REPOSITORY" \
         --notes-file "$NOTES" --verify-tag
+    fi
+    IS_DRAFT="$(gh release view "$VERSION" --repo "$REPOSITORY" \
+      --json isDraft --jq .isDraft)"
+    [[ "$IS_DRAFT" == false ]] || {
+      echo "error: GitHub release $VERSION is still a draft" >&2
+      exit 1
+    }
     ;;
   *) echo "error: unknown action: $ACTION" >&2; exit 64 ;;
 esac
@@ -101,7 +110,9 @@ esac
   in the shebang.
 - **Make every step idempotent.** A run can stop between any two steps. Check
   remote state before writing, use conditional writes, and verify digests, so
-  rerunning `continue` finishes the job instead of repeating it.
+  rerunning `continue` finishes the job instead of repeating it. Verify the
+  end state too: an existing release may still be a draft, so fail instead of
+  reporting success.
 - **Keep state in files the script checks**, not in memory or environment
   variables, because every invocation starts fresh.
 
