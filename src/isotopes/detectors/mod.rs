@@ -767,6 +767,10 @@ mod tests {
             ("sip", vec!["macOS Recovery", "csrutil enable", "restart"]),
             ("codex", vec!["ChatGPT desktop app", "sign-in again"]),
             (
+                "cloudflare-cf",
+                vec!["cf auth logout", "default profile", "cf auth delete <name>"],
+            ),
+            (
                 "emudhra",
                 vec![
                     "brew upgrade ca-certificates",

@@ -574,6 +574,8 @@ mod tests {
         assert!(documentation.contains("`/usr/bin/security`"));
         assert!(documentation.contains("Authorization Gate"));
         assert!(documentation.contains("Secret Custody"));
+        assert!(documentation.contains("`cf auth logout` removes the default profile"));
+        assert!(documentation.contains("`cf auth delete <name>` removes the named"));
     }
 }
 
