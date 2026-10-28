@@ -9,8 +9,9 @@ pub fn install_is_insecure() -> Result<bool, String> {
 }
 
 pub fn install_insecurity_reasons() -> Result<Vec<String>, String> {
-    let mut reasons = Vec::new();
-    for path in candidate_auth_files("json")? {
+    let profiles = candidate_auth_files()?;
+    let mut reasons = profiles.uncertainties;
+    for path in profiles.plaintext {
         if !path.exists() {
             continue;
         }
@@ -32,7 +33,7 @@ pub fn install_insecurity_reasons() -> Result<Vec<String>, String> {
             )),
         }
     }
-    for path in candidate_auth_files("enc")? {
+    for path in profiles.encrypted {
         if !path.exists() {
             continue;
         }
@@ -51,7 +52,14 @@ pub fn install_insecurity_reasons() -> Result<Vec<String>, String> {
     Ok(reasons)
 }
 
-fn candidate_auth_files(extension: &str) -> Result<Vec<PathBuf>, String> {
+#[derive(Debug, Default, PartialEq)]
+struct AuthFiles {
+    plaintext: Vec<PathBuf>,
+    encrypted: Vec<PathBuf>,
+    uncertainties: Vec<String>,
+}
+
+fn candidate_auth_files() -> Result<AuthFiles, String> {
     let home = home_dir()?;
     let mut roots = vec![
         home.join("Library/Preferences/cloudflare"),
@@ -61,25 +69,61 @@ fn candidate_auth_files(extension: &str) -> Result<Vec<PathBuf>, String> {
         roots.push(config_home.join("cloudflare"));
     }
 
-    let mut paths = Vec::new();
+    let mut files = AuthFiles::default();
     for root in roots {
-        paths.push(root.join(format!("config/default.{extension}")));
-        if let Ok(entries) = std::fs::read_dir(root.join("config")) {
-            for entry in entries.flatten() {
-                if entry
-                    .file_type()
-                    .map(|kind| kind.is_file())
-                    .unwrap_or(false)
-                    && entry.path().extension().and_then(|value| value.to_str()) == Some(extension)
-                {
-                    paths.push(entry.path());
+        let directory = root.join("config");
+        files.plaintext.push(directory.join("default.json"));
+        files.encrypted.push(directory.join("default.enc"));
+        match std::fs::read_dir(&directory) {
+            Ok(entries) => {
+                for entry in entries {
+                    match entry {
+                        Ok(entry) => files.add_named_profile(entry.path()),
+                        Err(error) => files
+                            .uncertainties
+                            .push(directory_uncertainty(&directory, &error)),
+                    }
                 }
             }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => files
+                .uncertainties
+                .push(directory_uncertainty(&directory, &error)),
         }
     }
-    paths.sort();
-    paths.dedup();
-    Ok(paths)
+    files.plaintext.sort();
+    files.plaintext.dedup();
+    files.encrypted.sort();
+    files.encrypted.dedup();
+    files.uncertainties.sort();
+    files.uncertainties.dedup();
+    Ok(files)
+}
+
+impl AuthFiles {
+    fn add_named_profile(&mut self, path: PathBuf) {
+        let bucket = match path.extension().and_then(|value| value.to_str()) {
+            Some("json") => &mut self.plaintext,
+            Some("enc") => &mut self.encrypted,
+            _ => return,
+        };
+        match std::fs::metadata(&path) {
+            Ok(metadata) if metadata.is_file() => bucket.push(path),
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => self.uncertainties.push(format!(
+                "cf auth profile could not be inspected ({error}): {}",
+                path.display()
+            )),
+        }
+    }
+}
+
+fn directory_uncertainty(directory: &Path, error: &std::io::Error) -> String {
+    format!(
+        "cf auth profile directory could not be inspected ({error}): {}",
+        directory.display()
+    )
 }
 
 fn keychain_item_for(encrypted_path: &Path) -> Option<(&'static str, String)> {
@@ -371,6 +415,155 @@ mod tests {
         let _env = EnvGuard::set(&[("HOME", &home), ("XDG_CONFIG_HOME", &xdg)]);
 
         assert!(!install_is_insecure().unwrap());
+        std::fs::remove_dir_all(home).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unlistable_profile_directory_is_reported_without_hiding_other_roots() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let _lock = crate::global_test_env_lock().lock().unwrap();
+        let home = temp_home("unlistable");
+        let xdg = home.join("xdg");
+        let preferences = home.join("Library/Preferences/cloudflare/config");
+        let xdg_config = xdg.join("cloudflare/config");
+        std::fs::create_dir_all(&preferences).unwrap();
+        std::fs::create_dir_all(&xdg_config).unwrap();
+        std::fs::write(
+            preferences.join("default.json"),
+            r#"{"scopes":["account:read"]}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            preferences.join("work-account.json"),
+            r#"{"api_token":"fixture-api-token"}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            xdg_config.join("staging.json"),
+            r#"{"oauth_token":"fixture-staging"}"#,
+        )
+        .unwrap();
+        std::fs::set_permissions(&preferences, std::fs::Permissions::from_mode(0o311)).unwrap();
+        let _env = EnvGuard::set(&[("HOME", &home), ("XDG_CONFIG_HOME", &xdg)]);
+
+        let reasons = install_insecurity_reasons().unwrap();
+
+        std::fs::set_permissions(&preferences, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(reasons.len(), 2, "{reasons:?}");
+        assert!(reasons.iter().any(|reason| {
+            reason.starts_with("cf auth profile directory could not be inspected (")
+                && reason.ends_with(&format!(": {}", preferences.display()))
+        }));
+        assert!(reasons.contains(&format!(
+            "cf auth profile contains plaintext Cloudflare tokens: {}",
+            xdg_config.join("staging.json").display()
+        )));
+        assert!(reasons.iter().all(|reason| !reason.contains("fixture-")));
+        std::fs::remove_dir_all(home).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_named_profiles_are_inspected_like_the_default_profile() {
+        let _lock = crate::global_test_env_lock().lock().unwrap();
+        let home = temp_home("symlinks");
+        let xdg = home.join("xdg");
+        let preferences = home.join("Library/Preferences/cloudflare/config");
+        let targets = home.join("targets");
+        std::fs::create_dir_all(&xdg).unwrap();
+        std::fs::create_dir_all(&preferences).unwrap();
+        std::fs::create_dir_all(&targets).unwrap();
+        std::fs::write(
+            targets.join("work.json"),
+            r#"{"api_token":"fixture-api-token"}"#,
+        )
+        .unwrap();
+        std::fs::write(targets.join("staging.enc"), "fixture-ciphertext").unwrap();
+        std::fs::create_dir_all(targets.join("tree.json")).unwrap();
+        std::os::unix::fs::symlink(
+            targets.join("work.json"),
+            preferences.join("work-account.json"),
+        )
+        .unwrap();
+        std::os::unix::fs::symlink(targets.join("staging.enc"), preferences.join("staging.enc"))
+            .unwrap();
+        std::os::unix::fs::symlink(targets.join("tree.json"), preferences.join("tree.json"))
+            .unwrap();
+        std::os::unix::fs::symlink(targets.join("missing.json"), preferences.join("ghost.json"))
+            .unwrap();
+        let _env = EnvGuard::set(&[("HOME", &home), ("XDG_CONFIG_HOME", &xdg)]);
+
+        let files = candidate_auth_files().unwrap();
+        let reasons = install_insecurity_reasons().unwrap();
+
+        assert!(
+            files
+                .plaintext
+                .contains(&preferences.join("work-account.json")),
+            "{files:?}"
+        );
+        assert!(
+            files.encrypted.contains(&preferences.join("staging.enc")),
+            "{files:?}"
+        );
+        assert!(
+            !files.plaintext.contains(&preferences.join("tree.json")),
+            "{files:?}"
+        );
+        assert!(
+            !files.plaintext.contains(&preferences.join("ghost.json")),
+            "{files:?}"
+        );
+        assert_eq!(files.uncertainties, Vec::<String>::new());
+        assert!(
+            reasons.contains(&format!(
+                "cf auth profile contains plaintext Cloudflare tokens: {}",
+                preferences.join("work-account.json").display()
+            )),
+            "{reasons:?}"
+        );
+        assert!(reasons.iter().all(|reason| !reason.contains("fixture-")));
+        std::fs::remove_dir_all(home).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn named_profile_whose_target_cannot_be_examined_is_reported() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let _lock = crate::global_test_env_lock().lock().unwrap();
+        let home = temp_home("unexaminable");
+        let xdg = home.join("xdg");
+        let preferences = home.join("Library/Preferences/cloudflare/config");
+        let locked = home.join("locked");
+        std::fs::create_dir_all(&xdg).unwrap();
+        std::fs::create_dir_all(&preferences).unwrap();
+        std::fs::create_dir_all(&locked).unwrap();
+        std::fs::write(
+            locked.join("work.json"),
+            r#"{"api_token":"fixture-api-token"}"#,
+        )
+        .unwrap();
+        std::os::unix::fs::symlink(
+            locked.join("work.json"),
+            preferences.join("work-account.json"),
+        )
+        .unwrap();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let _env = EnvGuard::set(&[("HOME", &home), ("XDG_CONFIG_HOME", &xdg)]);
+
+        let reasons = install_insecurity_reasons().unwrap();
+
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(reasons.len(), 1, "{reasons:?}");
+        assert!(reasons[0].starts_with("cf auth profile could not be inspected ("));
+        assert!(reasons[0].ends_with(&format!(
+            ": {}",
+            preferences.join("work-account.json").display()
+        )));
+        assert!(!reasons[0].contains("fixture-"));
         std::fs::remove_dir_all(home).unwrap();
     }
 

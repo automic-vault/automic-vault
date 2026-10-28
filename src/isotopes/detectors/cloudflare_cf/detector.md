@@ -19,6 +19,7 @@ named profile created with `cf auth create <name>` has its own file beside
 > - An encrypted `cf` auth profile uses a Keychain encryption key that
 >   `/usr/bin/security` can retrieve non-interactively.
 > - A `cf` auth profile cannot be read or parsed.
+> - A `cf` auth profile directory cannot be listed.
 > - Access to that Keychain encryption key cannot be inspected.
 >
 > #### Sensitive Files
