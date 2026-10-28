@@ -281,6 +281,10 @@ fn av_scan(home: &std::path::Path) -> Output {
             "System Integrity Protection status: enabled.",
         )
         .env("AUTOMIC_VAULT_DISABLE_SUDO_DETECTOR", "1")
+        .env(
+            "AUTOMIC_VAULT_TEST_EMUDHRA_CERT_PATH",
+            home.join("cert.pem"),
+        )
         .env("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
         .output()
         .unwrap()
@@ -301,6 +305,10 @@ fn av_scan_json(home: &std::path::Path) -> Output {
             "System Integrity Protection status: enabled.",
         )
         .env("AUTOMIC_VAULT_DISABLE_SUDO_DETECTOR", "1")
+        .env(
+            "AUTOMIC_VAULT_TEST_EMUDHRA_CERT_PATH",
+            home.join("cert.pem"),
+        )
         .env("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
         .output()
         .unwrap()
@@ -321,5 +329,10 @@ fn temp_home(label: &str) -> std::path::PathBuf {
         .as_nanos();
     let path = std::env::temp_dir().join(format!("av-cli-{label}-{}-{nanos}", std::process::id()));
     fs::create_dir_all(&path).unwrap();
+    fs::write(
+        path.join("cert.pem"),
+        include_str!("../src/isotopes/detectors/emudhra/testdata/unaffected.pem"),
+    )
+    .unwrap();
     path
 }
