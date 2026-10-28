@@ -47,7 +47,7 @@ credentials and reports inspection uncertainty as a Hazard.
 
 `cf auth logout` removes the default profile (`default.json` or `default.enc`).
 It does not touch a named profile. `cf auth delete <name>` removes the named
-profile `<name>.json` or `<name>.enc`. Remove a profile you no longer need. This detector is
-detect-only; Automic Vault does not yet harden `cf`.
+profile `<name>.json` or `<name>.enc`. Remove a profile you no longer need. This
+detector is detect-only; Automic Vault does not yet harden `cf`.
 
 [Open an issue to discuss a safer integration](https://github.com/automic-vault/automic-vault/issues).
