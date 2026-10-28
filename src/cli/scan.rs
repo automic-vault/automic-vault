@@ -509,6 +509,7 @@ mod tests {
             periodic,
             [
                 "cloudflare-wrangler",
+                "emudhra",
                 "gh-cli-keychain-access",
                 "git-credential-fill",
                 "macOS",
