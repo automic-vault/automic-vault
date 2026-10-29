@@ -9,13 +9,14 @@ name and a description that tells the agent when to use it.
 - [`reentrant-blessed-script`](reentrant-blessed-script/SKILL.md): write or
   follow a reentrant Blessed Script that pauses for agent input.
 
-To install one, copy its directory into your agent's skills directory, for
-example `~/.claude/skills/` for Claude Code. `reentrant-blessed-script`
-requires `blessed-script`, so install both together:
+Install with [skills](https://skills.sh):
 
 ```sh
-cp -R skills/blessed-script skills/reentrant-blessed-script ~/.claude/skills/
+npx skills add automic-vault/automic-vault
 ```
+
+Select your coding agent and both skills: `reentrant-blessed-script` requires
+`blessed-script`.
 
 A skill grants no authority. The agent still needs the user to review every
 Blessing and answer every Approval.

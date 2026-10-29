@@ -516,14 +516,14 @@ Teach your coding agent to write reviewed automation:
 - [`reentrant-blessed-script`](skills/reentrant-blessed-script/SKILL.md): write
   or follow a script that pauses for agent input and continues when invoked again.
 
-Install both from a checkout of this repository. For Claude Code:
+Install with [skills](https://skills.sh):
 
 ```sh
-$ mkdir -p ~/.claude/skills
-$ cp -R skills/blessed-script skills/reentrant-blessed-script ~/.claude/skills/
+$ npx skills add automic-vault/automic-vault
 ```
 
-For another agent, copy both directories into its skills directory. Then ask:
+Select your coding agent and both skills: `reentrant-blessed-script` requires
+`blessed-script`. Then ask:
 
 > Use the blessed-script skill to write a release script for this project.
 
