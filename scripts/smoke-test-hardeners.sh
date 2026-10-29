@@ -51,8 +51,8 @@ echo "Authenticating once for protected Target installation…"
 "$SUDO" -v
 
 run_hardener() {
-  if [[ "$1" == sudo ]]; then
-    "$SUDO" "$AV" harden sudo --yes
+  if [[ "$1" == sudo || "$1" == emudhra ]]; then
+    "$SUDO" "$AV" harden "$1" --yes
   else
     "$AV" harden "$1" --yes
   fi

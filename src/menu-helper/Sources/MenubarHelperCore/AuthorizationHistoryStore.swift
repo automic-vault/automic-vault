@@ -464,8 +464,8 @@ public final class AuthorizationHistoryStore: @unchecked Sendable {
         try maintain(afterScan: {})
     }
 
-    // The hook exercises mutations between authentication and deletion in tests.
-    func maintain(afterScan: () throws -> Void) throws {
+    // Hooks exercise concurrent writes during the scan and before deletion.
+    func maintain(afterScan: () throws -> Void, afterBatch: () throws -> Void = {}) throws {
         guard maintenanceLock.try() else { return }
         defer { maintenanceLock.unlock() }
         let (policy, appendedAtStart, upperSequence) = try lock.withLock {
@@ -487,28 +487,42 @@ public final class AuthorizationHistoryStore: @unchecked Sendable {
         var candidates: [Candidate] = []
         var cursor: Int64 = 0
         var total: Int64 = 0
+        var scan: OpaquePointer?
+        try lock.withLock {
+            try prepare("SELECT id, retention_bucket, ciphertext, sequence FROM authorization_history WHERE sequence > ? AND sequence <= ? ORDER BY sequence LIMIT 64", into: &scan)
+        }
+        defer { lock.withLock { sqlite3_finalize(scan) } }
+        let decoder = JSONDecoder()
         while cursor < upperSequence {
-            // Copy one row, release the insertion lock, then authenticate and decode it.
-            let row: (Int64, String, Data, Data)? = try lock.withLock {
-                var statement: OpaquePointer?
-                try prepare("SELECT id, retention_bucket, ciphertext, sequence FROM authorization_history WHERE sequence > ? AND sequence <= ? ORDER BY sequence LIMIT 1", into: &statement)
-                defer { sqlite3_finalize(statement) }
-                sqlite3_bind_int64(statement, 1, cursor)
-                sqlite3_bind_int64(statement, 2, upperSequence)
-                switch sqlite3_step(statement) {
-                case SQLITE_ROW:
-                    return (sqlite3_column_int64(statement, 3), try storedRecordID(from: statement),
-                            data(at: 1, from: statement), data(at: 2, from: statement))
-                case SQLITE_DONE: return nil
-                default: throw sqliteError("maintenance scan failed")
+            let rows: [(Int64, String, Data, Data)] = try lock.withLock {
+                // End the read before unlocking so appends never inherit an active cursor.
+                defer { sqlite3_reset(scan) }
+                sqlite3_bind_int64(scan, 1, cursor)
+                sqlite3_bind_int64(scan, 2, upperSequence)
+                var rows: [(Int64, String, Data, Data)] = []
+                var bytes = 0
+                while true {
+                    switch sqlite3_step(scan) {
+                    case SQLITE_ROW:
+                        let ciphertext = data(at: 2, from: scan)
+                        rows.append((sqlite3_column_int64(scan, 3), try storedRecordID(from: scan),
+                                     data(at: 1, from: scan), ciphertext))
+                        bytes += ciphertext.count
+                        if bytes >= 1_048_576 { return rows }
+                    case SQLITE_DONE: return rows
+                    default: throw sqliteError("maintenance scan failed")
+                    }
                 }
             }
-            guard let (sequence, id, bucket, ciphertext) = row else { break }
-            let record = try decode(ciphertext, id: id, bucket: bucket)
-            candidates.append(Candidate(sequence: sequence, id: id,
-                digest: SHA256.hash(data: bucket + ciphertext), date: record.date, size: Int64(ciphertext.count)))
-            total += Int64(ciphertext.count)
-            cursor = sequence
+            guard !rows.isEmpty else { break }
+            try afterBatch()
+            for (sequence, id, bucket, ciphertext) in rows {
+                let record = try decode(ciphertext, id: id, bucket: bucket, decoder: decoder)
+                candidates.append(Candidate(sequence: sequence, id: id,
+                    digest: SHA256.hash(data: bucket + ciphertext), date: record.date, size: Int64(ciphertext.count)))
+                total += Int64(ciphertext.count)
+                cursor = sequence
+            }
         }
         try afterScan()
         func expired(_ candidate: Candidate) -> Bool {
@@ -519,6 +533,14 @@ public final class AuthorizationHistoryStore: @unchecked Sendable {
             return $0.date == $1.date ? $0.sequence < $1.sequence : $0.date < $1.date
         }
         var removed: Int64 = 0
+        var recheck: OpaquePointer?
+        var deletion: OpaquePointer?
+        defer {
+            lock.withLock {
+                sqlite3_finalize(recheck)
+                sqlite3_finalize(deletion)
+            }
+        }
         for candidate in candidates {
             guard expired(candidate) || total - removed > policy.maximumEncryptedBytes else { continue }
             try lock.withLock {
@@ -526,23 +548,33 @@ public final class AuthorizationHistoryStore: @unchecked Sendable {
                 guard retention.maximumEncryptedBytes == policy.maximumEncryptedBytes else {
                     throw AuthorizationHistoryStoreError.verificationFailed
                 }
+                if recheck == nil {
+                    try prepare("SELECT id, retention_bucket, ciphertext FROM authorization_history WHERE sequence = ?", into: &recheck)
+                }
+                if deletion == nil {
+                    try prepare("DELETE FROM authorization_history WHERE id = ?", into: &deletion)
+                }
                 try execute("BEGIN IMMEDIATE")
                 do {
-                    var statement: OpaquePointer?
-                    try prepare("SELECT id, retention_bucket, ciphertext FROM authorization_history WHERE sequence = ?", into: &statement)
-                    sqlite3_bind_int64(statement, 1, candidate.sequence)
+                    sqlite3_bind_int64(recheck, 1, candidate.sequence)
                     do {
-                        defer { sqlite3_finalize(statement) }
-                        switch sqlite3_step(statement) {
+                        defer { sqlite3_reset(recheck) }
+                        switch sqlite3_step(recheck) {
                         case SQLITE_ROW:
-                            guard try storedRecordID(from: statement) == candidate.id,
-                                  SHA256.hash(data: data(at: 1, from: statement) + data(at: 2, from: statement)) == candidate.digest
+                            guard try storedRecordID(from: recheck) == candidate.id,
+                                  SHA256.hash(data: data(at: 1, from: recheck) + data(at: 2, from: recheck)) == candidate.digest
                             else { throw AuthorizationHistoryStoreError.verificationFailed }
                         case SQLITE_DONE: throw AuthorizationHistoryStoreError.verificationFailed
                         default: throw sqliteError("maintenance recheck failed")
                         }
                     }
-                    try delete(id: candidate.id)
+                    do {
+                        defer { sqlite3_reset(deletion) }
+                        sqlite3_bind_text(deletion, 1, candidate.id, -1, SQLITE_TRANSIENT)
+                        guard sqlite3_step(deletion) == SQLITE_DONE else {
+                            throw sqliteError("expiry pruning failed")
+                        }
+                    }
                     try execute("COMMIT")
                     dashboardRevision &+= 1
                     removed += candidate.size
@@ -617,7 +649,7 @@ public final class AuthorizationHistoryStore: @unchecked Sendable {
         }
     }
 
-    private func decode(_ ciphertext: Data, id: String, bucket: Data) throws -> AccessRequestRecord
+    private func decode(_ ciphertext: Data, id: String, bucket: Data, decoder: JSONDecoder = JSONDecoder()) throws -> AccessRequestRecord
     {
         do {
             let plaintext = try AES.GCM.open(
@@ -625,7 +657,7 @@ public final class AuthorizationHistoryStore: @unchecked Sendable {
                 using: encryptionKey,
                 authenticating: authenticatedData(id: id, bucket: bucket)
             )
-            let record = try JSONDecoder().decode(AccessRequestRecord.self, from: plaintext)
+            let record = try decoder.decode(AccessRequestRecord.self, from: plaintext)
             guard record.id.uuidString == id else {
                 throw AuthorizationHistoryStoreError.verificationFailed
             }
@@ -648,16 +680,6 @@ public final class AuthorizationHistoryStore: @unchecked Sendable {
               UUID(uuidString: id)?.uuidString == id
         else { throw AuthorizationHistoryStoreError.decoding }
         return id
-    }
-
-    private func delete(id: String) throws {
-        var statement: OpaquePointer?
-        try prepare("DELETE FROM authorization_history WHERE id = ?", into: &statement)
-        defer { sqlite3_finalize(statement) }
-        sqlite3_bind_text(statement, 1, id, -1, SQLITE_TRANSIENT)
-        guard sqlite3_step(statement) == SQLITE_DONE else {
-            throw sqliteError("expiry pruning failed")
-        }
     }
 
     private func retentionBucket(for date: Date) throws -> Data {

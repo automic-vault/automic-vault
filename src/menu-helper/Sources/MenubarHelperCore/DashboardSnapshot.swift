@@ -269,6 +269,7 @@ private let splitDetectorDisplayNames: [String: DetectorDisplayName] = [
     "secretlint-persisted-report": DetectorDisplayName(packageName: "secretlint", kind: "persisted report"),
     "secretlint-shell-history": DetectorDisplayName(packageName: "secretlint", kind: "shell history"),
     "sip": DetectorDisplayName(packageName: "SIP", kind: "system integrity"),
+    "emudhra": DetectorDisplayName(packageName: "eMudhra", kind: "TLS trust"),
     "sudo": DetectorDisplayName(packageName: "sudo", kind: "system integrity"),
 ]
 

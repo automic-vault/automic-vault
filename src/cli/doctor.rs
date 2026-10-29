@@ -1748,7 +1748,7 @@ mod tests {
             );
             if hardener.detection.commands.is_empty() {
                 assert!(
-                    matches!(hardener.name, "codex" | "sudo"),
+                    matches!(hardener.name, "codex" | "sudo" | "emudhra"),
                     "{} needs Doctor checks or an explicit Scan-owned exemption",
                     hardener.name
                 );

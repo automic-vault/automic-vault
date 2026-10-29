@@ -4,6 +4,7 @@ pub(crate) mod aws_release;
 pub(crate) mod codex;
 pub(crate) mod docker;
 pub(crate) mod doctl;
+pub(crate) mod emudhra;
 pub(crate) mod env_wrapper;
 pub(crate) mod fastly_cli;
 pub(crate) mod gh_cli;
@@ -357,6 +358,7 @@ const HARDENERS: &[HardenerSpec] = &[
     gated_hardener!(wrangler, "wrangler", &[]),
     gated_hardener!(stripe_cli, "stripe", &[]),
     ungated_hardener!(sudo, "sudo", &[]),
+    ungated_hardener!(emudhra, "emudhra", &[]),
     gated_hardener!(supabase, "supabase", &["supabase-cli"]),
     gated_hardener!(wakatime_cli, "wakatime-cli", &[]),
     HardenerSpec {

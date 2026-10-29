@@ -508,7 +508,9 @@ mod tests {
         assert_eq!(
             periodic,
             [
+                "cloudflare-cf",
                 "cloudflare-wrangler",
+                "emudhra",
                 "gh-cli-keychain-access",
                 "git-credential-fill",
                 "macOS",

@@ -562,6 +562,49 @@ func authorizationHistoryMaintenanceRejectsChangedDeletionCandidate() throws {
     #expect(sqlite3_column_int(statement, 0) == 8)
 }
 
+@Test(arguments: [0, 600_000])
+func authorizationHistoryMaintenanceBatchesReleaseTheReadBeforeAppend(reasonBytes: Int) throws {
+    let fixture = try HistoryStoreFixture(maximumEncryptedBytes: 128 * 1024 * 1024)
+    defer { fixture.remove() }
+    let records = (0..<130).map {
+        fixture.record(index: $0, date: Date(timeIntervalSince1970: 3_999_900),
+                       reason: String(repeating: "x", count: reasonBytes))
+    }
+    try fixture.store.importRecords(records)
+    let newRecord = fixture.record(index: 999)
+    var batches = 0
+    try fixture.store.maintain(afterScan: {}, afterBatch: {
+        batches += 1
+        if batches == 1 {
+            // Another connection must be able to commit while authentication runs.
+            let other = try AuthorizationHistoryStore(url: fixture.url, keyData: Data(repeating: 7, count: 32))
+            #expect(other.append(newRecord))
+            #expect(fixture.store.append(fixture.record(index: 998)))
+        }
+    })
+    #expect(batches == (reasonBytes == 0 ? 3 : 65))
+}
+
+@Test
+func authorizationHistoryMaintenanceAuthenticatesEveryBatchBeforeDeleting() throws {
+    let fixture = try HistoryStoreFixture()
+    defer { fixture.remove() }
+    try fixture.store.importRecords((0..<130).map { fixture.record(index: $0) })
+    try fixture.store.setMaximumEncryptedBytes(1)
+    var database: OpaquePointer?
+    try #require(sqlite3_open(fixture.url.path, &database) == SQLITE_OK)
+    defer { sqlite3_close(database) }
+    try #require(sqlite3_exec(database,
+        "UPDATE authorization_history SET ciphertext = zeroblob(32) WHERE sequence = 130",
+        nil, nil, nil) == SQLITE_OK)
+    #expect(throws: AuthorizationHistoryStoreError.decoding) { try fixture.store.maintain() }
+    var statement: OpaquePointer?
+    try #require(sqlite3_prepare_v2(database, "SELECT count(*) FROM authorization_history", -1, &statement, nil) == SQLITE_OK)
+    defer { sqlite3_finalize(statement) }
+    try #require(sqlite3_step(statement) == SQLITE_ROW)
+    #expect(sqlite3_column_int(statement, 0) == 130)
+}
+
 @Test
 func authorizationHistoryNewRecordFailureStillDeniesPersistence() throws {
     let fixture = try HistoryStoreFixture()
@@ -836,6 +879,29 @@ func authorizationHistoryReadRejectsInvalidSequenceBoundaries(sequence: Int64) t
     try #require(sqlite3_exec(database,
         "UPDATE authorization_history SET sequence = \(sequence)", nil, nil, nil) == SQLITE_OK)
     #expect(throws: AuthorizationHistoryStoreError.verificationFailed) { try fixture.store.records() }
+}
+
+@Test(.enabled(if: ProcessInfo.processInfo.environment["AV_HISTORY_BENCHMARK"] == "1"))
+func authorizationHistoryMaintenanceBenchmark() throws {
+    let fixture = try HistoryStoreFixture(maximumEncryptedBytes: 64 * 1024 * 1024)
+    defer { fixture.remove() }
+    let date = Date(timeIntervalSince1970: 3_999_900)
+    try fixture.store.importRecords((0..<16_273).map {
+        fixture.record(index: $0, date: date, reason: String(repeating: "x", count: 1_800))
+    })
+    for _ in 0..<3 {
+        let start = clock()
+        try fixture.store.maintain()
+        let seconds = Double(clock() - start) / Double(CLOCKS_PER_SEC)
+        print("History maintenance: 16273 rows, \(seconds) CPU seconds")
+        if let budget = ProcessInfo.processInfo.environment["AV_HISTORY_CPU_BUDGET"].flatMap(Double.init) {
+            #expect(seconds < budget)
+        }
+    }
+    try fixture.store.setMaximumEncryptedBytes(25 * 1024 * 1024)
+    let start = clock()
+    try fixture.store.maintain()
+    print("History pruning to 25 MiB: \(Double(clock() - start) / Double(CLOCKS_PER_SEC)) CPU seconds")
 }
 
 private final class HistoryStoreFixture {

@@ -1,6 +1,6 @@
 [package]
 name = "av"
-version = "4.20.3"
+version = "4.21.2"
 edition = "2024"
 
 [profile.release]
@@ -30,6 +30,7 @@ hudsucker = "=0.25.0"
 hyper-rustls = { version = "0.27", default-features = false, features = ["aws-lc-rs", "http1", "tls12", "webpki-tokio"] }
 hyper-util = { version = "0.1", features = ["client-legacy", "http1", "tokio"] }
 libc = "0.2"
+memchr = "2.8"
 reqwest = { version = "0.12", default-features = false, features = ["http2", "json", "rustls-tls"] }
 ring = "0.17"
 percent-encoding = "2.3"

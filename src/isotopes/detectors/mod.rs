@@ -29,6 +29,7 @@ mod certbot;
 mod checkov;
 mod circleci;
 mod civo;
+mod cloudflare_cf;
 mod cloudflare_wrangler;
 mod cloudflared;
 mod cloudsmith_cli;
@@ -42,6 +43,7 @@ mod docker_credential_helper;
 mod docker_machine;
 mod doctl;
 mod dropbox_uploader;
+pub(crate) mod emudhra;
 mod envchain;
 mod fastlane;
 mod fastly;
@@ -271,6 +273,7 @@ const DETECTORS: &[Detector] = &[
     detector!(checkov),
     detector!(circleci),
     detector!(civo),
+    detector!(cloudflare_cf),
     detector!(cloudflare_wrangler),
     detector!(cloudflared),
     detector!(cloudsmith_cli),
@@ -285,6 +288,7 @@ const DETECTORS: &[Detector] = &[
     detector!(docker_machine),
     detector!(doctl),
     detector!(dropbox_uploader),
+    detector!(emudhra),
     detector!(envchain),
     detector!(fastlane),
     detector!(fastly),
@@ -627,7 +631,7 @@ mod tests {
 
     #[test]
     fn scan_runs_every_registered_isotope() {
-        assert_eq!(DETECTORS.len(), 159);
+        assert_eq!(DETECTORS.len(), 161);
     }
 
     #[test]
@@ -719,7 +723,9 @@ mod tests {
         assert_eq!(
             periodic,
             HashSet::from([
+                "cloudflare-cf",
                 "cloudflare-wrangler",
+                "emudhra",
                 "gh-cli-keychain-access",
                 "git-credential-fill",
                 "macOS",
@@ -760,6 +766,18 @@ mod tests {
         for (name, details) in [
             ("sip", vec!["macOS Recovery", "csrutil enable", "restart"]),
             ("codex", vec!["ChatGPT desktop app", "sign-in again"]),
+            (
+                "cloudflare-cf",
+                vec!["cf auth logout", "default profile", "cf auth delete <name>"],
+            ),
+            (
+                "emudhra",
+                vec![
+                    "brew upgrade ca-certificates",
+                    "brew cleanup ca-certificates",
+                    "inactive kegs",
+                ],
+            ),
             (
                 "uv",
                 vec!["supported plaintext HTTP Basic", "separate migration"],
