@@ -21,6 +21,7 @@
 - [Signed CLI Launchers](signed-cli-launchers.md) — signature requirements and verification
 - [Securing Git](securing-git.md) — per-key SSH policies, GPG signing, and protected Git credentials
 - [Reentrant Release Script](examples/reentrant-release.sh) — reviewed GitHub, S3, and CloudFront workflow with agent input
+- [Agent Skills](../skills/README.md) — teach coding agents to write Blessed Scripts and reentrant Blessed Scripts
 
 ## Development
 

@@ -507,6 +507,37 @@ Vault's scope and roadmap. These apps cover those needs:
 &nbsp;
 
 
+## Agent Skills
+
+Teach your coding agent to write reviewed automation:
+
+- [`blessed-script`](skills/blessed-script/SKILL.md): write a Blessed Script
+  with the Secrets and Capabilities it needs, then request your review.
+- [`reentrant-blessed-script`](skills/reentrant-blessed-script/SKILL.md): write
+  or follow a script that pauses for agent input and continues when invoked again.
+
+Install with [skills](https://skills.sh):
+
+```sh
+$ npx skills add automic-vault/automic-vault
+```
+
+Select your coding agent and both skills: `reentrant-blessed-script` requires
+`blessed-script`. Then ask:
+
+> Use the blessed-script skill to write a release script for this project.
+
+Or, for a workflow that needs generated release notes:
+
+> Use the reentrant-blessed-script skill to write a release script that pauses
+> for you to draft the notes, then continues publication.
+
+The agent prepares the script and runs `av bless`; you review the script and
+requested authority in Automic Vault. Installing a skill grants no authority.
+
+&nbsp;
+
+
 ## Documentation
 
 - [User manual][user manual]
