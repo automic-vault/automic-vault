@@ -609,5 +609,5 @@
 
 "Outdated" = "有待更新";
 
-"1 outdated hardened tool" = "1 个已加固工具有待更新";
-"%lld outdated hardened tools" = "%lld 个已加固工具有待更新";
+"1 Outdated Hardened Tool" = "1 个已加固工具有待更新";
+"%lld Outdated Hardened Tools" = "%lld 个已加固工具有待更新";

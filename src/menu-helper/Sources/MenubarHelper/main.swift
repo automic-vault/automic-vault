@@ -1787,8 +1787,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
               brandImage(outline: .systemRed)?.isTemplate == false else { return false }
 
         setOutdatedToolsStatus(count: 2)
-        guard outdatedToolsStatusItem.title == "2 outdated hardened tools",
-              outdatedToolsStatusTitle(count: 1) == "1 outdated hardened tool",
+        guard outdatedToolsStatusItem.title == "2 Outdated Hardened Tools",
+              outdatedToolsStatusTitle(count: 1) == "1 Outdated Hardened Tool",
               outdatedToolsStatusTitle(count: 0) == nil else { return false }
         setDoctorStatus(count: 2)
         setReblessingStatus(count: 1)
@@ -2283,8 +2283,8 @@ private func boundedScanDelay(
 private func outdatedToolsStatusTitle(count: Int) -> String? {
     guard count > 0 else { return nil }
     return count == 1
-        ? String(localized: "1 outdated hardened tool")
-        : String(localized: "\(count) outdated hardened tools")
+        ? String(localized: "1 Outdated Hardened Tool")
+        : String(localized: "\(count) Outdated Hardened Tools")
 }
 
 private func doctorStatusTitle(count: Int) -> String? {
