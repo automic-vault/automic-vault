@@ -4810,7 +4810,7 @@ private final class ApprovalServer: @unchecked Sendable {
                     reason: "Secret source preview unavailable: \(error.localizedDescription)",
                     launcher: launcher
                 ))
-                reply(peer, to: message, ok: false, error: "Secret source preview unavailable: \(error.localizedDescription)")
+                reply(peer, to: message, ok: false, error: "Secret source preview unavailable")
                 return
             }
         }
