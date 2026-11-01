@@ -565,3 +565,71 @@ fn publish_origin_checks_accept_only_the_expected_repository() {
         }
     }
 }
+
+#[test]
+fn internal_version_updates_handle_repeated_iphone_build_numbers() {
+    let updater = PUBLISH_SCRIPT
+        .split("<<'RUBY'\n")
+        .nth(1)
+        .unwrap()
+        .split("\nRUBY")
+        .next()
+        .unwrap();
+    let harness = r#"
+require 'tmpdir'
+require 'fileutils'
+updater = STDIN.read
+Dir.mktmpdir do |root|
+  project = root + '/src/ios/ApprovalApp/AutomicVaultApproval.xcodeproj/project.pbxproj'
+  numeric = root + '/version.rs'
+  marker = root + '/src/brew_stub/main.rs'
+  cases = [
+    [project, 'CURRENT_PROJECT_VERSION', "\tCURRENT_PROJECT_VERSION = 11;\n" * 4, true],
+    [project, 'CURRENT_PROJECT_VERSION', "CURRENT_PROJECT_VERSION = 11;\n" * 3 + "CURRENT_PROJECT_VERSION = 10;\n", false],
+    [project, 'CURRENT_PROJECT_VERSION', "CURRENT_PROJECT_VERSION = 11;\n" * 5, false],
+    [project, 'CURRENT_PROJECT_VERSION', "CURRENT_PROJECT_VERSION = 11;\n" * 4 + "CURRENT_PROJECT_VERSION = 10;\n", false],
+    [numeric, 'CURRENT_PROJECT_VERSION', "CURRENT_PROJECT_VERSION = 11;\n" * 4, false],
+    [project, 'CURRENT_PROJECT_VERSION', "CURRENT_PROJECT_VERSION = 11;\n", false],
+    [numeric, 'REVISION', "const REVISION: u32 = 11;\n", true],
+    [numeric, 'REVISION', "const REVISION: u32 = 11;\n" * 2, false],
+    [numeric, 'REVISION', "const REVISION: u32 = 10;\n", false],
+    [marker, 'MARKER', %Q{const MARKER: &str = "AUTOMIC_VAULT_BREW_STUB_V11";\n}, true],
+  ]
+  cases.each do |path, symbol, before, success|
+    FileUtils.mkdir_p(File.dirname(path))
+    File.write(path, before)
+    ARGV.replace([path, symbol, '11', '12'])
+    actual = begin
+      eval(updater)
+      true
+    rescue SystemExit
+      false
+    end
+    raise "unexpected result for #{symbol}: #{before.inspect}" unless actual == success
+    expected = success ? before.gsub('11', '12') : before
+    raise 'unexpected file change' unless File.read(path) == expected
+  end
+end
+"#;
+    use std::io::Write;
+    use std::process::Stdio;
+    let mut child = Command::new("ruby")
+        .args(["-e", harness])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(updater.as_bytes())
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}

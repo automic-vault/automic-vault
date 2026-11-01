@@ -244,15 +244,22 @@ update_internal_versions() {
     ruby - "$ROOT/$path" "$symbol" "$current" "$next" <<'RUBY'
 path, symbol, current, replacement = ARGV
 contents = File.read(path)
+expected_count = 1
 if symbol == "MARKER" && path.end_with?("/src/brew_stub/main.rs")
   pattern = /^(const\s+MARKER:\s*&str\s*=\s*"AUTOMIC_VAULT_BREW_STUB_V)#{Regexp.escape(current)}(";\s*)$/
   description = "Homebrew stub marker assignment"
+elsif symbol == "CURRENT_PROJECT_VERSION" && path.end_with?("/src/ios/ApprovalApp/AutomicVaultApproval.xcodeproj/project.pbxproj")
+  # App and notification extension each have Debug and Release build numbers.
+  expected_count = 4
+  abort "#{path}: expected four build number assignments" unless contents.scan(/\bCURRENT_PROJECT_VERSION\s*=/).length == expected_count
+  pattern = /^([ \t]*CURRENT_PROJECT_VERSION[ \t]*=[ \t]*)#{Regexp.escape(current)}(;[ \t]*)$/
+  description = "matching build number assignments"
 else
   pattern = /^(.*\b#{Regexp.escape(symbol)}\b[^=\n]*=\s*)#{Regexp.escape(current)}(\s*[,;]?(?:\s*\/\/.*)?)$/
   description = "numeric assignment"
 end
-abort "#{path}: expected exactly one #{description} to #{symbol}" unless contents.scan(pattern).one?
-File.write(path, contents.sub(pattern) { "#{Regexp.last_match(1)}#{replacement}#{Regexp.last_match(2)}" })
+abort "#{path}: expected #{expected_count} #{description} to #{symbol}" unless contents.scan(pattern).length == expected_count
+File.write(path, contents.gsub(pattern) { "#{Regexp.last_match(1)}#{replacement}#{Regexp.last_match(2)}" })
 RUBY
     INTERNAL_VERSION_FILES+=("$path")
     echo "Updated $symbol in $path from $current to $next: $reason" >&2
