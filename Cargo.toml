@@ -1,6 +1,6 @@
 [package]
 name = "av"
-version = "4.21.2"
+version = "4.21.3"
 edition = "2024"
 
 [profile.release]
