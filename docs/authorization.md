@@ -311,3 +311,26 @@ outlive the rolling store's limits; they are not part of its retention guarantee
 
 See the [Domain Language](domain-language.md) and [Architecture](architecture.md)
 for the authoritative terms and security boundaries.
+
+### Inspecting selected Secret sources
+
+`av list` in a terminal shows each Secret Name and its selected Global Value or
+Project Directory. Project Values are cyan when terminal colors are enabled;
+text labels remain explicit with `NO_COLOR` or `TERM=dumb`.
+
+```sh
+av list
+av list --json
+av list --project-directory=/path/to/project --json
+```
+
+The selection directory defaults to the canonical working directory. JSON is a
+sorted array of objects with `name`, `source` (`global`, `project`, or `missing`),
+and `projectDirectory` for project selections. `missing` means no Value matches
+that directory. No Secret bytes are read or returned, and a preview does not
+verify availability or authorize a later operation.
+
+Source previews require Approval each time. Existing Secret Name Access grants
+remain names-only. `av list` piped without options retains one name per line;
+`--json` or `--project-directory` explicitly requests source metadata even when
+redirected. See [the architectural decision](adr/0075-cli-secret-source-previews.md).

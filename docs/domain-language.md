@@ -353,6 +353,14 @@ Authorization policy names the Secret, not an individual Value. A rule that
 authorizes a Secret Name therefore covers every current and future Value of that
 Secret Name.
 
+### Secret Name Access
+
+A durable grant allowing one exact Verified Launcher to list saved Secret Names.
+It does not permit disclosure of selected Value sources or Project Directories.
+`av list` source previews require separate Approval each time and never return
+Secret bytes. A preview is selection metadata, not authority or a guarantee that
+a subsequent Secret Use will succeed.
+
 ### Secret Value
 
 The opaque bytes selected when a Secret is used. A Secret may have one Global

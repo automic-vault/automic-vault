@@ -362,7 +362,7 @@
 "The original reviewed contents are unavailable for this legacy Blessing. Run `av bless` once to establish a diff baseline." = "The original reviewed contents are unavailable for this legacy Blessing. Run `av bless` once to establish a diff baseline.";
 "The original reviewed contents are unavailable. Run `av bless` once to create a new review baseline." = "The original reviewed contents are unavailable. Run `av bless` once to create a new review baseline.";
 "The policy was saved, but the Authorization Gate is no longer available" = "The policy was saved, but the Authorization Gate is no longer available";
-"These Verified Launchers may run av list without Approval." = "These Verified Launchers may run av list without Approval.";
+"These Verified Launchers may list Secret Names without Approval. Selected Value sources and Project Directories still require Approval." = "These Verified Launchers may list Secret Names without Approval. Selected Value sources and Project Directories still require Approval.";
 "This Approval applies only to this secret change." = "This Approval applies only to this secret change.";
 "This Mac cannot approve while iPhone Approval is enabled." = "This Mac cannot approve while iPhone Approval is enabled.";
 "This Secret has %lld Values. The availability setting applies to every Value." = "This Secret has %lld Values. The availability setting applies to every Value.";

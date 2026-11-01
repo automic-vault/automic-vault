@@ -21,6 +21,8 @@ import Testing
     #expect(ApprovalServiceOperation.historyRead.disclosesProtectedMetadata)
     #expect(ApprovalServiceOperation.historyNext.disclosesProtectedMetadata)
     #expect(ApprovalServiceOperation.list.disclosesProtectedMetadata)
+    #expect(ApprovalServiceOperation.listSources.disclosesProtectedMetadata)
+    #expect(ApprovalServiceOperation.listSources.rawValue == "list-sources")
     #expect(!ApprovalServiceOperation.inject.disclosesProtectedMetadata)
 }
 
