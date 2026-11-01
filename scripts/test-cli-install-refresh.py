@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise the dashboard's real reload method with a blocked snapshot load."""
+"""Exercise the real history loader; scoped refresh races live in the native self-check."""
 from pathlib import Path
 import subprocess
 import sys
@@ -14,23 +14,16 @@ show_method = "    func showAccessRequest(" + model_source.split(
 pending_status = "    var pendingAccessRequestStatus:" + model_source.split(
     "    var pendingAccessRequestStatus:", 1
 )[1].split("    var selectedProxySession:", 1)[0]
-reload_method, reload_boundary, _ = model_source.split(
-    "    func reload() {", 1
-)[1].partition("    fileprivate func reloadAuthorizationState()")
-assert reload_boundary, "DashboardModel reload extraction boundary not found"
-update_tool_status = "    func updateToolStatus(" + model_source.split(
-    "    func updateToolStatus(", 1
-)[1].split("    func reload() {", 1)[0]
+history_method = "    func reloadAccessRequests(" + model_source.split(
+    "    func reloadAccessRequests(", 1
+)[1].split("    private func invalidateAuthorizationReload()", 1)[0]
 
 fixture = r"""
 import Foundation
 import Synchronization
 
 let dashboardDidReload = Notification.Name("AutomicVaultDashboardDidReload")
-let loads = Mutex((count: 0, active: 0, peak: 0))
 
-let (snapshotStarted, started) = AsyncStream<Void>.makeStream()
-let finishSnapshot = DispatchSemaphore(value: 0)
 let (historyStarted, historySignal) = AsyncStream<Void>.makeStream()
 let finishHistory = DispatchSemaphore(value: 0)
 let blockHistory = Mutex(false)
@@ -69,27 +62,8 @@ struct DashboardSnapshot: Sendable {
     var toolStatus = "loaded"
     var accessRequests = [String]()
     var detectorFindings = ["preserved"]
-    static func load() -> Self {
-        loads.withLock {
-            $0.count += 1
-            $0.active += 1
-            $0.peak = max($0.peak, $0.active)
-        }
-        defer { loads.withLock { $0.active -= 1 } }
-        started.yield(())
-        finishSnapshot.wait()
-        return Self(detectorFindings: [])
-    }
+
 }
-struct ToolStatusSnapshot {
-    let snapshot: DashboardSnapshot
-    func apply(to target: inout DashboardSnapshot) {
-        target.toolStatus = snapshot.toolStatus
-    }
-}
-enum CLIInstallState { case current, outdated }
-func currentCLIInstallState() -> CLIInstallState { .current }
-func loadLauncherBundleEnrollments() -> [String] { [] }
 func loadAccessRequestRecordsForDisclosure(since: Date? = nil) -> [AccessRequestRecord]? {
     ["latest"]
 }
@@ -115,12 +89,10 @@ func loadAccessRequestRecordsPage(beforeSequence: Int64? = nil) -> Authorization
 }
 
 @MainActor final class Model {
-    var reloadTask: Task<Void, Never>?
     var accessRequestsReloadTask: Task<Void, Never>?
     var accessRequestsReloadPending = false
     var historyDashboard: AuthorizationHistoryDashboard?
     var accessRequestsGeneration = 0
-    var toolStatusGeneration = 0
     var historyOlderPageCursor: Int64?
     var isLoadingOlderHistory = false
     var historyLoadFailed = false
@@ -129,14 +101,8 @@ func loadAccessRequestRecordsPage(beforeSequence: Int64? = nil) -> Authorization
     var selectedSection = DashboardSection.secretUsage
     var selectedItemID: String?
     var searchText = ""
-    var reloadPending = false
-    var isReloading = false
-    var hasLoadedInitialSnapshot = false
     var overviewHistory: [AccessRequestRecord]?
-    var lastHardeningRefresh: Date?
     var snapshot = DashboardSnapshot()
-    var cliInstallState = CLIInstallState.outdated
-    var launcherBundles: [String] = []
     var normalizationCount = 0
     var historyRecordsByID = [UUID: String]()
     func normalizeSelection() {
@@ -156,10 +122,13 @@ func loadAccessRequestRecordsPage(beforeSequence: Int64? = nil) -> Authorization
     func appendHistoryRecords(_ records: [String]) {
         for record in records { historyRecordsByID[record.id] = record }
     }
-    func invalidateForTest() { invalidateReload() }
-""" + show_method + pending_status + update_tool_status + r"""
-    func reload() {
-""" + reload_method + """
+    struct Loaders {
+        var history: (AuthorizationHistoryDashboard?) async -> AuthorizationHistoryDashboard? = { previous in
+            await Task.detached { loadAuthorizationHistoryDashboard(previous: previous) }.value
+        }
+    }
+    let loaders = Loaders()
+""" + show_method + pending_status + history_method + """
 }
 
 DispatchQueue.global().asyncAfter(deadline: .now() + 10) {
@@ -167,62 +136,12 @@ DispatchQueue.global().asyncAfter(deadline: .now() + 10) {
     exit(1)
 }
 let model = Model()
-model.reload()
-for await _ in snapshotStarted { break }
-model.pendingAccessRequestID = UUID()
-assert(model.pendingAccessRequestStatus == String(localized: "Loading Authorization History…"))
-model.pendingAccessRequestID = nil
-guard model.cliInstallState == .current, model.isReloading else {
-    print("FAIL: Update av CLI remains visible while dashboard loading is blocked")
-    exit(1)
-}
-let first = model.reloadTask!
-model.updateToolStatus(ToolStatusSnapshot(snapshot: DashboardSnapshot(toolStatus: "newer")))
-for _ in 0..<100 { model.reload() }
-assert(!first.isCancelled, "refresh must not cancel a usable result")
-finishSnapshot.signal()
-await first.value
-assert(model.snapshot.toolStatus == "newer", "stale full reload overwrote newer Tool status")
-assert(model.hasLoadedInitialSnapshot && model.lastHardeningRefresh != nil)
+model.reloadAccessRequests()
+await model.accessRequestsReloadTask!.value
 assert(model.overviewHistory == ["latest"])
 assert(model.snapshot.accessRequests.count == 50 && model.snapshot.accessRequests.first == "latest")
 assert(model.historyOlderPageCursor == 50)
 assert(model.authorizationHistoryDayCount == 30)
-assert(model.snapshot.detectorFindings == ["preserved"])
-// A burst queues exactly one follow-up, after the first load finishes.
-for await _ in snapshotStarted { break }
-let second = model.reloadTask!
-finishSnapshot.signal()
-await second.value
-assert(model.snapshot.toolStatus == "loaded", "fresh full reload did not update Tool status")
-assert(!model.isReloading)
-assert(model.snapshot.detectorFindings == ["preserved"])
-assert(loads.withLock { $0.count == 2 && $0.peak == 1 })
-assert(model.reloadTask == nil)
-
-model.reload()
-for await _ in snapshotStarted { break }
-let invalidated = model.reloadTask!
-model.reload() // A pending refresh must also be invalidated by a policy edit.
-model.invalidateForTest()
-model.snapshot.policy = "edited"
-model.reloadAccessRequests()
-await model.accessRequestsReloadTask!.value
-assert(model.snapshot.accessRequests.count == 50 && model.snapshot.accessRequests.first == "latest")
-assert(invalidated.isCancelled)
-assert(!model.isReloading)
-assert(!model.reloadPending)
-assert(loads.withLock { $0.count == 3 })
-model.reload() // Wait for the invalidated work instead of overlapping it.
-finishSnapshot.signal()
-await invalidated.value
-assert(model.snapshot.policy == "edited", "stale policy result was applied")
-for await _ in snapshotStarted { break }
-let replacement = model.reloadTask!
-finishSnapshot.signal()
-await replacement.value
-assert(loads.withLock { $0.count == 4 && $0.peak == 1 })
-assert(model.reloadTask == nil && !model.isReloading)
 blockHistory.withLock { $0 = true }
 model.reloadAccessRequests()
 for await _ in historyStarted { break }
@@ -330,22 +249,8 @@ for _ in 0..<10_000 {
     await Task.yield()
 }
 assert(model.snapshot.accessRequests.count == 75 && !model.historyLoadFailed)
-model.reload()
-for await _ in snapshotStarted { break }
-let staleFullReload = model.reloadTask!
-blockHistory.withLock { $0 = true }
-finishSnapshot.signal()
-for await _ in historyStarted { break }
-blockHistory.withLock { $0 = false }
-historyDayCount.withLock { $0 = 40 }
-model.reloadAccessRequests(incremental: true)
-await model.accessRequestsReloadTask!.value
-assert(model.authorizationHistoryDayCount == 40)
-finishHistory.signal()
-await staleFullReload.value
-assert(model.authorizationHistoryDayCount == 40, "stale full reload overwrote the newer day count")
-assert(model.historyDashboard?.page.storedDayCount == 40)
-print("PASS: early CLI status, coalesced refreshes, fresh history, and stale policy/history rejection")
+assert(model.historyDashboard != nil)
+print("PASS: coalesced history refreshes, pagination, search selection, and failures")
 """
 
 with tempfile.TemporaryDirectory(prefix="av-cli-refresh-") as directory:

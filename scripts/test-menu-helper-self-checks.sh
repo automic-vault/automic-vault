@@ -69,6 +69,7 @@ checks=(
   --self-check-brew-read-only
   --self-check-transient-approvals
   --self-check-retained-provenance
+  --self-check-dashboard-refresh
   --self-check-dashboard-search
   --self-check-update-toolbar
   --self-check-launch-agent-handoff

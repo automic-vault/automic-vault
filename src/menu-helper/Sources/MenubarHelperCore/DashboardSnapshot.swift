@@ -97,33 +97,47 @@ public struct DashboardSnapshot: Equatable, Sendable {
     ) -> DashboardSnapshot {
         _ = resumePendingSecretMutation()
         let hardening = loadDashboardHardening(avExecutableURL: avExecutableURL)
-        let hardenerMetadata = hardening.hardeners
+        var snapshot = loadAuthorization(
+            hardeners: hardening.hardeners, catalog: hardening.secretGates,
+            policyService: policyService
+        )
+        snapshot.detectors = hardening.detectors
+        snapshot.hardeners = hardening.hardeners
+        snapshot.hardenedTools = loadHardenedTools(
+            in: stubDirectory, ghCLIURL: ghCLIURL, metadata: hardening.hardeners
+        )
+        snapshot.packages = hardening.packages
+        snapshot.doctorIssues = hardening.doctorIssues
+        return snapshot
+    }
+
+    /// Local authorization data does not wait for package or Doctor checks.
+    public static func loadAuthorization(
+        avExecutableURL: URL = defaultAVExecutableURL()
+    ) -> DashboardSnapshot {
+        _ = resumePendingSecretMutation()
+        return loadAuthorization(
+            hardeners: loadHardenerMetadata(avExecutableURL: avExecutableURL),
+            catalog: (try? loadSecretGateDescriptors(avExecutableURL: avExecutableURL)) ?? [],
+            policyService: secretGatePoliciesKeychainService
+        )
+    }
+
+    private static func loadAuthorization(
+        hardeners: [HardenerMetadata], catalog: [SecretGateDescriptor], policyService: String
+    ) -> DashboardSnapshot {
         let secrets = loadStoredSecrets(directAccessRules: loadDirectAccessRules())
-        let gateDescriptors = dashboardSecretGateDescriptors(
-            hardeners: hardenerMetadata,
-            catalog: hardening.secretGates,
-            storedSecretNames: Set(secrets.map(\.account))
+        let descriptors = dashboardSecretGateDescriptors(
+            hardeners: hardeners, catalog: catalog, storedSecretNames: Set(secrets.map(\.account))
         )
-        _ = initializeSecretGatePolicies(descriptors: gateDescriptors, service: policyService)
-        let hardenedTools = loadHardenedTools(
-            in: stubDirectory,
-            ghCLIURL: ghCLIURL,
-            metadata: hardenerMetadata
-        )
-        return DashboardSnapshot(
-            detectors: hardening.detectors,
-            detectorFindings: [],
-            hardenedTools: hardenedTools,
-            hardeners: hardenerMetadata,
-            secretGates: loadSecretGates(descriptors: gateDescriptors, service: policyService),
-            blessedScripts: loadBlessedScripts(),
-            secretNameAccessApps: loadSecretNameAccessApps(),
-            authorizationHistoryAccessApps: loadAuthorizationHistoryAccessApps(),
-            secrets: secrets,
-            accessRequests: [],
-            packages: hardening.packages,
-            doctorIssues: hardening.doctorIssues
-        )
+        _ = initializeSecretGatePolicies(descriptors: descriptors, service: policyService)
+        var snapshot = DashboardSnapshot.empty
+        snapshot.secretGates = loadSecretGates(descriptors: descriptors, service: policyService)
+        snapshot.blessedScripts = loadBlessedScripts()
+        snapshot.secretNameAccessApps = loadSecretNameAccessApps()
+        snapshot.authorizationHistoryAccessApps = loadAuthorizationHistoryAccessApps()
+        snapshot.secrets = secrets
+        return snapshot
     }
 }
 

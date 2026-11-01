@@ -1123,8 +1123,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func dashboardReloaded(_ notification: Notification) {
-        guard let model = notification.object as? DashboardModel,
-              model.hasLoadedInitialSnapshot else { return }
+        guard let model = notification.object as? DashboardModel else { return }
         toolAttentionGeneration += 1
         publishToolStatus(ToolStatusSnapshot(snapshot: model.snapshot))
     }
@@ -21112,6 +21111,11 @@ if CommandLine.arguments.contains("--self-check-transient-approvals") {
 
 if CommandLine.arguments.contains("--self-check-retained-provenance") {
     exit(runRetainedProcessProvenanceSelfCheck())
+}
+
+if CommandLine.arguments.contains("--self-check-dashboard-refresh") {
+    Task { @MainActor in exit(await DashboardModel.refreshSelfCheck()) }
+    NSApplication.shared.run()
 }
 
 if CommandLine.arguments.contains("--self-check-dashboard-search") {
