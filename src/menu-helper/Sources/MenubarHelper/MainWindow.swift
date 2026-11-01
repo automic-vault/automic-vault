@@ -6,9 +6,7 @@ import Security
 import SwiftUI
 import UniformTypeIdentifiers
 
-let automaticApprovalFeedbackDefaultsKey = "automaticApprovalFeedback"
-let compactAutomaticApprovalNotificationsDefaultsKey = "compactAutomaticApprovalNotifications"
-let autoCollapseTemporaryAccessGrantStripDefaultsKey = "autoCollapseTemporaryAccessGrantStrip"
+let compactAutomaticApprovalNotificationsDefaultsKey = compactNotificationsDefaultsKey
 let keepLauncherAccessForDetachedProcessesDefaultsKey = "keepLauncherAccessForDetachedProcesses"
 let dashboardDidReload = Notification.Name("AutomicVaultDashboardDidReload")
 let cliInstallationDidFinish = Notification.Name("AutomicVaultCLIInstallationDidFinish")
@@ -46,7 +44,7 @@ private let authorizationHistoryDocumentationURL = URL(
 
 enum AutomaticApprovalFeedback: String, CaseIterable, Identifiable {
     case notification
-    case menuBarFlash
+    case menuBarFlash = "menu-bar-flash"
     case none
 
     var id: Self { self }
@@ -6362,12 +6360,12 @@ private struct TouchIDApprovalSettingsView: View {
 }
 
 private struct AutomaticApprovalFeedbackSettingsView: View {
-    @AppStorage(automaticApprovalFeedbackDefaultsKey)
-    private var feedback = AutomaticApprovalFeedback.notification
+    @State private var feedback = AutomaticApprovalFeedback.notification
+    @StateObject private var approval = AuthorityApprovalState()
+    @State private var status: String?
     @AppStorage(compactAutomaticApprovalNotificationsDefaultsKey)
     private var compactNotifications = true
-    @AppStorage(autoCollapseTemporaryAccessGrantStripDefaultsKey)
-    private var autoCollapseTemporaryAccessGrantStrip = false
+    @State private var autoCollapseTemporaryAccessGrantStrip = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
@@ -6378,12 +6376,15 @@ private struct AutomaticApprovalFeedbackSettingsView: View {
                     .font(.system(size: 13))
                     .foregroundStyle(.secondary)
             }
-            Picker("Feedback", selection: $feedback) {
+            Picker("Feedback", selection: Binding(get: { feedback }, set: {
+                change(.feedback, to: $0.rawValue)
+            })) {
                 ForEach(AutomaticApprovalFeedback.allCases) { option in
                     Text(option.title).tag(option)
                 }
             }
             .pickerStyle(.radioGroup)
+            .disabled(approval.isPending("presentation"))
             Toggle("Compact Notifications", isOn: $compactNotifications)
                 .disabled(feedback != .notification)
             Text("Shows each command without continuation formatting, wrapped to at most five lines. Authorization History keeps the full formatted command.")
@@ -6400,20 +6401,57 @@ private struct AutomaticApprovalFeedbackSettingsView: View {
                     .font(.headline)
                 Toggle(
                     "Auto-collapse Temporary Access Grant Strip",
-                    isOn: $autoCollapseTemporaryAccessGrantStrip
+                    isOn: Binding(get: { autoCollapseTemporaryAccessGrantStrip }, set: {
+                        change(.autoCollapseGrantStrip, to: $0 ? "true" : "false")
+                    })
                 )
+                .disabled(approval.isPending("presentation"))
                 Text("After five seconds, the strip becomes a warning tab at the nearest screen edge. Select the tab or use the menu bar to restore it. New grants always show the complete strip.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            if approval.isPending("presentation") {
+                AuthorityApprovalLabel(title: "Change Presentation", approval: approval, action: "presentation")
+            }
+            if let status { Text(status).font(.caption).foregroundStyle(.red) }
         }
-        .onChange(of: autoCollapseTemporaryAccessGrantStrip) {
-            NotificationCenter.default.post(
-                name: temporaryAccessGrantStripPresentationDidChange,
-                object: nil
-            )
-        }
+        .onAppear { reload() }
+        .onReceive(NotificationCenter.default.publisher(for: temporaryAccessGrantStripPresentationDidChange)) { _ in reload() }
+        .onDisappear { approval.cancelAll() }
+    }
+
+    private func reload() {
+        feedback = (try? loadPresentationSetting(.feedback)).flatMap(AutomaticApprovalFeedback.init(rawValue:)) ?? .notification
+        autoCollapseTemporaryAccessGrantStrip = (try? loadPresentationSetting(.autoCollapseGrantStrip)) == "true"
+    }
+
+    private func change(_ setting: PresentationSetting, to value: String) {
+        do {
+            let old = try loadPresentationSetting(setting)
+            guard old != value else { return }
+            status = nil
+            let detail = setting.changeDetail(from: old, to: value)
+            approval.request("presentation", title: "Change \(setting.title)?", detail: detail) { allowed in
+                guard allowed else { status = "Settings change was not approved."; return }
+                do {
+                    try commitPresentationSetting(setting, value: value, expected: old,
+                        read: { try loadPresentationSetting(setting) },
+                        record: {
+                            let path = Bundle.main.executablePath ?? "Automic Vault"
+                            return appendAccessRequestRecord(AccessRequestRecord(
+                                date: Date(), tool: "Settings", command: "Set \(setting.rawValue) \(value)",
+                                displayCommand: "Set \(setting.rawValue) \(value)", decision: "Approved",
+                                approvalSource: "Manual", reason: "Approved settings change", launcher: "Automic Vault",
+                                callerPath: path, target: path, cwd: "", keys: [], detail: detail
+                            ))
+                        }, write: { try savePresentationSetting(setting, value: $0) }
+                    )
+                    NotificationCenter.default.post(name: temporaryAccessGrantStripPresentationDidChange, object: nil)
+                } catch { status = error.localizedDescription }
+                reload()
+            }
+        } catch { status = error.localizedDescription }
     }
 }
 

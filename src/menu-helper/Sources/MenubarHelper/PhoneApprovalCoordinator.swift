@@ -520,7 +520,7 @@ func requestAuthorityChangeApproval(
         if TouchIDApproval.isAvailable {
             Task {
                 completion(await TouchIDApproval.authenticate(
-                    reason: "Approve this Automic Vault authority change"
+                    reason: "\(title)\n\n\(detail)"
                 ))
             }
             return nil

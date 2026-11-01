@@ -66,6 +66,9 @@ public enum ApprovalServiceOperation: String, CaseIterable, Sendable {
     case sqlcmdDelete = "sqlcmd-delete"
     case terraformSave = "terraform-save"
     case terraformDelete = "terraform-delete"
+    case settingsList = "settings-list"
+    case settingsGet = "settings-get"
+    case settingsSet = "settings-set"
     case list
     case listSources = "list-sources"
     case history

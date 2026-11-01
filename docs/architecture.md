@@ -1011,6 +1011,17 @@ shield, active-grant menu entries, and immediate End action remain continuously
 available. This continuous indication is part of the temporary escalation's
 safety model, not a source of authority. See [ADR 0041](adr/0041-collapsible-temporary-access-grant-strip.md).
 
+## Presentation settings
+
+`av settings` reads and changes a closed catalog through the signed Gate Client
+and running app. Compact notifications remain directly writable. Feedback and
+persistent grant-strip auto-collapse live in the Data Protection Keychain and
+require Approval for changes from either CLI or Settings. Both paths compare
+the reviewed value and verify an Authorization Record before saving. Legacy
+visibility defaults are ignored; upgrades restore visible defaults. Policy and
+Approval-method settings are outside this API. See
+[ADR 0076](adr/0076-cli-presentation-settings.md).
+
 ## Source of truth
 
 This repository owns the domain language, architecture, and ADRs. Endorsed properties should adopt these terms and link here. Experimental integrations stay outside the canonical model until the project endorses them.

@@ -211,6 +211,27 @@ complete forensic log.
 
 [Authorization History and its limits](docs/authorization.md#authorization-history)
 
+## Presentation settings
+
+```sh
+$ av settings list --json
+$ av settings get compact-notifications
+$ av settings set compact-notifications true
+$ av settings set automatic-authorization-feedback menu-bar-flash
+$ av settings set auto-collapse-grant-strip true
+```
+
+The running app returns accepted values, defaults, and whether changes require
+Approval. Compact notifications are directly writable. Changing feedback or
+grant-strip auto-collapse requires Approval with the old and new values.
+`--json` works with every subcommand and returns an array; values are strings.
+Authorization policies and Approval methods remain in the app's Settings.
+
+These visibility preferences now use protected Keychain storage. On upgrade,
+feedback returns to notifications and grant strips stay expanded. Choose your
+preferred settings again in the app or through `av settings`; legacy `defaults`
+values no longer control them. See [the security decision](docs/adr/0076-cli-presentation-settings.md).
+
 ## Verified Launchers
 
 Choose which terminals, IDEs, agents, or eligible standalone CLIs receive
