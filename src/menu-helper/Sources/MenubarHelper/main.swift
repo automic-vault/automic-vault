@@ -134,6 +134,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var liveSecretUseTimer: Timer?
     private var baseStatusImage: NSImage?
     private var doctorReportCount = 0
+    private var reblessingCount = 0
     private var outdatedToolCount = 0
     private var latestToolStatus: ToolStatusSnapshot?
     private var toolAttentionGeneration = 0
@@ -1097,27 +1098,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func setDoctorStatus(count: Int) {
         doctorReportCount = count
         refreshStatusImage()
-        guard !isStatusMenuOpen else { return }
-        guard let title = doctorStatusTitle(count: count) else {
-            doctorStatusItem.isHidden = true
-            return
-        }
-        setStatusMenuItemTitle(title, on: doctorStatusItem)
-        doctorStatusItem.isHidden = false
+        refreshToolAttentionMenuItems()
     }
 
     private func setReblessingStatus(count: Int) {
-        guard !isStatusMenuOpen else { return }
-        reblessingStatusItem.title = reblessingStatusTitle(count: count) ?? ""
-        reblessingStatusItem.isHidden = count == 0
+        reblessingCount = count
+        refreshToolAttentionMenuItems()
     }
 
     private func setOutdatedToolsStatus(count: Int) {
         outdatedToolCount = count
         refreshStatusImage()
+        refreshToolAttentionMenuItems()
+    }
+
+    private func refreshToolAttentionMenuItems() {
         guard !isStatusMenuOpen else { return }
-        outdatedToolsStatusItem.title = outdatedToolsStatusTitle(count: count) ?? ""
-        outdatedToolsStatusItem.isHidden = count == 0
+        setStatusMenuItemTitle(doctorStatusTitle(count: doctorReportCount) ?? "", on: doctorStatusItem)
+        doctorStatusItem.isHidden = doctorReportCount == 0
+        reblessingStatusItem.title = reblessingStatusTitle(count: reblessingCount) ?? ""
+        reblessingStatusItem.isHidden = reblessingCount == 0
+        outdatedToolsStatusItem.title = outdatedToolsStatusTitle(count: outdatedToolCount) ?? ""
+        outdatedToolsStatusItem.isHidden = outdatedToolCount == 0
     }
 
     @objc private func dashboardReloaded(_ notification: Notification) {
@@ -1752,6 +1754,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return false
         }
 
+        // Status arriving during menu tracking must be visible on the next opening.
+        let wasStartingUp = isStartingUp
+        isStartingUp = false
+        menuWillOpen(menu)
+        setDoctorStatus(count: 2)
+        setReblessingStatus(count: 1)
+        NotificationCenter.default.post(name: dashboardDidReload,
+                                        object: DashboardModel(snapshot: attentionSnapshot))
+        guard controller.rootView.model.toolUpdates == packages,
+              outdatedToolsStatusItem.isHidden else { return false }
+        menuDidClose(menu)
+        menuWillOpen(menu)
+        guard !outdatedToolsStatusItem.isHidden,
+              outdatedToolsStatusItem.title == "1 Outdated Hardened Tool" else {
+            print("Menu lost Tool status published while it was open")
+            return false
+        }
+        setDoctorStatus(count: 2)
+        setReblessingStatus(count: 1)
+        menuDidClose(menu)
+        guard !doctorStatusItem.isHidden, !reblessingStatusItem.isHidden else {
+            print("Menu lost attention counts published while it was open")
+            return false
+        }
+        menuWillOpen(menu)
+        publishToolStatus(ToolStatusSnapshot(snapshot: .empty))
+        setReblessingStatus(count: 0)
+        guard !outdatedToolsStatusItem.isHidden, !doctorStatusItem.isHidden,
+              !reblessingStatusItem.isHidden else { return false }
+        menuDidClose(menu)
+        guard outdatedToolsStatusItem.isHidden, doctorStatusItem.isHidden,
+              reblessingStatusItem.isHidden else {
+            print("Menu retained resolved attention counts after closing")
+            return false
+        }
+        isStartingUp = wasStartingUp
+
         setDoctorStatus(count: 1)
         guard statusOutlineColor == .systemOrange else { return false }
         setDoctorStatus(count: 0)
@@ -1888,6 +1927,7 @@ private func scanDetectorGroup(_ detectors: Set<String>) -> Set<String> {
 extension AppDelegate: NSMenuDelegate {
     func menuWillOpen(_ menu: NSMenu) {
         if !isStartingUp, !isUpdating {
+            refreshToolAttentionMenuItems()
             refreshTemporaryDenials()
             refreshAutoApprovalMenuItems()
             refreshTemporaryAccessGrantMenuItems()
@@ -1900,6 +1940,8 @@ extension AppDelegate: NSMenuDelegate {
     func menuDidClose(_ menu: NSMenu) {
         isStatusMenuOpen = false
         guard !isStartingUp, !isUpdating else { return }
+        // Replay cached status before another asynchronous check can finish.
+        refreshToolAttentionMenuItems()
         refreshTemporaryDenials()
         refreshAutoApprovalMenuItems()
         refreshTemporaryAccessGrantMenuItems()
