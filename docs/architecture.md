@@ -135,6 +135,18 @@ Keychain. A Secret may contain a Global Value and Project Values. Each Secret
 has one availability choice, shared by all its Values and independent of
 authorization policy.
 
+### Secret source previews
+
+`av list` retains one Secret Name per line, coloring Project Value names in a
+terminal. `--json` shows selected sources as pretty-printed JSON;
+`--project-directory=DIR` selects another directory. Redirected output has no color.
+The dedicated `list-sources` request requires Approval even when the Verified
+Launcher has Secret Name Access or Authorization History Access. The service
+uses attributes-only inventory and the existing physical-directory selector;
+it never loads Secret bytes. A recorded Approval precedes metadata release.
+Selection failure denies the preview, with no fallback to Global Values.
+See [ADR 0075](adr/0075-cli-secret-source-previews.md).
+
 ### Runtime Authorization
 
 The protected `av git` HTTPS path registers a fixed network phase separately

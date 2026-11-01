@@ -4008,6 +4008,7 @@ private let registryHelperProtocolVersion: UInt64 = 3
 
 private enum MetadataDisclosure {
     case secretNames(globalOnly: Bool)
+    case secretSources
     case authorizationHistory(since: Date?)
 }
 
@@ -4037,7 +4038,8 @@ private func metadataDisclosureHasAutomaticAccess(
     secretNameAccessApps: [BlessedScriptLauncher] = loadSecretNameAccessApps(),
     authorizationHistoryAccessApps: [BlessedScriptLauncher] = loadAuthorizationHistoryAccessApps()
 ) -> Bool {
-    let allowedApps = switch kind {
+    let allowedApps: [BlessedScriptLauncher] = switch kind {
+    case .secretSources: []
     case .secretNames: secretNameAccessApps
     case .authorizationHistory: authorizationHistoryAccessApps
     }
@@ -4516,7 +4518,8 @@ private final class ApprovalServer: @unchecked Sendable {
             handleTerraformSave(message, on: peer, cancellation: cancellation, caller: mutationCaller)
         case .terraformDelete where isTrustedAvCaller(path: callerPath, signing: signing):
             handleTerraformDelete(message, on: peer, cancellation: cancellation, caller: mutationCaller)
-        case .list where isTrustedAvCaller(path: callerPath, signing: signing):
+        case .list where isTrustedAvCaller(path: callerPath, signing: signing),
+             .listSources where isTrustedAvCaller(path: callerPath, signing: signing):
             handleMetadataDisclosure(
                 message,
                 on: peer,
@@ -4525,7 +4528,8 @@ private final class ApprovalServer: @unchecked Sendable {
                 identity: identity,
                 callerPath: callerPath,
                 signing: signing,
-                kind: .secretNames(globalOnly: xpc_dictionary_get_bool(message, "global_only"))
+                kind: op == .listSources ? .secretSources
+                    : .secretNames(globalOnly: xpc_dictionary_get_bool(message, "global_only"))
             )
         case .history where isTrustedAvCaller(path: callerPath, signing: signing),
              .historyWindow where isTrustedAvCaller(path: callerPath, signing: signing),
@@ -4613,6 +4617,12 @@ private final class ApprovalServer: @unchecked Sendable {
     ) {
         let cwd = xpc_dictionary_get_string(message, "cwd")
             .map { String(cString: $0) } ?? ""
+        if case .secretSources = kind {
+            guard !cwd.isEmpty, (try? physicalDirectoryAncestors(cwd)) != nil else {
+                reply(peer, to: message, ok: false, error: "invalid selection directory")
+                return
+            }
+        }
         var launchers = launcherIdentities(for: identity)
         let ancestorFallbackPath = launcherFallbackPath(for: identity)
         if launchers.isEmpty, let caller = launcherIdentity(pid: pid, identity: identity) {
@@ -4632,6 +4642,12 @@ private final class ApprovalServer: @unchecked Sendable {
                 ? "Secret values will remain hidden. av will receive every saved Global Value name."
                 : "Secret values will remain hidden. av will receive every saved Secret Name.",
             ["list"]
+        )
+        case .secretSources: (
+            "list-sources",
+            "List Secret Value sources?",
+            "av will receive saved Secret Names and the Global Value or matched Project Directory selected for this directory. Secret bytes will remain hidden. This preview does not authorize Secret Use or verify Value availability.",
+            ["list", "--project-directory=\(cwd)"]
         )
         case .authorizationHistory(let since): (
             "history",
@@ -4776,6 +4792,28 @@ private final class ApprovalServer: @unchecked Sendable {
         if denyRequestIfNeeded(request, signing: signing,
                                launchers: launchers,
                                callerPath: callerPath, peer: peer, message: message) { return }
+        var sourceValue: String?
+        if case .secretSources = kind {
+            do {
+                let secrets: [StoredSecret]
+                switch loadStoredSecretsResult() {
+                case .success(let inventory): secrets = inventory
+                case .failure(let status): throw SecretValueCustodyError.inventoryUnavailable(status)
+                }
+                sourceValue = String(decoding: try JSONEncoder().encode(
+                    secretSourcePreview(secrets: secrets, cwd: request.cwd)
+                ), as: UTF8.self)
+            } catch {
+                _ = onAccessRequest(accessRequestRecord(
+                    request: request, callerPath: callerPath, decision: "Failed",
+                    approvalSource: approvalSource,
+                    reason: "Secret source preview unavailable: \(error.localizedDescription)",
+                    launcher: launcher
+                ))
+                reply(peer, to: message, ok: false, error: "Secret source preview unavailable")
+                return
+            }
+        }
         var names: [String]?
         if case .secretNames(let globalOnly) = kind {
             switch loadStoredSecretsResult() {
@@ -4863,7 +4901,7 @@ private final class ApprovalServer: @unchecked Sendable {
         if denyRequestIfNeeded(request, signing: signing,
                                launchers: launchers,
                                callerPath: callerPath, peer: peer, message: message) { return }
-        reply(peer, to: message, ok: true, error: nil, names: names)
+        reply(peer, to: message, ok: true, error: nil, value: sourceValue, names: names)
     }
 
     private func launcherDenial(
@@ -15909,6 +15947,12 @@ private func runMetadataDisclosureSelfCheck() -> Int32 {
         bundleIdentifier: launcher.identifier,
         requirement: requirement
     )
+    guard !metadataDisclosureHasAutomaticAccess(
+        .secretSources,
+        launchers: [launcher],
+        secretNameAccessApps: [grant],
+        authorizationHistoryAccessApps: [grant]
+    ) else { return 1 }
     guard metadataDisclosureHasAutomaticAccess(
         .secretNames(globalOnly: false),
         launchers: [launcher],

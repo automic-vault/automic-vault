@@ -6110,7 +6110,7 @@ private struct SecretNameAccessSettingsView: View {
             VStack(alignment: .leading, spacing: 6) {
                 Text("Secret Name Access")
                     .font(.system(size: 24, weight: .semibold))
-                Text("These Verified Launchers may run av list without Approval.")
+                Text("These Verified Launchers may list Secret Names without Approval. Selected Value sources and Project Directories still require Approval.")
                     .font(.system(size: 13))
                     .foregroundStyle(.secondary)
             }

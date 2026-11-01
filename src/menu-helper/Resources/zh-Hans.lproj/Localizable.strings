@@ -362,7 +362,7 @@
 "The original reviewed contents are unavailable for this legacy Blessing. Run `av bless` once to establish a diff baseline." = "此旧版认可记录中没有原始审阅内容。请运行一次 `av bless`，建立差异比较基准。";
 "The original reviewed contents are unavailable. Run `av bless` once to create a new review baseline." = "原始审阅内容不可用。请运行一次 `av bless`，建立新的审阅基准。";
 "The policy was saved, but the Authorization Gate is no longer available" = "策略已保存，但授权关卡已不可用";
-"These Verified Launchers may run av list without Approval." = "这些已验证启动器可以运行 av list，无须人工批准。";
+"These Verified Launchers may list Secret Names without Approval. Selected Value sources and Project Directories still require Approval." = "这些已验证启动器可以列出 Secret 名称，无须批准。所选 Value 的来源和 Project Directory 仍需批准。";
 "This Approval applies only to this secret change." = "此次批准仅适用于本次 Secret 更改。";
 "This Mac cannot approve while iPhone Approval is enabled." = "启用 iPhone 批准时，此 Mac 无法批准请求。";
 "This Secret has %lld Values. The availability setting applies to every Value." = "此 Secret 有 %lld 个值。可用性设置适用于每一个值。";
