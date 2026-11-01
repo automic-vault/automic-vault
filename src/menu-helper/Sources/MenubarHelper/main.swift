@@ -1575,9 +1575,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             temporaryAccessGrantStripFrame = nil
             return
         }
-        let autoCollapse = UserDefaults.standard.bool(
-            forKey: autoCollapseTemporaryAccessGrantStripDefaultsKey
-        )
+        let autoCollapse = (try? loadPresentationSetting(.autoCollapseGrantStrip)) == "true"
         if !autoCollapse {
             temporaryAccessGrantCollapseWorkItem?.cancel()
             temporaryAccessGrantCollapseWorkItem = nil
@@ -1647,9 +1645,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let workItem = DispatchWorkItem { [weak self] in
                 guard let self else { return }
                 self.temporaryAccessGrantCollapseWorkItem = nil
-                guard UserDefaults.standard.bool(
-                    forKey: autoCollapseTemporaryAccessGrantStripDefaultsKey
-                ), !self.temporaryAccessGrantSnapshots.isEmpty
+                guard (try? loadPresentationSetting(.autoCollapseGrantStrip)) == "true", !self.temporaryAccessGrantSnapshots.isEmpty
                 else { return }
                 self.collapseTemporaryAccessGrantStrip()
             }
@@ -2144,9 +2140,7 @@ private func shouldShowAutomaticAccessToast(_ record: AccessRequestRecord) -> Bo
         && record.reason != "Denied by two-minute Temporary Launcher Denial"
 }
 
-private func automaticApprovalFeedback(rawValue: String? = UserDefaults.standard.string(
-    forKey: automaticApprovalFeedbackDefaultsKey
-)) -> AutomaticApprovalFeedback {
+private func automaticApprovalFeedback(rawValue: String? = try? loadPresentationSetting(.feedback)) -> AutomaticApprovalFeedback {
     rawValue.flatMap(AutomaticApprovalFeedback.init(rawValue:)) ?? .notification
 }
 
@@ -4518,6 +4512,10 @@ private final class ApprovalServer: @unchecked Sendable {
             handleTerraformSave(message, on: peer, cancellation: cancellation, caller: mutationCaller)
         case .terraformDelete where isTrustedAvCaller(path: callerPath, signing: signing):
             handleTerraformDelete(message, on: peer, cancellation: cancellation, caller: mutationCaller)
+        case .settingsList where isTrustedAvCaller(path: callerPath, signing: signing),
+             .settingsGet where isTrustedAvCaller(path: callerPath, signing: signing),
+             .settingsSet where isTrustedAvCaller(path: callerPath, signing: signing):
+            handleSettings(message, on: peer, cancellation: cancellation, caller: mutationCaller, operation: op)
         case .list where isTrustedAvCaller(path: callerPath, signing: signing),
              .listSources where isTrustedAvCaller(path: callerPath, signing: signing):
             handleMetadataDisclosure(
@@ -4602,6 +4600,93 @@ private final class ApprovalServer: @unchecked Sendable {
             handleStripeDelete(message, on: peer, cancellation: cancellation, caller: mutationCaller)
         default:
             reply(peer, to: message, ok: false, error: "invalid XPC operation")
+        }
+    }
+
+    private func handleSettings(
+        _ message: xpc_object_t, on peer: xpc_connection_t,
+        cancellation: ApprovalCancellation, caller: MutationCaller, operation: ApprovalServiceOperation
+    ) {
+        let key = xpc_dictionary_get_string(message, "key").map(String.init(cString:))
+        let value = xpc_dictionary_get_string(message, "value").map(String.init(cString:))
+        let setting = key.flatMap(PresentationSetting.init(rawValue:))
+        guard (operation == .settingsList && key == nil && value == nil)
+            || (operation == .settingsGet && setting != nil && value == nil)
+            || (operation == .settingsSet && setting != nil && value != nil
+                && setting!.acceptedValues.contains(value!)) else {
+            reply(peer, to: message, ok: false, error: "unsupported setting, value, or settings operation")
+            return
+        }
+        let cwd = xpc_dictionary_get_string(message, "cwd").map(String.init(cString:))
+        guard operation != .settingsSet || cwd != nil else {
+            reply(peer, to: message, ok: false, error: "settings change is missing its working directory")
+            return
+        }
+        let launchers = operation == .settingsSet ? launcherIdentities(for: caller.identity) : []
+        let fallback = launcherFallbackPath(for: caller.identity) ?? caller.path
+        let launcher = executionOrigin(among: launchers, callerPID: caller.pid, ancestorFallbackPath: fallback)
+        Task { @MainActor in
+            do {
+                guard !cancellation.isCanceled else { return }
+                if operation == .settingsSet, let setting, let value {
+                    let old = try loadPresentationSetting(setting)
+                    let request = ApprovalRequest(
+                        op: "settings-set", keys: [], target: caller.path,
+                        args: ["settings", "set", setting.rawValue, value], cwd: cwd!,
+                        replaceExistingEnv: false, allowMissingKeys: false, envConflicts: [],
+                        shebangScript: nil, scriptData: nil, tool: "av",
+                        title: "Change \(setting.title)?", detail: setting.changeDetail(from: old, to: value)
+                    )
+                    if setting.requiresApproval && old != value {
+                        guard self.canRequestHumanApproval() else { throw AppError("User Approval is unavailable") }
+                        self.sendEvent(humanApprovalRequiredEvent, to: peer)
+                        let decision = await showApprovalAlert(
+                            request: request, callerPath: caller.path, pid: caller.pid, signing: caller.signing,
+                            scriptApproval: nil, launcher: launcher, denialLaunchers: launchers,
+                            launcherFallbackPath: fallback, automaticApprovalExplanation: nil,
+                            cancellation: cancellation
+                        )
+                        guard decision == .approved else {
+                            _ = self.onAccessRequest(accessRequestRecord(
+                                request: request, callerPath: caller.path, decision: "Denied",
+                                approvalSource: "Manual", reason: "Settings change was not approved", launcher: launcher
+                            ))
+                            throw AppError("Settings change was not approved")
+                        }
+                        guard self.canRequestHumanApproval() else { throw AppError("User Approval is unavailable") }
+                    }
+                    var current = AVProcessIdentity()
+                    guard !cancellation.isCanceled,
+                          av_process_identity(caller.pid, &current), sameProcessIdentity(caller.identity, current),
+                          let liveSigning = liveSigningInfo(pid: caller.pid),
+                          liveSigning.identifier == "com.automicvault.av",
+                          liveSigning.teamIdentifier == caller.signing.teamIdentifier,
+                          liveSigning.mainExecutable == caller.path,
+                          launcherBundleIntegrityError(for: current) == nil else {
+                        throw AppError("Settings requester changed or exited")
+                    }
+                    try commitPresentationSetting(setting, value: value, expected: old,
+                        read: { try loadPresentationSetting(setting) },
+                        record: {
+                            self.onAccessRequest(accessRequestRecord(
+                                request: request, callerPath: caller.path, decision: "Approved",
+                                approvalSource: "Manual", reason: "Approved settings change", launcher: launcher
+                            ))
+                        },
+                        write: {
+                            guard !cancellation.isCanceled else { throw AppError("Settings change canceled") }
+                            try savePresentationSetting(setting, value: $0)
+                        }
+                    )
+                    NotificationCenter.default.post(name: temporaryAccessGrantStripPresentationDidChange, object: nil)
+                }
+                let settings = setting.map { [$0] } ?? PresentationSetting.allCases
+                let snapshots = try settings.map { PresentationSettingSnapshot($0, value: try loadPresentationSetting($0)) }
+                let data = try JSONEncoder().encode(snapshots)
+                self.reply(peer, to: message, ok: true, error: nil, value: String(decoding: data, as: UTF8.self))
+            } catch {
+                self.reply(peer, to: message, ok: false, error: error.localizedDescription)
+            }
         }
     }
 
@@ -20493,7 +20578,7 @@ private func runMenuStatusSelfCheck() -> Int32 {
           AutomaticApprovalFeedback.allCases == [.notification, .menuBarFlash, .none],
           automaticApprovalFeedback(rawValue: nil) == .notification,
           automaticApprovalFeedback(rawValue: "notification") == .notification,
-          automaticApprovalFeedback(rawValue: "menuBarFlash") == .menuBarFlash,
+          automaticApprovalFeedback(rawValue: "menu-bar-flash") == .menuBarFlash,
           automaticApprovalFeedback(rawValue: "none") == .none,
           automaticApprovalFeedback(rawValue: "tampered") == .notification,
           automaticAccessToastCommand(groupedMenuRecords[0].record.displayCommand, compact: true)

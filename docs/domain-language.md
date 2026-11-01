@@ -554,6 +554,16 @@ require a click before the system Touch ID prompt starts. This independent
 Keychain-protected preference does not enable Touch ID Approval or grant
 broader authority.
 
+### Presentation settings
+
+Presentation settings control layout and security feedback, not Developer
+Authority. Compact notifications are cosmetic and directly writable. Automic
+authorization feedback and persistent grant-strip auto-collapse are protected
+visibility controls: changing either requires human Approval and a verified
+Authorization Record. Their Keychain-backed values cannot be overridden through
+UserDefaults. Missing or unreadable values keep feedback and grants visible.
+See [ADR 0076](adr/0076-cli-presentation-settings.md).
+
 ### Authorization Decision
 
 The final allow or deny result and its source. An allowed request is either **automically authorized** by policy or **approved** by the user.

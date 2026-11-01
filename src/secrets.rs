@@ -181,6 +181,22 @@ pub(crate) fn list_global_secret_names() -> Result<Vec<String>, String> {
     list_secret_names_filtered(true)
 }
 
+pub(crate) fn settings(
+    operation: &str,
+    key: Option<&str>,
+    value: Option<&str>,
+) -> Result<String, String> {
+    xpc_request(
+        operation,
+        key.map(|v| (b"key\0" as &'static [u8], v)),
+        value.map(|v| (b"value\0" as &'static [u8], v)),
+        None,
+        None,
+    )?
+    .value
+    .ok_or_else(|| "the approval service returned no settings".into())
+}
+
 pub(crate) fn authorization_history(since: Option<u64>) -> Result<String, String> {
     let reply = xpc_request(
         "history-read",
@@ -1201,6 +1217,7 @@ fn xpc_operation_requires_cwd(operation: &str) -> bool {
     matches!(
         operation,
         "save"
+            | "settings-set"
             | "save-if-absent"
             | "docker-save"
             | "docker-delete"

@@ -31,6 +31,7 @@ pub(crate) mod rclone_password;
 mod report;
 mod save;
 mod scan;
+mod settings;
 mod shell_secrets;
 pub(crate) mod sqlcmd_credential;
 mod ssh_agent;
@@ -58,6 +59,7 @@ commands:
   $ av git <clone|fetch|pull|push> <URL>  # protected GitHub HTTPS, main branch
   $ av list [options]                     # list Secret Names; --json adds sources
   $ av history [--json] [--since 7d] [--no-pager]
+  $ av settings <list|get|set> [--json]    # inspect or tune presentation
   $ av save [options] KEY                 # store a global or Project Value
   $ av harden <tool> [-y|--yes]           # harden a tool; migrate credentials
   $ av harden gh --without-git-configuration
@@ -622,6 +624,7 @@ where
         Some("rclone-password") => rclone_password::run(rest, stdout, stderr),
         Some("list" | "ls") => list::run(rest, stdout, stderr, terminal),
         Some("history") => history::run(rest, stdout, stderr, terminal),
+        Some("settings") => settings::run(rest, stdout, stderr),
         Some("bless") => bless::run(rest, stderr),
         Some("open") => {
             let Some(secret_gate) = parse_open_args(&rest) else {

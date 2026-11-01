@@ -145,7 +145,7 @@ Launcher has Secret Name Access or Authorization History Access. The service
 uses attributes-only inventory and the existing physical-directory selector;
 it never loads Secret bytes. A recorded Approval precedes metadata release.
 Selection failure denies the preview, with no fallback to Global Values.
-See [ADR 0075](adr/0075-cli-secret-source-previews.md).
+See [ADR 0076](adr/0075-cli-secret-source-previews.md).
 
 ### Runtime Authorization
 
@@ -1010,6 +1010,17 @@ The orange menu-bar
 shield, active-grant menu entries, and immediate End action remain continuously
 available. This continuous indication is part of the temporary escalation's
 safety model, not a source of authority. See [ADR 0041](adr/0041-collapsible-temporary-access-grant-strip.md).
+
+## Presentation settings
+
+`av settings` reads and changes a closed catalog through the signed Gate Client
+and running app. Compact notifications remain directly writable. Feedback and
+persistent grant-strip auto-collapse live in the Data Protection Keychain and
+require Approval for changes from either CLI or Settings. Both paths compare
+the reviewed value and verify an Authorization Record before saving. Legacy
+visibility defaults are ignored; upgrades restore visible defaults. Policy and
+Approval-method settings are outside this API. See
+[ADR 0076](adr/0076-cli-presentation-settings.md).
 
 ## Source of truth
 
