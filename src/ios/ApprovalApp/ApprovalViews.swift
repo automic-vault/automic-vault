@@ -323,10 +323,21 @@ struct ApprovalDetailView: View {
                     Button {
                         Task { await model.allowTemporaryWriteAccess(request) }
                     } label: {
-                        Label("Allow Write Access for 10 Minutes…", systemImage: "clock.badge.checkmark")
-                            .frame(maxWidth: .infinity)
+                        Label {
+                            VStack(alignment: .leading) {
+                                Text("Allow Write Access")
+                                    .font(.body.weight(.medium))
+                                Text("for 10 Minutes…")
+                                    .font(.subheadline)
+                            }
+                            .fixedSize(horizontal: false, vertical: true)
+                        } icon: {
+                            Image(systemName: "clock.badge.checkmark")
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     .buttonStyle(.bordered)
+                    .buttonBorderShape(.roundedRectangle)
                     .controlSize(.large)
                     .disabled(isResponding)
                     .accessibilityLabel("Allow Write Access for 10 minutes for \(scope)")
