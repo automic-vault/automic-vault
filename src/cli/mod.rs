@@ -56,7 +56,7 @@ commands:
   $ av inject --mode=fd +KEY:FD -- <cmd>  # apply secrets through anonymous pipes
   $ av proxy +KEY... [--] <command>       # proxy secret references for a command
   $ av git <clone|fetch|pull|push> <URL>  # protected GitHub HTTPS, main branch
-  $ av list [options]                     # list Secret Names and selected sources
+  $ av list [options]                     # list Secret Names; --json adds sources
   $ av history [--json] [--since 7d] [--no-pager]
   $ av save [options] KEY                 # store a global or Project Value
   $ av harden <tool> [-y|--yes]           # harden a tool; migrate credentials

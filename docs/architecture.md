@@ -137,8 +137,9 @@ authorization policy.
 
 ### Secret source previews
 
-`av list` shows selected sources in a terminal or with `--json` or
-`--project-directory=DIR`. Redirected output without options remains names only.
+`av list` retains one Secret Name per line, coloring Project Value names in a
+terminal. `--json` shows selected sources as pretty-printed JSON;
+`--project-directory=DIR` selects another directory. Redirected output has no color.
 The dedicated `list-sources` request requires Approval even when the Verified
 Launcher has Secret Name Access or Authorization History Access. The service
 uses attributes-only inventory and the existing physical-directory selector;

@@ -38,7 +38,7 @@ pub(super) fn run(
     if args.len() == 1 && (args[0] == "--help" || args[0] == "-h") {
         let _ = writeln!(
             stdout,
-            "{USAGE}\n\nTerminals show selected sources; pipes receive names only unless an option is supplied.\nSource previews require Approval and never read Secret bytes or authorize Secret Use."
+            "{USAGE}\n\nLists one Secret Name per line; terminals color Project Values. --json shows selected sources.\nSource previews require Approval and never read Secret bytes or authorize Secret Use."
         );
         return 0;
     }
@@ -126,22 +126,15 @@ fn render_sources(
         serde_json::from_str(response).map_err(|_| "invalid Secret source preview")?;
     sources.sort_by(|a, b| a.name().cmp(b.name()));
     if json {
-        serde_json::to_writer(&mut *stdout, &sources).map_err(|error| error.to_string())?;
+        serde_json::to_writer_pretty(&mut *stdout, &sources).map_err(|error| error.to_string())?;
         return writeln!(stdout).map_err(|error| error.to_string());
     }
     for source in sources {
         let name = safe_text(source.name());
-        let label = match &source {
-            Source::Global { .. } => "Global Value".into(),
-            Source::Project {
-                project_directory, ..
-            } => format!("Project Value: {}", safe_text(project_directory)),
-            Source::Missing { .. } => "No matching Value".into(),
-        };
         if color && matches!(source, Source::Project { .. }) {
-            writeln!(stdout, "\x1b[36m{name}\t{label}\x1b[0m")
+            writeln!(stdout, "\x1b[36m{name}\x1b[0m")
         } else {
-            writeln!(stdout, "{name}\t{label}")
+            writeln!(stdout, "{name}")
         }
         .map_err(|error| error.to_string())?;
     }
@@ -168,7 +161,7 @@ mod tests {
     const SOURCES: &str = r#"[{"name":"Z","source":"project","projectDirectory":"/project\u001b[31m\n"},{"name":"A","source":"global"},{"name":"M","source":"missing"}]"#;
 
     #[test]
-    fn json_is_sorted_and_never_colored() {
+    fn json_is_pretty_sorted_and_never_colored() {
         let mut output = Vec::new();
         render_sources(SOURCES, &mut output, true, true).unwrap();
         let rows: serde_json::Value = serde_json::from_slice(&output).unwrap();
@@ -176,6 +169,9 @@ mod tests {
         assert_eq!(rows[1]["source"], "missing");
         assert_eq!(rows[2]["projectDirectory"], "/project\x1b[31m\n");
         assert!(!output.contains(&27));
+        let text = String::from_utf8(output).unwrap();
+        assert!(text.starts_with("[\n  {\n    "));
+        assert!(text.ends_with("\n]\n"));
         assert!(
             render_sources(
                 r#"[{"name":"A","source":"global","value":"SECRET"}]"#,
@@ -188,18 +184,16 @@ mod tests {
     }
 
     #[test]
-    fn text_colors_only_projects_and_escapes_controls() {
+    fn text_preserves_names_only_and_colors_only_projects() {
         let mut plain = Vec::new();
         render_sources(SOURCES, &mut plain, false, false).unwrap();
         let plain = String::from_utf8(plain).unwrap();
-        assert!(plain.starts_with("A\tGlobal Value\nM\tNo matching Value\n"));
-        assert!(plain.contains("Project Value: /project\\u{1b}[31m\\n"));
-        assert!(!plain.contains('\x1b'));
+        assert_eq!(plain, "A\nM\nZ\n");
         let mut colored = Vec::new();
         render_sources(SOURCES, &mut colored, false, true).unwrap();
         let colored = String::from_utf8(colored).unwrap();
-        assert!(colored.starts_with("A\tGlobal Value\nM\tNo matching Value\n\x1b[36mZ"));
-        assert!(colored.ends_with("\x1b[0m\n"));
+        assert_eq!(colored, "A\nM\n\x1b[36mZ\x1b[0m\n");
+        assert_eq!(safe_text("A\x1b[31m\n"), "A\\u{1b}[31m\\n");
     }
 
     #[test]

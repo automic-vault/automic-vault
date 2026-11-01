@@ -314,9 +314,9 @@ for the authoritative terms and security boundaries.
 
 ### Inspecting selected Secret sources
 
-`av list` in a terminal shows each Secret Name and its selected Global Value or
-Project Directory. Project Values are cyan when terminal colors are enabled;
-text labels remain explicit with `NO_COLOR` or `TERM=dumb`.
+`av list` prints one Secret Name per line. In a terminal, Project Value names
+are cyan; `NO_COLOR` or `TERM=dumb` disables color. Source labels and matched
+Project Directories appear only with `--json`.
 
 ```sh
 av list
@@ -325,7 +325,7 @@ av list --project-directory=/path/to/project --json
 ```
 
 The selection directory defaults to the canonical working directory. JSON is a
-sorted array of objects with `name`, `source` (`global`, `project`, or `missing`),
+pretty-printed, sorted array of objects with `name`, `source` (`global`, `project`, or `missing`),
 and `projectDirectory` for project selections. `missing` means no Value matches
 that directory. No Secret bytes are read or returned, and a preview does not
 verify availability or authorize a later operation.

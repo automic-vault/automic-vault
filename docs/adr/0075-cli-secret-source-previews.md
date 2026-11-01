@@ -11,9 +11,10 @@ Secret Names; existing Secret Name Access grants must retain their scope.
 ## Decision
 
 Extend `av list` with `--json` and `--project-directory=DIR`. Terminal output
-shows each name and selected source, coloring Project Values cyan when color is
-enabled. Labels remain explicit without color. Honor `NO_COLOR` and `TERM=dumb`.
-Piped output without options remains one Secret Name per line.
+retains one Secret Name per line, coloring Project Value names cyan when color
+is enabled. Honor `NO_COLOR` and `TERM=dumb`. Non-JSON output never adds source
+labels or Project Directories, including when redirected. Source details appear
+only with `--json`.
 
 Source previews use a separate `list-sources` wire operation restricted to the
 trusted `av` Gate Client. Every request requires human Approval, retains the
@@ -25,11 +26,11 @@ The client canonicalizes the selection directory, defaulting to its cwd. The
 service validates it and uses the same physical-ancestor selection function as
 Secret Use. An attributes-only inventory supplies names and source metadata;
 Secret data is never read or returned. Inventory or selection failure fails
-closed. A Secret without a matching Value is marked missing. A selected Value
+closed. A Secret without a matching Value is marked missing in JSON. A selected Value
 is not read to check availability, so a preview cannot promise later success or
 fall back following a Secret read failure.
 
-JSON is a sorted array containing `name`, `source` (`global`, `project`, or
+JSON is a pretty-printed, sorted array containing `name`, `source` (`global`, `project`, or
 `missing`), and `projectDirectory` for project selections only. Text escapes
 terminal control characters; JSON never contains ANSI styling.
 
