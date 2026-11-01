@@ -4031,7 +4031,12 @@ private struct DashboardSidebarView: View {
             Spacer(minLength: 0)
             let count = model.count(for: section)
             let reblessingCount = section == .blessedScripts ? model.scriptsNeedingReblessingCount : 0
-            if section == .secretUsage, model.authorizationHistoryDayCount > 0 {
+            if section == .hardenedTools, model.isUpdatingTools {
+                ProgressView()
+                    .controlSize(.small)
+                    .help("Updating Tools…")
+                    .accessibilityLabel("Updating Tools…")
+            } else if section == .secretUsage, model.authorizationHistoryDayCount > 0 {
                 SidebarCountText(text: "\(model.authorizationHistoryDayCount)d")
                     .fixedSize()
             } else if count > 0 {
@@ -4120,13 +4125,11 @@ private struct DashboardListView: View {
         }
         .safeAreaInset(edge: .bottom) {
             if model.selectedSection == .hardenedTools,
-               model.toolUpdateError != nil || model.isUpdatingTools || model.toolUpdateMessage != nil
+               model.toolUpdateError != nil || model.toolUpdateMessage != nil
                 || (!model.toolUpdates.isEmpty && model.cliInstallState != nil && model.cliInstallState != .current) {
                 VStack(alignment: .leading, spacing: 8) {
                     if let error = model.toolUpdateError {
                         Text(error).font(.caption).foregroundStyle(.red).textSelection(.enabled)
-                    } else if model.isUpdatingTools {
-                        ProgressView("Updating Tools…").controlSize(.small)
                     } else if let message = model.toolUpdateMessage {
                         Text(message).font(.caption).foregroundStyle(.secondary)
                     }
