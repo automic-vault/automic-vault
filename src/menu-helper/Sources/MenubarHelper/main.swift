@@ -4610,10 +4610,7 @@ private final class ApprovalServer: @unchecked Sendable {
         let key = xpc_dictionary_get_string(message, "key").map(String.init(cString:))
         let value = xpc_dictionary_get_string(message, "value").map(String.init(cString:))
         let setting = key.flatMap(PresentationSetting.init(rawValue:))
-        guard (operation == .settingsList && key == nil && value == nil)
-            || (operation == .settingsGet && setting != nil && value == nil)
-            || (operation == .settingsSet && setting != nil && value != nil
-                && setting!.acceptedValues.contains(value!)) else {
+        guard presentationSettingsRequestIsValid(operation: operation, key: key, value: value) else {
             reply(peer, to: message, ok: false, error: "unsupported setting, value, or settings operation")
             return
         }
@@ -4660,6 +4657,7 @@ private final class ApprovalServer: @unchecked Sendable {
                           av_process_identity(caller.pid, &current), sameProcessIdentity(caller.identity, current),
                           let liveSigning = liveSigningInfo(pid: caller.pid),
                           liveSigning.identifier == "com.automicvault.av",
+                          liveSigning.isDeveloperID, liveSigning.runtimeProtection == .hardened,
                           liveSigning.teamIdentifier == caller.signing.teamIdentifier,
                           liveSigning.mainExecutable == caller.path,
                           launcherBundleIntegrityError(for: current) == nil else {

@@ -32,6 +32,19 @@ public enum PresentationSetting: String, CaseIterable, Sendable {
     }
 }
 
+public func presentationSettingsRequestIsValid(
+    operation: ApprovalServiceOperation, key: String?, value: String?
+) -> Bool {
+    switch operation {
+    case .settingsList: return key == nil && value == nil
+    case .settingsGet: return key.flatMap(PresentationSetting.init(rawValue:)) != nil && value == nil
+    case .settingsSet:
+        guard let key, let setting = PresentationSetting(rawValue: key), let value else { return false }
+        return setting.acceptedValues.contains(value)
+    default: return false
+    }
+}
+
 public struct PresentationSettingSnapshot: Encodable {
     public let key: String
     public let value: String

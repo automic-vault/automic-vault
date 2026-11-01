@@ -69,3 +69,30 @@ import Testing
     #expect(json["acceptedValues"] as? [String] == ["notification", "menu-bar-flash", "none"])
     #expect(json["defaultValue"] as? String == "notification")
 }
+
+@Test func settingsServiceRejectsUnknownKeysAndMalformedRequests() {
+    #expect(presentationSettingsRequestIsValid(operation: .settingsList, key: nil, value: nil))
+    #expect(!presentationSettingsRequestIsValid(operation: .settingsList, key: "gate-policy", value: nil))
+    for setting in PresentationSetting.allCases {
+        #expect(presentationSettingsRequestIsValid(operation: .settingsGet, key: setting.rawValue, value: nil))
+        #expect(!presentationSettingsRequestIsValid(operation: .settingsGet, key: setting.rawValue, value: "none"))
+        #expect(!presentationSettingsRequestIsValid(operation: .settingsSet, key: setting.rawValue, value: nil))
+        for value in setting.acceptedValues {
+            #expect(presentationSettingsRequestIsValid(operation: .settingsSet, key: setting.rawValue, value: value))
+        }
+        for value in ["", "1", "TRUE", "false\0true", "notification "] {
+            #expect(!presentationSettingsRequestIsValid(operation: .settingsSet, key: setting.rawValue, value: value))
+        }
+    }
+    for operation in [ApprovalServiceOperation.settingsGet, .settingsSet, .save, .list] {
+        #expect(!presentationSettingsRequestIsValid(operation: operation, key: "phoneApprovalEnabled", value: "false"))
+    }
+}
+
+@Test @MainActor func settingsWriteFailureNeverReportsSuccess() {
+    #expect(throws: PresentationSettingsError.self) {
+        try commitPresentationSetting(.feedback, value: "none", expected: "notification",
+            read: { "notification" }, record: { true },
+            write: { _ in throw PresentationSettingsError.unavailable })
+    }
+}

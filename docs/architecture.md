@@ -145,7 +145,7 @@ Launcher has Secret Name Access or Authorization History Access. The service
 uses attributes-only inventory and the existing physical-directory selector;
 it never loads Secret bytes. A recorded Approval precedes metadata release.
 Selection failure denies the preview, with no fallback to Global Values.
-See [ADR 0076](adr/0075-cli-secret-source-previews.md).
+See [ADR 0075](adr/0075-cli-secret-source-previews.md).
 
 ### Runtime Authorization
 
