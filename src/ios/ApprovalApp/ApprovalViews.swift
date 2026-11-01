@@ -327,7 +327,7 @@ struct ApprovalDetailView: View {
                             VStack(alignment: .leading) {
                                 Text("Allow Write Access")
                                     .font(.body.weight(.medium))
-                                Text("for 10 Minutes…")
+                                Text("for 10 Minutes")
                                     .font(.subheadline)
                             }
                             .fixedSize(horizontal: false, vertical: true)
