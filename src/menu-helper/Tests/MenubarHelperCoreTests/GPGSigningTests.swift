@@ -250,3 +250,43 @@ func gpgSigningConfigurationIsAvailableAfterFirstUnlock() {
     #expect(!deleted)
     #expect(values[gpgDefaultPassphraseSecretName] == "old-passphrase")
 }
+
+@Test func failedPrivateKeyReplacementRestoresSynchronizedPassphrase() {
+    let name = gpgDefaultPassphraseSecretName
+    let value = StoredSecretValue(source: .global, keychainAccount: name,
+        accessibility: .whenUnlocked, keychainProperties: [], synchronizable: true)
+    var passphrase = "old-passphrase"
+    let status = saveGPGSigningCredential(privateKey: "replacement", passphrase: "new-passphrase",
+        alternate: false, load: { account in
+            loadGPGStoredValue(account, inventory: .success([StoredSecret(account: name, values: [value])]),
+                load: { selected in
+                    #expect(selected.synchronizable)
+                    #expect(selected.keychainAccount == name)
+                    return selected.synchronizable ? .success(passphrase) : .notFound
+                })
+        }, save: { account, replacement in
+            if account == gpgDefaultPrivateKeySecretName { return errSecAuthFailed }
+            passphrase = replacement
+            return errSecSuccess
+        }, delete: { _ in
+            Issue.record("Rollback must restore the synchronized passphrase, not delete it")
+            return errSecSuccess
+        })
+    #expect(status == errSecAuthFailed)
+    #expect(passphrase == "old-passphrase")
+}
+
+@Test func gpgStoredValueReadFailuresAbortCredentialReplacement() {
+    let name = gpgDefaultPassphraseSecretName
+    let value = StoredSecretValue(source: .global, keychainAccount: name,
+        accessibility: .whenUnlocked, keychainProperties: [], synchronizable: true)
+    for result: StoredSecretValueLoad in [.notFound, .invalidUTF8, .failure(errSecInteractionNotAllowed)] {
+        let status = saveGPGSigningCredential(privateKey: "replacement", passphrase: "new-passphrase",
+            alternate: false, load: { account in
+                loadGPGStoredValue(account, inventory: .success([StoredSecret(account: name, values: [value])]),
+                    load: { _ in result })
+            }, save: { _, _ in Issue.record("Read failure must prevent mutation"); return errSecSuccess },
+            delete: { _ in Issue.record("Read failure must prevent deletion"); return errSecSuccess })
+        #expect(status != errSecSuccess)
+    }
+}

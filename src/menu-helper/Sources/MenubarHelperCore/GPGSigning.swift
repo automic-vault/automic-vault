@@ -107,13 +107,29 @@ enum GPGStoredValueLoad {
 }
 
 private func loadGPGStoredValue(_ account: String) -> GPGStoredValueLoad {
-    switch loadKeychainDataResult(service: automicVaultKeychainService, account: account) {
-    case .success(let data):
-        guard let value = String(data: data, encoding: .utf8) else {
-            return .failure(errSecDecode)
-        }
-        return .value(value)
-    case .notFound: return .missing
+    loadGPGStoredValue(account, inventory: loadStoredSecretsResult(), load: { loadStoredSecretValue($0) })
+}
+
+func loadGPGStoredValue(
+    _ account: String,
+    inventory: StoredSecretsLoad,
+    load: (StoredSecretValue) -> StoredSecretValueLoad
+) -> GPGStoredValueLoad {
+    let secrets: [StoredSecret]
+    switch inventory {
+    case .success(let loaded): secrets = loaded
+    case .failure(let status): return .failure(status)
+    }
+    guard let secret = secrets.first(where: { $0.account == account }) else { return .missing }
+    guard secret.hasConsistentAccessibility, secret.hasConsistentSynchronization else {
+        return .failure(errSecDecode)
+    }
+    guard let value = secret.values.first(where: { $0.source == .global }) else { return .missing }
+    switch load(value) {
+    case .success(let text): return .value(text)
+    // An observed Value disappearing is a failed snapshot, not permission to delete on rollback.
+    case .notFound: return .failure(errSecItemNotFound)
+    case .invalidUTF8: return .failure(errSecDecode)
     case .failure(let status): return .failure(status)
     }
 }
