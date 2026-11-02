@@ -135,7 +135,7 @@ private struct InMemorySecretValueCustodyAdapter: SecretValueCustodyAdapter {
 @Test func lockedSecretUseRetriesWithAvailableWhileLockedInventory() {
     var requestedAccessibility: [StoredSecretAccessibility?] = []
 
-    let result = retryLockedSecretInventory { accessibility in
+    let result = retryLockedSecretInventory(synchronizedInventory: { .success([]) }) { accessibility in
         requestedAccessibility.append(accessibility)
         return accessibility == nil
             ? .failure(errSecInteractionNotAllowed)
@@ -150,7 +150,7 @@ private struct InMemorySecretValueCustodyAdapter: SecretValueCustodyAdapter {
     #expect(secrets.map(\.account) == ["AVAILABLE"])
 
     requestedAccessibility.removeAll()
-    let unrelatedFailure = retryLockedSecretInventory { accessibility in
+    let unrelatedFailure = retryLockedSecretInventory(synchronizedInventory: { .success([]) }) { accessibility in
         requestedAccessibility.append(accessibility)
         return .failure(errSecAuthFailed)
     }
@@ -180,7 +180,7 @@ private struct LockedInventoryCustodyAdapter: SecretValueCustodyAdapter {
     func repairPendingMutation() -> OSStatus { errSecSuccess }
     func pendingMutationNames() -> Set<String>? { [] }
     func inventory(requiredNames: [String]) -> StoredSecretsLoad {
-        retryLockedSecretInventory(requiredNames: requiredNames) { accessibility in
+        retryLockedSecretInventory(requiredNames: requiredNames, synchronizedInventory: { .success([]) }) { accessibility in
             accessibility == nil ? .failure(errSecInteractionNotAllowed) : .success(available)
         }
     }

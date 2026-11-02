@@ -178,3 +178,39 @@ func secretSynchronizationDuplicateSourcesFailClosed() throws {
         })
     #expect(unavailable == errSecInteractionNotAllowed)
 }
+
+@Test func lockedInventoryDoesNotHideSynchronizationConflicts() {
+    for accessibility: StoredSecretAccessibility in [.whenUnlocked, .afterFirstUnlock] {
+        let synchronizedValue = StoredSecretValue(source: .global, keychainAccount: "TOKEN",
+            accessibility: accessibility, keychainProperties: [], synchronizable: true)
+        let synchronized = StoredSecret(account: "TOKEN", accessibility: accessibility, values: [synchronizedValue])
+        let result = retryLockedSecretInventory(requiredNames: ["TOKEN"],
+            synchronizedInventory: { .success([synchronized]) }) { availability in
+                #expect(availability == nil)
+                return .failure(errSecInteractionNotAllowed)
+            }
+        guard case .failure(errSecInteractionNotAllowed) = result else {
+            Issue.record("A filtered inventory must not hide either side of a local/synced conflict")
+            continue
+        }
+    }
+    let unavailable = retryLockedSecretInventory(synchronizedInventory: { .failure(errSecInteractionNotAllowed) }) { availability in
+        #expect(availability == nil)
+        return .failure(errSecInteractionNotAllowed)
+    }
+    guard case .failure(errSecInteractionNotAllowed) = unavailable else {
+        Issue.record("An unreadable synchronized inventory must deny fallback")
+        return
+    }
+}
+
+@Test func lockedInventoryRejectsSynchronizationArrivingDuringRetry() {
+    let synchronized = StoredSecret(account: "TOKEN", values: [syncFixture(true)])
+    let result = retryLockedSecretInventory(requiredNames: ["TOKEN"], synchronizedInventory: { .success([]) }) {
+        $0 == nil ? .failure(errSecInteractionNotAllowed) : .success([synchronized])
+    }
+    guard case .failure(errSecInteractionNotAllowed) = result else {
+        Issue.record("New synchronized Values require a complete inventory")
+        return
+    }
+}

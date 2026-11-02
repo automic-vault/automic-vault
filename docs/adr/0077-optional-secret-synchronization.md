@@ -31,7 +31,13 @@ Inventory explicitly includes local and synchronized items. Exact Value reads
 bind the synchronization class selected before authorization. A disappearing
 selected item fails rather than falling back. Duplicate local/synchronized
 items for the same source fail inventory; mixed synchronization settings fail
-Secret selection. Saving or migrating a Value inherits the existing Secret's
+Secret selection. If complete inventory is unavailable while locked, the availability-filtered
+fallback is allowed only after an unfiltered query proves there are no
+synchronized Values. A store containing synchronized Values may therefore
+require unlocking even for an Available While Locked Value; incomplete
+inventory must not hide a conflicting source.
+
+Saving or migrating a Value inherits the existing Secret's
 setting and rejects mixed custody. New names default to local-only. Renames,
 availability changes, and deletion support synchronized Values too.
 

@@ -2429,7 +2429,10 @@ public func loadStoredSecretsForUseResult(
     directAccessRules: [DirectAccessRule] = [],
     requiredNames: [String] = []
 ) -> StoredSecretsLoad {
-    retryLockedSecretInventory(requiredNames: requiredNames) { accessibility in
+    retryLockedSecretInventory(requiredNames: requiredNames, synchronizedInventory: {
+        loadStoredSecretsResult(service: service, directAccessRules: [], accessibility: nil,
+            synchronizable: true)
+    }) { accessibility in
         loadStoredSecretsResult(
             service: service,
             directAccessRules: directAccessRules,
@@ -2440,11 +2443,20 @@ public func loadStoredSecretsForUseResult(
 
 func retryLockedSecretInventory(
     requiredNames: [String] = [],
+    synchronizedInventory: () -> StoredSecretsLoad,
     _ load: (StoredSecretAccessibility?) -> StoredSecretsLoad
 ) -> StoredSecretsLoad {
     let result = load(nil)
     if case .failure(errSecInteractionNotAllowed) = result {
+        // Filtering by availability can hide a conflicting synchronized Value.
+        guard case .success(let synchronized) = synchronizedInventory(), synchronized.isEmpty else {
+            return result
+        }
         let available = load(.afterFirstUnlock)
+        if case .success(let secrets) = available,
+           secrets.contains(where: { $0.values.contains(where: \.synchronizable) }) {
+            return result
+        }
         if case .success(let secrets) = available,
            !Set(requiredNames).isSubset(of: Set(secrets.map(\.account))) {
             // A filtered inventory cannot establish that an omitted Secret is absent.
@@ -2458,7 +2470,8 @@ func retryLockedSecretInventory(
 private func loadStoredSecretsResult(
     service: String,
     directAccessRules: [DirectAccessRule],
-    accessibility: StoredSecretAccessibility?
+    accessibility: StoredSecretAccessibility?,
+    synchronizable: Bool? = nil
 ) -> StoredSecretsLoad {
     let directAccess = Dictionary(grouping: directAccessRules, by: \.secretName)
     var query: [String: Any] = [
@@ -2469,6 +2482,9 @@ private func loadStoredSecretsResult(
         kSecReturnAttributes as String: true,
         kSecMatchLimit as String: kSecMatchLimitAll,
     ]
+    if let synchronizable {
+        query[kSecAttrSynchronizable as String] = synchronizable
+    }
     if let accessibility {
         query[kSecAttrAccessible as String] = accessibility.keychainValue
     }
