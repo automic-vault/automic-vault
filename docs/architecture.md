@@ -55,6 +55,13 @@ text, keyed by its registered name. The catalog is embedded in the executable.
 Detector Markdown is presentation-only; changing its headings or formatting
 cannot change monitoring coverage or machine-readable remediation.
 
+PATH Findings recognize narrowly validated command directories inside installed
+vendor applications, relying on macOS App Management rather than Unix write
+permissions alone. The app executable and every file in the command directory
+must validate; uncertain cases retain the Finding. This diagnostic exception
+grants no authority and does not certify unrelated bundle resources. See
+[ADR 0078](adr/0078-sealed-application-path-directories.md).
+
 ### Tool Hardening
 
 Hardeners move supported Tools into a declared Hardened State. Doctor verifies

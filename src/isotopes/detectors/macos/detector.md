@@ -40,6 +40,15 @@ expose the environment from process launch rather than subsequent changes;
 commands launched after a shell changes PATH can supply that updated evidence.
 An absent Finding does not establish that every shell's PATH is safe.
 
+The PATH check recognizes command directories inside vendor-signed apps under
+`/Applications` when the app executable and every file in that directory pass
+targeted signature validation. This accounts for macOS App Management protection
+despite Unix write permissions. It does not check existing App Management grants
+or certify unrelated bundle resources. Added or modified files, symlinks,
+unsupported layouts, and validation errors retain the warning. Checks are shared
+within this detector pass and refreshed on the next Scan. See
+[ADR 0078](../../../../../docs/adr/0078-sealed-application-path-directories.md).
+
 ## Mitigation
 
 Review the shell configuration, LaunchAgents, or application settings that

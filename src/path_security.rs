@@ -1,7 +1,15 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::ffi::{CString, OsStr, OsString};
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
+
+mod app_bundle;
+
+#[derive(Default)]
+pub(crate) struct PathInspection {
+    directories: HashMap<PathBuf, bool>,
+    bundles: app_bundle::BundleInspection,
+}
 
 pub(crate) fn current_working_directory_utf8() -> Result<String, String> {
     let path = std::env::current_dir()
@@ -29,31 +37,49 @@ pub(crate) fn user_writable_path_reason(source: &str, entry: &Path) -> String {
 }
 
 pub(crate) fn user_writable_entries_before_system_paths(path: &OsStr) -> Vec<PathBuf> {
-    let entries = std::env::split_paths(path)
-        .map(|entry| {
-            let writable = !entry.is_absolute() || is_user_writable_or_creatable(&entry);
-            let displayed = if entry.as_os_str().is_empty() {
-                PathBuf::from(".")
-            } else {
-                entry
-            };
-            (displayed, writable)
-        })
-        .collect::<Vec<_>>();
+    PathInspection::default().user_writable_entries_before_system_paths(path)
+}
 
-    let last_system_path = entries.iter().rposition(|(_, writable)| !writable);
-    let all_entries_are_writable = last_system_path.is_none();
-    let mut seen = HashSet::<OsString>::new();
+impl PathInspection {
+    pub(crate) fn user_writable_entries_before_system_paths(
+        &mut self,
+        path: &OsStr,
+    ) -> Vec<PathBuf> {
+        let entries = std::env::split_paths(path)
+            .map(|entry| {
+                let writable = !entry.is_absolute() || is_user_writable_or_creatable(&entry);
+                let displayed = if entry.as_os_str().is_empty() {
+                    PathBuf::from(".")
+                } else {
+                    entry
+                };
+                (displayed, writable)
+            })
+            .collect::<Vec<_>>();
 
-    entries
-        .into_iter()
-        .enumerate()
-        .filter(|(index, (_, writable))| {
-            *writable
-                && (all_entries_are_writable || last_system_path.is_some_and(|last| *index < last))
-        })
-        .filter_map(|(_, (entry, _))| seen.insert(entry.as_os_str().to_owned()).then_some(entry))
-        .collect()
+        let last_system_path = entries.iter().rposition(|(_, writable)| !writable);
+        let all_entries_are_writable = last_system_path.is_none();
+        let mut seen = HashSet::<OsString>::new();
+
+        entries
+            .into_iter()
+            .enumerate()
+            .filter(|(index, (_, writable))| {
+                *writable
+                    && (all_entries_are_writable
+                        || last_system_path.is_some_and(|last| *index < last))
+            })
+            .filter(|(_, (entry, _))| {
+                !*self
+                    .directories
+                    .entry(entry.clone())
+                    .or_insert_with(|| self.bundles.contains_sealed_commands(entry))
+            })
+            .filter_map(|(_, (entry, _))| {
+                seen.insert(entry.as_os_str().to_owned()).then_some(entry)
+            })
+            .collect()
+    }
 }
 
 fn is_user_writable_or_creatable(path: &Path) -> bool {

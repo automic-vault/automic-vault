@@ -1,7 +1,7 @@
 use std::ffi::OsString;
 use std::path::Path;
 
-use crate::path_security::{user_writable_entries_before_system_paths, user_writable_path_reason};
+use crate::path_security::{PathInspection, user_writable_path_reason};
 use crate::{AffectedFile, Finding};
 
 mod process_paths;
@@ -9,14 +9,17 @@ mod process_paths;
 const DOCS_URL: &str = "https://github.com/automic-vault/automic-vault/blob/main/src/isotopes/detectors/macos/detector.md";
 
 pub(crate) fn findings(_home: &Path) -> Vec<Finding> {
-    let mut findings = gui_path().map_or_else(Vec::new, |path| findings_for_gui_path(&path));
+    let mut inspection = PathInspection::default();
+    let mut findings = gui_path().map_or_else(Vec::new, |path| {
+        findings_for_gui_path(&path, &mut inspection)
+    });
     let mut seen = findings
         .iter()
         .map(|finding| finding.affected[0].path.clone())
         .collect::<std::collections::HashSet<_>>();
     for path in process_paths::observed_paths() {
         findings.extend(
-            findings_for_path(&path, "Observed user process")
+            findings_for_path(&path, "Observed user process", &mut inspection)
                 .into_iter()
                 .filter(|finding| seen.insert(finding.affected[0].path.clone())),
         );
@@ -24,16 +27,21 @@ pub(crate) fn findings(_home: &Path) -> Vec<Finding> {
     findings
 }
 
-fn findings_for_gui_path(path: &std::ffi::OsStr) -> Vec<Finding> {
+fn findings_for_gui_path(path: &std::ffi::OsStr, inspection: &mut PathInspection) -> Vec<Finding> {
     if path.is_empty() {
         return Vec::new();
     }
 
-    findings_for_path(path, "macOS GUI")
+    findings_for_path(path, "macOS GUI", inspection)
 }
 
-fn findings_for_path(path: &std::ffi::OsStr, source: &str) -> Vec<Finding> {
-    user_writable_entries_before_system_paths(path)
+fn findings_for_path(
+    path: &std::ffi::OsStr,
+    source: &str,
+    inspection: &mut PathInspection,
+) -> Vec<Finding> {
+    inspection
+        .user_writable_entries_before_system_paths(path)
         .into_iter()
         .map(|entry| Finding {
             source: "macOS",
@@ -133,7 +141,7 @@ mod tests {
         std::fs::set_permissions(&protected, std::fs::Permissions::from_mode(0o555)).unwrap();
         let path = std::env::join_paths([&writable, &protected]).unwrap();
 
-        let findings = findings_for_gui_path(&path);
+        let findings = findings_for_gui_path(&path, &mut PathInspection::default());
 
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].source, "macOS");
@@ -145,6 +153,9 @@ mod tests {
 
     #[test]
     fn does_not_treat_an_unset_launchd_path_as_an_empty_entry() {
-        assert!(findings_for_gui_path(std::ffi::OsStr::new("")).is_empty());
+        assert!(
+            findings_for_gui_path(std::ffi::OsStr::new(""), &mut PathInspection::default())
+                .is_empty()
+        );
     }
 }

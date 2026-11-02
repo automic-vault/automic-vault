@@ -36,6 +36,9 @@ with `av save KEY`, then inject it only into the command that needs it.
 
 ## PATH Mitigation
 
+The PATH check uses the [installed-app exception](../macos/detector.md)
+for validated, sealed command directories under `/Applications`.
+
 Version managers commonly prepend user-writable tool directories to `PATH`;
 this is expected, but those directories can still shadow later commands. Remove
 empty, relative, and unexpected entries. If the ordering is intentional, use
