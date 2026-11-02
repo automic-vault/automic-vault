@@ -76,6 +76,10 @@ agent sandboxing is outside the product's scope.
 ## Supporting claims
 
 - Automic Vault protects credentials in custody and controls their application.
+- Optional, per-Secret iCloud Keychain synchronization expands custody to the
+  user's trusted devices. It is off by default and does not synchronize policy,
+  Launcher enrollment, Approval, or Authorization History. Delivery is eventual;
+  updates and deletions may propagate to other devices.
 - Authorization covers the software identity, Secret Names, Tool, Target,
   command, arguments, and working directory.
 - Tool-specific Authorization Gates distinguish read, write, disclosure, and

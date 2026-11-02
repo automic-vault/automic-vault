@@ -3213,13 +3213,6 @@ public func loadStoredSecretValue(
     }
 }
 
-private func loadKeychainData(service: String, account: String) -> Data? {
-    guard case .success(let data) = loadKeychainDataResult(service: service, account: account) else {
-        return nil
-    }
-    return data
-}
-
 enum KeychainDataLoad: Equatable {
     case success(Data)
     case notFound

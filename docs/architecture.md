@@ -132,8 +132,11 @@ operation. See [ADR 0032](adr/0032-positive-secret-routing.md).
 
 Automic Vault stores named opaque Secrets in the macOS Data Protection
 Keychain. A Secret may contain a Global Value and Project Values. Each Secret
-has one availability choice, shared by all its Values and independent of
-authorization policy.
+has one availability choice and one off-by-default synchronization choice,
+shared by all its Values and independent of authorization policy. Optional
+[Secret Synchronization](domain-language.md#secret-synchronization) expands
+custody to iCloud Keychain and the user's trusted devices. See
+[ADR 0077](adr/0077-optional-secret-synchronization.md).
 
 ### Secret source previews
 
@@ -741,7 +744,7 @@ Access Rules and Blessings, applies to all Values of that exact Secret Name. A
 Launcher with authority for a Secret may choose a working directory and thereby
 choose among its Values.
 
-Availability and renaming apply to every Value of a Secret. Multi-item
+Availability, synchronization, and renaming apply to every Value of a Secret. Multi-item
 mutations persist a forward-repair journal before changing Value items. The app
 resumes an interrupted operation, and affected Secret Names remain unavailable
 until repair completes. Removing one Value retains name-based policy while

@@ -135,3 +135,19 @@ func secretSynchronizationKeychainLifecycle() throws {
         load: { .success([]) },
         update: { _ in Issue.record("Must not recreate deleted Values"); return errSecSuccess }) == errSecSuccess)
 }
+
+@Test(.enabled(if: dataProtectionKeychainAvailable(), "requires an entitled Keychain test host"))
+func secretSynchronizationDuplicateSourcesFailClosed() throws {
+    let service = "com.automicvault.tests.sync-conflict.\(UUID().uuidString)"
+    defer { _ = deleteStoredSecretValue(secretName: "TOKEN", source: .global, service: service) }
+    #expect(saveStoredSecret(account: "TOKEN", value: "synthetic-local", service: service) == errSecSuccess)
+    #expect(saveKeychainData(Data("synthetic-synced".utf8), service: service,
+        account: "TOKEN", synchronizable: true) == errSecSuccess)
+    guard case .failure(let status) = loadStoredSecretsResult(service: service) else {
+        Issue.record("Duplicate sources must fail inventory")
+        return
+    }
+    #expect(status == errSecDecode)
+    #expect(loadStoredSecret(account: "TOKEN", service: service) == nil)
+    #expect(saveStoredSecret(account: "TOKEN", value: "replacement", service: service) == errSecDecode)
+}
