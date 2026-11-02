@@ -461,6 +461,7 @@ fn merge_duplicate_owned_shell_path_findings(findings: Vec<DetectorResult>) -> V
         // Shell detectors cover credential assignments and PATH hazards, but each
         // finding needs only the mitigation for the condition it reports.
         if shell_path_entry(&finding.finding).is_some() {
+            finding.finding.severity = "medium";
             finding.finding.solution = shell_path_solution(finding.finding.source);
         }
         let existing = shell_path_entry(&finding.finding).and_then(|entry| {
@@ -817,6 +818,7 @@ mod tests {
         let merged = merge_duplicate_shell_path_findings(findings);
 
         assert_eq!(merged[0].solution, shell_path_solution("bash"));
+        assert_eq!(merged[0].severity, "medium");
     }
 
     #[test]
@@ -835,6 +837,7 @@ mod tests {
 
         assert_eq!(merged.len(), 1);
         assert_eq!(merged[0].source, "bash+zsh");
+        assert_eq!(merged[0].severity, "medium");
         assert_eq!(merged[0].solution, shell_path_solution("bash"));
         assert_eq!(
             merged[0].explanation,
@@ -959,6 +962,7 @@ mod tests {
         assert_eq!(merged.len(), 2);
         assert_eq!(merged[0].source, "bash");
         assert_eq!(merged[1].source, "zsh");
+        assert!(merged.iter().all(|finding| finding.severity == "high"));
     }
 
     #[test]

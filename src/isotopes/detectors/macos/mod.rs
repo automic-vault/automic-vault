@@ -38,7 +38,7 @@ fn findings_for_path(path: &std::ffi::OsStr, source: &str) -> Vec<Finding> {
         .map(|entry| Finding {
             source: "macOS",
             homepage: DOCS_URL,
-            severity: "high",
+            severity: "medium",
             explanation: user_writable_path_reason(source, &entry),
             solution: super::detector_config("macOS").solution.clone(),
             affected: vec![AffectedFile {
@@ -137,7 +137,7 @@ mod tests {
 
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].source, "macOS");
-        assert_eq!(findings[0].severity, "high");
+        assert_eq!(findings[0].severity, "medium");
         assert_eq!(findings[0].affected[0].path, writable.display().to_string());
         std::fs::set_permissions(&protected, std::fs::Permissions::from_mode(0o755)).unwrap();
         std::fs::remove_dir_all(root).unwrap();
