@@ -625,7 +625,7 @@
   "macOS": {
     "watch_paths": [],
     "requires_periodic_scan": true,
-    "solution": "Move protected system directories before user-writable directories in the launchd `PATH`, remove empty and relative entries, then log out and back in. Review LaunchAgents and other software that modifies the launchd environment before changing it; an unexpected entry may indicate persistence."
+    "solution": "Review the shell configuration, LaunchAgents, or application settings that supplied this PATH. Move protected system directories before user-writable directories and remove empty, relative, and unexpected entries, then restart affected shells and applications. If version-manager ordering is intentional, use absolute paths for security-sensitive commands; this does not make the PATH safe. An unexpected entry may indicate persistence."
   },
   "mariadb": {
     "watch_paths": [

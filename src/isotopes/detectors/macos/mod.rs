@@ -4,13 +4,24 @@ use std::path::Path;
 use crate::path_security::{user_writable_entries_before_system_paths, user_writable_path_reason};
 use crate::{AffectedFile, Finding};
 
+mod process_paths;
+
 const DOCS_URL: &str = "https://github.com/automic-vault/automic-vault/blob/main/src/isotopes/detectors/macos/detector.md";
 
 pub(crate) fn findings(_home: &Path) -> Vec<Finding> {
-    let Some(path) = gui_path() else {
-        return Vec::new();
-    };
-    findings_for_gui_path(&path)
+    let mut findings = gui_path().map_or_else(Vec::new, |path| findings_for_gui_path(&path));
+    let mut seen = findings
+        .iter()
+        .map(|finding| finding.affected[0].path.clone())
+        .collect::<std::collections::HashSet<_>>();
+    for path in process_paths::observed_paths() {
+        findings.extend(
+            findings_for_path(&path, "Observed user process")
+                .into_iter()
+                .filter(|finding| seen.insert(finding.affected[0].path.clone())),
+        );
+    }
+    findings
 }
 
 fn findings_for_gui_path(path: &std::ffi::OsStr) -> Vec<Finding> {
@@ -18,14 +29,18 @@ fn findings_for_gui_path(path: &std::ffi::OsStr) -> Vec<Finding> {
         return Vec::new();
     }
 
+    findings_for_path(path, "macOS GUI")
+}
+
+fn findings_for_path(path: &std::ffi::OsStr, source: &str) -> Vec<Finding> {
     user_writable_entries_before_system_paths(path)
         .into_iter()
         .map(|entry| Finding {
             source: "macOS",
             homepage: DOCS_URL,
             severity: "high",
-            explanation: user_writable_path_reason("macOS GUI", &entry),
-            solution: "Move protected system directories before user-writable directories in the launchd PATH, then log out and back in.".to_string(),
+            explanation: user_writable_path_reason(source, &entry),
+            solution: super::detector_config("macOS").solution.clone(),
             affected: vec![AffectedFile {
                 path: entry.display().to_string(),
                 line: None,
@@ -69,6 +84,44 @@ pub(super) fn gui_path() -> Option<OsString> {
 mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    #[ignore = "subprocess fixture for the observed PATH regression test"]
+    fn path_process_fixture() {
+        let mut line = String::new();
+        std::io::stdin().read_line(&mut line).unwrap();
+    }
+
+    #[test]
+    fn finds_shell_inherited_path_even_when_scanner_path_differs() {
+        let root = std::env::temp_dir().join(format!("av-observed-path-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = std::env::join_paths([root.as_path(), Path::new("/usr/bin")]).unwrap();
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--ignored",
+                "--exact",
+                "isotopes::detectors::macos::tests::path_process_fixture",
+            ])
+            .env_clear()
+            .env("PATH", path)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let detected = findings(Path::new("/unused"));
+        child.kill().unwrap();
+        child.wait().unwrap();
+        std::fs::remove_dir_all(&root).unwrap();
+        assert!(
+            detected.iter().any(|finding| finding
+                .affected
+                .iter()
+                .any(|file| file.path == root.to_string_lossy())),
+            "scan must inspect PATH inherited by running user commands"
+        );
+    }
 
     #[test]
     fn reports_each_writable_gui_entry_before_a_system_path() {
