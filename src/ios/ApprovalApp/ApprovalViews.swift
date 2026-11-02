@@ -480,37 +480,39 @@ struct ApprovalActivityView: View {
                     description: Text("Responses and canceled requests will appear here.")
                 )
             } else {
-                List(model.activity) { item in
-                    NavigationLink(value: ApprovalRoute.history(item.id)) {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Label(item.responseTitle, systemImage: item.responseSystemImage)
-                                .font(.headline)
-                                .foregroundStyle(item.responseColor)
-                            Text(item.command)
-                                .font(.callout.monospaced())
-                                .lineLimit(2)
-                            HStack {
-                                Text("\(item.launcher) · \(item.tool) · \(item.macName)")
-                                Spacer()
-                                Text(item.recordedAt, style: .relative)
+                List {
+                    Section {
+                        ForEach(model.activity) { item in
+                            NavigationLink(value: ApprovalRoute.history(item.id)) {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Label(item.responseTitle, systemImage: item.responseSystemImage)
+                                        .font(.headline)
+                                        .foregroundStyle(item.responseColor)
+                                    Text(item.command)
+                                        .font(.callout.monospaced())
+                                        .lineLimit(2)
+                                    HStack {
+                                        Text("\(item.launcher) · \(item.tool) · \(item.macName)")
+                                        Spacer()
+                                        Text(item.recordedAt, style: .relative)
+                                    }
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                }
                             }
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
                         }
+                    } footer: {
+                        Text("Up to 50 responses and canceled requests. The Mac's Authorization History is authoritative.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                            .frame(maxWidth: .infinity)
                     }
                 }
             }
         }
         .safeAreaInset(edge: .bottom) {
             ZStack {
-                Text("Up to 50 responses and canceled requests. The Mac's Authorization History is authoritative.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-                    .padding()
-                    .opacity(connectionMessage == nil ? 1 : 0)
-                    .accessibilityHidden(connectionMessage != nil)
-
                 if let message = connectionMessage {
                     HStack(spacing: 12) {
                         if case .unavailable = model.state {
@@ -527,13 +529,13 @@ struct ApprovalActivityView: View {
                         }
                     }
                     .padding()
+                    .background(.bar, ignoresSafeAreaEdges: .bottom)
                     .frame(maxWidth: .infinity)
                     .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
                 }
             }
             .frame(maxWidth: .infinity)
             .clipped()
-            .background(.bar, ignoresSafeAreaEdges: .bottom)
             .animation(reduceMotion ? nil : .easeInOut(duration: 0.25), value: connectionMessage != nil)
         }
     }
