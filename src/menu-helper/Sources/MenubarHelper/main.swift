@@ -3340,6 +3340,14 @@ private func approvalDecision(
 final class ApprovalCancellation: @unchecked Sendable {
     private let lock = NSLock()
     private var canceled = false
+    private var febrRequestStarted = false
+    func beginFebrRequest() -> Bool {
+        lock.withLock {
+            guard !canceled, !febrRequestStarted else { return false }
+            febrRequestStarted = true
+            return true
+        }
+    }
     let historyTransfer = AuthorizationHistoryTransfer()
     private var observers: [UUID: @MainActor @Sendable () -> Void] = [:]
 
@@ -4174,7 +4182,10 @@ private final class ApprovalServer: @unchecked Sendable {
         identifier "gh" or identifier "com.github.cli" or identifier "stripe" or \
         identifier "supabase" or identifier "supabase-go" or identifier "com.supabase.cli")
         """
-        let status = requirement.withCString {
+        // Enrollment is root-owned and exact to one build. A new installation
+        // or update requires restarting AV to refresh this listener's code hash.
+        let admission = FebrEnrollment.load().map { "(\(requirement)) or (\($0.requirement))" } ?? requirement
+        let status = admission.withCString {
             xpc_connection_set_peer_code_signing_requirement(listener, $0)
         }
         guard status == 0 else {
@@ -4254,6 +4265,13 @@ private final class ApprovalServer: @unchecked Sendable {
         }
         guard let op = ApprovalServiceOperation(rawValue: String(cString: opPointer)) else {
             reply(peer, to: message, ok: false, error: "invalid XPC operation")
+            return
+        }
+
+        // The enrolled local client has a separate, Secret-free, approval-only
+        // route. It can never enter the existing generic client dispatch.
+        if callerPath == FebrEnrollment.executable || signing.identifier == FebrEnrollment.identifier {
+            handleFebr(message, on: peer, cancellation: cancellation)
             return
         }
 
@@ -4606,6 +4624,74 @@ private final class ApprovalServer: @unchecked Sendable {
             handleStripeDelete(message, on: peer, cancellation: cancellation, caller: mutationCaller)
         default:
             reply(peer, to: message, ok: false, error: "invalid XPC operation")
+        }
+    }
+
+    private func handleFebr(
+        _ message: xpc_object_t, on peer: xpc_connection_t,
+        cancellation: ApprovalCancellation
+    ) {
+        guard cancellation.beginFebrRequest(),
+              let enrollment = FebrEnrollment.load(),
+              let identity = verifiedFebrPeer(peer, enrollment: enrollment),
+              let (parsed, operation) = validatedFebrRequest(message) else {
+            reply(peer, to: message, ok: false, error: "Invalid or unverified febr request")
+            return
+        }
+        let request = ApprovalRequest(
+            op: "authorize", keys: [], target: FebrEnrollment.executable,
+            args: parsed.args, cwd: parsed.cwd, replaceExistingEnv: false,
+            allowMissingKeys: false, envConflicts: [], shebangScript: nil,
+            scriptData: nil, tool: "febr", title: "Allow febr operation?", detail: operation.detail
+        )
+        let signing = SigningInfo(identifier: FebrEnrollment.identifier, teamIdentifier: "root-enrolled local build")
+        let launchers = launcherIdentities(for: identity)
+        let fallback = launcherFallbackPath(for: identity) ?? FebrEnrollment.executable
+        let launcher = executionOrigin(among: launchers, callerPID: identity.pid, ancestorFallbackPath: fallback)
+        if denyRequestIfNeeded(request, signing: signing, launchers: launchers,
+            callerPath: FebrEnrollment.executable, peer: peer, message: message) { return }
+        Task { @MainActor in
+            guard !cancellation.isCanceled, self.canRequestHumanApproval() else {
+                self.reply(peer, to: message, ok: false, error: "User Approval is unavailable")
+                return
+            }
+            self.sendEvent(humanApprovalRequiredEvent, to: peer)
+            let decision = await showApprovalAlert(
+                request: request, callerPath: FebrEnrollment.executable, pid: identity.pid,
+                signing: signing, scriptApproval: nil, launcher: launcher,
+                denialLaunchers: launchers, launcherFallbackPath: fallback,
+                automaticApprovalExplanation: nil,
+                classification: operation == .systemWrite ? .mutating : .localWrite,
+                cancellation: cancellation
+            )
+            guard decision == .approved else {
+                _ = self.onAccessRequest(accessRequestRecord(request: request,
+                    callerPath: FebrEnrollment.executable, decision: "Denied",
+                    approvalSource: "Manual", reason: "febr operation was not approved", launcher: launcher))
+                self.reply(peer, to: message, ok: false, error: "febr operation was not approved")
+                return
+            }
+            guard !cancellation.isCanceled, self.canRequestHumanApproval(),
+                  let current = verifiedFebrPeer(peer, enrollment: enrollment),
+                  sameProcessIdentity(identity, current), launcherBundleIntegrityError(for: current) == nil else {
+                self.reply(peer, to: message, ok: false, error: "febr requester changed, exited, or lost enrollment")
+                return
+            }
+            let currentLaunchers = launcherIdentities(for: current)
+            if self.denyRequestIfNeeded(request, signing: signing, launchers: launchers + currentLaunchers,
+                callerPath: FebrEnrollment.executable, peer: peer, message: message) { return }
+            guard self.onAccessRequest(accessRequestRecord(request: request,
+                callerPath: FebrEnrollment.executable, decision: "Approved", approvalSource: "Manual",
+                reason: "Approved febr operation", launcher: launcher)) else {
+                self.reply(peer, to: message, ok: false, error: "Could not persist Authorization Record")
+                return
+            }
+            guard !cancellation.isCanceled, self.canRequestHumanApproval(),
+                  let final = verifiedFebrPeer(peer, enrollment: enrollment), sameProcessIdentity(identity, final) else {
+                self.reply(peer, to: message, ok: false, error: "febr execution changed before authorization")
+                return
+            }
+            self.reply(peer, to: message, ok: true, error: nil, febrProtocol: 1)
         }
     }
 
@@ -10321,10 +10407,12 @@ private final class ApprovalServer: @unchecked Sendable {
         names: [String]? = nil,
         protocolVersion: UInt64? = nil,
         proxySession: ProxySessionMaterial? = nil,
-        humanApprovalDecision: String? = nil
+        humanApprovalDecision: String? = nil,
+        febrProtocol: UInt64? = nil
     ) {
         let response = xpc_dictionary_create_reply(message) ?? xpc_dictionary_create_empty()
         xpc_dictionary_set_bool(response, "ok", ok)
+        if let febrProtocol { xpc_dictionary_set_uint64(response, "febr_protocol", febrProtocol) }
         if let error {
             error.withCString {
                 xpc_dictionary_set_string(response, "error", $0)
@@ -10548,6 +10636,75 @@ private func retainedProcessApprovalExplanation(
     let process = name.isEmpty ? "detached" : name
     let launcher = shortAppName(match.launcher.identifier)
     return "Automic Vault previously verified this running \(process) process under \(launcher), but that parent chain is no longer available. Keep Launcher Access for Detached Processes is off; enabling it would have automically authorized this request under the current \(gateName) policy."
+}
+
+private func validatedFebrRequest(_ message: xpc_object_t) -> (ApprovalRequest, FebrOperation)? {
+    guard xpc_dictionary_get_uint64(message, "febr_protocol") == 1,
+          let parsed = approvalRequest(from: message), parsed.op == "authorize",
+          parsed.target == FebrEnrollment.executable, parsed.tool == "febr",
+          parsed.keys.isEmpty, parsed.envConflicts.isEmpty,
+          !parsed.replaceExistingEnv, !parsed.allowMissingKeys,
+          parsed.shebangScript == nil, parsed.scriptData == nil,
+          parsed.cwd.hasPrefix("/"), parsed.cwd.utf8.count <= 4096,
+          let operation = febrOperation(parsed.args) else { return nil }
+    return (parsed, operation)
+}
+
+private func febrProtocolSelfCheck() -> Bool {
+    let message = xpc_dictionary_create_empty()
+    for (key, value) in ["op":"authorize", "target":FebrEnrollment.executable, "tool":"febr", "cwd":"/tmp"] {
+        key.withCString { key in value.withCString { xpc_dictionary_set_string(message, key, $0) } }
+    }
+    let args = xpc_array_create_empty()
+    for value in ["install", "jq"] { value.withCString { xpc_array_set_string(args, XPC_ARRAY_APPEND, $0) } }
+    xpc_dictionary_set_value(message, "args", args)
+    xpc_dictionary_set_value(message, "keys", xpc_array_create_empty())
+    xpc_dictionary_set_value(message, "env_conflicts", xpc_array_create_empty())
+    guard validatedFebrRequest(message) == nil else { return false }
+    xpc_dictionary_set_uint64(message, "febr_protocol", 1)
+    guard validatedFebrRequest(message)?.1 == .systemWrite else { return false }
+    xpc_dictionary_set_bool(message, "replace_existing_env", true)
+    guard validatedFebrRequest(message) == nil else { return false }
+    xpc_dictionary_set_bool(message, "replace_existing_env", false)
+    xpc_dictionary_set_string(message, "op", "inject")
+    guard validatedFebrRequest(message) == nil else { return false }
+    xpc_dictionary_set_string(message, "op", "authorize")
+    xpc_dictionary_set_value(message, "keys", args)
+    guard validatedFebrRequest(message) == nil else { return false }
+    return !isAllowedCaller(path: FebrEnrollment.executable,
+        signing: SigningInfo(identifier: FebrEnrollment.identifier, teamIdentifier: ""))
+}
+
+// Exact root enrollment plus audit-token-bound live code. No path-only trust,
+// no Developer ID bypass for any other client, and no Secret API admission.
+private func verifiedFebrPeer(_ peer: xpc_connection_t, enrollment: FebrEnrollment) -> AVProcessIdentity? {
+    guard enrollment == FebrEnrollment.load() else { return nil }
+    var identity = AVProcessIdentity()
+    var token = [UInt32](repeating: 0, count: 8)
+    var realUID: uid_t = 0
+    var effectiveGID: gid_t = 0
+    guard av_xpc_peer_evidence(peer, &identity, &token, &realUID, &effectiveGID),
+          realUID == getuid(), realUID != 0, identity.euid == enrollment.uid,
+          effectiveGID == enrollment.gid, pathString(identity) == FebrEnrollment.executable else { return nil }
+    var requirement: SecRequirement?
+    guard SecRequirementCreateWithString(enrollment.requirement as CFString, [], &requirement) == errSecSuccess,
+          let requirement else { return nil }
+    var live: SecCode?
+    let audit = token.withUnsafeBytes { Data($0) }
+    guard SecCodeCopyGuestWithAttributes(nil,
+        [kSecGuestAttributeAudit as String: audit] as CFDictionary, [], &live) == errSecSuccess,
+        let live, SecCodeCheckValidity(live, [], requirement) == errSecSuccess else { return nil }
+    var info: CFDictionary?
+    guard SecCodeCopySigningInformation(unsafeBitCast(live, to: SecStaticCode.self),
+        SecCSFlags(rawValue: kSecCSSigningInformation | kSecCSDynamicInformation), &info) == errSecSuccess,
+        let dictionary = info as? [CFString: Any], runtimeProtection(dictionary) == .hardened,
+        (dictionary[kSecCodeInfoEntitlementsDict] as? [String: Any] ?? [:]).isEmpty,
+        dictionary[kSecCodeInfoIdentifier] as? String == FebrEnrollment.identifier,
+        let hash = dictionary[kSecCodeInfoUnique] as? Data,
+        hash.map({ String(format: "%02x", $0) }).joined() == enrollment.cdhash,
+        SecCodeCheckValidity(live, [], requirement) == errSecSuccess,
+        enrollment == FebrEnrollment.load() else { return nil }
+    return identity
 }
 
 private func isAllowedCaller(path: String, signing: SigningInfo) -> Bool {
@@ -21112,6 +21269,10 @@ if CommandLine.arguments.contains("--self-check-localization") {
 if CommandLine.arguments.contains("--self-check-sleep") {
     sleep(5)
     exit(0)
+}
+
+if CommandLine.arguments.contains("--self-check-febr") {
+    exit(febrProtocolSelfCheck() ? 0 : 1)
 }
 
 if CommandLine.arguments.contains("--self-check-approvals") {
