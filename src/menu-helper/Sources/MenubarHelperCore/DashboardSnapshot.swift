@@ -2771,7 +2771,7 @@ public func saveStoredSecretIfAbsentOrEqual(
 
 public func secretSynchronizationWarning(_ enabled: Bool) -> String {
     enabled
-        ? "All Values of this Secret will enter your iCloud Keychain and may reach your other trusted devices. Updates, availability changes, renames, and deletions can propagate. Concurrent edits are resolved by iCloud; synchronization is eventual. Authorization Policy, Launcher enrollment, Approval, and Authorization History remain local. Existing policy on another Mac may authorize this Secret Name. Project Directories retain their exact paths."
+        ? "All Values of this Secret will enter your iCloud Keychain and may reach your other trusted devices. Updates, availability changes, renames, and deletions can propagate. Concurrent edits are resolved by iCloud; synchronization is eventual. Authorization Policy, Launcher enrollment, Approval, and Authorization History remain local. Existing policy on another Mac may authorize this Secret Name. \n\nProject Values require the same absolute Project Directory path on each Mac, including the username (for example, /Users/alex/src/myproject). Paths are not remapped. If the path differs, that Project Value will not match; another matching Project Value or the Global Value may be used instead."
         : "All Values will become local-only on this Mac. iCloud may propagate removal of the synchronized copies. This cannot revoke Values already received or used on another device."
 }
 
