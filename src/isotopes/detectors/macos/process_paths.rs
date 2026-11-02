@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::os::unix::ffi::OsStringExt;
 
@@ -6,8 +6,13 @@ use zeroize::{Zeroize, Zeroizing};
 
 // Passive diagnostic evidence only: never use these environments for execution
 // or authorization. macOS may expose only the environment supplied at exec.
-pub(super) fn observed_paths() -> BTreeSet<OsString> {
-    let mut paths = BTreeSet::new();
+pub(super) struct ObservedProcess {
+    pub pid: i32,
+    pub executable: OsString,
+}
+
+pub(super) fn observed_paths() -> BTreeMap<OsString, Vec<ObservedProcess>> {
+    let mut paths = BTreeMap::<OsString, Vec<ObservedProcess>>::new();
     let mut retained_bytes = 0;
     let mut pids = vec![0_i32; 16_384];
     // SAFETY: the output buffer holds the supplied number of bytes.
@@ -56,11 +61,25 @@ pub(super) fn observed_paths() -> BTreeSet<OsString> {
         if result == 0
             && len <= buffer.len()
             && let Some(path) = path_from_procargs(&buffer[..len])
-            && !paths.contains(&path)
-            && retained_bytes + path.len() <= 1024 * 1024
         {
-            retained_bytes += path.len();
-            paths.insert(path);
+            // KERN_PROCARGS2's first string is the executable path, not argv[0].
+            // Read it from the same snapshot as PATH; never retain command arguments.
+            let mut remaining = &buffer[4..len];
+            if let Some(executable) = take_string(&mut remaining) {
+                let path_bytes = if paths.contains_key(&path) {
+                    0
+                } else {
+                    path.len()
+                };
+                let bytes = path_bytes + executable.len();
+                if retained_bytes + bytes <= 1024 * 1024 {
+                    retained_bytes += bytes;
+                    paths.entry(path).or_default().push(ObservedProcess {
+                        pid,
+                        executable: OsString::from_vec(executable.to_vec()),
+                    });
+                }
+            }
         }
         // The kernel buffer also contains unrelated environment values.
         let written = if result == 0 {

@@ -27,14 +27,17 @@ credentials.
 > - Directories listed in observed user-process `PATH` values
 
 The GUI scanner does not inherit your terminal's `PATH`. To cover that gap,
-the macOS detector passively reads process environments and retains only PATH
-values for this Scan. It wipes the temporary environment buffers and never
-executes shell startup files. Findings identify the risky directory without
-including process arguments or other environment values.
+the macOS detector passively reads process environments and retains PATH values,
+PIDs, and executable paths for this Scan. It wipes the temporary environment
+buffers and never executes shell startup files. Findings identify the risky
+directory and up to 16 observed processes, with a count of additional processes,
+without including process arguments or other environment values. This is
+scan-time attribution, not Verified Launcher identity. Refresh before acting on
+a PID because the process may have exited and its PID may have been reused.
 
 This is a bounded snapshot of up to 16,384 processes with at most 1 MiB of
-argument and environment data per process and 1 MiB of distinct PATH values
-across the Scan. Exited processes, unreadable
+argument and environment data per process and 1 MiB of retained PATH and
+executable-path bytes across the Scan. Exited processes, unreadable
 environments, and oversized snapshots are outside its coverage. macOS may
 expose the environment from process launch rather than subsequent changes;
 commands launched after a shell changes PATH can supply that updated evidence.
