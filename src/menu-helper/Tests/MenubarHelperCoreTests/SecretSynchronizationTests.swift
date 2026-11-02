@@ -151,3 +151,30 @@ func secretSynchronizationDuplicateSourcesFailClosed() throws {
     #expect(loadStoredSecret(account: "TOKEN", service: service) == nil)
     #expect(saveStoredSecret(account: "TOKEN", value: "replacement", service: service) == errSecDecode)
 }
+
+@Test func availabilityRepairCompletesAfterRemoteDeletionButRetainsInventoryFailures() {
+    let secret = StoredSecret(account: "TOKEN", values: [syncFixture(true), syncFixture(true, project: true)])
+    var inventory: StoredSecretsLoad = .success([secret])
+    var writes = 0
+    let interrupted = resumeSecretAccessibility(account: "TOKEN", accessibility: .afterFirstUnlock,
+        load: { inventory }, update: { _ in
+            writes += 1
+            return writes == 1 ? errSecSuccess : errSecInteractionNotAllowed
+        })
+    #expect(interrupted == errSecInteractionNotAllowed)
+    #expect(writes == 2)
+    inventory = .success([])
+    let repaired = resumeSecretAccessibility(account: "TOKEN", accessibility: .afterFirstUnlock,
+        load: { inventory }, update: { _ in
+            Issue.record("Repair must not recreate a deleted Secret")
+            return errSecSuccess
+        })
+    #expect(repaired == errSecSuccess)
+    inventory = .failure(errSecInteractionNotAllowed)
+    let unavailable = resumeSecretAccessibility(account: "TOKEN", accessibility: .afterFirstUnlock,
+        load: { inventory }, update: { _ in
+            Issue.record("Unavailable inventory must not be treated as an absent Secret")
+            return errSecSuccess
+        })
+    #expect(unavailable == errSecInteractionNotAllowed)
+}

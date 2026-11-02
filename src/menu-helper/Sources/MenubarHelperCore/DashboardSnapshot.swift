@@ -2976,21 +2976,12 @@ private func resumePendingSecretMutationUnlocked(service: String) -> OSStatus {
                     [kSecAttrSynchronizable as String: enabled] as CFDictionary)
             })
     case .setAccessibility(let account, let accessibility):
-        let secrets: [StoredSecret]
-        switch loadStoredSecretsResult(service: service) {
-        case .success(let loaded): secrets = loaded
-        case .failure(let status): return status
-        }
-        guard let secret = secrets.first(where: { $0.account == account }) else { return errSecItemNotFound }
-        status = secret.values.reduce(errSecSuccess) { result, value in
-            guard result == errSecSuccess, value.accessibility != accessibility else { return result }
-            return setKeychainAccessibility(
-                accessibility,
-                service: service,
-                account: value.keychainAccount,
-                synchronizable: value.synchronizable
-            )
-        }
+        status = resumeSecretAccessibility(account: account, accessibility: accessibility,
+            load: { loadStoredSecretsResult(service: service) },
+            update: { value in
+                setKeychainAccessibility(accessibility, service: service,
+                    account: value.keychainAccount, synchronizable: value.synchronizable)
+            })
     case .rename(let account, let newAccount):
         let secrets: [StoredSecret]
         switch loadStoredSecretsResult(service: service) {
@@ -3023,6 +3014,26 @@ private func resumePendingSecretMutationUnlocked(service: String) -> OSStatus {
         source: .global,
         service: secretMutationKeychainService
     )
+}
+
+func resumeSecretAccessibility(
+    account: String,
+    accessibility: StoredSecretAccessibility,
+    load: () -> StoredSecretsLoad,
+    update: (StoredSecretValue) -> OSStatus
+) -> OSStatus {
+    let secrets: [StoredSecret]
+    switch load() {
+    case .success(let loaded): secrets = loaded
+    case .failure(let status): return status
+    }
+    // A synchronized deletion completes repair without recreating any Values.
+    let values = secrets.first(where: { $0.account == account })?.values ?? []
+    for value in values where value.accessibility != accessibility {
+        let status = update(value)
+        guard status == errSecSuccess else { return status }
+    }
+    return errSecSuccess
 }
 
 func resumeSecretSynchronization(
