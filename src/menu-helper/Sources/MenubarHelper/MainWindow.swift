@@ -3720,6 +3720,9 @@ struct DashboardRootView: View {
                 .labelStyle(.titleAndIcon)
                 .help("\(cliActionTitle) at /usr/local/bin/av")
             }
+            if #available(macOS 26, *) {
+                ToolbarSpacer(.fixed, placement: .primaryAction)
+            }
         }
     }
 
@@ -3867,8 +3870,8 @@ struct DashboardRootView: View {
                         .navigationSplitViewColumnWidth(min: 186, ideal: 227, max: 250)
                 } detail: {
                     DashboardOverviewView(model: model, checkForUpdates: checkForUpdates)
-                        .toolbar { cliInstallToolbar }
                         .toolbar {
+                            cliInstallToolbar
                             ToolbarItem(placement: .primaryAction) {
                                 Button {
                                     requestScan()
@@ -3889,9 +3892,9 @@ struct DashboardRootView: View {
                 .navigationSplitViewColumnWidth(min: 168, ideal: 255)
         } detail: {
             DashboardDetailView(model: model)
-                .toolbar { cliInstallToolbar }
                 .navigationSplitViewColumnWidth(min: 320, ideal: 320)
                 .toolbar {
+                    cliInstallToolbar
                     ToolbarItemGroup(placement: .primaryAction) {
                         Spacer()
                         if let version = model.availableUpdateVersion {
