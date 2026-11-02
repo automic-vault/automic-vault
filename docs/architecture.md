@@ -1045,3 +1045,20 @@ Approval-method settings are outside this API. See
 ## Source of truth
 
 This repository owns the domain language, architecture, and ADRs. Endorsed properties should adopt these terms and link here. Experimental integrations stay outside the canonical model until the project endorses them.
+
+## Local febr Execution Gate
+
+The febr installer enrolls one hardened, entitlement-free local build by its
+exact code hash in `/opt/febr/libexec/av-client.json`. AV admits that hash at
+listener startup without changing its existing Developer ID client admission.
+Installing or updating febr requires restarting AV to refresh the admitted
+hash. A missing or invalid enrollment contributes no additional admission rule.
+
+A separate dispatch path accepts only the bounded protocol-1, Secret-free
+`authorize` request for that executable. Live validation binds the XPC audit
+token, execution generation, real user, package identity, runtime protections,
+and enrolled code hash. The live peer and enrollment are checked again after
+Approval and immediately before the reply. Other AV APIs remain unavailable to
+this client. Every recognized mutation needs fresh Approval and a verified
+Authorization Record; there is no policy or decision-reuse shortcut.
+See [ADR 0079](adr/0079-local-febr-execution-gate.md).

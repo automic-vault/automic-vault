@@ -52,3 +52,8 @@ typedef struct {
     uint8_t cdhash[20];
 } AVProcessSigningEvidence;
 bool av_process_signing_evidence(pid_t pid, AVProcessSigningEvidence *out);
+
+// XPC audit evidence binds setuid Gate Clients without relying on PID alone.
+#include <xpc/xpc.h>
+bool av_xpc_peer_evidence(xpc_connection_t peer, AVProcessIdentity *identity,
+                         uint32_t token_words[8], uid_t *real_uid, gid_t *effective_gid);

@@ -897,3 +897,13 @@ The following identifiers remain in storage or code for compatibility. New produ
 | caller | Launcher, Gate Client, or Target, according to the role |
 
 Persisted raw values and external compatibility flags may retain legacy spelling. Their display names and documentation follow this language.
+
+### febr Execution Gate
+
+The local febr integration is an approval-only Execution Gate. Its Gate Client
+and Target are the same root-enrolled build of `/opt/febr/libexec/febr`.
+The installer records the exact signed code hash in a root-owned enrollment
+file; a pathname or ad-hoc signing identifier alone grants no trust. Each
+recognized package or user-service mutation requires a fresh Approval and an
+Authorization Record. The integration grants no Secret Use, durable policy,
+Blessing authority, Temporary Access Grant, or decision reuse.

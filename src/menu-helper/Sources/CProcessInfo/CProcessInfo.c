@@ -356,3 +356,20 @@ bool av_process_signing_identifier(pid_t pid, char *out, size_t out_len) {
     memcpy(out, blob.identifier, length);
     return true;
 }
+
+// Publicly exported by libxpc; not present in the SDK's public header.
+extern void xpc_connection_get_audit_token(xpc_connection_t, audit_token_t *);
+bool av_xpc_peer_evidence(xpc_connection_t peer, AVProcessIdentity *identity,
+                         uint32_t token_words[8], uid_t *real_uid, gid_t *effective_gid) {
+    audit_token_t token = {0};
+    xpc_connection_get_audit_token(peer, &token);
+    if (audit_token_to_pidversion(token) <= 0 ||
+        !av_process_identity(audit_token_to_pid(token), identity) ||
+        identity->euid != audit_token_to_euid(token)) return false;
+    identity->pidversion = audit_token_to_pidversion(token);
+    identity->audit_session_id = audit_token_to_asid(token);
+    *real_uid = audit_token_to_ruid(token);
+    *effective_gid = audit_token_to_egid(token);
+    memcpy(token_words, &token, sizeof(token));
+    return true;
+}
