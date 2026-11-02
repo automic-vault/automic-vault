@@ -1367,6 +1367,27 @@ final class DashboardModel: ObservableObject {
         return false
     }
 
+    func setSynchronization(_ enabled: Bool, for secret: StoredSecret) {
+        let detail = secretSynchronizationWarning(enabled)
+        approveAuthorityChange(action: "secret-sync:\(secret.account)",
+            enabled ? "Enable iCloud Keychain for \(secret.account)?" : "Stop synchronizing \(secret.account)?",
+            detail: detail
+        ) { [weak self] in
+            let status = setStoredSecretSynchronization(enabled, expected: secret) {
+                let path = Bundle.main.executablePath ?? "Automic Vault"
+                return appendAccessRequestRecord(AccessRequestRecord(
+                    date: Date(), tool: "Automic Vault", command: "set-synchronization \(secret.account) \(enabled)",
+                    decision: "Approved", approvalSource: "Manual", reason: "Approved Secret synchronization change",
+                    launcher: "Automic Vault", callerPath: path, target: path, cwd: "",
+                    keys: [secret.account], detail: detail
+                ))
+            }
+            self?.errorMessage = status == errSecSuccess ? nil
+                : "Could not change iCloud Keychain synchronization: \(status). Refresh and retry."
+            self?.reloadAfterSecretMutation()
+        }
+    }
+
     func chooseDirectAccessLauncher(_ completion: @escaping (DirectAccessLauncherSelection?) -> Void) {
         pickLauncher { signing in
             guard let signing else { return }
@@ -4711,6 +4732,7 @@ private struct StoredSecretDetailView: View {
     @State private var replacingValue: StoredSecretValue?
     @State private var deletingValue: StoredSecretValue?
     @State private var pendingAccessibility: StoredSecretAccessibility?
+    @State private var pendingSynchronization: StoredSecret?
 
     init(model: DashboardModel, secret: StoredSecret) {
         self.model = model
@@ -4788,6 +4810,24 @@ private struct StoredSecretDetailView: View {
                     .fill(Color(nsColor: .controlBackgroundColor))
             }
 
+            VStack(alignment: .leading, spacing: 8) {
+                Text("iCloud Keychain")
+                    .font(.headline)
+                Text(secret.hasConsistentSynchronization
+                     ? (secret.synchronizable ? "Synchronization enabled" : "Local-only")
+                     : "Synchronization settings differ between Values")
+                Text("Requires iCloud Keychain on your Macs. Changes and deletions may reach other devices; synchronization is eventual. Authorization remains local. This is a setting, not confirmation that another Mac has received the Values.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                AuthorityApprovalButton(title: secret.synchronizable ? "Stop Synchronizing…" : "Enable Synchronization…",
+                    approval: model.authorityApproval, action: "secret-sync:\(secret.account)") {
+                    pendingSynchronization = secret
+                }
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
+
             VStack(alignment: .leading, spacing: 10) {
                 launcherList(
                     secret.directAccessLaunchers,
@@ -4826,6 +4866,20 @@ private struct StoredSecretDetailView: View {
         .onChange(of: secret.accessibility) { _, accessibility in
             isAvailableWhileLocked = accessibility.isAvailableWhileLocked
         }
+        .alert("Change iCloud Keychain synchronization?", isPresented: Binding(
+            get: { pendingSynchronization != nil },
+            set: { if !$0 { pendingSynchronization = nil } }
+        )) {
+            Button("Cancel", role: .cancel) { pendingSynchronization = nil }
+            Button("Change All Values") {
+                guard let reviewed = pendingSynchronization else { return }
+                pendingSynchronization = nil
+                model.setSynchronization(!reviewed.synchronizable, for: reviewed)
+            }
+        } message: {
+            Text(secretSynchronizationWarning(!(pendingSynchronization ?? secret).synchronizable))
+        }
+        .onDisappear { model.authorityApproval.cancel("secret-sync:\(secret.account)") }
         .alert("Change availability for all Values?", isPresented: Binding(
             get: { pendingAccessibility != nil },
             set: { if !$0 { pendingAccessibility = nil } }

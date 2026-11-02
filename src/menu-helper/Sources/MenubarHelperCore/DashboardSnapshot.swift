@@ -809,14 +809,17 @@ public struct StoredSecretValue: Equatable, Identifiable, Sendable {
     public let keychainAccount: String
     public let accessibility: StoredSecretAccessibility
     public let keychainProperties: [String]
+    public let synchronizable: Bool
     public var id: String { keychainAccount }
 
     public init(
         source: StoredSecretValueSource,
         keychainAccount: String,
         accessibility: StoredSecretAccessibility,
-        keychainProperties: [String]
+        keychainProperties: [String],
+        synchronizable: Bool = false
     ) {
+        self.synchronizable = synchronizable
         self.source = source
         self.keychainAccount = keychainAccount
         self.accessibility = accessibility
@@ -843,6 +846,12 @@ public struct StoredSecret: Equatable, Sendable {
         self.keychainProperties = keychainProperties
         self.directAccessLaunchers = directAccessLaunchers
         self.values = values
+    }
+
+    public var synchronizable: Bool { values.first?.synchronizable ?? false }
+
+    public var hasConsistentSynchronization: Bool {
+        values.allSatisfy { $0.synchronizable == synchronizable }
     }
 
     public var hasConsistentAccessibility: Bool {
@@ -2456,6 +2465,7 @@ private func loadStoredSecretsResult(
         kSecClass as String: kSecClassGenericPassword,
         kSecAttrService as String: service,
         kSecUseDataProtectionKeychain as String: true,
+        kSecAttrSynchronizable as String: kSecAttrSynchronizableAny,
         kSecReturnAttributes as String: true,
         kSecMatchLimit as String: kSecMatchLimitAll,
     ]
@@ -2480,7 +2490,8 @@ private func loadStoredSecretsResult(
             accessibility: StoredSecretAccessibility(
                 keychainValue: item[kSecAttrAccessible as String]
             ),
-            keychainProperties: keychainProperties(for: item, dataProtection: true)
+            keychainProperties: keychainProperties(for: item, dataProtection: true),
+            synchronizable: isSynchronizable(item[kSecAttrSynchronizable as String])
         )))
     }
     let grouped = Dictionary(grouping: values, by: \.0)
@@ -2519,6 +2530,7 @@ public func storedSecretExists(account: String, service: String = automicVaultKe
         kSecAttrService as String: service,
         kSecAttrAccount as String: account,
         kSecUseDataProtectionKeychain as String: true,
+        kSecAttrSynchronizable as String: kSecAttrSynchronizableAny,
         kSecMatchLimit as String: kSecMatchLimitOne,
     ]
     addCanonicalAccessGroup(to: &query)
@@ -2628,9 +2640,12 @@ public func physicalDirectoryAncestors(_ path: String) throws -> [String] {
 
 public enum StoredSecretSelectionError: Error, LocalizedError, Equatable {
     case inconsistentAvailability(String)
+    case inconsistentSynchronization(String)
 
     public var errorDescription: String? {
         switch self {
+        case .inconsistentSynchronization(let name):
+            "secret \(name) has conflicting iCloud Keychain settings; retry after synchronization completes"
         case .inconsistentAvailability(let name):
             "secret \(name) has inconsistent availability and must be repaired"
         }
@@ -2651,6 +2666,9 @@ public func resolveStoredSecretValues(
     var selected: [String: StoredSecretValue] = [:]
     for name in names {
         guard let secret = byName[name] else { continue }
+        guard secret.hasConsistentSynchronization else {
+            throw StoredSecretSelectionError.inconsistentSynchronization(name)
+        }
         guard secret.hasConsistentAccessibility else {
             throw StoredSecretSelectionError.inconsistentAvailability(name)
         }
@@ -2713,11 +2731,19 @@ public func saveStoredSecret(
     source: StoredSecretValueSource = .global,
     service: String = automicVaultKeychainService
 ) -> OSStatus {
-    saveKeychainData(
+    let secrets: [StoredSecret]
+    switch loadStoredSecretsResult(service: service) {
+    case .success(let loaded): secrets = loaded
+    case .failure(let status): return status
+    }
+    let existing = secrets.first { $0.account == account }
+    guard existing?.hasConsistentSynchronization != false else { return errSecDecode }
+    return saveKeychainData(
         Data(value.utf8),
         service: service,
         account: storedSecretKeychainAccount(secretName: account, source: source),
-        accessibility: accessibility
+        accessibility: accessibility,
+        synchronizable: existing?.synchronizable ?? false
     )
 }
 
@@ -2732,13 +2758,56 @@ public func saveStoredSecretIfAbsentOrEqual(
     case .failure(let status): return status
     }
     let existing = secrets.first { $0.account == account }
-    guard existing?.hasConsistentAccessibility != false else { return errSecDecode }
+    guard existing?.hasConsistentAccessibility != false,
+          existing?.hasConsistentSynchronization != false else { return errSecDecode }
     return saveKeychainDataIfAbsentOrEqual(
         Data(value.utf8),
         service: service,
         account: account,
-        accessibility: existing?.accessibility ?? .whenUnlocked
+        accessibility: existing?.accessibility ?? .whenUnlocked,
+        synchronizable: existing?.synchronizable ?? false
     )
+}
+
+public func secretSynchronizationWarning(_ enabled: Bool) -> String {
+    enabled
+        ? "All Values of this Secret will enter your iCloud Keychain and may reach your other trusted devices. Updates, availability changes, renames, and deletions can propagate. Concurrent edits are resolved by iCloud; synchronization is eventual. Authorization Policy, Launcher enrollment, Approval, and Authorization History remain local. Existing policy on another Mac may authorize this Secret Name. Project Directories retain their exact paths."
+        : "All Values will become local-only on this Mac. iCloud may propagate removal of the synchronized copies. This cannot revoke Values already received or used on another device."
+}
+
+public func setStoredSecretSynchronization(
+    _ enabled: Bool,
+    expected: StoredSecret,
+    service: String = automicVaultKeychainService,
+    record: () -> Bool
+) -> OSStatus {
+    commitSecretSynchronization(enabled, expected: expected,
+        load: { loadStoredSecretsResult(service: service) }, record: record,
+        write: { accounts in
+            beginPendingSecretMutation(.setSynchronization(
+                account: expected.account, accounts: accounts, enabled: enabled
+            ), service: service)
+        })
+}
+
+func commitSecretSynchronization(
+    _ enabled: Bool,
+    expected: StoredSecret,
+    load: () -> StoredSecretsLoad,
+    record: () -> Bool,
+    write: ([String]) -> OSStatus
+) -> OSStatus {
+    let secrets: [StoredSecret]
+    switch load() {
+    case .success(let loaded): secrets = loaded
+    case .failure(let status): return status
+    }
+    guard let current = secrets.first(where: { $0.account == expected.account }),
+          !current.values.isEmpty, current.values == expected.values,
+          current.hasConsistentAccessibility else { return errSecNotAvailable }
+    guard !current.values.allSatisfy({ $0.synchronizable == enabled }) else { return errSecSuccess }
+    guard record() else { return errSecIO }
+    return write(current.values.map(\.keychainAccount))
 }
 
 public func setStoredSecretAccessibility(
@@ -2756,7 +2825,8 @@ public func setStoredSecretAccessibility(
         return setKeychainAccessibility(
             accessibility,
             service: service,
-            account: secret.values[0].keychainAccount
+            account: secret.values[0].keychainAccount,
+            synchronizable: secret.values[0].synchronizable
         )
     }
     return beginPendingSecretMutation(
@@ -2791,12 +2861,14 @@ public func renameStoredSecret(account: String, to newAccount: String, service: 
 private enum PendingSecretMutation: Codable, Equatable {
     case rename(account: String, newAccount: String)
     case setAccessibility(account: String, accessibility: StoredSecretAccessibility)
+    case setSynchronization(account: String, accounts: [String], enabled: Bool)
     case delete(account: String)
 
     var affectedNames: Set<String> {
         switch self {
         case .rename(let account, let newAccount): [account, newAccount]
         case .setAccessibility(let account, _): [account]
+        case .setSynchronization(let account, _, _): [account]
         case .delete(let account): [account]
         }
     }
@@ -2888,6 +2960,21 @@ private func resumePendingSecretMutationUnlocked(service: String) -> OSStatus {
 
     let status: OSStatus
     switch mutation {
+    case .setSynchronization(let account, let accounts, let enabled):
+        status = resumeSecretSynchronization(account: account, accounts: accounts, enabled: enabled,
+            load: { loadStoredSecretsResult(service: service) },
+            update: { value in
+                var query: [String: Any] = [
+                    kSecClass as String: kSecClassGenericPassword,
+                    kSecAttrService as String: service,
+                    kSecAttrAccount as String: value.keychainAccount,
+                    kSecUseDataProtectionKeychain as String: true,
+                    kSecAttrSynchronizable as String: value.synchronizable,
+                ]
+                addCanonicalAccessGroup(to: &query)
+                return SecItemUpdate(query as CFDictionary,
+                    [kSecAttrSynchronizable as String: enabled] as CFDictionary)
+            })
     case .setAccessibility(let account, let accessibility):
         let secrets: [StoredSecret]
         switch loadStoredSecretsResult(service: service) {
@@ -2900,7 +2987,8 @@ private func resumePendingSecretMutationUnlocked(service: String) -> OSStatus {
             return setKeychainAccessibility(
                 accessibility,
                 service: service,
-                account: value.keychainAccount
+                account: value.keychainAccount,
+                synchronizable: value.synchronizable
             )
         }
     case .rename(let account, let newAccount):
@@ -2937,6 +3025,34 @@ private func resumePendingSecretMutationUnlocked(service: String) -> OSStatus {
     )
 }
 
+func resumeSecretSynchronization(
+    account: String,
+    accounts: [String],
+    enabled: Bool,
+    load: () -> StoredSecretsLoad,
+    update: (StoredSecretValue) -> OSStatus
+) -> OSStatus {
+    let secrets: [StoredSecret]
+    switch load() {
+    case .success(let loaded): secrets = loaded
+    case .failure(let status): return status
+    }
+    // Sync may add or remove sources while this Mac repairs its reviewed mutation.
+    let reviewedValues = secrets.first(where: { $0.account == account })?.values
+        .filter { accounts.contains($0.keychainAccount) } ?? []
+    for value in reviewedValues where value.synchronizable != enabled {
+        let status = update(value)
+        guard status == errSecSuccess else { return status }
+    }
+    switch load() {
+    case .failure(let status): return status
+    case .success(let verified):
+        let remaining = verified.first(where: { $0.account == account })?.values
+            .filter { accounts.contains($0.keychainAccount) } ?? []
+        return remaining.allSatisfy { $0.synchronizable == enabled } ? errSecSuccess : errSecDecode
+    }
+}
+
 private func renameStoredSecretValue(
     _ value: StoredSecretValue,
     to newAccount: String,
@@ -2947,6 +3063,7 @@ private func renameStoredSecretValue(
         kSecAttrService as String: service,
         kSecAttrAccount as String: value.keychainAccount,
         kSecUseDataProtectionKeychain as String: true,
+        kSecAttrSynchronizable as String: value.synchronizable,
     ]
     addCanonicalAccessGroup(to: &query)
     return SecItemUpdate(
@@ -3013,6 +3130,7 @@ public func deleteStoredSecretValue(
         kSecAttrService as String: service,
         kSecAttrAccount as String: storedSecretKeychainAccount(secretName: secretName, source: source),
         kSecUseDataProtectionKeychain as String: true,
+        kSecAttrSynchronizable as String: kSecAttrSynchronizableAny,
     ]
     addCanonicalAccessGroup(to: &query)
     return SecItemDelete(query as CFDictionary)
@@ -3064,9 +3182,13 @@ public func loadStoredSecret(
     source: StoredSecretValueSource = .global,
     service: String = automicVaultKeychainService
 ) -> String? {
-    let keychainAccount = storedSecretKeychainAccount(secretName: account, source: source)
-    guard let data = loadKeychainData(service: service, account: keychainAccount) else { return nil }
-    return String(data: data, encoding: .utf8)
+    guard case .success(let secrets) = loadStoredSecretsResult(service: service),
+          let secret = secrets.first(where: { $0.account == account }),
+          secret.hasConsistentSynchronization, secret.hasConsistentAccessibility,
+          let selected = secret.values.first(where: { $0.source == source }),
+          case .success(let value) = loadStoredSecretValue(selected, service: service)
+    else { return nil }
+    return value
 }
 
 public enum StoredSecretValueLoad: Equatable, Sendable {
@@ -3080,7 +3202,7 @@ public func loadStoredSecretValue(
     _ value: StoredSecretValue,
     service: String = automicVaultKeychainService
 ) -> StoredSecretValueLoad {
-    switch loadKeychainDataResult(service: service, account: value.keychainAccount) {
+    switch loadKeychainDataResult(service: service, account: value.keychainAccount, synchronizable: value.synchronizable) {
     case .success(let data):
         guard let text = String(data: data, encoding: .utf8) else { return .invalidUTF8 }
         return .success(text)
@@ -3104,13 +3226,14 @@ enum KeychainDataLoad: Equatable {
     case failure(OSStatus)
 }
 
-func loadKeychainDataResult(service: String, account: String) -> KeychainDataLoad {
+func loadKeychainDataResult(service: String, account: String, synchronizable: Bool = false) -> KeychainDataLoad {
     var query: [String: Any] = [
         kSecClass as String: kSecClassGenericPassword,
         kSecAttrService as String: service,
         kSecAttrAccount as String: account,
         kSecUseDataProtectionKeychain as String: true,
         kSecReturnData as String: true,
+        kSecAttrSynchronizable as String: synchronizable,
     ]
     addCanonicalAccessGroup(to: &query)
     var result: CFTypeRef?
@@ -3395,13 +3518,15 @@ private func directAccessRulePrecedes(_ lhs: DirectAccessRule, _ rhs: DirectAcce
 private func setKeychainAccessibility(
     _ accessibility: StoredSecretAccessibility,
     service: String,
-    account: String
+    account: String,
+    synchronizable: Bool = false
 ) -> OSStatus {
     var query: [String: Any] = [
         kSecClass as String: kSecClassGenericPassword,
         kSecAttrService as String: service,
         kSecAttrAccount as String: account,
         kSecUseDataProtectionKeychain as String: true,
+        kSecAttrSynchronizable as String: synchronizable,
     ]
     addCanonicalAccessGroup(to: &query)
     return SecItemUpdate(
@@ -3414,13 +3539,15 @@ func saveKeychainData(
     _ data: Data,
     service: String,
     account: String,
-    accessibility: StoredSecretAccessibility = .whenUnlocked
+    accessibility: StoredSecretAccessibility = .whenUnlocked,
+    synchronizable: Bool = false
 ) -> OSStatus {
     var query: [String: Any] = [
         kSecClass as String: kSecClassGenericPassword,
         kSecAttrService as String: service,
         kSecAttrAccount as String: account,
         kSecUseDataProtectionKeychain as String: true,
+        kSecAttrSynchronizable as String: synchronizable,
     ]
     addCanonicalAccessGroup(to: &query)
     let attributes: [String: Any] = [
@@ -3441,13 +3568,15 @@ func saveKeychainDataIfAbsentOrEqual(
     _ data: Data,
     service: String,
     account: String,
-    accessibility: StoredSecretAccessibility = .whenUnlocked
+    accessibility: StoredSecretAccessibility = .whenUnlocked,
+    synchronizable: Bool = false
 ) -> OSStatus {
     var query: [String: Any] = [
         kSecClass as String: kSecClassGenericPassword,
         kSecAttrService as String: service,
         kSecAttrAccount as String: account,
         kSecUseDataProtectionKeychain as String: true,
+        kSecAttrSynchronizable as String: synchronizable,
         kSecValueData as String: data,
         kSecAttrAccessible as String: accessibility.keychainValue,
     ]
@@ -3456,7 +3585,7 @@ func saveKeychainDataIfAbsentOrEqual(
         status: SecItemAdd(query as CFDictionary, nil),
         expected: data
     ) {
-        loadKeychainDataResult(service: service, account: account)
+        loadKeychainDataResult(service: service, account: account, synchronizable: synchronizable)
     }
 }
 
