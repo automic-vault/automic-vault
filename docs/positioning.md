@@ -5,6 +5,11 @@ Status: authoritative for user-facing messaging
 Security claims and canonical terms defer to the [Domain Language](domain-language.md)
 and [Architecture](architecture.md).
 
+The shipped-product claims below describe av4. av5 messaging follows the scoped
+boundaries in [ADR 0081](adr/0081-av5-versioned-security-boundaries.md): do not
+promise Authorization History or the removed integrations for av5, or imply that
+its stage-one process scaffold already protects credentials.
+
 ## Product promise
 
 macOS protects your apps. We protect your command line.
