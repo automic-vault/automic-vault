@@ -1,9 +1,9 @@
-# Stable ib signing identity
+# Stable bru signing identity
 
 Supersedes the per-build hash admission in ADR 0079.
 
-The installer signs ib using Developer ID Application for team `ZU76A67LGU`,
-identifier `dev.mxcl.ib`, Hardened Runtime, and no entitlements. AV verifies
+The installer signs bru using Developer ID Application for team `ZU76A67LGU`,
+identifier `dev.mxcl.bru`, Hardened Runtime, and no entitlements. AV verifies
 that fixed identifier, team, Apple anchor, Developer ID intermediate, and
 Developer ID Application leaf. An arbitrary signer or ad-hoc signature cannot
 claim this identity. A new build by the same signer remains eligible without
@@ -23,4 +23,4 @@ ad-hoc fallback. The worker remains ad-hoc signed and cannot act as Gate Client.
 This deliberately trusts future builds from the project signer rather than
 requiring root to enroll every hash. Root still controls installation and the
 package account. Migration requires installing the updated AV app once and
-rerunning ib's installer. Old enrollment and old clients fail closed.
+rerunning bru's installer. Old enrollment and old clients fail closed.
