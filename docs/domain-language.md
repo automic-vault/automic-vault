@@ -904,11 +904,11 @@ The following identifiers remain in storage or code for compatibility. New produ
 
 Persisted raw values and external compatibility flags may retain legacy spelling. Their display names and documentation follow this language.
 
-### febr Execution Gate
+### ib Execution Gate
 
-The local febr integration is an approval-only Execution Gate. Its Gate Client
-and Target are the same Developer ID-signed `/opt/febr/libexec/febr`.
-AV verifies identifier `dev.mxcl.febr` and team `ZU76A67LGU` through the Apple
+The local ib integration is an approval-only Execution Gate. Its Gate Client
+and Target are the same Developer ID-signed `/opt/ib/libexec/ib`.
+AV verifies identifier `dev.mxcl.ib` and team `ZU76A67LGU` through the Apple
 Developer ID chain. Root enrollment binds the installed package account; a
 pathname or ad-hoc signing identifier alone grants no trust. Each
 recognized package or user-service mutation requires a fresh Approval and an

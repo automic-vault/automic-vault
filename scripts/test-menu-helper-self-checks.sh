@@ -45,7 +45,7 @@ fi
 python3 "$repo/scripts/test-localization.py" "${localization_args[@]}"
 
 checks=(
-  --self-check-febr
+  --self-check-ib
   --self-check-approvals
   --self-check-approval-callsite
   --self-check-approval-process-execution

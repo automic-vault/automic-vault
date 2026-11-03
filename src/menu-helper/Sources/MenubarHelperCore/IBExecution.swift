@@ -2,9 +2,9 @@ import Darwin
 import Foundation
 
 /// Root enrollment binds the package account; Developer ID authenticates the client.
-public struct FebrEnrollment: Codable, Equatable, Sendable {
-    public static let executable = "/opt/febr/libexec/febr"
-    public static let identifier = "dev.mxcl.febr"
+public struct IBEnrollment: Codable, Equatable, Sendable {
+    public static let executable = "/opt/ib/libexec/ib"
+    public static let identifier = "dev.mxcl.ib"
     public let protocolVersion: Int
     public let uid: UInt32
     public let gid: UInt32
@@ -22,19 +22,19 @@ public struct FebrEnrollment: Codable, Equatable, Sendable {
     }
 
     public static func load() -> Self? {
-        for path in ["/opt", "/opt/febr", "/opt/febr/libexec"] {
+        for path in ["/opt", "/opt/ib", "/opt/ib/libexec"] {
             var status = stat()
             guard lstat(path, &status) == 0, status.st_mode & S_IFMT == S_IFDIR,
                   status.st_uid == 0, status.st_mode & 0o022 == 0, access(path, W_OK) != 0 else { return nil }
         }
-        let fd = open("/opt/febr/libexec/av-client.json", O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK)
+        let fd = open("/opt/ib/libexec/av-client.json", O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK)
         guard fd >= 0 else { return nil }
         defer { close(fd) }
         var status = stat()
         guard fstat(fd, &status) == 0, status.st_mode & S_IFMT == S_IFREG,
               status.st_uid == 0, status.st_mode & 0o022 == 0,
               status.st_size > 0, status.st_size <= 4096,
-              access("/opt/febr/libexec/av-client.json", W_OK) != 0 else { return nil }
+              access("/opt/ib/libexec/av-client.json", W_OK) != 0 else { return nil }
         var bytes = [UInt8](repeating: 0, count: Int(status.st_size))
         guard read(fd, &bytes, bytes.count) == bytes.count,
               let enrollment = try? JSONDecoder().decode(Self.self, from: Data(bytes)), enrollment.isValid else { return nil }
@@ -56,7 +56,7 @@ public struct FebrEnrollment: Codable, Equatable, Sendable {
     }
 }
 
-public enum FebrOperation: String, Sendable {
+public enum IBOperation: String, Sendable {
     case systemWrite, localWrite
     public var detail: String {
         switch self {
@@ -67,7 +67,7 @@ public enum FebrOperation: String, Sendable {
 }
 
 /// Exact positive command catalog. Unknown syntax never reaches Approval.
-public func febrOperation(_ args: [String]) -> FebrOperation? {
+public func ibOperation(_ args: [String]) -> IBOperation? {
     guard let command = args.first, args.count <= 2048,
           args.allSatisfy({ $0.utf8.count <= 1024 }) else { return nil }
     func name(_ value: String) -> Bool {
