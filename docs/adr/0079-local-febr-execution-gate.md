@@ -1,5 +1,7 @@
 # 0079: Root-enrolled local febr Execution Gate
 
+Signing admission superseded by [ADR 0080](0080-febr-signing-identity.md).
+
 Status: accepted
 
 ## Context

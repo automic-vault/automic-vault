@@ -907,9 +907,10 @@ Persisted raw values and external compatibility flags may retain legacy spelling
 ### febr Execution Gate
 
 The local febr integration is an approval-only Execution Gate. Its Gate Client
-and Target are the same root-enrolled build of `/opt/febr/libexec/febr`.
-The installer records the exact signed code hash in a root-owned enrollment
-file; a pathname or ad-hoc signing identifier alone grants no trust. Each
+and Target are the same Developer ID-signed `/opt/febr/libexec/febr`.
+AV verifies identifier `dev.mxcl.febr` and team `ZU76A67LGU` through the Apple
+Developer ID chain. Root enrollment binds the installed package account; a
+pathname or ad-hoc signing identifier alone grants no trust. Each
 recognized package or user-service mutation requires a fresh Approval and an
 Authorization Record. The integration grants no Secret Use, durable policy,
 Blessing authority, Temporary Access Grant, or decision reuse.

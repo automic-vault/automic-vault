@@ -1053,17 +1053,19 @@ This repository owns the domain language, architecture, and ADRs. Endorsed prope
 
 ## Local febr Execution Gate
 
-The febr installer enrolls one hardened, entitlement-free local build by its
-exact code hash in `/opt/febr/libexec/av-client.json`. AV admits that hash at
-listener startup without changing its existing Developer ID client admission.
-Installing or updating febr requires restarting AV to refresh the admitted
-hash. A missing or invalid enrollment contributes no additional admission rule.
+The febr installer signs a hardened, entitlement-free client with Developer ID,
+identifier `dev.mxcl.febr`, and team `ZU76A67LGU`. AV's listener admits this
+stable signing requirement, including Apple's Developer ID certificate chain.
+Each request also requires root-owned schema-2 enrollment of the package UID/GID
+in `/opt/febr/libexec/av-client.json` and the protected installed executable.
+Updates signed with the same identity need no listener restart. Old hash-based
+enrollment and ad-hoc signatures fail closed.
 
 A separate dispatch path accepts only the bounded protocol-1, Secret-free
 `authorize` request for that executable. Live validation binds the XPC audit
 token, execution generation, real user, package identity, runtime protections,
-and enrolled code hash. The live peer and enrollment are checked again after
+and Developer ID signature. The live peer and enrollment are checked again after
 Approval and immediately before the reply. Other AV APIs remain unavailable to
 this client. Every recognized mutation needs fresh Approval and a verified
 Authorization Record; there is no policy or decision-reuse shortcut.
-See [ADR 0079](adr/0079-local-febr-execution-gate.md).
+See [ADR 0080](adr/0080-febr-signing-identity.md).

@@ -4182,9 +4182,8 @@ private final class ApprovalServer: @unchecked Sendable {
         identifier "gh" or identifier "com.github.cli" or identifier "stripe" or \
         identifier "supabase" or identifier "supabase-go" or identifier "com.supabase.cli")
         """
-        // Enrollment is root-owned and exact to one build. A new installation
-        // or update requires restarting AV to refresh this listener's code hash.
-        let admission = FebrEnrollment.load().map { "(\(requirement)) or (\($0.requirement))" } ?? requirement
+        // Stable signer admission survives updates; each request still verifies enrollment.
+        let admission = "(\(requirement)) or (\(FebrEnrollment.requirement))"
         let status = admission.withCString {
             xpc_connection_set_peer_code_signing_requirement(listener, $0)
         }
@@ -4644,7 +4643,7 @@ private final class ApprovalServer: @unchecked Sendable {
             allowMissingKeys: false, envConflicts: [], shebangScript: nil,
             scriptData: nil, tool: "febr", title: "Allow febr operation?", detail: operation.detail
         )
-        let signing = SigningInfo(identifier: FebrEnrollment.identifier, teamIdentifier: "root-enrolled local build")
+        let signing = SigningInfo(identifier: FebrEnrollment.identifier, teamIdentifier: FebrEnrollment.teamIdentifier)
         let launchers = launcherIdentities(for: identity)
         let fallback = launcherFallbackPath(for: identity) ?? FebrEnrollment.executable
         let launcher = executionOrigin(among: launchers, callerPID: identity.pid, ancestorFallbackPath: fallback)
@@ -10675,7 +10674,7 @@ private func febrProtocolSelfCheck() -> Bool {
         signing: SigningInfo(identifier: FebrEnrollment.identifier, teamIdentifier: ""))
 }
 
-// Exact root enrollment plus audit-token-bound live code. No path-only trust,
+// Root enrollment plus audit-token-bound Developer ID code. No path-only trust,
 // no Developer ID bypass for any other client, and no Secret API admission.
 private func verifiedFebrPeer(_ peer: xpc_connection_t, enrollment: FebrEnrollment) -> AVProcessIdentity? {
     guard enrollment == FebrEnrollment.load() else { return nil }
@@ -10687,7 +10686,7 @@ private func verifiedFebrPeer(_ peer: xpc_connection_t, enrollment: FebrEnrollme
           realUID == getuid(), realUID != 0, identity.euid == enrollment.uid,
           effectiveGID == enrollment.gid, pathString(identity) == FebrEnrollment.executable else { return nil }
     var requirement: SecRequirement?
-    guard SecRequirementCreateWithString(enrollment.requirement as CFString, [], &requirement) == errSecSuccess,
+    guard SecRequirementCreateWithString(FebrEnrollment.requirement as CFString, [], &requirement) == errSecSuccess,
           let requirement else { return nil }
     var live: SecCode?
     let audit = token.withUnsafeBytes { Data($0) }
@@ -10700,8 +10699,7 @@ private func verifiedFebrPeer(_ peer: xpc_connection_t, enrollment: FebrEnrollme
         let dictionary = info as? [CFString: Any], runtimeProtection(dictionary) == .hardened,
         (dictionary[kSecCodeInfoEntitlementsDict] as? [String: Any] ?? [:]).isEmpty,
         dictionary[kSecCodeInfoIdentifier] as? String == FebrEnrollment.identifier,
-        let hash = dictionary[kSecCodeInfoUnique] as? Data,
-        hash.map({ String(format: "%02x", $0) }).joined() == enrollment.cdhash,
+        dictionary[kSecCodeInfoTeamIdentifier] as? String == FebrEnrollment.teamIdentifier,
         SecCodeCheckValidity(live, [], requirement) == errSecSuccess,
         enrollment == FebrEnrollment.load() else { return nil }
     return identity

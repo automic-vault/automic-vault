@@ -1,20 +1,25 @@
 import Darwin
 import Foundation
 
-/// Root enrollment authenticates one local build; it is not Launcher authority.
+/// Root enrollment binds the package account; Developer ID authenticates the client.
 public struct FebrEnrollment: Codable, Equatable, Sendable {
     public static let executable = "/opt/febr/libexec/febr"
     public static let identifier = "dev.mxcl.febr"
     public let protocolVersion: Int
-    public let cdhash: String
     public let uid: UInt32
     public let gid: UInt32
 
+    public static let teamIdentifier = "ZU76A67LGU"
+    public static let requirement = """
+    identifier "\(identifier)" and anchor apple generic and \
+    certificate 1[field.1.2.840.113635.100.6.2.6] exists and \
+    certificate leaf[field.1.2.840.113635.100.6.1.13] exists and \
+    certificate leaf[subject.OU] = "\(teamIdentifier)"
+    """
+
     public var isValid: Bool {
-        protocolVersion == 1 && uid >= 200 && gid >= 200 && cdhash.count == 40
-            && cdhash.utf8.allSatisfy { (48...57).contains($0) || (97...102).contains($0) }
+        protocolVersion == 2 && uid >= 200 && gid >= 200
     }
-    public var requirement: String { "identifier \"\(Self.identifier)\" and cdhash H\"\(cdhash)\"" }
 
     public static func load() -> Self? {
         for path in ["/opt", "/opt/febr", "/opt/febr/libexec"] {
