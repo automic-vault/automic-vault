@@ -1051,13 +1051,13 @@ Approval-method settings are outside this API. See
 
 This repository owns the domain language, architecture, and ADRs. Endorsed properties should adopt these terms and link here. Experimental integrations stay outside the canonical model until the project endorses them.
 
-## Local ib Execution Gate
+## Local bru Execution Gate
 
-The ib installer signs a hardened, entitlement-free client with Developer ID,
-identifier `dev.mxcl.ib`, and team `ZU76A67LGU`. AV's listener admits this
+The bru installer signs a hardened, entitlement-free client with Developer ID,
+identifier `dev.mxcl.bru`, and team `ZU76A67LGU`. AV's listener admits this
 stable signing requirement, including Apple's Developer ID certificate chain.
 Each request also requires root-owned schema-2 enrollment of the package UID/GID
-in `/opt/ib/libexec/av-client.json` and the protected installed executable.
+in `/opt/bru/libexec/av-client.json` and the protected installed executable.
 Updates signed with the same identity need no listener restart. Old hash-based
 enrollment and ad-hoc signatures fail closed.
 
@@ -1068,4 +1068,4 @@ and Developer ID signature. The live peer and enrollment are checked again after
 Approval and immediately before the reply. Other AV APIs remain unavailable to
 this client. Every recognized mutation needs fresh Approval and a verified
 Authorization Record; there is no policy or decision-reuse shortcut.
-See [ADR 0080](adr/0080-ib-signing-identity.md).
+See [ADR 0080](adr/0080-bru-signing-identity.md).

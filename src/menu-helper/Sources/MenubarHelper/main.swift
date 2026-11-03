@@ -3340,11 +3340,11 @@ private func approvalDecision(
 final class ApprovalCancellation: @unchecked Sendable {
     private let lock = NSLock()
     private var canceled = false
-    private var ibRequestStarted = false
-    func beginIBRequest() -> Bool {
+    private var bruRequestStarted = false
+    func beginBruRequest() -> Bool {
         lock.withLock {
-            guard !canceled, !ibRequestStarted else { return false }
-            ibRequestStarted = true
+            guard !canceled, !bruRequestStarted else { return false }
+            bruRequestStarted = true
             return true
         }
     }
@@ -4183,7 +4183,7 @@ private final class ApprovalServer: @unchecked Sendable {
         identifier "supabase" or identifier "supabase-go" or identifier "com.supabase.cli")
         """
         // Stable signer admission survives updates; each request still verifies enrollment.
-        let admission = "(\(requirement)) or (\(IBEnrollment.requirement))"
+        let admission = "(\(requirement)) or (\(BruEnrollment.requirement))"
         let status = admission.withCString {
             xpc_connection_set_peer_code_signing_requirement(listener, $0)
         }
@@ -4269,8 +4269,8 @@ private final class ApprovalServer: @unchecked Sendable {
 
         // The enrolled local client has a separate, Secret-free, approval-only
         // route. It can never enter the existing generic client dispatch.
-        if callerPath == IBEnrollment.executable || signing.identifier == IBEnrollment.identifier {
-            handleIB(message, on: peer, cancellation: cancellation)
+        if callerPath == BruEnrollment.executable || signing.identifier == BruEnrollment.identifier {
+            handleBru(message, on: peer, cancellation: cancellation)
             return
         }
 
@@ -4626,29 +4626,29 @@ private final class ApprovalServer: @unchecked Sendable {
         }
     }
 
-    private func handleIB(
+    private func handleBru(
         _ message: xpc_object_t, on peer: xpc_connection_t,
         cancellation: ApprovalCancellation
     ) {
-        guard cancellation.beginIBRequest(),
-              let enrollment = IBEnrollment.load(),
-              let identity = verifiedIBPeer(peer, enrollment: enrollment),
-              let (parsed, operation) = validatedIBRequest(message) else {
-            reply(peer, to: message, ok: false, error: "Invalid or unverified ib request")
+        guard cancellation.beginBruRequest(),
+              let enrollment = BruEnrollment.load(),
+              let identity = verifiedBruPeer(peer, enrollment: enrollment),
+              let (parsed, operation) = validatedBruRequest(message) else {
+            reply(peer, to: message, ok: false, error: "Invalid or unverified bru request")
             return
         }
         let request = ApprovalRequest(
-            op: "authorize", keys: [], target: IBEnrollment.executable,
+            op: "authorize", keys: [], target: BruEnrollment.executable,
             args: parsed.args, cwd: parsed.cwd, replaceExistingEnv: false,
             allowMissingKeys: false, envConflicts: [], shebangScript: nil,
-            scriptData: nil, tool: "ib", title: "Allow ib operation?", detail: operation.detail
+            scriptData: nil, tool: "bru", title: "Allow bru operation?", detail: operation.detail
         )
-        let signing = SigningInfo(identifier: IBEnrollment.identifier, teamIdentifier: IBEnrollment.teamIdentifier)
+        let signing = SigningInfo(identifier: BruEnrollment.identifier, teamIdentifier: BruEnrollment.teamIdentifier)
         let launchers = launcherIdentities(for: identity)
-        let fallback = launcherFallbackPath(for: identity) ?? IBEnrollment.executable
+        let fallback = launcherFallbackPath(for: identity) ?? BruEnrollment.executable
         let launcher = executionOrigin(among: launchers, callerPID: identity.pid, ancestorFallbackPath: fallback)
         if denyRequestIfNeeded(request, signing: signing, launchers: launchers,
-            callerPath: IBEnrollment.executable, peer: peer, message: message) { return }
+            callerPath: BruEnrollment.executable, peer: peer, message: message) { return }
         Task { @MainActor in
             guard !cancellation.isCanceled, self.canRequestHumanApproval() else {
                 self.reply(peer, to: message, ok: false, error: "User Approval is unavailable")
@@ -4656,7 +4656,7 @@ private final class ApprovalServer: @unchecked Sendable {
             }
             self.sendEvent(humanApprovalRequiredEvent, to: peer)
             let decision = await showApprovalAlert(
-                request: request, callerPath: IBEnrollment.executable, pid: identity.pid,
+                request: request, callerPath: BruEnrollment.executable, pid: identity.pid,
                 signing: signing, scriptApproval: nil, launcher: launcher,
                 denialLaunchers: launchers, launcherFallbackPath: fallback,
                 automaticApprovalExplanation: nil,
@@ -4665,32 +4665,32 @@ private final class ApprovalServer: @unchecked Sendable {
             )
             guard decision == .approved else {
                 _ = self.onAccessRequest(accessRequestRecord(request: request,
-                    callerPath: IBEnrollment.executable, decision: "Denied",
-                    approvalSource: "Manual", reason: "ib operation was not approved", launcher: launcher))
-                self.reply(peer, to: message, ok: false, error: "ib operation was not approved")
+                    callerPath: BruEnrollment.executable, decision: "Denied",
+                    approvalSource: "Manual", reason: "bru operation was not approved", launcher: launcher))
+                self.reply(peer, to: message, ok: false, error: "bru operation was not approved")
                 return
             }
             guard !cancellation.isCanceled, self.canRequestHumanApproval(),
-                  let current = verifiedIBPeer(peer, enrollment: enrollment),
+                  let current = verifiedBruPeer(peer, enrollment: enrollment),
                   sameProcessIdentity(identity, current), launcherBundleIntegrityError(for: current) == nil else {
-                self.reply(peer, to: message, ok: false, error: "ib requester changed, exited, or lost enrollment")
+                self.reply(peer, to: message, ok: false, error: "bru requester changed, exited, or lost enrollment")
                 return
             }
             let currentLaunchers = launcherIdentities(for: current)
             if self.denyRequestIfNeeded(request, signing: signing, launchers: launchers + currentLaunchers,
-                callerPath: IBEnrollment.executable, peer: peer, message: message) { return }
+                callerPath: BruEnrollment.executable, peer: peer, message: message) { return }
             guard self.onAccessRequest(accessRequestRecord(request: request,
-                callerPath: IBEnrollment.executable, decision: "Approved", approvalSource: "Manual",
-                reason: "Approved ib operation", launcher: launcher)) else {
+                callerPath: BruEnrollment.executable, decision: "Approved", approvalSource: "Manual",
+                reason: "Approved bru operation", launcher: launcher)) else {
                 self.reply(peer, to: message, ok: false, error: "Could not persist Authorization Record")
                 return
             }
             guard !cancellation.isCanceled, self.canRequestHumanApproval(),
-                  let final = verifiedIBPeer(peer, enrollment: enrollment), sameProcessIdentity(identity, final) else {
-                self.reply(peer, to: message, ok: false, error: "ib execution changed before authorization")
+                  let final = verifiedBruPeer(peer, enrollment: enrollment), sameProcessIdentity(identity, final) else {
+                self.reply(peer, to: message, ok: false, error: "bru execution changed before authorization")
                 return
             }
-            self.reply(peer, to: message, ok: true, error: nil, ibProtocol: 1)
+            self.reply(peer, to: message, ok: true, error: nil, bruProtocol: 1)
         }
     }
 
@@ -10407,11 +10407,11 @@ private final class ApprovalServer: @unchecked Sendable {
         protocolVersion: UInt64? = nil,
         proxySession: ProxySessionMaterial? = nil,
         humanApprovalDecision: String? = nil,
-        ibProtocol: UInt64? = nil
+        bruProtocol: UInt64? = nil
     ) {
         let response = xpc_dictionary_create_reply(message) ?? xpc_dictionary_create_empty()
         xpc_dictionary_set_bool(response, "ok", ok)
-        if let ibProtocol { xpc_dictionary_set_uint64(response, "ib_protocol", ibProtocol) }
+        if let bruProtocol { xpc_dictionary_set_uint64(response, "bru_protocol", bruProtocol) }
         if let error {
             error.withCString {
                 xpc_dictionary_set_string(response, "error", $0)
@@ -10637,21 +10637,21 @@ private func retainedProcessApprovalExplanation(
     return "Automic Vault previously verified this running \(process) process under \(launcher), but that parent chain is no longer available. Keep Launcher Access for Detached Processes is off; enabling it would have automically authorized this request under the current \(gateName) policy."
 }
 
-private func validatedIBRequest(_ message: xpc_object_t) -> (ApprovalRequest, IBOperation)? {
-    guard xpc_dictionary_get_uint64(message, "ib_protocol") == 1,
+private func validatedBruRequest(_ message: xpc_object_t) -> (ApprovalRequest, BruOperation)? {
+    guard xpc_dictionary_get_uint64(message, "bru_protocol") == 1,
           let parsed = approvalRequest(from: message), parsed.op == "authorize",
-          parsed.target == IBEnrollment.executable, parsed.tool == "ib",
+          parsed.target == BruEnrollment.executable, parsed.tool == "bru",
           parsed.keys.isEmpty, parsed.envConflicts.isEmpty,
           !parsed.replaceExistingEnv, !parsed.allowMissingKeys,
           parsed.shebangScript == nil, parsed.scriptData == nil,
           parsed.cwd.hasPrefix("/"), parsed.cwd.utf8.count <= 4096,
-          let operation = ibOperation(parsed.args) else { return nil }
+          let operation = bruOperation(parsed.args) else { return nil }
     return (parsed, operation)
 }
 
-private func ibProtocolSelfCheck() -> Bool {
+private func bruProtocolSelfCheck() -> Bool {
     let message = xpc_dictionary_create_empty()
-    for (key, value) in ["op":"authorize", "target":IBEnrollment.executable, "tool":"ib", "cwd":"/tmp"] {
+    for (key, value) in ["op":"authorize", "target":BruEnrollment.executable, "tool":"bru", "cwd":"/tmp"] {
         key.withCString { key in value.withCString { xpc_dictionary_set_string(message, key, $0) } }
     }
     let args = xpc_array_create_empty()
@@ -10659,34 +10659,34 @@ private func ibProtocolSelfCheck() -> Bool {
     xpc_dictionary_set_value(message, "args", args)
     xpc_dictionary_set_value(message, "keys", xpc_array_create_empty())
     xpc_dictionary_set_value(message, "env_conflicts", xpc_array_create_empty())
-    guard validatedIBRequest(message) == nil else { return false }
-    xpc_dictionary_set_uint64(message, "ib_protocol", 1)
-    guard validatedIBRequest(message)?.1 == .systemWrite else { return false }
+    guard validatedBruRequest(message) == nil else { return false }
+    xpc_dictionary_set_uint64(message, "bru_protocol", 1)
+    guard validatedBruRequest(message)?.1 == .systemWrite else { return false }
     xpc_dictionary_set_bool(message, "replace_existing_env", true)
-    guard validatedIBRequest(message) == nil else { return false }
+    guard validatedBruRequest(message) == nil else { return false }
     xpc_dictionary_set_bool(message, "replace_existing_env", false)
     xpc_dictionary_set_string(message, "op", "inject")
-    guard validatedIBRequest(message) == nil else { return false }
+    guard validatedBruRequest(message) == nil else { return false }
     xpc_dictionary_set_string(message, "op", "authorize")
     xpc_dictionary_set_value(message, "keys", args)
-    guard validatedIBRequest(message) == nil else { return false }
-    return !isAllowedCaller(path: IBEnrollment.executable,
-        signing: SigningInfo(identifier: IBEnrollment.identifier, teamIdentifier: ""))
+    guard validatedBruRequest(message) == nil else { return false }
+    return !isAllowedCaller(path: BruEnrollment.executable,
+        signing: SigningInfo(identifier: BruEnrollment.identifier, teamIdentifier: ""))
 }
 
 // Root enrollment plus audit-token-bound Developer ID code. No path-only trust,
 // no Developer ID bypass for any other client, and no Secret API admission.
-private func verifiedIBPeer(_ peer: xpc_connection_t, enrollment: IBEnrollment) -> AVProcessIdentity? {
-    guard enrollment == IBEnrollment.load() else { return nil }
+private func verifiedBruPeer(_ peer: xpc_connection_t, enrollment: BruEnrollment) -> AVProcessIdentity? {
+    guard enrollment == BruEnrollment.load() else { return nil }
     var identity = AVProcessIdentity()
     var token = [UInt32](repeating: 0, count: 8)
     var realUID: uid_t = 0
     var effectiveGID: gid_t = 0
     guard av_xpc_peer_evidence(peer, &identity, &token, &realUID, &effectiveGID),
           realUID == getuid(), realUID != 0, identity.euid == enrollment.uid,
-          effectiveGID == enrollment.gid, pathString(identity) == IBEnrollment.executable else { return nil }
+          effectiveGID == enrollment.gid, pathString(identity) == BruEnrollment.executable else { return nil }
     var requirement: SecRequirement?
-    guard SecRequirementCreateWithString(IBEnrollment.requirement as CFString, [], &requirement) == errSecSuccess,
+    guard SecRequirementCreateWithString(BruEnrollment.requirement as CFString, [], &requirement) == errSecSuccess,
           let requirement else { return nil }
     var live: SecCode?
     let audit = token.withUnsafeBytes { Data($0) }
@@ -10698,10 +10698,10 @@ private func verifiedIBPeer(_ peer: xpc_connection_t, enrollment: IBEnrollment) 
         SecCSFlags(rawValue: kSecCSSigningInformation | kSecCSDynamicInformation), &info) == errSecSuccess,
         let dictionary = info as? [CFString: Any], runtimeProtection(dictionary) == .hardened,
         (dictionary[kSecCodeInfoEntitlementsDict] as? [String: Any] ?? [:]).isEmpty,
-        dictionary[kSecCodeInfoIdentifier] as? String == IBEnrollment.identifier,
-        dictionary[kSecCodeInfoTeamIdentifier] as? String == IBEnrollment.teamIdentifier,
+        dictionary[kSecCodeInfoIdentifier] as? String == BruEnrollment.identifier,
+        dictionary[kSecCodeInfoTeamIdentifier] as? String == BruEnrollment.teamIdentifier,
         SecCodeCheckValidity(live, [], requirement) == errSecSuccess,
-        enrollment == IBEnrollment.load() else { return nil }
+        enrollment == BruEnrollment.load() else { return nil }
     return identity
 }
 
@@ -21269,8 +21269,8 @@ if CommandLine.arguments.contains("--self-check-sleep") {
     exit(0)
 }
 
-if CommandLine.arguments.contains("--self-check-ib") {
-    exit(ibProtocolSelfCheck() ? 0 : 1)
+if CommandLine.arguments.contains("--self-check-bru") {
+    exit(bruProtocolSelfCheck() ? 0 : 1)
 }
 
 if CommandLine.arguments.contains("--self-check-approvals") {
