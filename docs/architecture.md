@@ -4,6 +4,11 @@ Automic Vault is a local authority system for developer credentials and controll
 
 The [domain language](domain-language.md) is authoritative. The ADRs in [`docs/adr`](adr) record the decisions behind this architecture.
 
+This document describes shipped av4 behavior. The av5 rewrite's explicit
+departures are scoped in [ADR 0081](adr/0081-av5-versioned-security-boundaries.md).
+In particular, av5 removes persistent authorization recording and adds companion
+Macs without moving enforcement off the originating Mac. av4 is unchanged.
+
 ## Principles
 
 ### The Mac enforces authority

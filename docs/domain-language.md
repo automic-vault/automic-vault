@@ -3,6 +3,12 @@
 Status: authoritative
 Applies to: endorsed Automic Vault products, interfaces, and documentation
 
+Version scope: the shipped behavior described below applies to av4. The av5
+rewrite retains these terms with the explicit exceptions in
+[ADR 0081](adr/0081-av5-versioned-security-boundaries.md): no persistent
+Authorization History, companion-Mac approvals, and a smaller integration scope.
+Those exceptions do not change av4's guarantees.
+
 Automic Vault protects developer credentials at two boundaries: where they are stored and where they are used. Its domain is developer authority, with secrets and the application of those secrets at its center. Execution control, including Homebrew control, belongs to the same domain even when an operation uses no secret.
 
 This document defines the language used across the Automic Vault ecosystem. Product copy should favor the user-facing terms. Architecture and implementation may use the precise terms where the distinction affects security.
