@@ -1,4 +1,5 @@
 import Foundation
+import Security
 import Testing
 @testable import MenubarHelperCore
 
@@ -14,12 +15,32 @@ struct FebrExecutionTests {
             #expect(febrOperation(args) == nil)
         }
     }
-    @Test func enrollmentCannotInjectSigningRequirement() throws {
-        for hash in [String(repeating: "a", count: 39), String(repeating: "g", count: 40), "\" or true"] {
-            let data = try JSONSerialization.data(withJSONObject: ["protocolVersion":1, "cdhash":hash, "uid":400, "gid":400])
-            #expect(try !JSONDecoder().decode(FebrEnrollment.self, from: data).isValid)
+    @Test func enrollmentRequiresCurrentProtocolAndServiceAccount() throws {
+        for (version, uid, gid, valid) in [(2,400,400,true), (1,400,400,false), (2,0,400,false), (2,400,0,false)] {
+            let data = try JSONSerialization.data(withJSONObject: ["protocolVersion":version, "uid":uid, "gid":gid])
+            #expect(try JSONDecoder().decode(FebrEnrollment.self, from: data).isValid == valid)
         }
-        let data = try JSONSerialization.data(withJSONObject: ["protocolVersion":1, "cdhash":String(repeating:"a",count:40), "uid":0, "gid":400])
-        #expect(try !JSONDecoder().decode(FebrEnrollment.self, from: data).isValid)
     }
+    @Test func copiedIdentifierDoesNotAuthenticateAdHocCode() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let binary = directory.appendingPathComponent("fake-febr")
+        try FileManager.default.copyItem(atPath: "/usr/bin/true", toPath: binary.path)
+        let signer = Process()
+        signer.executableURL = URL(fileURLWithPath: "/usr/bin/codesign")
+        signer.arguments = ["--force", "--sign", "-", "--identifier", FebrEnrollment.identifier, "--options", "runtime", binary.path]
+        try signer.run()
+        signer.waitUntilExit()
+        #expect(signer.terminationStatus == 0)
+        var requirement: SecRequirement?
+        #expect(SecRequirementCreateWithString(FebrEnrollment.requirement as CFString, [], &requirement) == errSecSuccess)
+        let checkedRequirement = try #require(requirement)
+        var code: SecStaticCode?
+        #expect(SecStaticCodeCreateWithPath(binary as CFURL, [], &code) == errSecSuccess)
+        let checkedCode = try #require(code)
+        #expect(SecStaticCodeCheckValidity(checkedCode, [], nil) == errSecSuccess)
+        #expect(SecStaticCodeCheckValidity(checkedCode, [], checkedRequirement) != errSecSuccess)
+    }
+
 }
