@@ -162,12 +162,9 @@ func liveExecutableReliesOnKernelForUnreadPageIntegrity(standalone: Bool) throws
         return
     }
     try #require(response == "", "Modified signed page became readable: \(response)")
-    for _ in 0..<100 {
-        if !fixture.process.isRunning { break }
-        usleep(10_000)
-    }
-    try #require(!fixture.process.isRunning)
+    // EOF can precede Foundation's exit notification under parallel test load.
     fixture.process.waitUntilExit()
+    #expect(!fixture.process.isRunning)
     #expect(fixture.process.terminationReason == .uncaughtSignal)
     #expect(fixture.process.terminationStatus == SIGKILL)
     #expect(fixture.identity() == nil)
