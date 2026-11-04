@@ -4,16 +4,21 @@ use std::process::{Command, Output};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[test]
-fn av_scan_reports_clean_home() {
+fn av_scan_reports_clean_home_credential_store() {
     let home = temp_home("clean");
-    let output = av_scan(&home);
+    // A temporary HOME cannot isolate host-wide checks such as process PATHs.
+    let output = Command::new(env!("CARGO_BIN_EXE_av"))
+        .args(["scan", "--json", "--detector", "git-credentials-file"])
+        .env_clear()
+        .env("HOME", &home)
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
+        .output()
+        .unwrap();
 
     assert!(output.status.success());
-    let stdout = stdout(&output);
-    assert!(stdout.starts_with("╭─ system exposure audit\n│\n"));
-    assert!(!stdout.contains("GUI PATH"));
-    assert!(stdout.contains("◇ No problems found\n"));
-    assert!(stdout.ends_with("╰─ vault sealed\n"));
+    let report: serde_json::Value = serde_json::from_str(&stdout(&output)).unwrap();
+    assert_eq!(report["findings"], serde_json::json!([]));
     assert_eq!(stderr(&output), "");
 
     let _ = fs::remove_dir_all(home);
