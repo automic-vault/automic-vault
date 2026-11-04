@@ -105,6 +105,16 @@ revalidate the installed artifact before Secret Application and execution; this
 is pre-execution verification, not a live credential-provider handshake. See
 [ADR 0059](adr/0059-hcloud-verified-vendor-target.md).
 
+The gcloud Isotope embeds a pinned Python runtime and SDK in a signed,
+root-owned bundle. Its native entry point is both Gate Client and Target;
+ordinary Python interpreters cannot access its custody operations. User OAuth
+login, credential loading, refresh-token replacement, and logout use AV custody.
+Access tokens remain in memory, and legacy credential-file generation and ADC
+export are disabled. Global Values only are supported; every read initially
+classifies as Unknown. Conditional mutations reject stale refresh and logout
+requests. The supported scope and release validation are specified in
+[ADR 0082](adr/0082-gcloud-isotope-custody.md).
+
 Hardener detection is point-in-time diagnostic state, not runtime authorization
 evidence. Runtime Authorization consumes static Gate definitions and performs
 the required live identity, integrity, request, policy, and recording checks at

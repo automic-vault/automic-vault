@@ -294,8 +294,8 @@ mod tests {
     #[test]
     fn extraction_cannot_write_through_external_links() {
         for bytes in [
-            include_bytes!("testdata/wrangler-symlink-escape.tgz").as_slice(),
-            include_bytes!("testdata/wrangler-hardlink-escape.tgz").as_slice(),
+            include_bytes!("testdata/gcloud-symlink-escape.tgz").as_slice(),
+            include_bytes!("testdata/gcloud-hardlink-escape.tgz").as_slice(),
         ] {
             let temp =
                 isotope::TemporaryDirectory::new_in(&std::env::temp_dir(), "gcloud-test").unwrap();

@@ -7017,6 +7017,8 @@ private final class ApprovalServer: @unchecked Sendable {
               let presence = xpc_dictionary_get_value(message, "expected_present"),
               xpc_get_type(presence) == XPC_TYPE_BOOL,
               let cwd = xpc_dictionary_get_string(message, "cwd").map({ String(cString: $0) }),
+              let context = xpc_dictionary_get_string(message, "gcloud_context").map({ String(cString: $0) }),
+              context.utf8.count <= 8192,
               let args = stringArray(message, "args"), args.count <= 4096,
               args.reduce(0, { $0 + $1.utf8.count }) <= 1024 * 1024,
               processArguments(caller.pid).map({ Array($0.dropFirst()) }) == args,
@@ -7072,8 +7074,9 @@ private final class ApprovalServer: @unchecked Sendable {
                 return gcloudCredentialMatchesExpected(current: current, expected: expected)
                     ? nil : "gcloud credential changed; retry the operation"
             }
-            guard preflight() == nil, case .success(let inventory) = loadStoredSecretsResult() else {
-                self.reply(peer, to: message, ok: false, error: preflight() ?? "Secret custody is unavailable")
+            let preliminaryError = preflight()
+            guard preliminaryError == nil, case .success(let inventory) = loadStoredSecretsResult() else {
+                self.reply(peer, to: message, ok: false, error: preliminaryError ?? "Secret custody is unavailable")
                 return
             }
             let accessibility = inventory.first { $0.account == key }?.accessibility ?? .whenUnlocked
@@ -7084,7 +7087,7 @@ private final class ApprovalServer: @unchecked Sendable {
             let request = ApprovalRequest(op: base.op, keys: base.keys, target: caller.path,
                 args: args, cwd: cwd, replaceExistingEnv: base.replaceExistingEnv,
                 allowMissingKeys: false, envConflicts: [], shebangScript: nil, scriptData: nil,
-                tool: "gcloud", title: base.title, detail: base.detail)
+                tool: "gcloud", title: base.title, detail: (base.detail ?? "") + "\nResolved context: " + context)
             let result = await performApprovedSecretMutation(mutation, callerPath: caller.path,
                 pid: caller.pid, signing: caller.signing, launcher: launcher, launchers: launchers,
                 launcherFallbackPath: caller.path, canRequestHumanApproval: self.canRequestHumanApproval,
@@ -15931,6 +15934,19 @@ private func runSecretMutationSelfCheck() async -> Int32 {
           changedDocker.error == "Docker Target changed before mutation",
           !performedAfterFailedPreflight
     else { return 1 }
+    var currentGcloud = "old-login"
+    var gcloudPerformed = false
+    let staleGcloud = await performApprovedSecretMutation(
+        .delete(account: "GCLOUD_AUTH_6140622E63"),
+        callerPath: "/opt/av/gcloud/Gcloud.app/Contents/MacOS/gcloud", pid: 42,
+        signing: SigningInfo(identifier: "com.automicvault.gcloud", teamIdentifier: "ZU76A67LGU"),
+        launcher: nil, launcherFallbackPath: "/Applications/Terminal.app",
+        canRequestHumanApproval: { true }, onAccessRequest: { _ in true },
+        decision: { _ in currentGcloud = "new-login"; return .approved },
+        perform: { _ in gcloudPerformed = true; return errSecSuccess },
+        preflight: { gcloudCredentialMatchesExpected(current: currentGcloud, expected: "old-login") ? nil : "gcloud credential changed" }
+    )
+    guard staleGcloud.status == nil, !gcloudPerformed, currentGcloud == "new-login" else { return 1 }
     return 0
 }
 
@@ -17376,6 +17392,8 @@ private func runApprovalSelfCheck() -> Int32 {
               signing: SigningInfo(identifier: "com.automicvault.av", teamIdentifier: "TEAM"),
               descriptors: [ghDescriptor]
           ) == nil,
+          classifySecretGateRequest(gateID: "gcloud", request: readOnlyGh) == .unknown,
+          !SecretGateProtection.fullIncludingSecretDumps.allows(.unknown),
           classifySecretGateRequest(gateID: "gh", request: readOnlyGh) == .readOnly,
           classifySecretGateRequest(gateID: "gh", request: ghRequest(args: ["repo", "delete", "owner/name"])) == .mutating,
           classifySecretGateRequest(gateID: "gh", request: ghRequest(args: ["auth", "git-credential", "get"])) == .secretDump,

@@ -1,6 +1,6 @@
 # gcloud user OAuth custody in a fixed Python runtime
 
-Status: implementation in progress
+Status: accepted; release requires protected-installation OAuth validation
 
 ## Decision
 
@@ -15,7 +15,9 @@ The native `gcloud` executable embeds an isolated Python interpreter and is both
 Gate Client and Target. Before executing Python it validates the complete signed
 bundle, root ownership, effective write protection, and resource containment.
 The interpreter, standard library, SDK and native extensions are pinned and
-sealed together under `/opt/av/gcloud/Gcloud.app`. No Python command-line modes,
+sealed together under `/opt/av/gcloud/Gcloud.app`. Effective configuration is frozen in memory before command execution; resolved
+account, project, billing project, and universe accompany the bound request.
+No Python command-line modes,
 external import paths, user site packages, or startup hooks are accepted.
 Upstream component installation and self-update cannot change this runtime.
 
@@ -33,7 +35,8 @@ observe the credential after Secret Application; this is not process containment
 
 The first supported workflow is ordinary user OAuth. ADC export, service-account
 keys, federation, alternate token endpoints, impersonation, companion tools and
-credential-file overrides are rejected in the protected workflow. Existing
+credential-file overrides, flags files, remote-bootstrap login, `init`, and
+alpha/beta/preview commands are rejected in the protected workflow. Existing
 upstream credential files are not imported or deleted implicitly. Users revoke
 old sessions before logging in through the Isotope; installation alone does not
 remove existing Exposures.
