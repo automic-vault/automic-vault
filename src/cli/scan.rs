@@ -327,6 +327,16 @@ mod tests {
     use super::*;
 
     #[test]
+    fn print_displays_clean_report() {
+        let mut stdout = Vec::new();
+        print(&mut stdout, &[], Style::plain(), false);
+        assert_eq!(
+            String::from_utf8(stdout).unwrap(),
+            "╭─ system exposure audit\n│\n◇ No problems found\n│\n╰─ vault sealed\n"
+        );
+    }
+
+    #[test]
     fn print_displays_findings() {
         let mut stdout = Vec::new();
 

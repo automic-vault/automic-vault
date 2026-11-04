@@ -534,6 +534,10 @@ where
                 let result = hardeners::kubectl::run(&mut stdout, yes);
                 return finish_hardening(result, "kubectl", &mut stdout, stderr);
             }
+            if target == "gcloud" {
+                let result = hardeners::gcloud::run(&mut stdout, yes);
+                return finish_hardening(result, "gcloud", &mut stdout, stderr);
+            }
             if target == "wrangler" {
                 let result = hardeners::wrangler::run(&mut stdout, yes);
                 return finish_hardening(result, "wrangler", &mut stdout, stderr);

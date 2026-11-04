@@ -17,6 +17,14 @@ const TAP_FORMULA_ROOT: &str =
     "https://raw.githubusercontent.com/automic-vault/homebrew-isotopes/main/Formula";
 const MAX_ARCHIVE_BYTES: u64 = 128 * 1024 * 1024;
 
+pub(crate) const GCLOUD: Spec = Spec {
+    hardener: "gcloud",
+    formula: "gcloud-isotope",
+    repository: "gcloud",
+    primary: "gcloud",
+    binaries: &["gcloud"],
+    test_path: "AUTOMIC_VAULT_TEST_GCLOUD_TARGET",
+};
 pub(crate) const WRANGLER: Spec = Spec {
     hardener: "wrangler",
     formula: "wrangler-isotope",
@@ -163,8 +171,8 @@ pub(crate) const KUBECTL: Spec = Spec {
 };
 
 pub(super) const PACKAGES: &[Spec] = &[
-    WRANGLER, GH, STRIPE, SUPABASE, OPENTOFU, OXIDE, FASTLY, SQLCMD, GOAT, RAILWAY, ORDERCLI,
-    OPENHUE, UAA, PLUMBER, ALIYUN, WAKATIME, RCLONE, KUBECTL,
+    GCLOUD, WRANGLER, GH, STRIPE, SUPABASE, OPENTOFU, OXIDE, FASTLY, SQLCMD, GOAT, RAILWAY,
+    ORDERCLI, OPENHUE, UAA, PLUMBER, ALIYUN, WAKATIME, RCLONE, KUBECTL,
 ];
 
 #[derive(Clone, Copy)]
@@ -221,6 +229,10 @@ impl InstallPlan {
             }
             Self::Direct { .. } => {
                 let verb = "install";
+                if spec.hardener == GCLOUD.hardener {
+                    writeln!(stdout, "├─ {verb} /opt/av/gcloud").ok();
+                    return;
+                }
                 if spec.hardener == WRANGLER.hardener {
                     writeln!(stdout, "├─ {verb} /opt/av/wrangler").ok();
                     return;
@@ -248,7 +260,7 @@ pub(crate) fn plan(spec: Spec) -> Result<InstallPlan, String> {
     if installed(spec, &target) {
         return Ok(InstallPlan::Ready);
     }
-    if spec.hardener == WRANGLER.hardener {
+    if matches!(spec.hardener, "wrangler" | "gcloud") {
         return Ok(InstallPlan::Direct {
             manifest: current_manifest(spec)?,
         });
@@ -285,6 +297,9 @@ pub(crate) fn target(spec: Spec) -> PathBuf {
     if let Some(path) = crate::test_env_var(spec.test_path) {
         return path.into();
     }
+    if spec.hardener == GCLOUD.hardener {
+        return super::gcloud::TARGET.into();
+    }
     if spec.hardener == WRANGLER.hardener {
         return super::wrangler::TARGET.into();
     }
@@ -300,7 +315,9 @@ pub(crate) fn detect(spec: Spec) -> HardenerDetection {
     let mut detection =
         HardenerDetection::command(exists, spec.primary, Some(target_text.clone()), target_text);
     detection.commands[0].isotope = Some(Doctor {
-        identifier: if spec.hardener == WRANGLER.hardener {
+        identifier: if spec.hardener == GCLOUD.hardener {
+            "com.automicvault.gcloud"
+        } else if spec.hardener == WRANGLER.hardener {
             "com.automicvault.wrangler"
         } else {
             spec.primary
@@ -341,6 +358,9 @@ pub(crate) fn install_privileged(
     sha256: &str,
     archive: &Path,
 ) -> Result<(), String> {
+    if hardener == GCLOUD.hardener {
+        return super::gcloud::install_privileged(sha256, archive);
+    }
     if hardener == WRANGLER.hardener {
         return super::wrangler::install_privileged(sha256, archive);
     }
@@ -516,7 +536,9 @@ fn install_direct(spec: Spec, manifest: &Manifest) -> Result<(), String> {
     download(
         &manifest.url,
         &archive,
-        if spec.hardener == WRANGLER.hardener {
+        if spec.hardener == GCLOUD.hardener {
+            super::gcloud::MAX_ARCHIVE_BYTES
+        } else if spec.hardener == WRANGLER.hardener {
             super::wrangler::MAX_ARCHIVE_BYTES
         } else {
             MAX_ARCHIVE_BYTES
@@ -557,6 +579,9 @@ fn extract_and_verify(
     archive: &Path,
     destination: &Path,
 ) -> Result<Vec<PathBuf>, String> {
+    if spec.hardener == GCLOUD.hardener {
+        return super::gcloud::extract_and_verify(archive, destination).map(|path| vec![path]);
+    }
     if spec.hardener == WRANGLER.hardener {
         return super::wrangler::extract_and_verify(archive, destination).map(|path| vec![path]);
     }
@@ -799,12 +824,16 @@ pub(super) fn receipt_path(spec: Spec) -> PathBuf {
 
 pub(super) fn is_direct_target(spec: Spec, path: &Path) -> bool {
     path == direct_target(spec)
+        || (spec.hardener == GCLOUD.hardener && path == Path::new(super::gcloud::TARGET))
         || (spec.hardener == WRANGLER.hardener && path == Path::new(super::wrangler::TARGET))
 }
 
 pub(super) fn installed(spec: Spec, path: &Path) -> bool {
     if crate::test_env_var(spec.test_path).is_some() {
         return path.exists();
+    }
+    if spec.hardener == GCLOUD.hardener {
+        return super::gcloud::verify_installed().is_ok();
     }
     if spec.hardener == WRANGLER.hardener {
         return super::wrangler::verify_installed().is_ok();
@@ -866,8 +895,8 @@ pub(super) fn formula_url(spec: Spec) -> String {
 
 fn spec(hardener: &str) -> Option<Spec> {
     [
-        WRANGLER, GH, STRIPE, SUPABASE, OPENTOFU, OXIDE, FASTLY, GOAT, RAILWAY, ORDERCLI, OPENHUE,
-        UAA, PLUMBER, ALIYUN, WAKATIME, RCLONE, KUBECTL, SQLCMD,
+        GCLOUD, WRANGLER, GH, STRIPE, SUPABASE, OPENTOFU, OXIDE, FASTLY, GOAT, RAILWAY, ORDERCLI,
+        OPENHUE, UAA, PLUMBER, ALIYUN, WAKATIME, RCLONE, KUBECTL, SQLCMD,
     ]
     .into_iter()
     .find(|spec| spec.hardener == hardener)

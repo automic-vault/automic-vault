@@ -1307,6 +1307,40 @@ mod tests {
     }
 
     #[test]
+    fn gcloud_runtime_diagnostic_survives_a_missing_executable() {
+        let dir = temp_dir("gcloud-remnant");
+        let target = dir.join("missing-gcloud");
+        let mut metadata = hardener(
+            "gcloud",
+            false,
+            command(
+                "gcloud",
+                false,
+                target.to_str().unwrap(),
+                target.to_str().unwrap(),
+            ),
+        );
+        metadata
+            .detection
+            .diagnostics
+            .push(hardeners::HardenerDiagnostic {
+                kind: "gcloud_runtime_invalid",
+                message: "unsafe runtime".into(),
+                remediation: "reinstall".into(),
+                path: Some(dir.display().to_string()),
+            });
+        let results = diagnose(vec![metadata], None, OsStr::new("")).unwrap();
+        assert_eq!(results.len(), 1);
+        assert!(
+            results[0]
+                .issues
+                .iter()
+                .any(|issue| issue.kind == "gcloud_runtime_invalid")
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn native_releases_skip_absent_tools_but_report_installation_remnants() {
         let _guard = crate::global_test_env_lock().lock().unwrap();
         for name in ["hcloud", "doctl"] {
@@ -1785,6 +1819,7 @@ mod tests {
                             hardener.name,
                             "aliyun-cli"
                                 | "wrangler"
+                                | "gcloud"
                                 | "gh"
                                 | "goat"
                                 | "ordercli"
