@@ -45,7 +45,13 @@ remove existing Exposures.
 
 The fork owns its signed release archive. The tap pins its exact URL and digest;
 the Hardener owns protected installation and updates, following ADRs 0029 and
-0042. Doctor verifies the bundle and receipt. Runtime and app checks remain
+0042. Doctor reports protected-runtime verification failures even when only the
+installation prefix or receipt remains. Privileged update verification checks the
+sealed bundle, root ownership, protected ancestor directories, and absence of
+extended ACLs without executing gcloud. Ordinary-user Doctor checks additionally
+run the authenticated bootstrap's `--version` probe. Extraction sets a child-only
+`022` umask so archived readable/executable resources remain usable without
+allowing group or other writes. Runtime and app checks remain
 mandatory independently of Doctor. Release checks cover the packaged artifact,
 credential storage/refresh/deletion, denial, missing and malformed replies,
 unsupported authentication, and attempts to redirect Python loading.

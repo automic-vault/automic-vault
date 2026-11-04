@@ -279,7 +279,7 @@ fn protected(path: &Path, directory: bool) -> Result<(), String> {
     Ok(())
 }
 
-fn no_extended_acl(path: &Path) -> bool {
+pub(crate) fn no_extended_acl(path: &Path) -> bool {
     unsafe extern "C" {
         fn acl_get_link_np(path: *const c_char, kind: i32) -> *mut c_void;
         fn acl_valid(acl: *mut c_void) -> i32;

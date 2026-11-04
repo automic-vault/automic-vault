@@ -1,10 +1,13 @@
 use std::fs;
 use std::io::{Read, Write};
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
+use std::os::unix::process::CommandExt;
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use super::{HardenerDetection, SecretGateDescriptor, SecretGateRoute, isotope};
+use super::{
+    HardenerDetection, HardenerDiagnostic, SecretGateDescriptor, SecretGateRoute, isotope,
+};
 
 pub(crate) const TARGET: &str = "/opt/av/gcloud/Gcloud.app/Contents/MacOS/gcloud";
 const PREFIX: &str = "/opt/av/gcloud";
@@ -38,7 +41,47 @@ pub(crate) fn run(stdout: &mut dyn Write, yes: bool) -> Result<(), String> {
 }
 
 pub(crate) fn detect() -> HardenerDetection {
-    isotope::detect(isotope::GCLOUD)
+    if crate::test_env_var("AUTOMIC_VAULT_TEST_GCLOUD_TARGET").is_some() {
+        return isotope::detect(isotope::GCLOUD);
+    }
+    detect_installation(
+        Path::new(PREFIX),
+        &isotope::receipt_path(isotope::GCLOUD),
+        verify_runtime,
+    )
+}
+
+fn detect_installation(
+    prefix: &Path,
+    receipt: &Path,
+    verify: impl FnOnce() -> Result<(), String>,
+) -> HardenerDetection {
+    let target = prefix.join("Gcloud.app/Contents/MacOS/gcloud");
+    let verification = verify();
+    let target_text = target.display().to_string();
+    let mut detection = HardenerDetection::command(
+        verification.is_ok(),
+        "gcloud",
+        Some(target_text.clone()),
+        target_text,
+    );
+    detection.commands[0].isotope = Some(isotope::Doctor {
+        identifier: "com.automicvault.gcloud",
+    });
+    // A remaining prefix or receipt is evidence even when the executable is gone.
+    let present = [prefix, receipt].iter().any(|path| {
+        !fs::symlink_metadata(path).is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
+    });
+    detection.applicable |= present;
+    if present && let Err(message) = verification {
+        detection.diagnostics.push(HardenerDiagnostic {
+            kind: "gcloud_runtime_invalid",
+            message,
+            remediation: "Run `av harden gcloud` to reinstall the protected Gcloud runtime.".into(),
+            path: Some(prefix.display().to_string()),
+        });
+    }
+    detection
 }
 
 fn command(program: &str) -> Command {
@@ -65,7 +108,15 @@ pub(crate) fn extract_and_verify(archive: &Path, destination: &Path) -> Result<P
     }
     // bsdtar's default secure extraction rejects traversal through symlinks and
     // external hard links. Never use -P. Strip archived ownership, ACLs and flags.
-    let status = command("/usr/bin/tar")
+    let mut extractor = command("/usr/bin/tar");
+    // Set only the child mask: preserve archive readability without permitting writes.
+    unsafe {
+        extractor.pre_exec(|| {
+            libc::umask(0o022);
+            Ok(())
+        });
+    }
+    let status = extractor
         .args(["-xzf"])
         .arg(archive)
         .args([
@@ -97,8 +148,11 @@ fn safe_archive_path(entry: &str) -> bool {
 fn verify_bundle(bundle: &Path, protected: bool) -> Result<(), String> {
     fn walk(path: &Path, root: &Path, protected: bool) -> Result<(), String> {
         let metadata = fs::symlink_metadata(path).map_err(|error| error.to_string())?;
-        if protected && metadata.uid() != 0 {
-            return Err("Gcloud runtime must be root-owned".into());
+        if protected {
+            if metadata.uid() != 0 {
+                return Err("Gcloud runtime must be root-owned".into());
+            }
+            verify_no_acl(path)?;
         }
         if metadata.file_type().is_symlink() {
             if !fs::canonicalize(path)
@@ -196,9 +250,40 @@ fn verify_native(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
+fn verify_no_acl(path: &Path) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    if crate::cli::git::no_extended_acl(path) {
+        return Ok(());
+    }
+    Err(format!(
+        "cannot verify ACL-free Gcloud path: {}",
+        path.display()
+    ))
+}
+
+fn verify_ancestors(prefix: &Path) -> Result<(), String> {
+    for directory in prefix.ancestors() {
+        let metadata = fs::symlink_metadata(directory).map_err(|error| error.to_string())?;
+        if !metadata.is_dir() || metadata.uid() != 0 || metadata.mode() & 0o7022 != 0 {
+            return Err(format!("unsafe Gcloud ancestor: {}", directory.display()));
+        }
+        verify_no_acl(directory)?;
+    }
+    Ok(())
+}
+
 pub(crate) fn verify_installed() -> Result<(), String> {
     let bundle = Path::new(PREFIX).join("Gcloud.app");
-    verify_bundle(&bundle, true)?;
+    verify_ancestors(Path::new(PREFIX))?;
+    verify_bundle(&bundle, true)
+}
+
+fn verify_runtime() -> Result<(), String> {
+    verify_installed()?;
+    // Updates and root-run Doctor use static checks, never execute the CLI as root.
+    if super::effective_uid() == 0 {
+        return Ok(());
+    }
     // The authenticated bootstrap checks every ancestor and effective ACL access
     // before loading any mutable resource. --version never requests a Credential.
     let output = command(TARGET)
@@ -218,19 +303,7 @@ pub(crate) fn install_privileged(digest: &str, archive: &Path) -> Result<(), Str
     isotope::validate_sha256(digest)?;
     let prefix = Path::new(PREFIX);
     isotope::prepare_install_directory(prefix)?;
-    for directory in prefix.ancestors() {
-        let acl = command("/bin/ls")
-            .args(["-lde"])
-            .arg(directory)
-            .output()
-            .map_err(|error| error.to_string())?;
-        if !acl.status.success() || String::from_utf8_lossy(&acl.stdout).lines().count() != 1 {
-            return Err(format!(
-                "refusing installation through directory with ACLs: {}",
-                directory.display()
-            ));
-        }
-    }
+    verify_ancestors(prefix)?;
     let temporary = isotope::TemporaryDirectory::new_in(prefix, "gcloud")?;
     let trusted_archive = temporary.path.join("isotope.tgz");
     isotope::copy_new(archive, &trusted_archive)?;
@@ -291,6 +364,118 @@ pub(crate) fn secret_gate() -> SecretGateDescriptor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn detection_reports_verification_errors_and_missing_executable_remnants() {
+        let temp =
+            isotope::TemporaryDirectory::new_in(&std::env::temp_dir(), "gcloud-detect").unwrap();
+        let prefix = temp.path.join("installed");
+        let receipt = temp.path.join("receipt");
+        let detect = || detect_installation(&prefix, &receipt, || Err("unsafe runtime".into()));
+        assert!(detect().diagnostics.is_empty());
+        fs::create_dir(&prefix).unwrap();
+        let damaged = detect();
+        assert!(damaged.applicable);
+        assert!(!damaged.hardened);
+        assert_eq!(damaged.diagnostics[0].kind, "gcloud_runtime_invalid");
+        assert_eq!(damaged.diagnostics[0].message, "unsafe runtime");
+        assert!(!prefix.join("Gcloud.app/Contents/MacOS/gcloud").exists());
+        fs::remove_dir(&prefix).unwrap();
+        fs::write(&receipt, "digest").unwrap();
+        assert_eq!(detect().diagnostics.len(), 1);
+        fs::remove_file(&receipt).unwrap();
+        std::os::unix::fs::symlink(temp.path.join("absent"), &prefix).unwrap();
+        assert_eq!(detect().diagnostics.len(), 1);
+    }
+
+    #[test]
+    fn extraction_uses_a_child_only_umask() {
+        const CHILD: &str = "AV_GCLOUD_UMASK_TEST_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let mut child = Command::new(std::env::current_exe().unwrap());
+            child
+                .args([
+                    "--exact",
+                    "isotopes::hardeners::gcloud::tests::extraction_uses_a_child_only_umask",
+                ])
+                .env(CHILD, "1");
+            unsafe {
+                child.pre_exec(|| {
+                    libc::umask(0o077);
+                    Ok(())
+                });
+            }
+            assert!(child.status().unwrap().success());
+            return;
+        }
+        let temp =
+            isotope::TemporaryDirectory::new_in(&std::env::temp_dir(), "gcloud-umask").unwrap();
+        let source = temp.path.join("source");
+        let bundle = source.join("Gcloud.app");
+        let executable = bundle.join("gcloud");
+        fs::create_dir_all(&bundle).unwrap();
+        fs::set_permissions(&bundle, fs::Permissions::from_mode(0o755)).unwrap();
+        fs::write(&executable, "#!/bin/sh\nexit 0\n").unwrap();
+        fs::set_permissions(&executable, fs::Permissions::from_mode(0o755)).unwrap();
+        let archive = temp.path.join("test.tgz");
+        assert!(
+            command("/usr/bin/tar")
+                .arg("-czf")
+                .arg(&archive)
+                .arg("-C")
+                .arg(&source)
+                .arg("Gcloud.app")
+                .status()
+                .unwrap()
+                .success()
+        );
+        let stage = temp.path.join("stage");
+        fs::create_dir(&stage).unwrap();
+        // The unsigned fixture must still fail signature verification after extraction.
+        assert_eq!(
+            extract_and_verify(&archive, &stage).unwrap_err(),
+            "Gcloud bundle signature is invalid"
+        );
+        for path in [stage.join("Gcloud.app"), stage.join("Gcloud.app/gcloud")] {
+            assert_eq!(fs::metadata(path).unwrap().mode() & 0o777, 0o755);
+        }
+        let after = temp.path.join("parent-mask");
+        fs::write(&after, "test").unwrap();
+        assert_eq!(fs::metadata(after).unwrap().mode() & 0o777, 0o600);
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn static_verification_rejects_unprotected_ancestors_and_acl_resources() {
+        assert!(verify_ancestors(Path::new("/")).is_ok());
+        let temp =
+            isotope::TemporaryDirectory::new_in(&std::env::temp_dir(), "gcloud-acl").unwrap();
+        assert!(verify_ancestors(&temp.path).is_err());
+        let link = temp.path.join("link");
+        std::os::unix::fs::symlink("/", &link).unwrap();
+        assert!(verify_ancestors(&link).is_err());
+        let file = temp.path.join("resource");
+        fs::write(&file, "test").unwrap();
+        assert!(verify_no_acl(&file).is_ok());
+        assert!(
+            command("/bin/chmod")
+                .args(["+a", "everyone allow write"])
+                .arg(&file)
+                .status()
+                .unwrap()
+                .success()
+        );
+        assert!(verify_no_acl(&file).is_err());
+        assert!(
+            command("/bin/chmod")
+                .arg("-N")
+                .arg(&file)
+                .status()
+                .unwrap()
+                .success()
+        );
+        assert!(verify_no_acl(&file).is_ok());
+    }
+
     #[test]
     fn extraction_cannot_write_through_external_links() {
         for bytes in [
