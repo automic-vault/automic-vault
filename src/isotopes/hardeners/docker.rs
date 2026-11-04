@@ -18,6 +18,7 @@ const DOCKER_APP: &str = "/Applications/Docker.app";
 const DOCKER_TEAM: &str = "9BNSXJN65R";
 const MAX_CONFIG: u64 = 1024 * 1024;
 const MAX_HELPER_OUTPUT: u64 = 1024 * 1024;
+const MAX_HELPER_DIAGNOSTIC: u64 = 4096;
 const PRIVILEGE_MODE: super::PrivilegeMode = super::PrivilegeMode::Mixed;
 
 const TARGETS: [(&str, &str, &str); 3] = [
@@ -317,9 +318,27 @@ fn helper_output(path: &Path, action: &str, input: &str) -> Result<String, Strin
     let mut child = helper_command(path, action)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(if action == "list" {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
         .spawn()
         .map_err(|error| format!("failed to start {}: {error}", path.display()))?;
+    // List takes no credential input; its stdout is still private registry metadata.
+    // Never expose get/store diagnostics, which may echo credential payloads.
+    // Drain concurrently so a full stderr pipe cannot block the helper's stdout.
+    let diagnostic = child.stderr.take().map(|mut stderr| {
+        std::thread::spawn(move || -> io::Result<Vec<u8>> {
+            let mut bytes = Vec::new();
+            stderr
+                .by_ref()
+                .take(MAX_HELPER_DIAGNOSTIC + 1)
+                .read_to_end(&mut bytes)?;
+            io::copy(&mut stderr, &mut io::sink())?;
+            Ok(bytes)
+        })
+    });
     if let Some(mut stdin) = child.stdin.take() {
         stdin
             .write_all(input.as_bytes())
@@ -341,12 +360,45 @@ fn helper_output(path: &Path, action: &str, input: &str) -> Result<String, Strin
     let status = child
         .wait()
         .map_err(|error| format!("failed to wait for {}: {error}", path.display()))?;
+    let diagnostic = diagnostic.map(|reader| reader.join());
     if !status.success() {
-        return Err(format!(
-            "legacy Docker helper `{action}` failed ({status}); open Docker Desktop and retry"
-        ));
+        let mut error = format!(
+            "legacy Docker helper `{action}` failed ({status}): {}; the legacy helper exited unsuccessfully during credential migration",
+            path.display()
+        );
+        if action == "list" {
+            error.push_str("; no Docker Secret Gate decision was requested. Invoked with empty stdin and only HOME plus PATH=/usr/bin:/bin:/usr/sbin:/sbin in the environment");
+            append_list_diagnostic(&mut error, "stdout", &bytes);
+            match diagnostic {
+                Some(Ok(Ok(bytes))) => append_list_diagnostic(&mut error, "stderr", &bytes),
+                _ => error.push_str("; helper stderr could not be read"),
+            }
+        } else {
+            error.push_str("; helper output withheld because it may contain credentials");
+        }
+        return Err(error);
     }
     String::from_utf8(bytes).map_err(|_| "legacy Docker helper returned non-UTF-8 output".into())
+}
+
+fn append_list_diagnostic(error: &mut String, stream: &str, bytes: &[u8]) {
+    let text = String::from_utf8_lossy(bytes);
+    if text.trim().is_empty() {
+        error.push_str(&format!("; helper produced no {stream}"));
+    } else if text.trim_start().starts_with(['{', '[', '\"']) {
+        // A failed write can leave partial JSON. Do not disclose registry maps or payloads.
+        error.push_str(&format!("; helper {stream}: JSON output withheld"));
+    } else {
+        let retained = &bytes[..bytes.len().min(MAX_HELPER_DIAGNOSTIC as usize)];
+        // Docker's helper protocol reports errors on stdout. Escape terminal controls.
+        error.push_str(&format!(
+            "; helper {stream}: {:?}",
+            String::from_utf8_lossy(retained)
+        ));
+        if bytes.len() > MAX_HELPER_DIAGNOSTIC as usize {
+            error.push_str(" [truncated at 4096 bytes]");
+        }
+    }
 }
 
 fn helper_action(path: &Path, action: &str, input: &str) -> Result<(), String> {
@@ -726,6 +778,96 @@ fn codesign_output(args: &[&str], path: &Path) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn diagnostic_helper(label: &str, script: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "av-docker-diagnostic-{label}-{}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let helper = root.join("helper");
+        fs::write(&helper, format!("#!/bin/sh\n{script}\n")).unwrap();
+        fs::set_permissions(&helper, fs::Permissions::from_mode(0o700)).unwrap();
+        helper
+    }
+
+    #[test]
+    fn legacy_list_failure_reports_diagnostics_without_registry_json() {
+        let helper = diagnostic_helper(
+            "failure",
+            "printf '{\"private-registry-and-credential\":\"user\"}'; printf '\\033[31mbackend unavailable\\n' >&2; exit 1",
+        );
+        let error = helper_output(&helper, "list", "").unwrap_err();
+        assert!(error.contains("exit status: 1"));
+        assert!(error.contains(helper.to_str().unwrap()));
+        assert!(error.contains("backend unavailable"));
+        assert!(error.contains("no Docker Secret Gate decision was requested"));
+        assert!(error.contains("empty stdin"));
+        assert!(error.contains("PATH=/usr/bin:/bin:/usr/sbin:/sbin"));
+        assert!(!error.contains("private-registry-and-credential"));
+        assert!(!error.contains('\x1b'));
+        assert!(!error.contains("open Docker Desktop"));
+        fs::write(
+            &helper,
+            "#!/bin/sh\nprintf 'backend connection refused'; exit 1\n",
+        )
+        .unwrap();
+        let error = helper_output(&helper, "list", "").unwrap_err();
+        assert!(error.contains("helper stdout: \"backend connection refused\""));
+        fs::remove_dir_all(helper.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn list_diagnostics_withhold_partial_json_and_escape_invalid_bytes() {
+        for bytes in [
+            b"  {\"private-registry".as_slice(),
+            b"[\"private-registry",
+            b"\"private-registry",
+        ] {
+            let mut error = String::new();
+            append_list_diagnostic(&mut error, "stdout", bytes);
+            assert!(error.contains("JSON output withheld"));
+            assert!(!error.contains("private-registry"));
+        }
+        let mut error = String::new();
+        append_list_diagnostic(&mut error, "stderr", b"failure\xff\x1b[2J\r");
+        assert!(error.contains("failure"));
+        assert!(!error.contains('\x1b'));
+        assert!(!error.contains('\r'));
+    }
+
+    #[test]
+    fn legacy_get_failure_keeps_both_streams_private() {
+        let helper = diagnostic_helper(
+            "get",
+            "cat >/dev/null; printf 'secret-on-stdout'; printf 'secret-on-stderr' >&2; exit 1",
+        );
+        let error = helper_output(&helper, "get", "registry.example").unwrap_err();
+        assert!(error.contains("legacy Docker helper `get` failed"));
+        assert!(!error.contains("secret-on-"));
+        assert!(!error.contains("registry.example"));
+        fs::remove_dir_all(helper.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn legacy_list_drains_large_stderr_and_bounds_diagnostics() {
+        let helper =
+            diagnostic_helper("large", "head -c 131072 /dev/zero >&2; printf '{}'; exit 1");
+        let error = helper_output(&helper, "list", "").unwrap_err();
+        assert!(error.contains("[truncated at 4096 bytes]"));
+        assert!(error.len() < 20000);
+        fs::write(
+            &helper,
+            "#!/bin/sh\nhead -c 131072 /dev/zero >&2; printf '{}'\n",
+        )
+        .unwrap();
+        assert_eq!(helper_output(&helper, "list", "").unwrap(), "{}");
+        fs::write(&helper, "#!/bin/sh\nexit 1\n").unwrap();
+        let error = helper_output(&helper, "list", "").unwrap_err();
+        assert!(error.contains("helper produced no stderr"));
+        assert!(!error.contains("open Docker Desktop"));
+        fs::remove_dir_all(helper.parent().unwrap()).unwrap();
+    }
 
     #[test]
     fn doctor_omits_absent_docker_but_retains_missing_vendor_after_hardening() {
