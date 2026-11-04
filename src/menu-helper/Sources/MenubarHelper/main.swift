@@ -4169,6 +4169,7 @@ private final class ApprovalServer: @unchecked Sendable {
         (identifier "com.automicvault" or identifier "com.automicvault.av" or \
         identifier "com.automicvault.av-brew-stub" or \
         identifier "com.automicvault.varlock-plugin-helper" or \
+        identifier "com.automicvault.gcloud" or \
         identifier "com.automicvault.wrangler" or \
         identifier "gh" or identifier "com.github.cli" or identifier "stripe" or \
         identifier "supabase" or identifier "supabase-go" or identifier "com.supabase.cli")
@@ -4575,6 +4576,12 @@ private final class ApprovalServer: @unchecked Sendable {
             handleDelete(message, on: peer, cancellation: cancellation, caller: mutationCaller)
         case .save where isTrustedGhCaller(path: callerPath, signing: signing):
             handleGhSave(message, on: peer, cancellation: cancellation, caller: mutationCaller)
+        case .gcloudSave, .gcloudDelete:
+            guard isTrustedGcloudCaller(path: callerPath, signing: signing) else {
+                reply(peer, to: message, ok: false, error: "gcloud Gate Client is not trusted")
+                return
+            }
+            handleGcloudMutation(message, on: peer, cancellation: cancellation, caller: mutationCaller, saving: op == .gcloudSave)
         case .wranglerSave where isTrustedWranglerCaller(path: callerPath, signing: signing):
             guard let key = xpc_dictionary_get_string(message, "key"), wranglerCredentialMutationIsSupported(key: String(cString: key), hasProjectDirectory: xpc_dictionary_get_value(message, "project_directory") != nil) else {
                 reply(peer, to: message, ok: false, error: "Wrangler mutations require a Global Value in the Wrangler namespace")
@@ -5202,6 +5209,10 @@ private final class ApprovalServer: @unchecked Sendable {
             if isTrustedWranglerCaller(path: callerPath, signing: signing),
                !wranglerCredentialSelectionIsSupported(selected) {
                 throw AppError("Wrangler OAuth requires Global Values in the Wrangler namespace")
+            }
+            if isTrustedGcloudCaller(path: callerPath, signing: signing),
+               !gcloudCredentialSelectionIsSupported(selected) {
+                throw AppError("gcloud OAuth requires Global Values in the gcloud namespace")
             }
             preparedRequest = approvalRequestWithCredentialContext(uvRequest.selecting(selected))
         } catch {
@@ -6994,6 +7005,94 @@ private final class ApprovalServer: @unchecked Sendable {
             reply(peer, to: message, ok: false, error: error.localizedDescription)
         }
         return true
+    }
+
+    private func handleGcloudMutation(
+        _ message: xpc_object_t, on peer: xpc_connection_t,
+        cancellation: ApprovalCancellation, caller: MutationCaller, saving: Bool
+    ) {
+        guard let key = xpc_dictionary_get_string(message, "key").map({ String(cString: $0) }),
+              isGcloudCredentialKey(key),
+              xpc_dictionary_get_value(message, "project_directory") == nil,
+              let presence = xpc_dictionary_get_value(message, "expected_present"),
+              xpc_get_type(presence) == XPC_TYPE_BOOL,
+              let cwd = xpc_dictionary_get_string(message, "cwd").map({ String(cString: $0) }),
+              let args = stringArray(message, "args"), args.count <= 4096,
+              args.reduce(0, { $0 + $1.utf8.count }) <= 1024 * 1024,
+              processArguments(caller.pid).map({ Array($0.dropFirst()) }) == args,
+              sshAgentPeerCWD(caller.pid) == cwd
+        else {
+            reply(peer, to: message, ok: false, error: "invalid gcloud mutation request")
+            return
+        }
+        let expected = xpc_dictionary_get_string(message, "expected_value").map { String(cString: $0) }
+        guard xpc_bool_get_value(presence) == (expected != nil),
+              expected.map(gcloudCredentialIsSupported) ?? true else {
+            reply(peer, to: message, ok: false, error: "invalid prior gcloud credential")
+            return
+        }
+        let value = xpc_dictionary_get_string(message, "value").map { String(cString: $0) }
+        guard !saving || value.map(gcloudCredentialIsSupported) == true else {
+            reply(peer, to: message, ok: false, error: "invalid gcloud OAuth credential")
+            return
+        }
+        let launchers = launcherIdentities(for: caller.identity)
+        let launcher = launchers.first
+        Task { @MainActor in
+            // Recheck custody inside the serialized approval transaction, immediately
+            // before recording and mutation. No Secret bytes are returned by this check.
+            let preflight: () -> String? = {
+                var live = AVProcessIdentity()
+                guard !cancellation.isCanceled,
+                      av_process_identity(caller.pid, &live), sameProcessIdentity(caller.identity, live),
+                      let signing = liveSigningInfo(pid: caller.pid),
+                      signing.mainExecutable == caller.path, signing.identifier == "com.automicvault.gcloud",
+                      signing.teamIdentifier == "ZU76A67LGU", signing.isDeveloperID,
+                      signing.runtimeProtection == .hardened,
+                      liveProcessHasNoEntitlements(pid: caller.pid),
+                      self.processArguments(caller.pid).map({ Array($0.dropFirst()) }) == args,
+                      sshAgentPeerCWD(caller.pid) == cwd
+                else { return "gcloud execution changed before mutation" }
+                guard let pending = pendingSecretMutationNames(), pending.isEmpty,
+                      case .success(let inventory) = loadStoredSecretsResult() else {
+                    return "Secret custody is unavailable"
+                }
+                let stored = inventory.first { $0.account == key }
+                guard stored?.hasConsistentAccessibility != false,
+                      stored?.values.allSatisfy({ $0.source == .global }) != false else {
+                    return "gcloud mutations require a consistent Global Value"
+                }
+                let current: String?
+                if let selected = stored?.values.first {
+                    guard case .success(let text) = loadStoredSecretValue(selected) else {
+                        return "gcloud credential is unavailable"
+                    }
+                    current = text
+                } else { current = nil }
+                return gcloudCredentialMatchesExpected(current: current, expected: expected)
+                    ? nil : "gcloud credential changed; retry the operation"
+            }
+            guard preflight() == nil, case .success(let inventory) = loadStoredSecretsResult() else {
+                self.reply(peer, to: message, ok: false, error: preflight() ?? "Secret custody is unavailable")
+                return
+            }
+            let accessibility = inventory.first { $0.account == key }?.accessibility ?? .whenUnlocked
+            let mutation: SecretMutation = saving
+                ? .save(account: key, value: value!, accessibility: accessibility, warning: "Existing Direct Access rules for this Secret also apply to the new credential.")
+                : .delete(account: key)
+            let base = mutation.approvalRequest(callerPath: caller.path, requestCWD: cwd)
+            let request = ApprovalRequest(op: base.op, keys: base.keys, target: caller.path,
+                args: args, cwd: cwd, replaceExistingEnv: base.replaceExistingEnv,
+                allowMissingKeys: false, envConflicts: [], shebangScript: nil, scriptData: nil,
+                tool: "gcloud", title: base.title, detail: base.detail)
+            let result = await performApprovedSecretMutation(mutation, callerPath: caller.path,
+                pid: caller.pid, signing: caller.signing, launcher: launcher, launchers: launchers,
+                launcherFallbackPath: caller.path, canRequestHumanApproval: self.canRequestHumanApproval,
+                onAccessRequest: self.onAccessRequest, cancellation: cancellation,
+                preflight: preflight, requestOverride: request)
+            self.reply(peer, to: message, ok: result.status == errSecSuccess,
+                error: result.error ?? result.status.flatMap { $0 == errSecSuccess ? nil : secretMutationFailureMessage(action: saving ? "store" : "delete", account: key, status: $0) })
+        }
     }
 
     private func handleSave(
@@ -10455,6 +10554,7 @@ private func isAllowedCaller(path: String, signing: SigningInfo) -> Bool {
     if isTrustedAvCaller(path: path, signing: signing) {
         return true
     }
+    if isTrustedGcloudCaller(path: path, signing: signing) { return true }
     if isTrustedWranglerCaller(path: path, signing: signing) {
         return true
     }
@@ -10485,6 +10585,12 @@ private func isTrustedMenuHelperCaller(path: String, signing: SigningInfo) -> Bo
 private func isTrustedAvCaller(path: String, signing: SigningInfo) -> Bool {
     URL(fileURLWithPath: path).lastPathComponent == "av"
         && signing.identifier == "com.automicvault.av"
+}
+
+private func isTrustedGcloudCaller(path: String, signing: SigningInfo) -> Bool {
+    path == "/opt/av/gcloud/Gcloud.app/Contents/MacOS/gcloud"
+        && signing.identifier == "com.automicvault.gcloud"
+        && signing.teamIdentifier == "ZU76A67LGU"
 }
 
 private func isTrustedWranglerCaller(path: String, signing: SigningInfo) -> Bool {
@@ -10767,7 +10873,7 @@ private func classifySecretGateRequest(
         return .mutating
     case "gpg-signing":
         return .localWrite
-    case "wrangler":
+    case "wrangler", "gcloud":
         return .unknown
     case "gh":
         return request.credentialParent?.gitContext?.registration.operation.classification ?? ghRequestClassification(request.args)

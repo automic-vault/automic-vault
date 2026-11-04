@@ -1785,6 +1785,7 @@ mod tests {
                             hardener.name,
                             "aliyun-cli"
                                 | "wrangler"
+                                | "gcloud"
                                 | "gh"
                                 | "goat"
                                 | "ordercli"

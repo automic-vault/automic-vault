@@ -7,6 +7,7 @@ pub(crate) mod doctl;
 pub(crate) mod emudhra;
 pub(crate) mod env_wrapper;
 pub(crate) mod fastly_cli;
+pub(crate) mod gcloud;
 pub(crate) mod gh_cli;
 mod gh_git;
 pub(crate) mod goat;
@@ -355,6 +356,7 @@ const HARDENERS: &[HardenerSpec] = &[
     gated_hardener!(hcloud, "hcloud", &[]),
     gated_hardener!(homebrew, "brew", &["homebrew"]),
     gated_hardener!(gh_cli, "gh", &["gh-cli"]),
+    gated_hardener!(gcloud, "gcloud", &[]),
     gated_hardener!(wrangler, "wrangler", &[]),
     gated_hardener!(stripe_cli, "stripe", &[]),
     ungated_hardener!(sudo, "sudo", &[]),
@@ -432,6 +434,7 @@ pub(crate) fn secret_gates() -> Vec<SecretGateDescriptor> {
         sqlcmd::secret_gate(),
         homebrew::secret_gate(),
         gh_cli::secret_gate(),
+        gcloud::secret_gate(),
         wrangler::secret_gate(),
         stripe_cli::secret_gate(),
         supabase::secret_gate(),
