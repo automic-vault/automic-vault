@@ -24,6 +24,13 @@ existing documented invariants:
 - Managed installations use root-owned versioned prefixes with narrow privileged
   publication authority. The main app and engine-owning menu helper are ordinary
   user processes. Root/kernel compromise remains outside the threat model.
+- av5 requires an explicit capabilities manifest for Blessed Scripts. Unlike
+  av4's compatibility behavior, absence does not mean Capability Inheritance.
+  `capabilities: { inherit: true }` remains explicit inheritance; `{}` remains
+  an empty ceiling. Its initial runner accepts only verified shell snapshots,
+  without the canonical-path exception, and SSH capabilities name exact per-key
+  gates. Optional ordinary-shebang re-exec uses `AV_RUN` only as a recursion hint,
+  never authority. See [AV5 ADR 0021](../../../av5/docs/adr/0021-local-blessed-scripts.md).
 - av5 uses distinct bundle, IPC, launch-agent, and future storage namespaces so
   av4 can run alongside it. No implicit migration or fallback to av4 authority.
 
