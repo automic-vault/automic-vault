@@ -166,6 +166,11 @@ func migrateLegacyGPGSigningSecrets(
             guard deleteStatus == errSecSuccess || deleteStatus == errSecItemNotFound else {
                 return deleteStatus
             }
+        // A locked keychain cannot be read, so there is nothing to migrate this time.
+        // The migration retries on a later request; the signing gate still reports
+        // any Secret it cannot load. Writes and other read failures still fail closed.
+        case .failure(let status) where status == errSecInteractionNotAllowed:
+            continue
         case .failure(let status):
             return status
         case .missing:
@@ -197,6 +202,8 @@ func migrateEmptyGPGSigningPassphrases(
         case .value(let value) where value.isEmpty:
             let status = delete(name)
             if status != errSecSuccess && status != errSecItemNotFound { return status }
+        case .failure(let status) where status == errSecInteractionNotAllowed:
+            continue
         case .failure(let status):
             return status
         case .value, .missing:
