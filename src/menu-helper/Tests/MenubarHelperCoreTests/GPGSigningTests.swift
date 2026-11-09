@@ -156,6 +156,83 @@ func gpgSigningConfigurationIsAvailableAfterFirstUnlock() {
     #expect(values.keys.allSatisfy { !$0.hasPrefix("AUTOMIC_GPG_") })
 }
 
+@Test func lockedReadsDoNotBlockGPGSecretNameMigration() {
+    var values = [
+        "AUTOMIC_GPG_AGENT_SIGNING_PRIVATE_KEY": "alternate-private",
+    ]
+    var deleted: [String] = []
+    let status = migrateLegacyGPGSigningSecrets(
+        load: { account in
+            if account == "AUTOMIC_GPG_SIGNING_PRIVATE_KEY"
+                || account == gpgDefaultPassphraseSecretName
+            {
+                return .failure(errSecInteractionNotAllowed)
+            }
+            return values[account].map(GPGStoredValueLoad.value) ?? .missing
+        },
+        saveIfAbsentOrEqual: { account, value in
+            values[account] = value
+            return errSecSuccess
+        },
+        delete: { account in
+            deleted.append(account)
+            values.removeValue(forKey: account)
+            return errSecSuccess
+        }
+    )
+
+    #expect(status == errSecSuccess)
+    #expect(values[gpgAlternatePrivateKeySecretName] == "alternate-private")
+    #expect(deleted == ["AUTOMIC_GPG_AGENT_SIGNING_PRIVATE_KEY"])
+}
+
+@Test func lockedReadsLeaveEveryLegacyGPGSecretUntouched() {
+    var writes = 0
+    let status = migrateLegacyGPGSigningSecrets(
+        load: { _ in .failure(errSecInteractionNotAllowed) },
+        saveIfAbsentOrEqual: { _, _ in writes += 1; return errSecSuccess },
+        delete: { _ in writes += 1; return errSecSuccess }
+    )
+
+    #expect(status == errSecSuccess)
+    #expect(writes == 0)
+}
+
+@Test func nonLockedReadFailuresStillFailGPGSecretMigrationClosed() {
+    for failure in [errSecAuthFailed, errSecDecode, errSecIO] {
+        let legacyStatus = migrateLegacyGPGSigningSecrets(
+            load: { _ in .failure(failure) },
+            saveIfAbsentOrEqual: { _, _ in errSecSuccess },
+            delete: { _ in errSecSuccess }
+        )
+        #expect(legacyStatus == failure)
+
+        let passphraseStatus = migrateLegacyGPGSigningSecrets(
+            load: { $0 == gpgDefaultPassphraseSecretName ? .failure(failure) : .missing },
+            saveIfAbsentOrEqual: { _, _ in errSecSuccess },
+            delete: { _ in errSecSuccess }
+        )
+        #expect(passphraseStatus == failure)
+    }
+}
+
+@Test func lockedWritesDuringGPGSecretMigrationStillFail() {
+    let values = ["AUTOMIC_GPG_SIGNING_PRIVATE_KEY": "private"]
+    let saveStatus = migrateLegacyGPGSigningSecrets(
+        load: { values[$0].map(GPGStoredValueLoad.value) ?? .missing },
+        saveIfAbsentOrEqual: { _, _ in errSecInteractionNotAllowed },
+        delete: { _ in errSecSuccess }
+    )
+    #expect(saveStatus == errSecInteractionNotAllowed)
+
+    let deleteStatus = migrateLegacyGPGSigningSecrets(
+        load: { values[$0].map(GPGStoredValueLoad.value) ?? .missing },
+        saveIfAbsentOrEqual: { _, _ in errSecSuccess },
+        delete: { _ in errSecInteractionNotAllowed }
+    )
+    #expect(deleteStatus == errSecInteractionNotAllowed)
+}
+
 @Test func conflictingGPGSecretNameMigrationFailsClosed() {
     var values = [
         "AUTOMIC_GPG_SIGNING_PRIVATE_KEY": "legacy-private",
