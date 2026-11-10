@@ -2,17 +2,21 @@ import Foundation
 import Security
 
 /// A closed catalog: no arbitrary defaults or policy keys can cross this API.
+/// The type and Keychain service retain their original presentation-only names.
 public enum PresentationSetting: String, CaseIterable, Sendable {
+    case defaultSecretAvailability = "default-secret-availability"
     case feedback = "automatic-authorization-feedback"
     case compactNotifications = "compact-notifications"
     case autoCollapseGrantStrip = "auto-collapse-grant-strip"
 
     public var requiresApproval: Bool { self != .compactNotifications }
     public var acceptedValues: [String] {
-        self == .feedback ? ["notification", "menu-bar-flash", "none"] : ["true", "false"]
+        if self == .defaultSecretAvailability { return ["when-unlocked", "available-while-locked"] }
+        return self == .feedback ? ["notification", "menu-bar-flash", "none"] : ["true", "false"]
     }
     public var defaultValue: String {
         switch self {
+        case .defaultSecretAvailability: "when-unlocked"
         case .feedback: "notification"
         case .compactNotifications: "true"
         case .autoCollapseGrantStrip: "false"
@@ -20,13 +24,17 @@ public enum PresentationSetting: String, CaseIterable, Sendable {
     }
     public var title: String {
         switch self {
+        case .defaultSecretAvailability: "Default Secret Availability"
         case .feedback: "Automic Authorization Feedback"
         case .compactNotifications: "Compact Notifications"
         case .autoCollapseGrantStrip: "Auto-collapse Temporary Access Grant Strip"
         }
     }
     public func changeDetail(from old: String, to new: String) -> String {
-        "\(title): \(old) → \(new). " + (self == .feedback
+        if self == .defaultSecretAvailability {
+            return "\(title): \(old) → \(new). New Secrets without an explicit availability choice use this setting. Existing Secrets are unchanged. Available While Locked permits authorized use after the first unlock following a restart. Availability never grants authorization."
+        }
+        return "\(title): \(old) → \(new). " + (self == .feedback
             ? "Controls whether policy-authorized operations show a notification, flash the menu bar, or show no feedback. Approval prompts and policy-denial notifications are unaffected."
             : "Controls whether the full grant strip collapses after five seconds. The warning tab, orange shield, and End action remain available.")
     }
@@ -65,8 +73,8 @@ public enum PresentationSettingsError: Error, LocalizedError {
     case invalidValue, unavailable, changed, recordingFailed
     public var errorDescription: String? {
         switch self {
-        case .invalidValue: "Unsupported presentation setting value."
-        case .unavailable: "Presentation settings storage is unavailable or malformed."
+        case .invalidValue: "Unsupported setting value."
+        case .unavailable: "Settings storage is unavailable or malformed."
         case .changed: "The setting changed during review; retry the change."
         case .recordingFailed: "Authorization History is unavailable."
         }
@@ -125,4 +133,27 @@ public func savePresentationSetting(_ setting: PresentationSetting, value: Strin
         }
     }
     guard try loadPresentationSetting(setting) == value else { throw PresentationSettingsError.unavailable }
+}
+
+/// Existing Secrets retain their availability; an explicit choice overrides only creation.
+public func secretSaveAccessibility(
+    existing: StoredSecretAccessibility?, requested: StoredSecretAccessibility? = nil,
+    readDefault: () throws -> String = { try loadPresentationSetting(.defaultSecretAvailability) }
+) throws -> StoredSecretAccessibility {
+    if let existing { return existing }
+    if let requested { return requested }
+    switch try readDefault() {
+    case "when-unlocked": return .whenUnlocked
+    case "available-while-locked": return .afterFirstUnlock
+    default: throw PresentationSettingsError.unavailable
+    }
+}
+
+public func secretSaveAvailabilityDetail(_ accessibility: StoredSecretAccessibility, explicit: Bool) -> String {
+    if explicit {
+        return "All Values of this Secret will be Available While Locked, after the first unlock following a restart. Authorization is still required. If saving the Value fails after availability changes, the availability change remains."
+    }
+    return accessibility.isAvailableWhileLocked
+        ? "Secret Availability: Available While Locked, after the first unlock following a restart. Authorization is still required."
+        : "Secret Availability: When Unlocked."
 }

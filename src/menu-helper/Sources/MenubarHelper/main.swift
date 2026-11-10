@@ -2698,14 +2698,16 @@ enum SecretMutation {
         account: String,
         value: String,
         accessibility: StoredSecretAccessibility,
-        warning: String = ""
+        warning: String = "",
+        availableWhileLocked: Bool = false
     )
     case saveProject(
         account: String,
         value: String,
         directory: String,
         accessibility: StoredSecretAccessibility,
-        warning: String
+        warning: String,
+        availableWhileLocked: Bool = false
     )
     case saveIfAbsentOrEqual(account: String, value: String, warning: String = "")
     case delete(account: String)
@@ -2745,16 +2747,16 @@ enum SecretMutation {
     fileprivate func approvalRequest(callerPath: String, requestCWD: String = "") -> ApprovalRequest {
         let properties: (op: String, keys: [String], args: [String], title: String, detail: String)
         switch self {
-        case .save(let account, _, _, let warning):
+        case .save(let account, _, let accessibility, let warning, let availableWhileLocked):
             properties = (
-                "save", [account], ["save", account], "Add or modify \(account)?",
-                "This will create or replace a Global Value in Automic Vault."
+                "save", [account], ["save", account] + (availableWhileLocked ? ["--available-while-locked"] : []), "Add or modify \(account)?",
+                "This will create or replace a Global Value in Automic Vault. " + secretSaveAvailabilityDetail(accessibility, explicit: availableWhileLocked)
                     + (warning.isEmpty ? "" : " \(warning)")
             )
-        case .saveProject(let account, _, let directory, _, let warning):
+        case .saveProject(let account, _, let directory, let accessibility, let warning, let availableWhileLocked):
             properties = (
-                "save", [account], ["save", "--project-directory=\(escapedSecurityPath(directory))", account],
-                "Add or modify \(account) Project Value?", warning
+                "save", [account], ["save", "--project-directory=\(escapedSecurityPath(directory))", account] + (availableWhileLocked ? ["--available-while-locked"] : []),
+                "Add or modify \(account) Project Value?", warning + " " + secretSaveAvailabilityDetail(accessibility, explicit: availableWhileLocked)
             )
         case .saveIfAbsentOrEqual(let account, _, let warning):
             properties = (
@@ -2938,7 +2940,7 @@ enum SecretMutation {
         let selectedSecretValues: SelectedSecretValues
         let credentialScope: String?
         switch self {
-        case .saveProject(let account, _, let directory, let accessibility, _):
+        case .saveProject(let account, _, let directory, let accessibility, _, _):
             cwd = directory
             selectedSecretValues = SelectedSecretValues(values: [account: StoredSecretValue(
                 source: .projectDirectory(directory),
@@ -3026,32 +3028,20 @@ enum SecretMutation {
             return repairStatus == errSecSuccess ? errSecNotAvailable : repairStatus
         }
         switch self {
-        case .save(let account, let value, let accessibility, _):
-            let secrets: [StoredSecret]
-            switch loadStoredSecretsResult() {
-            case .success(let loaded): secrets = loaded
-            case .failure(let status): return status
-            }
-            let existing = secrets.first { $0.account == account }
-            guard existing?.hasConsistentAccessibility != false else { return errSecDecode }
+        case .save(let account, let value, let accessibility, _, let availableWhileLocked):
             return saveStoredSecret(
                 account: account,
                 value: value,
-                accessibility: existing?.accessibility ?? accessibility
+                accessibility: accessibility,
+                availableWhileLocked: availableWhileLocked
             )
-        case .saveProject(let account, let value, let directory, let accessibility, _):
+        case .saveProject(let account, let value, let directory, let accessibility, _, let availableWhileLocked):
             guard (try? validateCanonicalProjectDirectory(directory)) != nil else { return errSecParam }
-            let secrets: [StoredSecret]
-            switch loadStoredSecretsResult() {
-            case .success(let loaded): secrets = loaded
-            case .failure(let status): return status
-            }
-            let existing = secrets.first { $0.account == account }
-            guard existing?.hasConsistentAccessibility != false else { return errSecDecode }
             return saveStoredSecret(
                 account: account,
                 value: value,
-                accessibility: existing?.accessibility ?? accessibility,
+                accessibility: accessibility,
+                availableWhileLocked: availableWhileLocked,
                 source: .projectDirectory(directory)
             )
         case .saveIfAbsentOrEqual(let account, let value, _):
@@ -3059,47 +3049,47 @@ enum SecretMutation {
         case .delete(let account):
             return deleteStoredSecretRevokingDirectAccess(account: account)
         case .dockerSave(let account, let value, _, _):
-            return saveStoredSecret(account: account, value: value, accessibility: .whenUnlocked)
+            return saveStoredSecret(account: account, value: value)
         case .dockerDelete(let account, _):
             return deleteStoredSecretRevokingDirectAccess(account: account)
         case .podmanSave(let account, let value, _, _):
-            return saveStoredSecret(account: account, value: value, accessibility: .whenUnlocked)
+            return saveStoredSecret(account: account, value: value)
         case .podmanDelete(let account, _):
             return deleteStoredSecretRevokingDirectAccess(account: account)
         case .goatSave(let account, let value, _):
-            return saveStoredSecret(account: account, value: value, accessibility: .whenUnlocked)
+            return saveStoredSecret(account: account, value: value)
         case .goatDelete(let account, _):
             return deleteStoredSecretRevokingDirectAccess(account: account)
         case .ordercliSave(let account, let value, _):
-            return saveStoredSecret(account: account, value: value, accessibility: .whenUnlocked)
+            return saveStoredSecret(account: account, value: value)
         case .ordercliDelete(let account, _):
             return deleteStoredSecretRevokingDirectAccess(account: account)
         case .openhueSave(let account, let value, _):
-            return saveStoredSecret(account: account, value: value, accessibility: .whenUnlocked)
+            return saveStoredSecret(account: account, value: value)
         case .plumberSave(let account, let value, _):
-            return saveStoredSecret(account: account, value: value, accessibility: .whenUnlocked)
+            return saveStoredSecret(account: account, value: value)
         case .uaaSave(let account, let value, _):
-            return saveStoredSecret(account: account, value: value, accessibility: .whenUnlocked)
+            return saveStoredSecret(account: account, value: value)
         case .uaaDelete(let account, _):
             return deleteStoredSecretRevokingDirectAccess(account: account)
         case .railwaySave(let account, let value, _):
-            return saveStoredSecret(account: account, value: value, accessibility: .whenUnlocked)
+            return saveStoredSecret(account: account, value: value)
         case .railwayDelete(let account, _):
             return deleteStoredSecretRevokingDirectAccess(account: account)
         case .oxideSave(let account, let value, _):
-            return saveStoredSecret(account: account, value: value, accessibility: .whenUnlocked)
+            return saveStoredSecret(account: account, value: value)
         case .oxideDelete(let account, _):
             return deleteStoredSecretRevokingDirectAccess(account: account)
         case .fastlySave(let account, let value, _):
-            return saveStoredSecret(account: account, value: value, accessibility: .whenUnlocked)
+            return saveStoredSecret(account: account, value: value)
         case .fastlyDelete(let account, _):
             return deleteStoredSecretRevokingDirectAccess(account: account)
         case .sqlcmdSave(let account, let value, _):
-            return saveStoredSecret(account: account, value: value, accessibility: .whenUnlocked)
+            return saveStoredSecret(account: account, value: value)
         case .sqlcmdDelete(let account, _):
             return deleteStoredSecretRevokingDirectAccess(account: account)
         case .terraformSave(let account, let value, _):
-            return saveStoredSecret(account: account, value: value, accessibility: .whenUnlocked)
+            return saveStoredSecret(account: account, value: value)
         case .terraformDelete(let account, _):
             return deleteStoredSecretRevokingDirectAccess(account: account)
         case .deleteValue(let account, let source):
@@ -4560,6 +4550,8 @@ private final class ApprovalServer: @unchecked Sendable {
                 return
             }
             replyHistoryChunk(chunk, to: message, on: peer)
+        case .saveAvailableWhileLocked where isTrustedAvCaller(path: callerPath, signing: signing):
+            handleSave(message, on: peer, cancellation: cancellation, caller: mutationCaller, availableWhileLocked: true)
         case .save where isTrustedAvCaller(path: callerPath, signing: signing):
             handleSave(message, on: peer, cancellation: cancellation, caller: mutationCaller)
         case .saveIfAbsentOrEqual where isTrustedAvCaller(path: callerPath, signing: signing):
@@ -7079,7 +7071,13 @@ private final class ApprovalServer: @unchecked Sendable {
                 self.reply(peer, to: message, ok: false, error: preliminaryError ?? "Secret custody is unavailable")
                 return
             }
-            let accessibility = inventory.first { $0.account == key }?.accessibility ?? .whenUnlocked
+            let accessibility: StoredSecretAccessibility
+            do {
+                accessibility = saving ? try secretSaveAccessibility(existing: inventory.first { $0.account == key }?.accessibility) : .whenUnlocked
+            } catch {
+                self.reply(peer, to: message, ok: false, error: error.localizedDescription)
+                return
+            }
             let mutation: SecretMutation = saving
                 ? .save(account: key, value: value!, accessibility: accessibility, warning: "Existing Direct Access rules for this Secret also apply to the new credential.")
                 : .delete(account: key)
@@ -7103,7 +7101,8 @@ private final class ApprovalServer: @unchecked Sendable {
         on peer: xpc_connection_t,
         cancellation: ApprovalCancellation,
         caller: MutationCaller,
-        ifAbsentOrEqual: Bool = false
+        ifAbsentOrEqual: Bool = false,
+        availableWhileLocked: Bool = false
     ) {
         guard let pendingNames = pendingSecretMutationNames() else {
             reply(peer, to: message, ok: false, error: "pending Secret mutation state is unavailable")
@@ -7158,7 +7157,13 @@ private final class ApprovalServer: @unchecked Sendable {
             reply(peer, to: message, ok: false, error: "secret \(key) must be repaired before it can be changed")
             return
         }
-        let accessibility = storedSecret?.accessibility ?? .whenUnlocked
+        let accessibility: StoredSecretAccessibility
+        do {
+            accessibility = availableWhileLocked ? .afterFirstUnlock : try secretSaveAccessibility(existing: storedSecret?.accessibility)
+        } catch {
+            reply(peer, to: message, ok: false, error: error.localizedDescription)
+            return
+        }
         let directAccessWarning: String
         if let launchers = storedSecret?.directAccessLaunchers, !launchers.isEmpty {
             directAccessWarning = "Direct Access Launchers already authorized for \(key) can use this value immediately: "
@@ -7195,14 +7200,16 @@ private final class ApprovalServer: @unchecked Sendable {
                 value: value,
                 directory: projectDirectory,
                 accessibility: accessibility,
-                warning: warning
+                warning: warning,
+                availableWhileLocked: availableWhileLocked
             )
         } else {
             mutation = .save(
                 account: key,
                 value: value,
                 accessibility: accessibility,
-                warning: directAccessWarning
+                warning: directAccessWarning,
+                availableWhileLocked: availableWhileLocked
             )
         }
         handleMutation(
@@ -8008,8 +8015,8 @@ private final class ApprovalServer: @unchecked Sendable {
                 return
             }
             switch mutation {
-            case .save(let account, _, _, _),
-                 .saveProject(let account, _, _, _, _),
+            case .save(let account, _, _, _, _),
+                 .saveProject(let account, _, _, _, _, _),
                  .saveIfAbsentOrEqual(let account, _, _),
                  .dockerSave(let account, _, _, _),
                  .podmanSave(let account, _, _, _),
@@ -15803,6 +15810,8 @@ private func runSecretMutationSelfCheck() async -> Int32 {
 
     for mutation in [
         SecretMutation.save(account: "TEST_SECRET", value: "secret", accessibility: .whenUnlocked),
+        SecretMutation.save(account: "TEST_SECRET", value: "secret", accessibility: .afterFirstUnlock, availableWhileLocked: true),
+        SecretMutation.saveProject(account: "TEST_SECRET", value: "secret", directory: "/tmp", accessibility: .afterFirstUnlock, warning: "", availableWhileLocked: true),
         SecretMutation.saveIfAbsentOrEqual(account: "TEST_SECRET", value: "secret"),
         SecretMutation.delete(account: "TEST_SECRET"),
     ] {
@@ -15823,6 +15832,24 @@ private func runSecretMutationSelfCheck() async -> Int32 {
             }
         )
         guard result.status == nil, !performed else { return 1 }
+    }
+
+    for mutation in [
+        SecretMutation.save(account: "TEST_SECRET", value: "secret", accessibility: .afterFirstUnlock, availableWhileLocked: true),
+        SecretMutation.saveProject(account: "TEST_SECRET", value: "secret", directory: "/tmp", accessibility: .afterFirstUnlock, warning: "", availableWhileLocked: true),
+    ] {
+        let request = mutation.approvalRequest(callerPath: "/usr/local/bin/av")
+        guard request.args.contains("--available-while-locked"),
+              request.detail?.contains("All Values") == true else { return 21 }
+        var performed = false
+        let result = await performApprovedSecretMutation(
+            mutation, callerPath: "/usr/local/bin/av", pid: 42,
+            signing: SigningInfo(identifier: "com.automicvault.av", teamIdentifier: "TEAM"),
+            launcher: nil, launcherFallbackPath: "/Applications/Terminal.app",
+            canRequestHumanApproval: { true }, onAccessRequest: { _ in false },
+            decision: { _ in .approved }, perform: { _ in performed = true; return errSecSuccess }
+        )
+        guard result.status == nil, !performed else { return 22 }
     }
 
     var performedWhileInactive = false

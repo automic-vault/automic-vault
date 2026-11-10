@@ -6,6 +6,7 @@ import Testing
 }
 
 @Test func conditionalSaveKeepsItsCompatibleWireValue() {
+    #expect(ApprovalServiceOperation(rawValue: "save-available-while-locked") == .saveAvailableWhileLocked)
     #expect(ApprovalServiceOperation.saveIfAbsentOrEqual.rawValue == "save-if-absent")
 }
 

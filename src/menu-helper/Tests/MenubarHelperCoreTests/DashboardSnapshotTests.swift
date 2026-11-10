@@ -1268,6 +1268,26 @@ func storedSecretAccessibilityCanChangeWithoutChangingValue() throws {
 }
 
 @Test(.enabled(if: dataProtectionKeychainAvailable(), "requires an entitled Keychain test host"))
+func saveWhileLockedUpdatesEveryValueAndOrdinarySavesPreserveAvailability() throws {
+    let service = "com.automicvault.tests.save-availability.\(UUID().uuidString)"
+    defer { _ = deleteStoredSecret(account: "TOKEN", service: service) }
+    #expect(saveStoredSecret(account: "TOKEN", value: "global", accessibility: .whenUnlocked, service: service) == errSecSuccess)
+    #expect(saveStoredSecret(account: "TOKEN", value: "project", source: .projectDirectory("/project"), service: service) == errSecSuccess)
+    #expect(saveStoredSecret(account: "TOKEN", value: "new project", availableWhileLocked: true,
+        source: .projectDirectory("/project"), service: service) == errSecSuccess)
+    var secret = try #require(loadStoredSecrets(service: service).first)
+    #expect(secret.values.count == 2)
+    #expect(secret.values.allSatisfy { $0.accessibility == .afterFirstUnlock })
+    #expect(loadStoredSecret(account: "TOKEN", service: service) == "global")
+    #expect(saveStoredSecret(account: "TOKEN", value: "replacement", accessibility: .whenUnlocked, service: service) == errSecSuccess)
+    secret = try #require(loadStoredSecrets(service: service).first)
+    #expect(secret.hasConsistentAccessibility && secret.accessibility == .afterFirstUnlock)
+    #expect(setStoredSecretAccessibility(account: "TOKEN", accessibility: .whenUnlocked, service: service) == errSecSuccess)
+    #expect(saveStoredSecret(account: "TOKEN", value: "new global", availableWhileLocked: true, service: service) == errSecSuccess)
+    #expect(loadStoredSecrets(service: service).first?.values.allSatisfy { $0.accessibility == .afterFirstUnlock } == true)
+}
+
+@Test(.enabled(if: dataProtectionKeychainAvailable(), "requires an entitled Keychain test host"))
 func storedSecretsCanBeRenamed() throws {
     let service = "com.automicvault.tests.\(UUID().uuidString)"
     #expect(saveStoredSecret(

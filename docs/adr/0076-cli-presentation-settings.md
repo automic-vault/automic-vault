@@ -1,6 +1,6 @@
 # ADR 0076: CLI presentation settings with protected visibility controls
 
-Status: accepted
+Status: accepted; catalog extended by [ADR 0083](0083-default-secret-availability.md).
 
 ## Context
 

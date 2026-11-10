@@ -1036,7 +1036,7 @@ shield, active-grant menu entries, and immediate End action remain continuously
 available. This continuous indication is part of the temporary escalation's
 safety model, not a source of authority. See [ADR 0041](adr/0041-collapsible-temporary-access-grant-strip.md).
 
-## Presentation settings
+## CLI settings
 
 `av settings` reads and changes a closed catalog through the signed Gate Client
 and running app. Compact notifications remain directly writable. Feedback and
@@ -1044,7 +1044,19 @@ persistent grant-strip auto-collapse live in the Data Protection Keychain and
 require Approval for changes from either CLI or Settings. Both paths compare
 the reviewed value and verify an Authorization Record before saving. Legacy
 visibility defaults are ignored; upgrades restore visible defaults. Policy and
-Approval-method settings are outside this API. See
+Approval-method settings are outside this API.
+
+The catalog also includes `default-secret-availability`, protected by the same
+Approval, compare-before-write, and recording path. Missing settings select
+`when-unlocked`; malformed or unreadable settings deny implicit creation. New
+Secrets inherit it unless creation explicitly selects availability. Existing
+Secrets retain their availability. The Add Secret form starts with this default
+and falls back to When Unlocked if the setting cannot be read.
+`av save --available-while-locked` uses a distinct XPC operation that older apps
+reject. Its save Approval names the all-Value availability change. The app uses
+the existing forward-repair journal before writing the supplied Value; a later
+Value-write failure does not roll back an approved availability change.
+See [ADR 0083](adr/0083-default-secret-availability.md) and
 [ADR 0076](adr/0076-cli-presentation-settings.md).
 
 ## Source of truth

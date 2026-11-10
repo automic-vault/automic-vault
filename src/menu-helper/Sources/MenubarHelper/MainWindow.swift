@@ -4941,6 +4941,9 @@ private struct AddSecretView: View {
         .padding(22)
         .frame(width: 360)
         .background(.ultraThinMaterial)
+        .onAppear {
+            isAvailableWhileLocked = (try? secretSaveAccessibility(existing: nil)) == .afterFirstUnlock
+        }
     }
 }
 

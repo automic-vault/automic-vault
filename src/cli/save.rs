@@ -23,7 +23,7 @@ pub(crate) fn run(args: Vec<OsString>, stdout: &mut dyn Write, stderr: &mut dyn 
     if args.len() == 1 && (args[0] == "--help" || args[0] == "-h") {
         let _ = writeln!(
             stdout,
-            "{}\n\nDefault: hidden single-line terminal input.\n--multiline: hidden terminal input until Ctrl-D; preserve received whitespace.\n--stdin: read redirected stdin to EOF without trimming or newline conversion.\nInput must be nonempty UTF-8 without NUL, at most 1 MiB. Saving requires Approval.",
+            "{}\n\nDefault: hidden single-line terminal input.\n--multiline: hidden terminal input until Ctrl-D; preserve received whitespace.\n--stdin: read redirected stdin to EOF without trimming or newline conversion.\n--available-while-locked: make all Values of this Secret available after the first unlock following a restart; authorization is still required.\nWithout the flag, new Secrets use default-secret-availability; existing Secrets keep their availability.\nInput must be nonempty UTF-8 without NUL, at most 1 MiB. Saving requires Approval.",
             usage()
         );
         return 0;
@@ -38,7 +38,7 @@ pub(crate) fn run(args: Vec<OsString>, stdout: &mut dyn Write, stderr: &mut dyn 
 }
 
 fn run_inner(args: Vec<OsString>) -> Result<(), String> {
-    let (key, project_directory, input) = parse_args(args)?;
+    let (key, project_directory, input, available_while_locked) = parse_args(args)?;
     let key = key
         .to_str()
         .ok_or_else(|| "save key must be valid UTF-8".to_string())?;
@@ -55,13 +55,19 @@ fn run_inner(args: Vec<OsString>) -> Result<(), String> {
     } else {
         read_secret_from_tty(key, input)?
     };
-    save_value(key, &value, project_directory.as_deref())
+    save_value(
+        key,
+        &value,
+        project_directory.as_deref(),
+        available_while_locked,
+    )
 }
 
-fn parse_args(args: Vec<OsString>) -> Result<(OsString, Option<String>, Input), String> {
+fn parse_args(args: Vec<OsString>) -> Result<(OsString, Option<String>, Input, bool), String> {
     let mut key = None;
     let mut project_directory = None;
     let mut input = Input::Line;
+    let mut available_while_locked = false;
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
         if arg == "--multiline" || arg == "--stdin" {
@@ -73,6 +79,11 @@ fn parse_args(args: Vec<OsString>) -> Result<(OsString, Option<String>, Input), 
             } else {
                 Input::Stdin
             };
+        } else if arg == "--available-while-locked" {
+            if available_while_locked {
+                return Err("--available-while-locked may be specified only once".into());
+            }
+            available_while_locked = true;
         } else if arg == "--project-directory" {
             let path = args.next().ok_or_else(usage)?;
             if project_directory.is_some() {
@@ -91,11 +102,16 @@ fn parse_args(args: Vec<OsString>) -> Result<(OsString, Option<String>, Input), 
             return Err(usage());
         }
     }
-    Ok((key.ok_or_else(usage)?, project_directory, input))
+    Ok((
+        key.ok_or_else(usage)?,
+        project_directory,
+        input,
+        available_while_locked,
+    ))
 }
 
 fn usage() -> String {
-    "usage: av save [--multiline | --stdin] [--project-directory=DIR] KEY".into()
+    "usage: av save [--multiline | --stdin] [--project-directory=DIR] [--available-while-locked] KEY".into()
 }
 
 fn canonical_project_directory(path: &Path) -> Result<String, String> {
@@ -134,7 +150,12 @@ fn canonical_project_directory(path: &Path) -> Result<String, String> {
         .map_err(|_| "project directory must be valid UTF-8".into())
 }
 
-fn save_value(key: &str, value: &str, project_directory: Option<&str>) -> Result<(), String> {
+fn save_value(
+    key: &str,
+    value: &str,
+    project_directory: Option<&str>,
+    available_while_locked: bool,
+) -> Result<(), String> {
     if value.is_empty() {
         return Err("empty key value".into());
     }
@@ -143,6 +164,9 @@ fn save_value(key: &str, value: &str, project_directory: Option<&str>) -> Result
     }
     if value.len() > MAX_SECRET_BYTES {
         return Err("Secret Value exceeds 1 MiB".into());
+    }
+    if available_while_locked {
+        return crate::secrets::store_secret_available_while_locked(key, value, project_directory);
     }
     match project_directory {
         Some(path) => crate::secrets::store_project_secret(key, value, path),
@@ -371,7 +395,7 @@ mod tests {
             "Secret Value exceeds 1 MiB"
         );
         assert_eq!(
-            save_value("SAVED_KEY", "sensitive\0value", None).unwrap_err(),
+            save_value("SAVED_KEY", "sensitive\0value", None, false).unwrap_err(),
             "Secret Value must not contain NUL"
         );
     }
@@ -379,7 +403,7 @@ mod tests {
     #[test]
     fn input_modes_are_explicit_and_mutually_exclusive() {
         for (flag, expected) in [("--multiline", Input::Multiline), ("--stdin", Input::Stdin)] {
-            let (_, _, mode) = parse_args(vec![flag.into(), "SAVED_KEY".into()]).unwrap();
+            let (_, _, mode, _) = parse_args(vec![flag.into(), "SAVED_KEY".into()]).unwrap();
             assert_eq!(mode, expected);
             assert!(parse_args(vec![flag.into(), flag.into(), "SAVED_KEY".into()]).is_err());
         }
@@ -394,6 +418,31 @@ mod tests {
     }
 
     #[test]
+    fn availability_flag_is_opt_in_and_composes_with_input_and_project_options() {
+        assert!(!parse_args(vec!["TOKEN".into()]).unwrap().3);
+        let args = vec![
+            "--available-while-locked".into(),
+            "--stdin".into(),
+            format!("--project-directory={}", std::env::temp_dir().display()).into(),
+            "TOKEN".into(),
+        ];
+        let (_, project, input, available) = parse_args(args).unwrap();
+        assert!(available && project.is_some());
+        assert_eq!(input, Input::Stdin);
+        assert!(
+            parse_args(vec![
+                "TOKEN".into(),
+                "--available-while-locked".into(),
+                "--available-while-locked".into()
+            ])
+            .is_err()
+        );
+        assert!(parse_args(vec!["--available-while-locked".into()]).is_err());
+        assert!(save_value("TOKEN", "", None, true).is_err());
+        assert!(save_value("TOKEN", "bad\0value", None, true).is_err());
+    }
+
+    #[test]
     fn saves_value_to_test_keychain() {
         let _guard = crate::global_test_env_lock().lock().unwrap();
         let dir = std::env::temp_dir().join(format!("av-save-{}", std::process::id()));
@@ -402,7 +451,7 @@ mod tests {
             std::env::set_var("AUTOMIC_VAULT_TEST_KEYCHAIN_DIR", &dir);
         }
 
-        save_value("SAVED_KEY", "secret", None).unwrap();
+        save_value("SAVED_KEY", "secret", None, false).unwrap();
 
         unsafe {
             std::env::remove_var("AUTOMIC_VAULT_TEST_KEYCHAIN_DIR");
@@ -417,7 +466,7 @@ mod tests {
     #[test]
     fn rejects_empty_value() {
         assert_eq!(
-            save_value("SAVED_KEY", "", None).unwrap_err(),
+            save_value("SAVED_KEY", "", None, false).unwrap_err(),
             "empty key value"
         );
     }
@@ -425,7 +474,7 @@ mod tests {
     #[test]
     fn parses_and_canonicalizes_project_directory() {
         let directory = std::env::temp_dir();
-        let (key, project, input) = parse_args(vec![
+        let (key, project, input, _) = parse_args(vec![
             OsString::from(format!("--project-directory={}", directory.display())),
             OsString::from("SAVED_KEY"),
         ])
@@ -454,8 +503,8 @@ mod tests {
         let project = std::fs::canonicalize(project).unwrap();
         unsafe { std::env::set_var("AUTOMIC_VAULT_TEST_KEYCHAIN_DIR", &keychain) };
 
-        save_value("SAVED_KEY", "global", None).unwrap();
-        save_value("SAVED_KEY", "project", project.to_str()).unwrap();
+        save_value("SAVED_KEY", "global", None, false).unwrap();
+        save_value("SAVED_KEY", "project", project.to_str(), false).unwrap();
 
         unsafe { std::env::remove_var("AUTOMIC_VAULT_TEST_KEYCHAIN_DIR") };
         assert_eq!(
