@@ -76,6 +76,7 @@ public enum ApprovalServiceOperation: String, CaseIterable, Sendable {
     case historyRead = "history-read"
     case historyNext = "history-next"
     case save
+    case saveAvailableWhileLocked = "save-available-while-locked"
     case saveIfAbsentOrEqual = "save-if-absent"
     case bless
     case delete

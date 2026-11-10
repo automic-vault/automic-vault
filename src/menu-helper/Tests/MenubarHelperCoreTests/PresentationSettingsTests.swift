@@ -4,7 +4,7 @@ import Testing
 @testable import MenubarHelperCore
 
 @Test func presentationSettingsAreAClosedCatalog() {
-    #expect(PresentationSetting.allCases.count == 3)
+    #expect(PresentationSetting.allCases.count == 4)
     for key in ["phoneApprovalEnabled", "gate-policy", "denial-threshold", "automaticApprovalFeedback"] {
         #expect(PresentationSetting(rawValue: key) == nil)
     }
@@ -14,7 +14,7 @@ import Testing
 }
 
 @Test func visibilityStorageFailsVisibleWithoutTrustingLegacyDefaults() throws {
-    for setting in [PresentationSetting.feedback, .autoCollapseGrantStrip] {
+    for setting in [PresentationSetting.feedback, .autoCollapseGrantStrip, .defaultSecretAvailability] {
         #expect(try decodePresentationSetting(setting, result: .notFound) == setting.defaultValue)
         for value in setting.acceptedValues {
             #expect(try decodePresentationSetting(setting, result: .success(Data(value.utf8))) == value)
@@ -95,4 +95,39 @@ import Testing
             read: { "notification" }, record: { true },
             write: { _ in throw PresentationSettingsError.unavailable })
     }
+}
+
+@Test func newSecretAvailabilityDefaultsAreExplicitAndFailClosed() throws {
+    let setting = PresentationSetting.defaultSecretAvailability
+    #expect(setting.requiresApproval)
+    #expect(setting.defaultValue == "when-unlocked")
+    #expect(try secretSaveAccessibility(existing: nil, readDefault: { setting.defaultValue }) == .whenUnlocked)
+    #expect(try secretSaveAccessibility(existing: nil, readDefault: { "available-while-locked" }) == .afterFirstUnlock)
+    for existing in [StoredSecretAccessibility.whenUnlocked, .afterFirstUnlock] {
+        #expect(try secretSaveAccessibility(existing: existing, requested: .afterFirstUnlock,
+            readDefault: { throw PresentationSettingsError.unavailable }) == existing)
+    }
+    #expect(try secretSaveAccessibility(existing: nil, requested: .afterFirstUnlock,
+        readDefault: { throw PresentationSettingsError.unavailable }) == .afterFirstUnlock)
+    #expect(throws: PresentationSettingsError.self) {
+        try secretSaveAccessibility(existing: nil, readDefault: { "tampered" })
+    }
+    #expect(throws: PresentationSettingsError.self) {
+        try secretSaveAccessibility(existing: nil, readDefault: { throw PresentationSettingsError.unavailable })
+    }
+}
+
+@Test @MainActor func availabilityDefaultRequiresRecordingAndRejectsStaleReview() throws {
+    for (current, recorded) in [("when-unlocked", false), ("available-while-locked", true)] {
+        #expect(throws: PresentationSettingsError.self) {
+            try commitPresentationSetting(.defaultSecretAvailability, value: "available-while-locked",
+                expected: "when-unlocked", read: { current }, record: { recorded },
+                write: { _ in Issue.record("Unapproved or stale default was written") })
+        }
+    }
+    var events: [String] = []
+    try commitPresentationSetting(.defaultSecretAvailability, value: "available-while-locked",
+        expected: "when-unlocked", read: { "when-unlocked" },
+        record: { events.append("record"); return true }, write: { events.append($0) })
+    #expect(events == ["record", "available-while-locked"])
 }

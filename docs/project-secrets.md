@@ -92,3 +92,20 @@ For `.env` configuration with Secret References, see
 
 See the [Domain Language](domain-language.md) and [Architecture](architecture.md)
 for the authoritative terms and security boundaries.
+
+## Secret Availability
+
+```sh
+$ av settings set default-secret-availability available-while-locked
+$ av save --available-while-locked --project-directory=. API_TOKEN
+```
+
+The setting starts at `when-unlocked`. Changing it requires Approval and affects
+only new Secrets without an explicit availability choice. New Project Values
+under an existing Secret Name inherit that Secret's availability.
+
+The save flag explicitly makes every Value of the named Secret Available While
+Locked, after the first unlock following a restart. Approval shows this scope;
+availability never grants authorization. If the subsequent Value write fails,
+the approved availability change remains. See
+[ADR 0083](adr/0083-default-secret-availability.md).

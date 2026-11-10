@@ -467,6 +467,13 @@ The Keychain availability chosen for a Secret and shared by all its Values:
 - **When Unlocked:** available while the user's device is unlocked.
 - **Available While Locked:** available after the first unlock following a restart.
 
+**Default Secret Availability** selects availability for newly added Secrets
+without an explicit choice. It starts at When Unlocked. Changing it through
+`av settings` requires Approval and a verified Authorization Record; the app
+stores it in the Data Protection Keychain. It never changes existing Secrets.
+`av save --available-while-locked` explicitly selects Available While Locked
+for all Values of that Secret, subject to the save's Approval.
+
 Availability can prevent an authorized operation. It cannot authorize one. Human Approval requires an active user session and awake displays. An automically authorized operation may continue while locked only when every requested Secret is Available While Locked.
 
 When iPhone Approval is enabled and at least one iPhone has registered for the

@@ -90,6 +90,23 @@ pub(crate) fn store_project_secret(
     .map(|_| ())
 }
 
+pub(crate) fn store_secret_available_while_locked(
+    account: &str,
+    value: &str,
+    project_directory: Option<&str>,
+) -> Result<(), String> {
+    // A distinct operation makes older apps reject, rather than ignore, the option.
+    xpc_request_with_project_directory(
+        "save-available-while-locked",
+        Some((b"key\0", account)),
+        Some((b"value\0", value)),
+        None,
+        None,
+        project_directory,
+    )
+    .map(|_| ())
+}
+
 pub(crate) fn test_project_secret_path(
     keychain_directory: &std::path::Path,
     project_directory: &str,
@@ -1217,6 +1234,7 @@ fn xpc_operation_requires_cwd(operation: &str) -> bool {
     matches!(
         operation,
         "save"
+            | "save-available-while-locked"
             | "settings-set"
             | "save-if-absent"
             | "docker-save"
@@ -1289,6 +1307,7 @@ mod tests {
     #[test]
     fn only_mutations_require_a_working_directory() {
         assert!(xpc_operation_requires_cwd("save"));
+        assert!(xpc_operation_requires_cwd("save-available-while-locked"));
         assert!(xpc_operation_requires_cwd("docker-delete"));
         assert!(xpc_operation_requires_cwd("goat-save"));
         assert!(xpc_operation_requires_cwd("oxide-save"));

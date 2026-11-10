@@ -2757,7 +2757,8 @@ private func accessibleLabel(_ value: Any?) -> String? {
 public func saveStoredSecret(
     account: String,
     value: String,
-    accessibility: StoredSecretAccessibility = .whenUnlocked,
+    accessibility: StoredSecretAccessibility? = nil,
+    availableWhileLocked: Bool = false,
     source: StoredSecretValueSource = .global,
     service: String = automicVaultKeychainService
 ) -> OSStatus {
@@ -2767,12 +2768,23 @@ public func saveStoredSecret(
     case .failure(let status): return status
     }
     let existing = secrets.first { $0.account == account }
-    guard existing?.hasConsistentSynchronization != false else { return errSecDecode }
+    guard existing?.hasConsistentSynchronization != false,
+          existing?.hasConsistentAccessibility != false else { return errSecDecode }
+    let selected: StoredSecretAccessibility
+    do {
+        selected = availableWhileLocked ? .afterFirstUnlock : try secretSaveAccessibility(
+            existing: existing?.accessibility, requested: accessibility
+        )
+    } catch { return errSecDecode }
+    if availableWhileLocked, let existing, existing.accessibility != selected {
+        let status = setStoredSecretAccessibility(account: account, accessibility: selected, service: service)
+        guard status == errSecSuccess else { return status }
+    }
     return saveKeychainData(
         Data(value.utf8),
         service: service,
         account: storedSecretKeychainAccount(secretName: account, source: source),
-        accessibility: accessibility,
+        accessibility: selected,
         synchronizable: existing?.synchronizable ?? false
     )
 }
@@ -2790,11 +2802,14 @@ public func saveStoredSecretIfAbsentOrEqual(
     let existing = secrets.first { $0.account == account }
     guard existing?.hasConsistentAccessibility != false,
           existing?.hasConsistentSynchronization != false else { return errSecDecode }
+    let accessibility: StoredSecretAccessibility
+    do { accessibility = try secretSaveAccessibility(existing: existing?.accessibility) }
+    catch { return errSecDecode }
     return saveKeychainDataIfAbsentOrEqual(
         Data(value.utf8),
         service: service,
         account: account,
-        accessibility: existing?.accessibility ?? .whenUnlocked,
+        accessibility: accessibility,
         synchronizable: existing?.synchronizable ?? false
     )
 }

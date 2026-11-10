@@ -211,7 +211,7 @@ complete forensic log.
 
 [Authorization History and its limits](docs/authorization.md#authorization-history)
 
-## Presentation settings
+## Settings
 
 ```sh
 $ av settings list --json
@@ -219,11 +219,14 @@ $ av settings get compact-notifications
 $ av settings set compact-notifications true
 $ av settings set automatic-authorization-feedback menu-bar-flash
 $ av settings set auto-collapse-grant-strip true
+$ av settings set default-secret-availability available-while-locked
 ```
 
 The running app returns accepted values, defaults, and whether changes require
 Approval. Compact notifications are directly writable. Changing feedback or
 grant-strip auto-collapse requires Approval with the old and new values.
+Changing `default-secret-availability` also requires Approval; it starts at
+`when-unlocked` and affects only newly added Secrets without an explicit choice.
 `--json` works with every subcommand and returns an array; values are strings.
 Authorization policies and Approval methods remain in the app's Settings.
 
@@ -293,6 +296,18 @@ policy covers all Values of that Secret.
 
 - [Project Values, dotenvx, and mise](docs/project-secrets.md)
 - [Varlock](docs/varlock.md)
+
+### Save for use while locked
+
+To allow authorized use while locked, after the first unlock following a restart:
+
+```sh
+$ av save --available-while-locked API_TOKEN
+```
+
+This requires Approval and changes availability for all Values of that Secret.
+It grants no authorization. Without the flag, existing Secrets keep their
+availability and new Secrets use `default-secret-availability`.
 
 ### Save multiline or exact input
 
