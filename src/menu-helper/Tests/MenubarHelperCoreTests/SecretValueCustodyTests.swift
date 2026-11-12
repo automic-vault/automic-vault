@@ -161,6 +161,45 @@ private struct InMemorySecretValueCustodyAdapter: SecretValueCustodyAdapter {
     }
 }
 
+@Test func lockedInventoryDiagnosticsContainOnlyStatusesAndFixedOutcomes() {
+    let name = "PRIVATE_SECRET_NAME"
+    let source = StoredSecretValueSource.projectDirectory("/private/project/path")
+    let synchronized = StoredSecret(account: name, values: [StoredSecretValue(
+        source: source, keychainAccount: "PRIVATE_ACCOUNT", accessibility: .afterFirstUnlock,
+        keychainProperties: ["PRIVATE_METADATA"], synchronizable: true)])
+    let available = StoredSecret(account: name)
+    let cases: [(StoredSecretsLoad, StoredSecretsLoad, String)] = [
+        (.failure(errSecInteractionNotAllowed), .success([]),
+         "sync_result_status=-25308 outcome=sync_query_failed"),
+        (.failure(errSecDecode), .success([]),
+         "sync_result_status=-26275 outcome=sync_query_failed"),
+        (.success([synchronized]), .success([]),
+         "sync_result_status=0 sync_empty=false outcome=sync_present"),
+        (.success([]), .failure(errSecInteractionNotAllowed),
+         "sync_result_status=0 sync_empty=true filtered_result_status=-25308 outcome=filtered_query_failed"),
+        (.success([]), .success([synchronized]),
+         "sync_result_status=0 sync_empty=true filtered_result_status=0 outcome=sync_arrived"),
+        (.success([]), .success([]),
+         "sync_result_status=0 sync_empty=true filtered_result_status=0 outcome=required_names_missing"),
+        (.success([]), .success([available]),
+         "sync_result_status=0 sync_empty=true filtered_result_status=0 outcome=fallback_returned"),
+    ]
+    for (sync, filtered, expected) in cases {
+        var messages: [String] = []
+        _ = retryLockedSecretInventory(requiredNames: [name], synchronizedInventory: { sync },
+            diagnostic: { messages.append($0) }) { accessibility in
+                accessibility == nil ? .failure(errSecInteractionNotAllowed) : filtered
+            }
+        #expect(messages == ["AVLockedSecretInventory full_status=-25308 " + expected])
+    }
+    for initial: StoredSecretsLoad in [.success([available]), .failure(errSecAuthFailed)] {
+        _ = retryLockedSecretInventory(synchronizedInventory: {
+            Issue.record("Non-locked results must not query synchronized inventory")
+            return .success([])
+        }, diagnostic: { _ in Issue.record("Non-locked results must not log locked diagnostics") }) { _ in initial }
+    }
+}
+
 private func storedValue(
     source: StoredSecretValueSource,
     account: String,
