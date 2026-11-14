@@ -27,6 +27,12 @@ provides Update and Update All. Hardening keeps an existing valid release.
 
 ## GitHub HTTPS operations
 
+For Git operations, prefer SSH with the [Automic Vault SSH agent](../../../docs/securing-git.md).
+The protected HTTPS transport has a narrow reviewed Git build and command
+surface; Homebrew Git is unsupported. A Doctor warning about that transport
+does not mean the `gh` Isotope's credential custody failed. Do not grant ordinary
+Git helpers Secret Disclosure authority to work around this warning.
+
 After completing Isotope installation and credential migration, `av harden gh`
 also attempts to configure Git globally to use Automic Vault's protected
 transport for `https://github.com/` URLs, including fresh clones. It verifies

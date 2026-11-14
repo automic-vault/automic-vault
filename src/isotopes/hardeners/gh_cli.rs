@@ -138,7 +138,7 @@ pub(crate) fn detect() -> HardenerDetection {
                 kind,
                 message,
                 remediation: if kind == "gh_git_transport_unavailable" {
-                    "Protected Git transport requires a reviewed Apple Git build. gh hardening remains independent of Git setup. Use `av harden gh --without-git-configuration` to manage Git configuration yourself.".into()
+                    "This finding concerns optional Git HTTPS transport, not gh credential custody. Homebrew Git is not supported by the protected transport; installing it does not satisfy the reviewed Apple Git requirement. For Git, use SSH with the Automic Vault SSH agent. Use `av harden gh --without-git-configuration` to manage Git configuration yourself; this does not remove existing URL rewrites.".into()
                 } else {
                     "Run `av harden gh` to repair protected Git transport setup, or `av harden gh --without-git-configuration` to manage Git configuration yourself.".into()
                 },

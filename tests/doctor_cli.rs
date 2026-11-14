@@ -73,6 +73,11 @@ fn gh_doctor_reports_unsupported_git_before_missing_routing() {
             .unwrap()
             .contains("Run `av harden gh`")
     );
+    let remediation = issue["remediation"].as_str().unwrap();
+    assert!(remediation.contains("not gh credential custody"));
+    assert!(remediation.contains("Homebrew Git is not supported"));
+    assert!(remediation.contains("SSH agent"));
+    assert!(remediation.contains("does not remove existing URL rewrites"));
     assert!(!root.join("home/.gitconfig").exists());
     fs::write(root.join("gh/av-git-configuration"), "manual\n").unwrap();
     let manual = gh_doctor(&root)
