@@ -17,7 +17,7 @@ helper configuration without invoking it.
 
 ## Mitigation
 
-Run:
+With Docker Desktop installed in `/Applications`, run:
 
 ```sh
 av harden docker
@@ -28,3 +28,9 @@ default helper into Automic Vault, and installs an approval-aware helper.
 Non-Automic per-registry helpers fail closed rather than being partly migrated.
 
 See the [hardening reference](../../hardeners/docker.md) for setup and coverage.
+
+The hardener does not support the Homebrew Docker CLI, including installations
+used with Colima. Installing Colima does not satisfy the Docker Desktop
+requirement. On those setups this Finding still applies: the configured ambient
+helper can disclose registry credentials to other software running as you.
+Do not replace the helper with plaintext credentials to silence the Finding.

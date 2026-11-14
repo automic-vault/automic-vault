@@ -317,7 +317,7 @@
       "~/.docker/config.json"
     ],
     "requires_periodic_scan": false,
-    "solution": "Run `av harden docker`."
+    "solution": "With Docker Desktop installed in /Applications, run `av harden docker`. Homebrew Docker CLI installations, including Colima setups, are not supported by this hardener; their ambient credential helpers remain exposed."
   },
   "docker-registry-credentials": {
     "watch_paths": [
@@ -334,7 +334,7 @@
       "~/.docker/config.json"
     ],
     "requires_periodic_scan": false,
-    "solution": "Run `av harden docker`."
+    "solution": "With Docker Desktop installed in /Applications, run `av harden docker`. Homebrew Docker CLI installations, including Colima setups, are not supported by this hardener; their ambient credential helpers remain exposed."
   },
   "docker-machine": {
     "watch_paths": [
