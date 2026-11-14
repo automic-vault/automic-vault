@@ -76,6 +76,37 @@ Remove any separately configured repository-local rule separately. Rollback
 restores previous transport selection; ordinary credential-helper requests
 still require Secret Disclosure authority.
 
+## Git cannot find `remote-av`
+
+A `url."av::https://github.com/".insteadOf` rule makes Git look for
+`git-remote-av`. Adding that rule by hand does not install the adapter or its
+protected runtime. The adapter alone is also insufficient: the transport
+requires a reviewed Git build, the matching signed Automic Vault CLI, and the
+verified runtime.
+
+Inspect the setup without fetching credentials:
+
+```sh
+command -v git
+command -v git-remote-av
+git config --show-origin --get-all 'url.av::https://github.com/.insteadOf'
+av doctor gh
+```
+
+`command -v` only shows shell resolution; it does not verify the adapter or
+Git's own helper search path. Homebrew Git is not supported by this transport.
+For that setup, use SSH with Automic Vault's SSH agent rather than adding an
+HTTPS rewrite. Review the origin reported above and remove only the manually
+added routing value from that configuration file. The global rollback command
+above applies only to a global rule; included and repository-local files need
+separate review. Preserve unrelated rewrites and remote URLs.
+
+If Doctor reports an unsupported build, rerunning setup cannot make that build
+reviewed. `--without-git-configuration` suppresses automatic Git setup checks
+but does not remove existing rewrites or repair a missing adapter. Do not copy
+an arbitrary `git-remote-av` executable into PATH or enable an ordinary token
+helper as a workaround. Ordinary helper token retrieval is Secret Disclosure.
+
 ## Secret Gate
 
 The menu bar app creates a `gh` Secret Gate as soon as the hardened CLI is
