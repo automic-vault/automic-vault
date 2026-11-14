@@ -7231,9 +7231,7 @@ private final class ApprovalServer: @unchecked Sendable {
             return
         }
         let path = String(cString: pathPointer)
-        guard path.hasPrefix("/"),
-              URL(fileURLWithPath: path).standardizedFileURL.path == path,
-              URL(fileURLWithPath: path).resolvingSymlinksInPath().path == path
+        guard isCanonicalBlessedScriptPath(path)
         else {
             reply(peer, to: message, ok: false, error: "script path must be canonical")
             return
