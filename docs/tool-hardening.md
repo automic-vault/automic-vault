@@ -67,6 +67,12 @@ arguments, runtime posture, and requested registry. Docker's helper protocol
 returns a usable token to the authorized Docker process. A compromised Target
 can leak that token.
 
+## npm and Node version managers
+
+The npm launcher pins one Target and does not follow `nvm use`. See
+[npm launchers and Node version managers](npm-version-managers.md) before
+changing versions or trying to repair a PATH finding.
+
 ## Rescind Unneeded Terminal Permissions
 
 For an agent used through a CLI, the terminal app is often the macOS TCC

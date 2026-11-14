@@ -941,17 +941,24 @@ fn path_issue(command: &HardenerCommand, path: &OsStr) -> Option<DoctorIssue> {
         kind: "stub_not_first_on_path",
         command: Some(command.name.clone()),
         message,
-        remediation: format!(
-            "Put {stub_dir} before {target_dir} in PATH, then start a new shell. For example: `export PATH=\"{stub_dir}:$PATH\"`.",
-            stub_dir = Path::new(stub)
-                .parent()
-                .unwrap_or_else(|| Path::new(stub))
-                .display(),
-            target_dir = Path::new(&command.target_path)
-                .parent()
-                .unwrap_or_else(|| Path::new(&command.target_path))
-                .display(),
-        ),
+        remediation: if command.name == "npm" {
+            format!(
+                "The npm launcher pins {}. Changing PATH or running nvm use does not retarget it, and rerunning `av harden node` retains an existing executable Target. Putting the launcher first restores that pinned version, not the selected nvm version. Keep the pinned Target installed; see https://github.com/automic-vault/automic-vault/blob/main/docs/npm-version-managers.md for recovery and explicit authenticated use.",
+                command.target_path
+            )
+        } else {
+            format!(
+                "Put {stub_dir} before {target_dir} in PATH, then start a new shell. For example: `export PATH=\"{stub_dir}:$PATH\"`.",
+                stub_dir = Path::new(stub)
+                    .parent()
+                    .unwrap_or_else(|| Path::new(stub))
+                    .display(),
+                target_dir = Path::new(&command.target_path)
+                    .parent()
+                    .unwrap_or_else(|| Path::new(&command.target_path))
+                    .display(),
+            )
+        },
         stub_path: Some(stub.to_string()),
         target_path: Some(command.target_path.clone()),
         resolved_path,
