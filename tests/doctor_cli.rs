@@ -220,6 +220,13 @@ fn av_doctor_omits_unhardened_tools_and_reports_hardened_stubs() {
         targets.join("npm").display().to_string()
     );
 
+    let remediation = shadowed["results"][0]["issues"][0]["remediation"]
+        .as_str()
+        .unwrap();
+    assert!(remediation.contains("does not retarget"));
+    assert!(remediation.contains("retains an existing executable Target"));
+    assert!(remediation.contains(&targets.join("npm").display().to_string()));
+
     let _ = fs::remove_dir_all(root);
 }
 
