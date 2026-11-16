@@ -1,6 +1,7 @@
 import CryptoKit
 import Darwin
 import Foundation
+import os
 import Security
 
 public let automicVaultKeychainService = "com.automicvault.isotope"
@@ -2458,24 +2459,46 @@ public func loadStoredSecretsForUseResult(
 func retryLockedSecretInventory(
     requiredNames: [String] = [],
     synchronizedInventory: () -> StoredSecretsLoad,
+    diagnostic: (String) -> Void = {
+        Logger(subsystem: "com.automicvault", category: "SecretInventory").notice("\($0, privacy: .public)")
+    },
     _ load: (StoredSecretAccessibility?) -> StoredSecretsLoad
 ) -> StoredSecretsLoad {
     let result = load(nil)
     if case .failure(errSecInteractionNotAllowed) = result {
+        // Log only fixed labels, status codes, and booleans; never inventory contents.
+        var trace = ["AVLockedSecretInventory", "full_status=\(errSecInteractionNotAllowed)"]
+        defer { diagnostic(trace.joined(separator: " ")) }
+        func status(_ result: StoredSecretsLoad) -> OSStatus {
+            if case .failure(let status) = result { return status }
+            return errSecSuccess
+        }
+        let synchronizedResult = synchronizedInventory()
+        trace.append("sync_result_status=\(status(synchronizedResult))")
         // Filtering by availability can hide a conflicting synchronized Value.
-        guard case .success(let synchronized) = synchronizedInventory(), synchronized.isEmpty else {
+        guard case .success(let synchronized) = synchronizedResult else {
+            trace.append("outcome=sync_query_failed")
+            return result
+        }
+        trace.append("sync_empty=\(synchronized.isEmpty)")
+        guard synchronized.isEmpty else {
+            trace.append("outcome=sync_present")
             return result
         }
         let available = load(.afterFirstUnlock)
+        trace.append("filtered_result_status=\(status(available))")
         if case .success(let secrets) = available,
            secrets.contains(where: { $0.values.contains(where: \.synchronizable) }) {
+            trace.append("outcome=sync_arrived")
             return result
         }
         if case .success(let secrets) = available,
            !Set(requiredNames).isSubset(of: Set(secrets.map(\.account))) {
             // A filtered inventory cannot establish that an omitted Secret is absent.
+            trace.append("outcome=required_names_missing")
             return result
         }
+        trace.append(status(available) == errSecSuccess ? "outcome=fallback_returned" : "outcome=filtered_query_failed")
         return available
     }
     return result

@@ -388,8 +388,13 @@ fn reject_unsupported_auth(auth: &Map<String, Value>, name: &str) -> Result<(), 
         .find(|(field, value)| !safe.contains(field.as_str()) && !value.is_null())
         .map(|(field, _)| field)
     {
+        let guidance = if field == "exec" {
+            "; external credential plugins (including gke-gcloud-auth-plugin) are not supported. Keep the plugin configuration intact; this hardener migrates only inline tokens or client certificate/key pairs. Installing the kubectl Isotope alone does not harden these credentials"
+        } else {
+            ""
+        };
         return Err(format!(
-            "kubeconfig user {name:?} uses unsupported authentication field {field:?}"
+            "kubeconfig user {name:?} uses unsupported authentication field {field:?}{guidance}"
         ));
     }
     Ok(())
@@ -592,6 +597,24 @@ mod tests {
             }))
             .is_err()
         );
+    }
+
+    #[test]
+    fn external_exec_plugins_fail_with_supported_scope_guidance() {
+        let input = json!({
+            "clusters": [{"name": "gke", "cluster": {"server": "https://example.com"}}],
+            "users": [{"name": "gke", "user": {"exec": {
+                "command": "gke-gcloud-auth-plugin",
+                "apiVersion": "client.authentication.k8s.io/v1beta1",
+                "provideClusterInfo": true
+            }}}]
+        });
+        let error = sanitize_config(input)
+            .err()
+            .expect("external plugin must be rejected");
+        assert!(error.contains("unsupported authentication field \"exec\""));
+        assert!(error.contains("Keep the plugin configuration intact"));
+        assert!(error.contains("Installing the kubectl Isotope alone does not harden"));
     }
 
     #[test]

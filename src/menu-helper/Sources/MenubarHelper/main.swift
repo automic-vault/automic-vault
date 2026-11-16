@@ -100,6 +100,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var missingFilePoller: DispatchSourceTimer?
     private var periodicDetectorPoller: DispatchSourceTimer?
     private var mainWindow: NSWindow?
+    private let sponsorshipAppeal = SponsorshipAppeal()
     private var isUserSessionActive = true
     private var areScreensAwake = true
     private let updater = makeUpdater()
@@ -741,6 +742,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @MainActor private func showMainWindow(secretGateID: String?) {
         guard !isUpdating else { return }
+        defer {
+            if let mainWindow { sponsorshipAppeal.presentIfNeeded(on: mainWindow) }
+        }
         let wasVisible = mainWindow?.isVisible ?? false
         if let mainWindow {
             mainWindow.makeKeyAndOrderFront(nil)
@@ -7231,9 +7235,7 @@ private final class ApprovalServer: @unchecked Sendable {
             return
         }
         let path = String(cString: pathPointer)
-        guard path.hasPrefix("/"),
-              URL(fileURLWithPath: path).standardizedFileURL.path == path,
-              URL(fileURLWithPath: path).resolvingSymlinksInPath().path == path
+        guard isCanonicalBlessedScriptPath(path)
         else {
             reply(peer, to: message, ok: false, error: "script path must be canonical")
             return
@@ -21146,6 +21148,9 @@ if CommandLine.arguments.contains("--self-check-approvals") {
 }
 
 #if DEBUG
+if CommandLine.arguments.contains("--self-check-sponsorship") {
+    exit(MainActor.assumeIsolated { SponsorshipAppeal.selfCheck() })
+}
 if CommandLine.arguments.contains("--self-check-touch-id-focus") {
     Task { @MainActor in
         exit(await touchIDWindowFocusSelfCheck() ? 0 : 1)

@@ -178,7 +178,7 @@
 "Execution chain details" = "Execution chain details";
 "Existing" = "Existing";
 "Existing access paths" = "Existing access paths";
-"Experimental" = "Experimental";
+"Deprecated" = "Deprecated";
 "Explicit local authority" = "Explicit local authority";
 "Export from GnuPG" = "Export from GnuPG";
 "Feedback" = "Feedback";
@@ -611,3 +611,9 @@
 
 "1 Outdated Hardened Tool" = "1 Outdated Hardened Tool";
 "%lld Outdated Hardened Tools" = "%lld Outdated Hardened Tools";
+
+// Optional sponsorship appeal.
+"Help me keep Automic Vault going" = "Help me keep Automic Vault going";
+"My financial situation has changed, and times are tight. If you enjoy Automic Vault, I could use a few bucks a month to help cover the costs of maintaining my open source projects.\n\nYou can sponsor me on GitHub. Thank you for using my work.\n\nMax Howell" = "My financial situation has changed, and times are tight. If you enjoy Automic Vault, I could use a few bucks a month to help cover the costs of maintaining my open source projects.\n\nYou can sponsor me on GitHub. Thank you for using my work.\n\nMax Howell";
+"Sponsor on GitHub" = "Sponsor on GitHub";
+"Remind me in 30 days" = "Remind me in 30 days";

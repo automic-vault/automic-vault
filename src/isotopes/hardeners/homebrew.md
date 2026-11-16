@@ -1,5 +1,11 @@
 # Homebrew
 
+**Deprecated.** Homebrew hardening is no longer recommended for new
+installations. Scan no longer reports the Homebrew installation as a Finding.
+Existing hardened installations retain their Execution Gate and protections;
+Doctor and `av unharden brew` remain available. Deprecation does not change
+installation ownership or Authorization Policy.
+
 ## Summary
 
 - Homebrew hardening is defense in depth for most Isotopes. Automic Vault
