@@ -49,7 +49,7 @@ The authority to use developer credentials and perform controlled developer oper
 A boundary that decides whether an operation may proceed. Every gate owns one Authorization Policy.
 
 - A **Secret Gate** controls the application or disclosure of protected secrets.
-- An **Execution Gate** controls an operation without requiring a secret. Homebrew is the current example.
+- An **Execution Gate** controls an operation without requiring a secret. The deprecated Homebrew Hardener retains this gate for existing installations.
 
 ### Direct Secret Gate
 

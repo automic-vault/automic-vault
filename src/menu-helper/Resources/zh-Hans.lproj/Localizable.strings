@@ -178,7 +178,7 @@
 "Execution chain details" = "执行链详情";
 "Existing" = "已有变量";
 "Existing access paths" = "现有访问路径";
-"Experimental" = "实验性";
+"Deprecated" = "已弃用";
 "Explicit local authority" = "明确的本地权限";
 "Export from GnuPG" = "从 GnuPG 导出";
 "Feedback" = "提示方式";

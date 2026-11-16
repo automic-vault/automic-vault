@@ -26,8 +26,8 @@ without a separate decision about that operation.
 
 Automic Vault builds on macOS code signing, Hardened Runtime, and the Keychain.
 We harden supported tools where they are installed and configured, move exposed
-credentials into protected custody, and authorize their use. Homebrew has an
-Execution Gate for supported package-management operations, too.
+credentials into protected custody, and authorize their use. The deprecated
+Homebrew Hardener retains its Execution Gate for existing installations.
 
 You keep using your commands. Automic Vault checks the complete operation before
 applying a protected credential, and asks you when policy requires Approval.
@@ -51,9 +51,8 @@ Follow it with GitHub's read, write, and disclosure decisions for one token.
 Lead with respect for Apple's Mac app security and our complementary role in
 the command line. Connect the founder's Homebrew history to the credentials and
 authority developer tools carry today. Explain the remaining credential and
-operation gap, then show the intervention with `av harden gh` and Homebrew's
-Read & Update policy. Follow with the runtime demo, Scan or installation path,
-and relevant security boundary.
+operation gap, then show the intervention with `av harden gh`. Follow with the
+runtime demo, Scan or installation path, and relevant security boundary.
 
 Attribute the first-person founder line to Max Howell without repeating
 “creator of Homebrew” beside it. Explain Secrets, Verified Launchers, and

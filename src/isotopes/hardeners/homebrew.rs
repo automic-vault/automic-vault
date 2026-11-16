@@ -47,6 +47,11 @@ pub(crate) fn run(stdout: &mut dyn Write, yes: bool) -> Result<(), String> {
     let shell_rcs = shell_rc_references(&source_user.home)?;
 
     writeln!(stdout, "╭─ harden brew").ok();
+    writeln!(
+        stdout,
+        "◆ Deprecated: Homebrew hardening is no longer recommended for new installations."
+    )
+    .ok();
     writeln!(stdout, "│").ok();
     writeln!(stdout, "◆ defense in depth for most Isotopes").ok();
     writeln!(

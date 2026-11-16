@@ -69,6 +69,11 @@ grants no authority and does not certify unrelated bundle resources. See
 
 ### Tool Hardening
 
+The Homebrew Hardener is deprecated. Its dedicated Detector is retired; Scan
+no longer recommends Homebrew hardening. Existing installations retain their
+Execution Gate, ownership protections, Doctor checks, and explicit unharden
+path. Deprecation does not change Authorization Policy or enforcement.
+
 Hardeners move supported Tools into a declared Hardened State. Doctor verifies
 the installed intervention and its dependencies. Installed hardening detection
 does not depend on the inspecting process’s PATH; command resolution remains a
