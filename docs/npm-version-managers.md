@@ -14,9 +14,10 @@ stub, delete the vaulted token, or copy it back into `.npmrc`.
 
 ## Inspect the existing route
 
-Run `av doctor node --json` and inspect the reported Target and any command
-resolution findings. Inspect the generated launcher at `/usr/local/bin/npm`
-without executing it; it names the pinned Target. Run `command -v npm` after
+Run `av doctor node --json` and inspect any command resolution findings. Doctor
+includes `target_path` only in issue records; a healthy result does not report
+the pinned Target. To identify it, inspect the generated launcher at
+`/usr/local/bin/npm` without executing it. Run `command -v npm` after
 `nvm use` to check which entry point your shell selects. Doctor verifies the
 installed intervention; it does not prove that a different npm invocation uses
 that route.
