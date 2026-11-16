@@ -2655,7 +2655,7 @@ func runDashboardSearchSelfCheck() -> Int32 {
     pathModel.selectSection(.detectors)
     guard let pathItem = pathModel.items.first,
           pathItem.id == "macOS",
-          pathItem.title == "macOS Command Search",
+          pathItem.title == "Vulnerable PATH",
           pathItem.kind == "PATH ordering",
           pathItem.subtitle == "2 flagged PATH entries",
           pathItem.pathFindings == pathFindings,
@@ -4513,7 +4513,7 @@ private struct DashboardRow: View {
                 Text(item.title)
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(.primary)
-                    .lineLimit(item.id == "macOS" ? 2 : 1)
+                    .lineLimit(1)
                     .layoutPriority(1)
                 if item.isUpdateAvailable {
                     Text("Outdated")
