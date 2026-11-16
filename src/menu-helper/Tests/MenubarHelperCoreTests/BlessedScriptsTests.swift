@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import Testing
 @testable import MenubarHelperCore
@@ -544,4 +545,33 @@ func malformedBlessedScriptManifestsFailClosed(_ source: String) {
         gateID: nil,
         launcherAllowsOperation: true
     ) == "This request exceeds the stored authority. Approval applies only to this request.")
+}
+
+@Test func blessedScriptCanonicalPathsUseFilesystemSpelling() throws {
+    for base in [FileManager.default.temporaryDirectory, FileManager.default.homeDirectoryForCurrentUser] {
+        let directory = base.appendingPathComponent("av-canonical-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let script = directory.appendingPathComponent("script")
+        try Data("ok".utf8).write(to: script)
+        let resolved = try #require(realpath(script.path, nil))
+        defer { free(resolved) }
+        let canonical = String(cString: resolved)
+        #expect(isCanonicalBlessedScriptPath(canonical))
+        #expect(try readBlessedScript(path: canonical) == Data("ok".utf8))
+        #expect(!isCanonicalBlessedScriptPath(canonical + "/../script"))
+        #expect(!isCanonicalBlessedScriptPath(canonical + "\0ignored"))
+        let link = directory.appendingPathComponent("link")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: script)
+        #expect(!isCanonicalBlessedScriptPath(link.path))
+        if canonical.hasPrefix("/private/var/") {
+            let alias = String(canonical.dropFirst("/private".count))
+            #expect(!isCanonicalBlessedScriptPath(alias))
+            let aliasResolved = try #require(realpath(alias, nil))
+            defer { free(aliasResolved) }
+            #expect(isCanonicalBlessedScriptPath(String(cString: aliasResolved)))
+        }
+    }
+    #expect(!isCanonicalBlessedScriptPath("relative/script"))
+    #expect(!isCanonicalBlessedScriptPath("/nonexistent-\(UUID().uuidString)"))
 }

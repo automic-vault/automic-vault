@@ -29,6 +29,15 @@ private enum BlessedScriptFileError: Error, LocalizedError {
     }
 }
 
+public func isCanonicalBlessedScriptPath(_ path: String) -> Bool {
+    guard path.hasPrefix("/"), !path.utf8.contains(0),
+          let resolved = path.withCString({ realpath($0, nil) })
+    else { return false }
+    defer { free(resolved) }
+    // Match the CLI's filesystem spelling, including /private/var on macOS.
+    return path == String(cString: resolved)
+}
+
 public func readBlessedScript(path: String) throws -> Data {
     let descriptor = open(path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
     guard descriptor >= 0 else { throw BlessedScriptFileError.cannotOpen }
