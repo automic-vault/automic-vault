@@ -611,3 +611,10 @@
 
 "1 Outdated Hardened Tool" = "1 个已加固工具有待更新";
 "%lld Outdated Hardened Tools" = "%lld 个已加固工具有待更新";
+
+// Optional sponsorship appeal.
+"Help me keep Automic Vault going" = "帮我继续维护 Automic Vault";
+"My financial situation has changed, and times are tight. If you enjoy Automic Vault, I could use a few bucks a month to help cover the costs of maintaining my open source projects.\n\nYou can sponsor me on GitHub. Thank you for using my work.\n\nMax Howell" = "我的经济状况发生了变化，最近手头有些紧。如果你喜欢 Automic Vault，每月赞助几美元就能帮我分担维护开源项目的费用。\n\n你可以在 GitHub 上赞助我。感谢你使用我的作品。\n\nMax Howell";
+"Sponsor on GitHub" = "在 GitHub 上赞助";
+"Not now" = "暂时不了";
+"Don’t show this again" = "不再显示此消息";
