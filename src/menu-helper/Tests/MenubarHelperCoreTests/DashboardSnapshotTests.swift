@@ -102,6 +102,7 @@ import Testing
 }
 
 @Test func splitDetectorNamesDisplayPackageAndKind() {
+    #expect(detectorDisplayName("macOS") == DetectorDisplayName(packageName: "macOS Command Search", kind: "PATH ordering"))
     #expect(detectorDisplayName("git-credential-fill") == DetectorDisplayName(packageName: "git", kind: "credential fill"))
     #expect(detectorDisplayName("aws-cli-login-cache") == DetectorDisplayName(packageName: "aws-cli", kind: "login cache"))
     #expect(detectorDisplayName("homebrew") == DetectorDisplayName(packageName: "homebrew", kind: "mutable"))

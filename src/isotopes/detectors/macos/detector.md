@@ -1,4 +1,4 @@
-# macOS
+# macOS Command Search
 
 ```sh
 launchctl getenv PATH

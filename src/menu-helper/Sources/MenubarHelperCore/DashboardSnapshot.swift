@@ -266,6 +266,7 @@ public func detectorDisplayName(_ name: String) -> DetectorDisplayName {
 }
 
 private let splitDetectorDisplayNames: [String: DetectorDisplayName] = [
+    "macOS": DetectorDisplayName(packageName: "macOS Command Search", kind: "PATH ordering"),
     "aws-cli-credentials-file": DetectorDisplayName(packageName: "aws-cli", kind: "credentials file"),
     "aws-cli-legacy-plugins": DetectorDisplayName(packageName: "aws-cli", kind: "legacy plugins"),
     "aws-cli-login-cache": DetectorDisplayName(packageName: "aws-cli", kind: "login cache"),

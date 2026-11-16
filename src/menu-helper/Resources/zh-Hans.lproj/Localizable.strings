@@ -617,3 +617,6 @@
 "My financial situation has changed, and times are tight. If you enjoy Automic Vault, I could use a few bucks a month to help cover the costs of maintaining my open source projects.\n\nYou can sponsor me on GitHub. Thank you for using my work.\n\nMax Howell" = "我的经济状况发生了变化，最近手头有些紧。如果你喜欢 Automic Vault，每月赞助几美元就能帮我分担维护开源项目的费用。\n\n你可以在 GitHub 上赞助我。感谢你使用我的作品。\n\nMax Howell";
 "Sponsor on GitHub" = "在 GitHub 上赞助";
 "Remind me in 30 days" = "30 天后提醒我";
+"Flagged PATH entries" = "已标记的 PATH 条目";
+"PATH controls where apps and shells look for commands. A user-writable directory searched before protected system directories can supply a replacement command that runs under your account." = "PATH 决定应用和 shell 在哪里查找命令。如果先搜索用户可写目录，再搜索受保护的系统目录，该目录就可能提供以你的账户运行的替代命令。";
+"These entries can supply commands before protected system directories. Expand an entry to see where it was observed. Executable paths identify processes; they are not the flagged PATH entries." = "这些条目可先于受保护的系统目录提供命令。展开条目可查看观察到它的位置。可执行文件路径用于标识进程，并不是被标记的 PATH 条目。";

@@ -2073,7 +2073,9 @@ final class DashboardModel: ObservableObject {
                 }
                 let severity = detectorSeverityLevel(findings.map(\.severity))
                 let affectedCount = findings.flatMap(\.affected).count
-                let subtitle = affectedCount == 0 ? "detector tripped"
+                let subtitle = detector.name == "macOS"
+                    ? (affectedCount == 1 ? "1 flagged PATH entry" : "\(affectedCount) flagged PATH entries")
+                    : affectedCount == 0 ? "detector tripped"
                     : affectedCount == 1 ? "1 trigger tripped" : "\(affectedCount) triggers tripped"
                 return DashboardItem(
                     id: detector.name,
@@ -2081,13 +2083,14 @@ final class DashboardModel: ObservableObject {
                     kind: displayName.kind,
                     subtitle: subtitle,
                     detail: [
-                        findings.first?.explanation ?? "Detector flagged this tool.",
+                        findings.compactMap(\.explanation).joined(separator: "\n\n"),
                         findings.first?.solution,
                     ].compactMap(\.self).joined(separator: "\n\n"),
                     documentation: detector.documentation,
                     hardenerDocumentation: hardener?.documentation,
                     severity: severity.title,
-                    isTriggered: true
+                    isTriggered: true,
+                    pathFindings: detector.name == "macOS" ? findings : []
                 )
             }
             .sorted(by: detectorItemPrecedes)
@@ -2639,6 +2642,29 @@ extension DashboardModel {
 
 @MainActor
 func runDashboardSearchSelfCheck() -> Int32 {
+    var pathSnapshot = DashboardSnapshot.empty
+    let pathData = Data("""
+    [
+      {"source":"macOS","severity":"medium","explanation":"First PATH evidence: PID 123","solution":"Review PATH.","affected":[{"path":"/fixture/first"}]},
+      {"source":"macOS","severity":"medium","explanation":"Second PATH evidence: PID 456","solution":"Review PATH.","affected":[{"path":"/fixture/second"}]}
+    ]
+    """.utf8)
+    guard let pathFindings = try? JSONDecoder().decode([DetectorFinding].self, from: pathData) else { return 1 }
+    pathSnapshot.detectorFindings = pathFindings
+    let pathModel = DashboardModel(snapshot: pathSnapshot)
+    pathModel.selectSection(.detectors)
+    guard let pathItem = pathModel.items.first,
+          pathItem.id == "macOS",
+          pathItem.title == "macOS Command Search",
+          pathItem.kind == "PATH ordering",
+          pathItem.subtitle == "2 flagged PATH entries",
+          pathItem.pathFindings == pathFindings,
+          !detectorSummary(for: pathItem).contains("Plaintext") else {
+        print("PATH presentation must retain every Finding and describe command search")
+        return 1
+    }
+    pathModel.searchText = "PID 456"
+    guard pathModel.items.map(\.id) == ["macOS"] else { return 1 }
     // Terraform and OpenTofu share a credential helper, but remain separate Tools.
     var sharedHelperSnapshot = DashboardSnapshot.empty
     sharedHelperSnapshot.hardenedTools = [
@@ -3635,6 +3661,7 @@ struct DashboardItem: Identifiable, Equatable, Sendable {
     let isHardened: Bool
     let isUpdateAvailable: Bool
     let date: Date?
+    let pathFindings: [DetectorFinding]
 
     var isBuiltInTool: Bool { id == "gpg-signing" || id == "ssh-agent" }
 
@@ -3642,7 +3669,7 @@ struct DashboardItem: Identifiable, Equatable, Sendable {
         isBuiltInTool ? id : hardenerNameReferencedByDocumentation(documentation) ?? title
     }
 
-    init(id: String, title: String, kind: String? = nil, subtitle: String, detail: String, documentation: String = "", hardenerDocumentation: String? = nil, severity: String? = nil, blessingStatus: String? = nil, isTriggered: Bool = false, isHardened: Bool = false, isUpdateAvailable: Bool = false, date: Date? = nil) {
+    init(id: String, title: String, kind: String? = nil, subtitle: String, detail: String, documentation: String = "", hardenerDocumentation: String? = nil, severity: String? = nil, blessingStatus: String? = nil, isTriggered: Bool = false, isHardened: Bool = false, isUpdateAvailable: Bool = false, date: Date? = nil, pathFindings: [DetectorFinding] = []) {
         self.id = id
         self.title = title
         self.kind = kind
@@ -3656,6 +3683,7 @@ struct DashboardItem: Identifiable, Equatable, Sendable {
         self.isHardened = isHardened
         self.isUpdateAvailable = isUpdateAvailable
         self.date = date
+        self.pathFindings = pathFindings
     }
 }
 
@@ -4485,7 +4513,7 @@ private struct DashboardRow: View {
                 Text(item.title)
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(.primary)
-                    .lineLimit(1)
+                    .lineLimit(item.id == "macOS" ? 2 : 1)
                     .layoutPriority(1)
                 if item.isUpdateAvailable {
                     Text("Outdated")
@@ -5433,6 +5461,8 @@ private func detectorSummary(for item: DashboardItem) -> String {
         String(localized: "Mutable installs can be changed after installation. If an attacker edits them, future commands may run code you did not approve.")
     case "persisted output", "persisted report":
         String(localized: "Persisted output can leave discovered secrets in report files. Anyone with file access can recover those secrets later.")
+    case "path ordering":
+        String(localized: "PATH controls where apps and shells look for commands. A user-writable directory searched before protected system directories can supply a replacement command that runs under your account.")
     case "plaintext secret":
         String(localized: "Plaintext secrets are stored without OS-backed protection. Any local process with file access can copy and reuse them.")
     case "registry credentials":
@@ -5545,7 +5575,36 @@ private struct ReferenceDetailView: View {
                 InfoBlock(title: localizedUIString(packageStatus.update), text: packageStatus.detail, rendersMarkdown: true)
             }
 
-            if !item.detail.isEmpty {
+            if !item.pathFindings.isEmpty {
+                VStack(alignment: .leading, spacing: 14) {
+                    Text("Flagged PATH entries")
+                        .font(.headline)
+                    Text("These entries can supply commands before protected system directories. Expand an entry to see where it was observed. Executable paths identify processes; they are not the flagged PATH entries.")
+                        .foregroundStyle(.secondary)
+                    ForEach(Array(item.pathFindings.enumerated()), id: \.offset) { _, finding in
+                        DisclosureGroup {
+                            Text(finding.explanation ?? "")
+                                .foregroundStyle(.secondary)
+                                .textSelection(.enabled)
+                                .padding(.top, 6)
+                        } label: {
+                            // Escape untrusted path characters so they cannot impersonate report text.
+                            Text(verbatim: finding.affected.map { $0.path.debugDescription }.joined(separator: "\n"))
+                                .font(.system(.body, design: .monospaced))
+                                .textSelection(.enabled)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        Divider()
+                    }
+                    if let solution = item.pathFindings.first?.solution {
+                        InfoBlock(title: "Mitigation", text: solution)
+                    }
+                }
+                .font(.system(size: 12))
+                .padding(14)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
+            } else if !item.detail.isEmpty {
                 InfoBlock(title: "Current Result", text: item.detail)
                     .padding(14)
                     .frame(maxWidth: .infinity, alignment: .leading)
