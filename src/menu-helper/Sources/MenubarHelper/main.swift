@@ -742,9 +742,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @MainActor private func showMainWindow(secretGateID: String?) {
         guard !isUpdating else { return }
-        defer {
-            if let mainWindow { sponsorshipAppeal.presentIfNeeded(on: mainWindow) }
-        }
+        defer { showSponsorshipAppealIfNeeded() }
         let wasVisible = mainWindow?.isVisible ?? false
         if let mainWindow {
             mainWindow.makeKeyAndOrderFront(nil)
@@ -795,6 +793,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         #if !DEBUG
         postHogTelemetry.captureMainWindowOpened()
         #endif
+    }
+
+    private func showSponsorshipAppealIfNeeded() {
+        guard !isUpdating, let mainWindow, mainWindow.isVisible else { return }
+        sponsorshipAppeal.presentIfNeeded(
+            on: mainWindow,
+            hasHardenedTools: latestToolStatus?.hardenedTools.isEmpty == false
+        )
     }
 
     @MainActor @objc private func openAutoApproval(_ sender: NSMenuItem) {
@@ -1137,6 +1143,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         (mainWindow?.contentViewController as? AutomicVaultMainWindowController)?.updateToolStatus(status)
         setDoctorStatus(count: status.doctorIssues.count)
         setOutdatedToolsStatus(count: status.outdatedCount)
+        showSponsorshipAppealIfNeeded()
     }
 
     private func refreshDoctorStatus() {

@@ -18,8 +18,8 @@ final class SponsorshipAppeal {
         return now.timeIntervalSince(lastShown) >= Self.reminderInterval
     }
 
-    func presentIfNeeded(on window: NSWindow) {
-        guard shouldPresent(), window.attachedSheet == nil else { return }
+    func presentIfNeeded(on window: NSWindow, hasHardenedTools: Bool) {
+        guard hasHardenedTools, shouldPresent(), window.attachedSheet == nil else { return }
         defaults.set(Date(), forKey: Self.lastShownKey)
         let alert = Self.makeAlert()
         // A window sheet leaves the approval service and its separate windows running.
@@ -80,10 +80,13 @@ final class SponsorshipAppeal {
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 800, height: 600),
                               styleMask: [.titled], backing: .buffered, defer: false)
         window.orderFront(nil)
-        appeal.presentIfNeeded(on: window)
+        appeal.presentIfNeeded(on: window, hasHardenedTools: false)
+        guard window.attachedSheet == nil, appeal.shouldPresent(),
+              defaults.object(forKey: lastShownKey) == nil else { return 1 }
+        appeal.presentIfNeeded(on: window, hasHardenedTools: true)
         guard !appeal.shouldPresent(), let sheet = window.attachedSheet else { return 1 }
         guard !SponsorshipAppeal(defaults: defaults).shouldPresent() else { return 1 }
-        appeal.presentIfNeeded(on: window)
+        appeal.presentIfNeeded(on: window, hasHardenedTools: true)
         guard window.attachedSheet === sheet else { return 1 }
         window.endSheet(sheet, returnCode: .alertSecondButtonReturn)
         window.orderOut(nil)
