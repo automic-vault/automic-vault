@@ -56,13 +56,13 @@ commands:
   $ av inject -- <command>                # run an approved script
   $ av inject --mode=fd +KEY:FD -- <cmd>  # apply secrets through anonymous pipes
   $ av proxy +KEY... [--] <command>       # proxy secret references for a command
-  $ av git <clone|fetch|pull|push> <URL>  # protected GitHub HTTPS, main branch
+  $ av git <clone|fetch|pull|push> <URL>  # deprecated Git HTTPS transport
   $ av list [options]                     # list Secret Names; --json adds sources
   $ av history [--json] [--since 7d] [--no-pager]
   $ av settings <list|get|set> [--json]   # inspect or tune presentation
   $ av save [options] KEY                 # store a global or Project Value
   $ av harden <tool> [-y|--yes]           # harden a tool; migrate credentials
-  $ av harden gh --without-git-configuration
+  $ av harden gh --without-git-configuration  # compatibility flag; Git is always unchanged
   $ av unharden brew [-y|--yes]           # temporarily restore Homebrew for cask migration
   $ av gpg-sign [GPG options]             # authorize and sign a Git payload
   $ av open [--secret-gate <id>]          # open the Automic Vault app

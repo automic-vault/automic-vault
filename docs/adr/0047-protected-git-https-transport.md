@@ -7,6 +7,10 @@ The force/lease extension is recorded in [ADR 0052](0052-protected-git-force-and
 Its candidate implementation requires signed validation before merge. The
 measurements below describe the original non-forced transport.
 
+The installation and repair behavior below is superseded by
+[ADR 0084](0084-deprecated-git-transport.md). The transport is deprecated;
+existing runtime authorization checks remain in force.
+
 ## Context
 
 An Apple signature does not stop Git from forwarding a password to another

@@ -745,6 +745,11 @@ Use request; it is not an Unknown operation receiving automic authorization.
 An explicit Secret Use request whose characteristics remain Unknown still
 requires Approval.
 
+The GitHub CLI Hardener protects `gh` independently of Git. Its former
+protected Git HTTPS transport (`av git` and `git-remote-av`) is deprecated and
+no longer installed. Existing transport requests retain the same Secret Use
+boundary; deprecation grants no ordinary credential-helper authority.
+
 ### Hardened State
 
 The current, verifiable invariants established by a Hardener. Hardened State does not mean fully safe. Installed hardening status is independent

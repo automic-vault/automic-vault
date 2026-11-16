@@ -153,6 +153,11 @@ fn transport_response(
 }
 
 pub(super) fn run(args: &[OsString], stdout: &mut dyn Write, stderr: &mut dyn Write) -> i32 {
+    let _ = writeln!(
+        stderr,
+        "av git: warning: {}",
+        super::git::DEPRECATION_WARNING
+    );
     let result = (|| {
         let [_, url] = args else {
             return Err("expected remote name and GitHub HTTPS URL".into());

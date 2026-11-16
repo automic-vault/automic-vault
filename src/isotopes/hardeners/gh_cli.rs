@@ -18,7 +18,7 @@ struct GhCredential {
 pub(crate) fn run(
     stdout: &mut dyn Write,
     yes: bool,
-    without_git_configuration: bool,
+    _without_git_configuration: bool,
 ) -> Result<(), String> {
     PRIVILEGE_MODE.require_user("gh", false)?;
     let install = isotope::plan(isotope::GH)?;
@@ -40,16 +40,11 @@ pub(crate) fn run(
     writeln!(stdout, "╭─ harden gh").ok();
     writeln!(stdout, "│").ok();
     install.write(stdout, isotope::GH);
-    if without_git_configuration {
-        writeln!(
-            stdout,
-            "├─ leave Git configuration unchanged (managed manually)"
-        )
-        .ok();
-    } else {
-        writeln!(stdout, "├─ install or verify the protected Git transport").ok();
-        writeln!(stdout, "├─ configure Git globally to use Automic Vault for github.com HTTPS operations, including new clones").ok();
-    }
+    writeln!(
+        stdout,
+        "├─ leave Git configuration unchanged; the protected Git HTTPS transport is deprecated"
+    )
+    .ok();
 
     let destinations = migration_destinations(&credentials, &configured_hosts)?;
 
@@ -86,7 +81,6 @@ pub(crate) fn run(
 
     if credentials.is_empty() {
         install.apply(isotope::GH)?;
-        configure_git(stdout, without_git_configuration, &hosts_paths[0])?;
         writeln!(stdout, "╰─ installed gh isotope").ok();
         super::write_secret_gate_notice(stdout, "gh");
         return Ok(());
@@ -100,48 +94,20 @@ pub(crate) fn run(
         credential.delete()?;
     }
     verify_postconditions()?;
-    configure_git(stdout, without_git_configuration, &hosts_paths[0])?;
     writeln!(stdout, "╰─ migrated gh credentials").ok();
     super::write_secret_gate_notice(stdout, "gh");
-    Ok(())
-}
-
-fn configure_git(
-    stdout: &mut dyn Write,
-    without_configuration: bool,
-    hosts: &Path,
-) -> Result<(), String> {
-    if without_configuration {
-        return gh_git::apply(true, hosts);
-    }
-    // Git setup cannot prevent completion of gh credential custody and cleanup.
-    if let Err(error) = gh_git::preflight().and_then(|()| gh_git::apply(false, hosts)) {
-        writeln!(
-            stdout,
-            "├─ warning: gh hardening completed, but Git setup failed: {error}"
-        )
-        .ok();
-        writeln!(stdout, "├─ run `av doctor gh` to inspect Git setup; protected Git requests still require a verified transport").ok();
-    }
     Ok(())
 }
 
 pub(crate) fn detect() -> HardenerDetection {
     let mut detection = isotope::detect(isotope::GH);
     if detection.hardened {
-        match gh_hosts_paths()
-            .map_err(|message| ("gh_git_configuration", message))
-            .and_then(|paths| gh_git::diagnose(&paths[0]))
-        {
+        match gh_git::diagnose() {
             Ok(()) => {}
             Err((kind, message)) => detection.diagnostics.push(super::HardenerDiagnostic {
                 kind,
                 message,
-                remediation: if kind == "gh_git_transport_unavailable" {
-                    "Protected Git transport requires a reviewed Apple Git build. gh hardening remains independent of Git setup. Use `av harden gh --without-git-configuration` to manage Git configuration yourself.".into()
-                } else {
-                    "Run `av harden gh` to repair protected Git transport setup, or `av harden gh --without-git-configuration` to manage Git configuration yourself.".into()
-                },
+                remediation: "Use SSH with the Automic Vault SSH agent. Review existing av:: URL rewrites before removing them; do not enable an ordinary token helper as a fallback. See https://github.com/automic-vault/automic-vault/blob/main/docs/securing-git.md.".into(),
                 path: None,
             }),
         }
@@ -743,7 +709,7 @@ mod tests {
     }
 
     #[test]
-    fn harden_completes_when_git_setup_fails() {
+    fn harden_completes_without_attempting_git_setup() {
         let _guard = crate::global_test_env_lock().lock().unwrap();
         for migrate in [false, true] {
             let dir = temp_path("gh-git-failure");
@@ -766,7 +732,7 @@ mod tests {
                 std::env::set_var("GH_CONFIG_DIR", &config);
                 std::env::set_var("AUTOMIC_VAULT_TEST_KEYCHAIN_DIR", &keychain);
                 std::env::set_var("AUTOMIC_VAULT_TEST_GH_CLI_PATH", &gh);
-                // A real preflight failure, before any privileged installation.
+                // Git overrides no longer cause installation preflight or affect migration.
                 std::env::set_var("GIT_CONFIG_COUNT", "0");
             }
             let mut output = Vec::new();
@@ -783,8 +749,8 @@ mod tests {
             }
             result.unwrap();
             let output = String::from_utf8(output).unwrap();
-            assert!(output.contains("gh hardening completed, but Git setup failed"));
-            assert!(output.contains("Git environment overrides are set"));
+            assert!(output.contains("transport is deprecated"));
+            assert!(!output.contains("Git setup failed"));
             assert!(!output.contains("fixture-token"));
             assert!(!config.join("av-git-configuration").exists());
             assert!(

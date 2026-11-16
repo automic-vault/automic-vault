@@ -37,6 +37,14 @@ the `gh` Secret Gate evaluates the request before applying the token.
 
 Use SSH.
 
+## Deprecated Git HTTPS transport
+
+Automic Vault no longer installs its protected Git HTTPS transport. Existing
+`av git` and `git-remote-av` invocations warn and retain their security checks.
+This does not deprecate the `gh` Isotope. Use the SSH agent below for Git, then
+follow the [legacy routing removal guidance](../src/isotopes/hardeners/gh_cli.md#git-https-transport-deprecated).
+Removing an `av::` rewrite alone does not switch an HTTPS remote to SSH.
+
 ## Gate SSH Authentication
 
 Open **Settings → SSH Agent**, choose **Add SSH Key…**, and import an OpenSSH
