@@ -5528,7 +5528,7 @@ private struct ReferenceDetailView: View {
                         .foregroundStyle(.primary)
                         .lineLimit(1)
                     referenceBadge
-                    if item.id == "homebrew" {
+                    if item.id == "brew" {
                         Label("Deprecated", systemImage: "exclamationmark.triangle.fill")
                             .font(.system(size: 11, weight: .semibold))
                             .padding(.horizontal, 8)
