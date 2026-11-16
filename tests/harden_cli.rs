@@ -29,10 +29,7 @@ fn gh_git_opt_out_preserves_configuration_and_migrates_credentials() {
         assert!(output.status.success(), "{}", stderr(&output));
         assert!(stdout(&output).contains("leave Git configuration unchanged"));
         assert_eq!(fs::read_to_string(&git_config).unwrap(), original);
-        assert_eq!(
-            fs::read_to_string(config.join("av-git-configuration")).unwrap(),
-            "manual\n"
-        );
+        assert!(!config.join("av-git-configuration").exists());
     }
     assert_eq!(
         fs::read_to_string(root.join("keychain/GH_TOKEN_GITHUB_COM")).unwrap(),
@@ -47,7 +44,7 @@ fn gh_git_opt_out_preserves_configuration_and_migrates_credentials() {
 }
 
 #[test]
-fn gh_git_conflict_warns_after_migration_and_offers_opt_out() {
+fn gh_hardening_preserves_existing_git_routing() {
     let root = fixture("gh-git-conflict");
     prepare(&root, "gh");
     let config = root.join("gh");
@@ -72,12 +69,8 @@ fn gh_git_conflict_warns_after_migration_and_offers_opt_out() {
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ");
-    assert!(message.contains("Git setup failed"), "{message}");
-    assert!(
-        message.contains("overlapping GitHub URL rewrite"),
-        "{message}"
-    );
-    assert!(message.contains("--without-git-configuration"));
+    assert!(message.contains("transport is deprecated"), "{message}");
+    assert!(!message.contains("Git setup failed"));
     assert_eq!(fs::read_to_string(git_config).unwrap(), original);
     assert!(
         !fs::read_to_string(config.join("hosts.yml"))
@@ -93,7 +86,7 @@ fn gh_git_conflict_warns_after_migration_and_offers_opt_out() {
 }
 
 #[test]
-fn gh_git_discovery_overrides_warn_after_migration() {
+fn gh_hardening_ignores_git_discovery_overrides() {
     let root = fixture("gh-git-discovery");
     prepare(&root, "gh");
     let config = root.join("gh");
@@ -119,12 +112,8 @@ fn gh_git_discovery_overrides_warn_after_migration() {
         assert!(output.status.success(), "{}", stderr(&output));
         assert!(stderr(&output).is_empty());
         let message = stdout(&output).replace("\n│  ", " ");
-        assert!(message.contains("Git setup failed"), "{message}");
-        assert!(
-            message.contains("Git environment overrides are set"),
-            "{message}"
-        );
-        assert!(message.contains("--without-git-configuration"));
+        assert!(message.contains("transport is deprecated"), "{message}");
+        assert!(!message.contains("Git setup failed"));
         assert_eq!(fs::read_to_string(&git_config).unwrap(), original);
         assert!(
             !fs::read_to_string(config.join("hosts.yml"))
@@ -137,6 +126,36 @@ fn gh_git_discovery_overrides_warn_after_migration() {
         );
         assert!(!config.join("av-git-configuration").exists());
         fs::remove_dir_all(root.join("keychain")).unwrap();
+    }
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn gh_hardening_does_not_create_git_configuration() {
+    let root = fixture("gh-no-git-setup");
+    prepare(&root, "gh");
+    let config = root.join("gh");
+    fs::create_dir(&config).unwrap();
+    fs::write(config.join("hosts.yml"), "github.com:\n    user: test\n").unwrap();
+    for opt_out in [false, true] {
+        let mut command = av(&root, "gh");
+        if opt_out {
+            command.arg("--without-git-configuration");
+        }
+        let output = command
+            .env("AUTOMIC_VAULT_TEST_EUID", "501")
+            .env("AUTOMIC_VAULT_TEST_GH_CLI_PATH", root.join("targets/gh"))
+            .env("GH_CONFIG_DIR", &config)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{}", stderr(&output));
+        assert!(
+            stdout(&output)
+                .replace("\n│  ", " ")
+                .contains("transport is deprecated")
+        );
+        assert!(!root.join("home/.gitconfig").exists());
+        assert!(!config.join("av-git-configuration").exists());
     }
     fs::remove_dir_all(root).unwrap();
 }

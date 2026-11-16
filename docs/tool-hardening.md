@@ -8,10 +8,11 @@ $ av harden gh
 $ av doctor gh
 ```
 
-By default, `av harden gh` also configures protected GitHub HTTPS operations,
-including fresh clones. Use `av harden gh --without-git-configuration` if you
-manage Git routing yourself. See the [gh hardener](../src/isotopes/hardeners/gh_cli.md)
-for supported operations and rollback.
+`av harden gh` protects GitHub CLI credentials and leaves Git configuration
+unchanged. The protected Git HTTPS transport is deprecated and no longer
+installed. Use [SSH with the Automic Vault SSH agent](securing-git.md) for Git;
+see the [gh hardener](../src/isotopes/hardeners/gh_cli.md) for legacy routing
+removal guidance.
 
 A Detector reports a supported Exposure or Hazard without changing the
 environment, requesting Secrets, or invoking a configured credential helper.

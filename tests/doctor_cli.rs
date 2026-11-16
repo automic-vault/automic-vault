@@ -21,68 +21,18 @@ fn doctor_does_not_report_package_update_status() {
             assert!(!kind.starts_with("isotope_update") && !kind.starts_with("aws_update"));
         }
     }
-    assert!(
-        gh_git_issue(&output).is_some(),
-        "integrity/configuration checks remain active"
-    );
+    assert!(gh_git_issue(&output).is_none());
     fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
-fn gh_doctor_reports_missing_global_routing_for_an_installed_isotope() {
-    let root = gh_fixture();
-    let output = gh_doctor(&root).output().unwrap();
-    assert_eq!(output.status.code(), Some(1));
-    let issue = gh_git_issue(&output).expect("installed gh must diagnose missing Git routing");
-    assert_eq!(
-        issue["message"],
-        "GitHub HTTPS operations are not globally routed through Automic Vault"
-    );
-    assert_gh_git_repair(&issue);
-    assert!(!root.join("home/.gitconfig").exists());
-    fs::remove_dir_all(root).unwrap();
-}
-
-#[test]
-fn gh_doctor_reports_unsupported_git_before_missing_routing() {
+fn gh_doctor_does_not_require_git_routing_or_a_reviewed_git_build() {
     let root = gh_fixture();
     let output = gh_doctor(&root)
-        .env(
-            "AUTOMIC_VAULT_TEST_GIT_VERSION",
-            "git version 2.51.0 (Apple Git-156)\n",
-        )
+        .env("AUTOMIC_VAULT_TEST_GIT_VERSION", "git version unreviewed\n")
         .output()
         .unwrap();
-    assert_eq!(output.status.code(), Some(1));
     let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    let issue = report["results"][0]["issues"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|issue| issue["kind"] == "gh_git_transport_unavailable")
-        .expect("unsupported Git must be reported before missing routing");
-    assert!(
-        issue["message"]
-            .as_str()
-            .unwrap()
-            .contains("not been reviewed")
-    );
-    assert!(
-        !issue["remediation"]
-            .as_str()
-            .unwrap()
-            .contains("Run `av harden gh`")
-    );
-    assert!(!root.join("home/.gitconfig").exists());
-    fs::write(root.join("gh/av-git-configuration"), "manual\n").unwrap();
-    let manual = gh_doctor(&root)
-        .env(
-            "AUTOMIC_VAULT_TEST_GIT_VERSION",
-            "git version 2.51.0 (Apple Git-156)\n",
-        )
-        .output()
-        .unwrap();
-    let report: serde_json::Value = serde_json::from_slice(&manual.stdout).unwrap();
     assert!(
         report["results"][0]["issues"]
             .as_array()
@@ -90,37 +40,32 @@ fn gh_doctor_reports_unsupported_git_before_missing_routing() {
             .iter()
             .all(|issue| !issue["kind"].as_str().unwrap().starts_with("gh_git_"))
     );
+    assert!(!root.join("home/.gitconfig").exists());
     fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
-fn gh_doctor_reports_unavailable_transport_and_respects_manual_setup() {
-    let root = gh_fixture();
-    let config = root.join("home/.gitconfig");
-    let routing = "[url \"av::https://github.com/\"]\n insteadOf = https://github.com/\n";
-    fs::write(&config, routing).unwrap();
-    // PATH contains only the fixture gh, so the protected adapter is unavailable.
-    // Machines without the signed CLI/runtime may report that earlier failure.
-    let output = gh_doctor(&root).output().unwrap();
-    assert_eq!(output.status.code(), Some(1));
-    let issue = gh_git_issue(&output).expect("a route without usable transport needs repair");
-    assert!(!issue["message"].as_str().unwrap().is_empty());
-    assert!(
-        !issue["message"]
-            .as_str()
-            .unwrap()
-            .contains("not globally routed")
-    );
-    assert_gh_git_repair(&issue);
-
-    fs::write(root.join("gh/av-git-configuration"), "manual\n").unwrap();
-    let manual = gh_doctor(&root).output().unwrap();
-    assert!(
-        gh_git_issue(&manual).is_none(),
-        "manual setup must suppress Git repair diagnostics"
-    );
-    assert_eq!(fs::read_to_string(config).unwrap(), routing);
-    fs::remove_dir_all(root).unwrap();
+fn gh_doctor_reports_deprecated_routing_even_with_legacy_manual_preference() {
+    for key in ["insteadOf", "pushInsteadOf"] {
+        let root = gh_fixture();
+        let config = root.join("home/.gitconfig");
+        let routing = format!("[url \"av::https://github.com/\"]\n {key} = https://github.com/\n");
+        fs::write(&config, &routing).unwrap();
+        for manual in [false, true] {
+            if manual {
+                fs::write(root.join("gh/av-git-configuration"), "manual\n").unwrap();
+            }
+            let output = gh_doctor(&root).output().unwrap();
+            assert_eq!(output.status.code(), Some(1));
+            let issue = gh_git_issue(&output).expect("existing routes must report deprecation");
+            assert!(issue["message"].as_str().unwrap().contains("deprecated"));
+            let remediation = issue["remediation"].as_str().unwrap();
+            assert!(remediation.contains("SSH agent"));
+            assert!(!remediation.contains("av harden gh"));
+            assert_eq!(fs::read_to_string(&config).unwrap(), routing);
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
 }
 
 fn gh_fixture() -> PathBuf {
@@ -158,14 +103,8 @@ fn gh_git_issue(output: &Output) -> Option<serde_json::Value> {
         .as_array()
         .unwrap()
         .iter()
-        .find(|issue| issue["kind"] == "gh_git_configuration")
+        .find(|issue| issue["kind"] == "gh_git_transport_deprecated")
         .cloned()
-}
-
-fn assert_gh_git_repair(issue: &serde_json::Value) {
-    let remediation = issue["remediation"].as_str().unwrap();
-    assert!(remediation.contains("Run `av harden gh`"));
-    assert!(remediation.contains("av harden gh --without-git-configuration"));
 }
 
 #[test]

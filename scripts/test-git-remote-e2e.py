@@ -21,6 +21,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--repository', required=True, help='disposable private OWNER/NAME')
     options = parser.parse_args()
+    for path in ['/usr/local/bin/git-remote-av', '/opt/av/git/bin/git',
+                 '/opt/av/git/bin/git-remote-https', '/opt/av/git/bin/gh']:
+        if not Path(path).is_file():
+            parser.error('deprecated transport test requires an existing installed runtime and adapter')
     assert re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', options.repository)
     root = Path(tempfile.mkdtemp(prefix='av-git-real-')).resolve()
     url = f'https://github.com/{options.repository}.git'
@@ -54,11 +58,11 @@ def main():
     assert api('')['private'] is True, 'fixture must be private'
     run(git + ['config', '--global', 'user.name', 'Vault transport test'])
     run(git + ['config', '--global', 'user.email', 'transport-test@example.invalid'])
-    for _ in range(2):
-        run(['/usr/local/bin/av', 'harden', 'gh', '--yes'], env=git_environment)
     rule = 'url.av::https://github.com/.insteadOf'
+    # Legacy transport testing only; this HOME is an isolated fixture.
+    run(git + ['config', '--global', rule, 'https://github.com/'])
     assert run(git + ['config', '--global', '--get-all', rule]).stdout == b'https://github.com/\n'
-    print('PASS: gh hardening installs global routing idempotently in an isolated home', flush=True)
+    print('PASS: isolated legacy routing configured; no transport installed', flush=True)
     baseline = {r['id'] for r in records()}
     print(f'Test directory: {root}\nRemote branch: {branch}', flush=True)
     clone = root / 'clone'

@@ -2,10 +2,11 @@
 
 This follows the [domain language](domain-language.md),
 [architecture](architecture.md), and [positioning](positioning.md).
-This guide requires the signed candidate app and CLI. Run `av harden gh` to
-install or refresh the protected runtime and `/usr/local/bin/git-remote-av`,
-then enable global GitHub HTTPS routing. The [security boundary and measured evidence](adr/0047-protected-git-https-transport.md)
-apply to the narrow surface below. Your existing Vault policy is unchanged.
+**Legacy transport only.** The Git HTTPS transport is deprecated and its
+installer is disabled. This guide applies only to an already-installed signed
+runtime and adapter; `av harden gh` no longer installs or repairs them. Use
+[SSH](securing-git.md) for new setups. The [security boundary and measured evidence](adr/0047-protected-git-https-transport.md)
+still apply to existing use.
 
 ## Start with the private fixture
 
@@ -27,26 +28,13 @@ One Git command can produce several records or Approval requests because each
 HTTPS phase gets a fresh process and authorization. Public reads may require
 no credential and therefore produce no Secret-use record.
 
-## Configure routing manually
+## Inspect legacy routing
 
-Default hardening already enables GitHub HTTPS routing globally. If you chose
-`av harden gh --without-git-configuration`, install and verify the protected
-runtime and adapter before opting individual repositories into routing.
-
-For an existing repository with a GitHub HTTPS origin ending in `.git`, run once:
-
-```sh
-git config --local url."av::https://github.com/".insteadOf https://github.com/
-```
-
-Continue using ordinary `git fetch`, `git pull`, and `git push`. The saved
-origin URL remains unchanged. Inspect it with `git config --get remote.origin.url`;
-`git remote get-url origin` displays the effective rewritten URL.
-SSH origins continue using SSH. This setting does not redirect them.
-
-To opt in globally, including new clones, use `--global` instead of `--local`.
-Native Git must be able to find `/usr/local/bin/git-remote-av` on PATH.
-No `av git` command or replacement Git binary is required.
+Inspect existing routing with `git config --includes --show-origin --get-regexp
+'^url\.av::.*\.(insteadof|pushinsteadof)$'`. The transport still checks the
+installed runtime at use. A URL rewrite does not install or verify it.
+Do not add routing to work around a missing adapter. See the
+[removal guidance](../src/isotopes/hardeners/gh_cli.md#git-https-transport-deprecated).
 
 ## Check Approval behavior
 
@@ -69,8 +57,7 @@ repositories, and branch updates (including force and leases) are supported by t
 in [ADR 0052](adr/0052-protected-git-force-and-leases.md). Tags, shallow or
 partial clones, deletion, atomic/signed pushes, submodules and LFS
 are outside this candidate's surface. Unsupported helper commands/options fail
-explicitly. Repositories using these features may need to stay outside the
-opt-in while the surface is extended. Large transfers and GUI/embedded Git
+explicitly. Use SSH for repositories that need these features. Large transfers and GUI/embedded Git
 clients have not been validated.
 
 Try `git push --dry-run`: it must leave the remote unchanged. Try
@@ -91,9 +78,8 @@ git config --local --fixed-value --unset-all url."av::https://github.com/".inste
 If you enabled the global setting, remove it with the same command using
 `--global`. This restores your previous transport selection. It does not grant
 ordinary Git access to Vault's protected credential provider. Keep the
-candidate app installed during testing. Run
-`av harden gh --without-git-configuration` to retain manual configuration and
-stop Doctor requesting the global route. The flag itself does not undo routing.
+candidate app installed during testing. Doctor reports remaining legacy rewrites
+as deprecated. The compatibility flag does not undo routing.
 
 ## Repeat the automated live test
 
@@ -102,8 +88,8 @@ python3 scripts/test-git-remote-e2e.py \
   --repository OWNER/PRIVATE_TEST_REPO
 ```
 
-It runs `av harden gh --yes` twice using an isolated home and global Git config,
-then creates and retains a new feature branch and local clones. It verifies
+It requires an existing runtime and adapter, configures routing only in an
+isolated test home, then creates and retains a new feature branch and local clones. It verifies
 actual GitHub commits, upstream tracking, dry-run, hostile config isolation,
 malformed request denial, copied-nonce denial, and fresh Vault records without
 reading or displaying the raw token. It also exercises force, implicit/explicit

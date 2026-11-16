@@ -4,6 +4,10 @@
 - Date: 2026-10-16
 - Updates: [ADR 0047](0047-protected-git-https-transport.md), hardener integration
 
+The installation and repair behavior below is superseded by
+[ADR 0084](0084-deprecated-git-transport.md). The transport is deprecated;
+existing runtime authorization checks remain in force.
+
 ## Context
 
 An unreviewed Apple Git build prevents protected transport installation. Making
