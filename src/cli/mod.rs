@@ -62,7 +62,8 @@ commands:
   $ av settings <list|get|set> [--json]   # inspect or tune presentation
   $ av save [options] KEY                 # store a global or Project Value
   $ av harden <tool> [-y|--yes]           # harden a tool; migrate credentials
-  $ av harden gh --without-git-configuration  # compatibility flag; Git is always unchanged
+  $ av harden gh --without-git-configuration
+                                          # compatibility flag; Git is always unchanged
   $ av unharden brew [-y|--yes]           # temporarily restore Homebrew for cask migration
   $ av gpg-sign [GPG options]             # authorize and sign a Git payload
   $ av open [--secret-gate <id>]          # open the Automic Vault app
