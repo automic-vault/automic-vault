@@ -143,7 +143,7 @@ fn release_builds_are_actions_only_and_fail_closed() {
     assert!(PUBLISH_SCRIPT.contains("dirname \"${AV_SCRIPT_PATH:-$0}\""));
     assert!(PUBLISH_SCRIPT.contains("Determining release metadata with Codex"));
     assert!(PUBLISH_SCRIPT.contains(
-        "Breaking changes confined to the experimental Homebrew stub have at most minor impact"
+        "Breaking changes confined to the deprecated Homebrew stub have at most minor impact"
     ));
     assert!(PUBLISH_SCRIPT.contains("internalVersionReview"));
     assert!(PUBLISH_SCRIPT.contains("INSTALL_REVISION in src/cli/mod.rs"));

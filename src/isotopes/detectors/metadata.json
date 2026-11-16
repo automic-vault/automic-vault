@@ -551,14 +551,6 @@
     "requires_periodic_scan": false,
     "solution": "Run `av harden heroku`."
   },
-  "homebrew": {
-    "watch_paths": [
-      "/opt/homebrew",
-      "/opt/homebrew/*/"
-    ],
-    "requires_periodic_scan": false,
-    "solution": "Run `av harden brew`."
-  },
   "httpie": {
     "watch_paths": [
       "$XDG_CONFIG_HOME/httpie/sessions/**/default.json",
