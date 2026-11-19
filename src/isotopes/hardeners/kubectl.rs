@@ -421,25 +421,26 @@ fn helper_config(kind: &str, user: &str) -> Value {
 }
 
 fn exact_helper(auth: &Map<String, Value>, user: &str) -> bool {
-    auth.get("exec")
-        == Some(&helper_config(
-            auth.get("exec")
-                .and_then(Value::as_object)
-                .and_then(|exec| exec.get("args"))
-                .and_then(Value::as_array)
-                .and_then(|args| args.get(2))
-                .and_then(Value::as_str)
-                .unwrap_or_default(),
-            user,
-        ))
-        && auth
-            .get("exec")
-            .and_then(Value::as_object)
-            .and_then(|exec| exec.get("args"))
-            .and_then(Value::as_array)
-            .and_then(|args| args.get(2))
-            .and_then(Value::as_str)
-            .is_some_and(|kind| matches!(kind, "token" | "client-certificate"))
+    let Some(exec) = auth.get("exec") else {
+        return false;
+    };
+    let Some(kind @ ("token" | "client-certificate")) = exec
+        .get("args")
+        .and_then(Value::as_array)
+        .and_then(|args| args.get(2))
+        .and_then(Value::as_str)
+    else {
+        return false;
+    };
+    let mut expected = helper_config(kind, user);
+    // kubectl renders an unset env as null. Neither null nor [] adds variables.
+    match exec.get("env") {
+        None => {}
+        Some(Value::Null) => expected["env"] = Value::Null,
+        Some(Value::Array(env)) if env.is_empty() => expected["env"] = json!([]),
+        Some(_) => return false,
+    }
+    exec == &expected
         && auth.keys().all(|field| {
             matches!(
                 field.as_str(),
@@ -619,15 +620,54 @@ mod tests {
 
     #[test]
     fn recognizes_the_exact_generated_helper_only() {
-        let mut auth = Map::new();
-        auth.insert("exec".into(), helper_config("token", "prod"));
+        let mut auth = Map::from_iter([("exec".into(), helper_config("token", "prod"))]);
         assert!(exact_helper(&auth, "prod"));
-        auth.get_mut("exec").unwrap()["command"] = json!("av");
+        for env in [Value::Null, json!([])] {
+            auth.get_mut("exec").unwrap()["env"] = env;
+            assert!(exact_helper(&auth, "prod"));
+            assert!(!exact_helper(&auth, "another-user"));
+        }
+        for env in [
+            json!([{"name": "EXAMPLE", "value": "value"}]),
+            json!({}),
+            json!(""),
+        ] {
+            auth.get_mut("exec").unwrap()["env"] = env;
+            assert!(!exact_helper(&auth, "prod"));
+        }
+        for (field, value) in [
+            ("command", json!("av")),
+            (
+                "args",
+                json!(["kubectl-credential", "1", "unknown-kind", "prod"]),
+            ),
+            ("installHint", json!("extra field")),
+        ] {
+            let mut exec = helper_config("token", "prod");
+            exec["env"] = Value::Null;
+            exec[field] = value;
+            auth.insert("exec".into(), exec);
+            assert!(!exact_helper(&auth, "prod"));
+        }
+        auth.insert("exec".into(), helper_config("client-certificate", "prod"));
+        auth.insert("token".into(), json!("inline token"));
         assert!(!exact_helper(&auth, "prod"));
     }
 
     #[test]
     fn hardener_migrates_a_token_and_installs_the_exact_exec_helper() {
+        verify_token_migration(None);
+    }
+
+    #[test]
+    #[ignore = "requires AV_KUBECTL_TEST_BINARY pointing to a real kubectl binary"]
+    fn hardener_round_trips_with_real_kubectl() {
+        let target = std::env::var_os("AV_KUBECTL_TEST_BINARY")
+            .expect("set AV_KUBECTL_TEST_BINARY to the kubectl binary");
+        verify_token_migration(Some(&fs::canonicalize(target).unwrap()));
+    }
+
+    fn verify_token_migration(real_target: Option<&Path>) {
         let _guard = crate::global_test_env_lock().lock().unwrap();
         let root = std::env::temp_dir().join(format!(
             "av-kubectl-hardener-test-{}-{}",
@@ -635,7 +675,8 @@ mod tests {
             super::super::isotope::now_nanos()
         ));
         let config = root.join("config");
-        let target = root.join("kubectl");
+        let fake_target = root.join("kubectl");
+        let target = real_target.unwrap_or(&fake_target);
         let keychain = root.join("keychain");
         fs::create_dir_all(&root).unwrap();
         fs::write(
@@ -643,17 +684,19 @@ mod tests {
             r#"{"apiVersion":"v1","kind":"Config","clusters":[{"name":"prod","cluster":{"server":"https://example.com"}}],"users":[{"name":"prod","user":{"token":"secret"}}]}"#,
         )
         .unwrap();
-        fs::write(
-            &target,
-            "#!/bin/sh\nfile=${1#--kubeconfig=}\n/bin/cat \"$file\"\n",
-        )
-        .unwrap();
-        fs::set_permissions(&target, fs::Permissions::from_mode(0o755)).unwrap();
+        if real_target.is_none() {
+            fs::write(
+                target,
+                "#!/bin/sh\nfile=${1#--kubeconfig=}\n/bin/cat \"$file\"\n",
+            )
+            .unwrap();
+            fs::set_permissions(target, fs::Permissions::from_mode(0o755)).unwrap();
+        }
         let previous_kubeconfig = std::env::var_os("KUBECONFIG");
         unsafe {
             std::env::remove_var("KUBECONFIG");
             std::env::set_var("AUTOMIC_VAULT_TEST_KUBECTL_CONFIG", &config);
-            std::env::set_var("AUTOMIC_VAULT_TEST_KUBECTL_TARGET", &target);
+            std::env::set_var("AUTOMIC_VAULT_TEST_KUBECTL_TARGET", target);
             std::env::set_var("AUTOMIC_VAULT_TEST_KEYCHAIN_DIR", &keychain);
         }
 
@@ -668,6 +711,11 @@ mod tests {
             r#"{"token":"secret"}"#
         );
         assert!(detect().hardened);
+        run(&mut Vec::new(), true).unwrap();
+        assert_eq!(
+            serde_json::from_slice::<Value>(&fs::read(&config).unwrap()).unwrap(),
+            hardened
+        );
 
         unsafe {
             std::env::remove_var("AUTOMIC_VAULT_TEST_KUBECTL_CONFIG");
