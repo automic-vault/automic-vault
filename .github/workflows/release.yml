@@ -215,21 +215,40 @@ jobs:
           set -euo pipefail
           mkdir -p "$ASSET_DIR" target/sbom-input
           cp "target/swift/$DMG_NAME" "$ASSET_DIR/$DMG_NAME"
-          cp Cargo.toml Cargo.lock target/sbom-input/
           cp src/menu-helper/Package.swift \
             src/menu-helper/Package.resolved \
             target/sbom-input/
+
+      - name: Generate Rust SBOM from the build graph
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo install sbom-attest --version 0.4.0 --locked
+          sbom-attest generate --package av --locked \
+            --target "$(rustc -vV | sed -n 's/^host: //p')" \
+            --product-version "$VERSION" --spdx target/sbom-rust.spdx.json
 
       - name: Generate SPDX SBOM
         uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
         with:
           path: target/sbom-input
           format: spdx-json
-          output-file: ${{ env.ASSET_DIR }}/${{ env.SBOM_NAME }}
+          output-file: target/sbom-swift.spdx.json
           syft-version: v1.49.0
           dependency-snapshot: false
           upload-artifact: false
           upload-release-assets: false
+
+      - name: Merge Rust and Swift SBOMs
+        shell: bash
+        run: |
+          set -euo pipefail
+          jq -s '.[0] + {
+              packages: (.[0].packages + .[1].packages),
+              files: ((.[0].files // []) + (.[1].files // [])),
+              relationships: (.[0].relationships + .[1].relationships)
+            }' target/sbom-rust.spdx.json target/sbom-swift.spdx.json \
+            >"$ASSET_DIR/$SBOM_NAME"
 
       - name: Generate release checksums
         shell: bash
