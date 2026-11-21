@@ -70,6 +70,15 @@ fn release_workflow_binds_the_dmg_to_reviewed_source() {
 }
 
 #[test]
+fn release_sbom_describes_the_built_crate_graph() {
+    assert!(!RELEASE_WORKFLOW.contains("cp Cargo.toml Cargo.lock target/sbom-input/"));
+    assert!(RELEASE_WORKFLOW.contains("cargo install sbom-attest --version 0.4.0 --locked"));
+    assert!(RELEASE_WORKFLOW.contains("sbom-attest generate --package av --locked"));
+    assert!(RELEASE_WORKFLOW.contains("output-file: target/sbom-swift.spdx.json"));
+    assert!(RELEASE_WORKFLOW.contains(">\"$ASSET_DIR/$SBOM_NAME\""));
+}
+
+#[test]
 fn release_assets_are_immutable_and_never_replaced() {
     assert!(RELEASE_WORKFLOW.contains("--draft"));
     assert!(PUBLISH_SCRIPT.contains(".immutable"));
