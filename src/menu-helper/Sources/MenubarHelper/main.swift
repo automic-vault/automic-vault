@@ -5362,7 +5362,8 @@ private final class ApprovalServer: @unchecked Sendable {
                     pid: pid,
                     identity: identity,
                     peer: peer,
-                    message: message
+                    message: message,
+                    cancellation: cancellation
                 ) {
                     return
                 }
@@ -5546,7 +5547,8 @@ private final class ApprovalServer: @unchecked Sendable {
                pid: pid,
                identity: identity,
                peer: peer,
-               message: message
+               message: message,
+               cancellation: cancellation
            )
         {
             return
@@ -5849,7 +5851,8 @@ private final class ApprovalServer: @unchecked Sendable {
                            pid: pid,
                            identity: currentIdentity,
                            peer: peer,
-                           message: message
+                           message: message,
+                           cancellation: cancellation
                        )
                     {
                         return true
@@ -5887,6 +5890,7 @@ private final class ApprovalServer: @unchecked Sendable {
                             record: record,
                             launchers: policyLaunchers,
                             launcher: promptLauncher,
+                            cancellation: cancellation,
                             release: { payload in
                                 self.reply(
                                     peer,
@@ -6091,6 +6095,7 @@ private final class ApprovalServer: @unchecked Sendable {
                         record: record,
                         launchers: policyLaunchers,
                         launcher: refreshedCandidate.launcher,
+                        cancellation: cancellation,
                         release: { payload in
                             self.temporaryAccessGrants.startWithLease(
                                 scope: refreshedCandidate.scope,
@@ -6247,7 +6252,8 @@ private final class ApprovalServer: @unchecked Sendable {
         pid: pid_t,
         identity: AVProcessIdentity,
         peer: xpc_connection_t,
-        message: xpc_object_t
+        message: xpc_object_t,
+        cancellation: ApprovalCancellation
     ) -> Bool {
         for launcher in launchers {
             do {
@@ -6277,6 +6283,7 @@ private final class ApprovalServer: @unchecked Sendable {
                         record: record,
                         launchers: denialLaunchers,
                         launcher: launcher,
+                        cancellation: cancellation,
                         activateAfterRecording: {
                             rememberRetainedProvenance(
                                 at: authorizationGate,
@@ -6966,7 +6973,8 @@ private final class ApprovalServer: @unchecked Sendable {
         pid: pid_t,
         identity: AVProcessIdentity,
         peer: xpc_connection_t,
-        message: xpc_object_t
+        message: xpc_object_t,
+        cancellation: ApprovalCancellation
     ) -> Bool {
         guard blessedScriptCanAutoApprove(
             script,
@@ -6996,6 +7004,7 @@ private final class ApprovalServer: @unchecked Sendable {
                 launchers: launchers,
                 launcher: launcher,
                 sshScriptAuthorization: request.sshPeer == nil ? nil : .blessing(script),
+                cancellation: cancellation,
                 activateAfterRecording: {
                     if let launcher {
                         Task { @MainActor in
@@ -9932,20 +9941,18 @@ private final class ApprovalServer: @unchecked Sendable {
         launchers: [LauncherIdentity],
         launcher: LauncherIdentity?,
         sshScriptAuthorization: SSHScriptAuthorization? = nil,
-        cancellation: ApprovalCancellation? = nil,
+        cancellation: ApprovalCancellation,
         validateAuthority: () throws -> Void = {},
         activateAfterRecording: () -> Void = {},
         release: (ApprovedPayload) -> Void
     ) throws -> Bool {
         func validateCancellation() throws {
-            guard cancellation?.isCanceled != true else { throw CancellationError() }
+            try cancellation.check()
             try validateAuthority()
         }
         try validateCancellation()
         func validateDenial() throws {
-            let currentLaunchers = try request.sshPeer?.launchers ?? launcherIdentities(for: identity) {
-                try cancellation?.check()
-            }
+            let currentLaunchers = try request.sshPeer?.launchers ?? launcherIdentities(for: identity, check: cancellation.check)
             var attributedLaunchers = launchers + currentLaunchers
             if let launcher, !attributedLaunchers.contains(where: {
                 $0.designatedRequirement == launcher.designatedRequirement
@@ -9956,7 +9963,7 @@ private final class ApprovalServer: @unchecked Sendable {
             }
         }
         try validateDenial()
-        try cancellation?.check()
+        try cancellation.check()
         func validateSSHScriptAuthority() throws {
             guard let sshScriptAuthorization, let sshPeer = request.sshPeer else { return }
             guard sshScriptAuthorization.allows(
