@@ -198,6 +198,11 @@ static bool unique_info(pid_t pid, struct av_unique_info *info) {
     return proc_pidinfo(pid, 17, 0, info, sizeof(*info)) == sizeof(*info);
 }
 
+int av_process_execution_version(pid_t pid) {
+    struct av_unique_info info = {0};
+    return unique_info(pid, &info) ? info.version : 0;
+}
+
 bool av_original_parent_tracking_available(void) {
     struct av_unique_info info = {0};
     return unique_info(getpid(), &info) && info.original_parent_version > 0;
