@@ -8,16 +8,19 @@ package final class ApprovalValidationQueue: @unchecked Sendable {
     }
 
     private let workers = DispatchQueue(label: "com.automicvault.validation", qos: .utility, attributes: .concurrent)
+    private let workerLimit: Int
     private let lock = NSLock()
     private var active = Set<UUID>()
     private var waiting: [Request] = []
 
-    package init() {}
+    package init(activeProcessorCount: Int = ProcessInfo.processInfo.activeProcessorCount) {
+        workerLimit = min(4, max(1, activeProcessorCount / 4))
+    }
 
     package func submit(peer: UUID, run: @escaping @Sendable () -> Void) -> Bool {
         lock.withLock {
             let request = Request(peer: peer, run: run)
-            if active.count < 2 && !active.contains(peer) {
+            if active.count < workerLimit && !active.contains(peer) {
                 start(request)
             } else {
                 guard waiting.count < 8 else { return false }

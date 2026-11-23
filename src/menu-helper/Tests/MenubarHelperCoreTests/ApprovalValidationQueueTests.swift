@@ -2,16 +2,16 @@ import Foundation
 import Testing
 @testable import MenubarHelperCore
 
-@Test func validationBoundsBurstsAndDiscardsDisconnectedPeers() throws {
-    let queue = ApprovalValidationQueue()
+@Test(arguments: [(2, 1), (8, 2), (12, 3), (16, 4), (32, 4)])
+func validationBoundsBurstsAndDiscardsDisconnectedPeers(processors: Int, workers: Int) throws {
+    let queue = ApprovalValidationQueue(activeProcessorCount: processors)
     let started = DispatchSemaphore(value: 0)
     let release = DispatchSemaphore(value: 0)
     defer {
-        release.signal()
-        release.signal()
+        for _ in 0..<workers { release.signal() }
     }
     let waiting = UUID()
-    for _ in 0..<2 {
+    for _ in 0..<workers {
         try #require(queue.submit(peer: UUID()) {
             started.signal()
             _ = release.wait(timeout: .now() + 10)
@@ -32,7 +32,7 @@ import Testing
 }
 
 @Test func validationSerializesOnePeerWhileOthersCanProceed() throws {
-    let queue = ApprovalValidationQueue()
+    let queue = ApprovalValidationQueue(activeProcessorCount: 8)
     let peer = UUID()
     let release = DispatchSemaphore(value: 0)
     defer { release.signal() }
