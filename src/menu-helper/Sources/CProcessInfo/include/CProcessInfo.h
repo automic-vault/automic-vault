@@ -20,6 +20,7 @@ typedef struct {
     char path[PROC_PIDPATHINFO_MAXSIZE];
 } AVProcessIdentity;
 
+int av_process_execution_version(pid_t pid);
 bool av_original_parent_tracking_available(void);
 bool av_original_parent_identity(const AVProcessIdentity *child, AVProcessIdentity *parent_out);
 // Verifies both execution links and endpoint UID/session. Caller must verify the live

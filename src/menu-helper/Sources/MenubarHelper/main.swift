@@ -2207,7 +2207,7 @@ private func automaticTargetRuntimeProtection(
     if let parent = request.credentialParent {
         protection = liveSigningInfo(for: parent)?.runtimeProtection
     } else {
-        protection = executableSigningInfo(path: request.target)?.runtimeProtection
+        protection = verifiedExecutableInformation(path: request.target).map { runtimeProtection($0.information) }
     }
     return protection?.targetAuthorizationHistoryDescription
         ?? "Hardened Runtime could not be verified; Secret may be exposed to debugging or process-memory inspection"
@@ -3348,6 +3348,10 @@ final class ApprovalCancellation: @unchecked Sendable {
         lock.withLock { canceled }
     }
 
+    func check() throws {
+        if isCanceled { throw CancellationError() }
+    }
+
     func cancel() {
         let list: [@MainActor @Sendable () -> Void] = lock.withLock {
             guard !canceled else { return [] }
@@ -4085,6 +4089,7 @@ private func replyHistoryChunk(
 
 
 private final class ApprovalServer: @unchecked Sendable {
+    private let validation = ApprovalValidationQueue()
     private let serviceName: String
     private let teamIdentifier: String
     private let secretGateDescriptors: [SecretGateDescriptor]
@@ -4222,8 +4227,35 @@ private final class ApprovalServer: @unchecked Sendable {
         guard xpc_get_type(event) == XPC_TYPE_CONNECTION else { return }
         let peer = event
         let cancellation = ApprovalCancellation()
+        let peerID = UUID()
         xpc_connection_set_event_handler(peer) { [weak self] message in
-            self?.handle(message, on: peer, cancellation: cancellation)
+            guard let self else { return }
+            if isApprovalCancellationEvent(message) {
+                cancellation.cancel()
+                validation.discardWaiting(for: peerID)
+                return
+            }
+            guard xpc_get_type(message) == XPC_TYPE_DICTIONARY, !cancellation.isCanceled else { return }
+
+            let pid = xpc_connection_get_pid(peer)
+            // Bind queued work to the execution observed while handling this XPC message.
+            let version = av_process_execution_version(pid)
+            guard version > 0 else {
+                reply(peer, to: message, ok: false, error: "Gate Client identity is unavailable")
+                return
+            }
+            let accepted = validation.submit(peer: peerID) {
+                guard !cancellation.isCanceled else { return }
+                var current = AVProcessIdentity()
+                guard av_process_identity(pid, &current), av_process_execution_version(pid) == version else {
+                    self.reply(peer, to: message, ok: false, error: "Gate Client changed before validation")
+                    return
+                }
+                self.handle(message, on: peer, identity: current, cancellation: cancellation)
+            }
+            if !accepted {
+                reply(peer, to: message, ok: false, error: "Automic Vault is busy. Try again shortly.")
+            }
         }
         xpc_connection_activate(peer)
     }
@@ -4231,21 +4263,10 @@ private final class ApprovalServer: @unchecked Sendable {
     private func handle(
         _ message: xpc_object_t,
         on peer: xpc_connection_t,
+        identity: AVProcessIdentity,
         cancellation: ApprovalCancellation
     ) {
-        if isApprovalCancellationEvent(message) {
-            cancellation.cancel()
-            return
-        }
-        guard xpc_get_type(message) == XPC_TYPE_DICTIONARY else { return }
-
-        let pid = xpc_connection_get_pid(peer)
-        var identity = AVProcessIdentity()
-        guard av_process_identity(pid, &identity) else {
-            reply(peer, to: message, ok: false, error: "Gate Client identity is unavailable")
-            return
-        }
-
+        let pid = identity.pid
         let callerPath = pathString(identity)
         let signing = signingInfo(path: callerPath)
 
@@ -4270,7 +4291,7 @@ private final class ApprovalServer: @unchecked Sendable {
         )
 
         if op.requiresLauncherBundleIntegrity,
-           let error = launcherBundleIntegrityError(for: identity) {
+           let error = launcherBundleIntegrityError(for: identity, cancellation: cancellation) {
             reply(peer, to: message, ok: false, error: error)
             return
         }
@@ -5041,16 +5062,19 @@ private final class ApprovalServer: @unchecked Sendable {
             return
         }
         let originIdentity = parsedRequest.sshPeer?.identity ?? identity
-        func requestLaunchers() -> [LauncherIdentity] {
-            var launchers = parsedRequest.sshPeer?.launchers ?? launcherIdentities(for: identity)
+        func requestLaunchers() throws -> [LauncherIdentity] {
+            var launchers = try parsedRequest.sshPeer?.launchers ?? launcherIdentities(for: identity, check: cancellation.check)
+            try cancellation.check()
             if launchers.isEmpty, let launcher = launcherIdentity(pid: pid, identity: identity) {
                 launchers.append(launcher)
             }
             return launchers
         }
         // GPG needs Launchers for credential selection; other requests need them for authorization.
-        var launchers = parsedRequest.op == "gpg-sign" ? requestLaunchers() : []
+        var launchers: [LauncherIdentity] = []
         if parsedRequest.op == "gpg-sign" {
+            guard let current = try? requestLaunchers() else { return }
+            launchers = current
             let migrationStatus = migrateLegacyGPGSigningSecrets()
             guard migrationStatus == errSecSuccess else {
                 reply(
@@ -5238,8 +5262,10 @@ private final class ApprovalServer: @unchecked Sendable {
             return
         }
         if preparedRequest.op != "gpg-sign" {
-            launchers = requestLaunchers()
+            guard let current = try? requestLaunchers() else { return }
+            launchers = current
         }
+        guard !cancellation.isCanceled else { return }
         let processChains = preparedRequest.sshPeer == nil ? retainedProcessChains(for: identity) : []
         let keepsDetachedProcessAccess = UserDefaults.standard.bool(
             forKey: keepLauncherAccessForDetachedProcessesDefaultsKey
@@ -5336,7 +5362,8 @@ private final class ApprovalServer: @unchecked Sendable {
                     pid: pid,
                     identity: identity,
                     peer: peer,
-                    message: message
+                    message: message,
+                    cancellation: cancellation
                 ) {
                     return
                 }
@@ -5388,6 +5415,7 @@ private final class ApprovalServer: @unchecked Sendable {
                     record: record,
                     launchers: policyLaunchers,
                     launcher: matchedLauncher,
+                    cancellation: cancellation,
                     activateAfterRecording: {
                         registerBlessedExecution(script, pid: pid, identity: identity)
                         rememberRetainedProvenance(
@@ -5519,7 +5547,8 @@ private final class ApprovalServer: @unchecked Sendable {
                pid: pid,
                identity: identity,
                peer: peer,
-               message: message
+               message: message,
+               cancellation: cancellation
            )
         {
             return
@@ -5545,6 +5574,7 @@ private final class ApprovalServer: @unchecked Sendable {
                     record: record,
                     launchers: policyLaunchers,
                     launcher: directAccessLauncher,
+                    cancellation: cancellation,
                     activateAfterRecording: {
                         rememberRetainedProvenance(
                             at: authorizationGate,
@@ -5639,6 +5669,7 @@ private final class ApprovalServer: @unchecked Sendable {
                     launchers: policyLaunchers,
                     launcher: authorizingLauncher,
                     sshScriptAuthorization: request.sshPeer == nil ? nil : .inheritedPolicy,
+                    cancellation: cancellation,
                     validateAuthority: {
                         guard !overrideExecutions.isEmpty else { return }
                         guard let ancestorExecution, retainedProcessExecutionIsLive(ancestorExecution),
@@ -5820,7 +5851,8 @@ private final class ApprovalServer: @unchecked Sendable {
                            pid: pid,
                            identity: currentIdentity,
                            peer: peer,
-                           message: message
+                           message: message,
+                           cancellation: cancellation
                        )
                     {
                         return true
@@ -5858,6 +5890,7 @@ private final class ApprovalServer: @unchecked Sendable {
                             record: record,
                             launchers: policyLaunchers,
                             launcher: promptLauncher,
+                            cancellation: cancellation,
                             release: { payload in
                                 self.reply(
                                     peer,
@@ -6062,6 +6095,7 @@ private final class ApprovalServer: @unchecked Sendable {
                         record: record,
                         launchers: policyLaunchers,
                         launcher: refreshedCandidate.launcher,
+                        cancellation: cancellation,
                         release: { payload in
                             self.temporaryAccessGrants.startWithLease(
                                 scope: refreshedCandidate.scope,
@@ -6218,7 +6252,8 @@ private final class ApprovalServer: @unchecked Sendable {
         pid: pid_t,
         identity: AVProcessIdentity,
         peer: xpc_connection_t,
-        message: xpc_object_t
+        message: xpc_object_t,
+        cancellation: ApprovalCancellation
     ) -> Bool {
         for launcher in launchers {
             do {
@@ -6248,6 +6283,7 @@ private final class ApprovalServer: @unchecked Sendable {
                         record: record,
                         launchers: denialLaunchers,
                         launcher: launcher,
+                        cancellation: cancellation,
                         activateAfterRecording: {
                             rememberRetainedProvenance(
                                 at: authorizationGate,
@@ -6937,7 +6973,8 @@ private final class ApprovalServer: @unchecked Sendable {
         pid: pid_t,
         identity: AVProcessIdentity,
         peer: xpc_connection_t,
-        message: xpc_object_t
+        message: xpc_object_t,
+        cancellation: ApprovalCancellation
     ) -> Bool {
         guard blessedScriptCanAutoApprove(
             script,
@@ -6967,6 +7004,7 @@ private final class ApprovalServer: @unchecked Sendable {
                 launchers: launchers,
                 launcher: launcher,
                 sshScriptAuthorization: request.sshPeer == nil ? nil : .blessing(script),
+                cancellation: cancellation,
                 activateAfterRecording: {
                     if let launcher {
                         Task { @MainActor in
@@ -9903,18 +9941,18 @@ private final class ApprovalServer: @unchecked Sendable {
         launchers: [LauncherIdentity],
         launcher: LauncherIdentity?,
         sshScriptAuthorization: SSHScriptAuthorization? = nil,
-        cancellation: ApprovalCancellation? = nil,
+        cancellation: ApprovalCancellation,
         validateAuthority: () throws -> Void = {},
         activateAfterRecording: () -> Void = {},
         release: (ApprovedPayload) -> Void
     ) throws -> Bool {
         func validateCancellation() throws {
-            guard cancellation?.isCanceled != true else { throw CancellationError() }
+            try cancellation.check()
             try validateAuthority()
         }
         try validateCancellation()
         func validateDenial() throws {
-            let currentLaunchers = request.sshPeer?.launchers ?? launcherIdentities(for: identity)
+            let currentLaunchers = try request.sshPeer?.launchers ?? launcherIdentities(for: identity, check: cancellation.check)
             var attributedLaunchers = launchers + currentLaunchers
             if let launcher, !attributedLaunchers.contains(where: {
                 $0.designatedRequirement == launcher.designatedRequirement
@@ -9925,6 +9963,7 @@ private final class ApprovalServer: @unchecked Sendable {
             }
         }
         try validateDenial()
+        try cancellation.check()
         func validateSSHScriptAuthority() throws {
             guard let sshScriptAuthorization, let sshPeer = request.sshPeer else { return }
             guard sshScriptAuthorization.allows(
@@ -12567,8 +12606,14 @@ private func copySigningInformation(_ code: SecStaticCode) -> [CFString: Any]? {
 }
 
 private func launcherIdentities(for identity: AVProcessIdentity) -> [LauncherIdentity] {
+    launcherIdentities(for: identity, check: {})
+}
+
+private func launcherIdentities(
+    for identity: AVProcessIdentity, check: () throws -> Void
+) rethrows -> [LauncherIdentity] {
     for pid in launcherAncestorStartPIDs(identity) {
-        let launchers = launcherIdentities(startingAt: pid)
+        let launchers = try launcherIdentities(startingAt: pid, check: check)
         if !launchers.isEmpty { return launchers }
     }
     return []
@@ -13065,11 +13110,12 @@ private func launcherAncestorPath(startingAt startPID: pid_t) -> (path: String, 
     return result
 }
 
-private func launcherIdentities(startingAt startPID: pid_t) -> [LauncherIdentity] {
+private func launcherIdentities(startingAt startPID: pid_t, check: () throws -> Void) rethrows -> [LauncherIdentity] {
     var pid = startPID
     var seen = Set<pid_t>()
     var launchers: [LauncherIdentity] = []
     for _ in 0..<32 {
+        try check()
         guard pid > 1, seen.insert(pid).inserted else { return launchers }
 
         var identity = AVProcessIdentity()
@@ -13254,11 +13300,12 @@ private func launcherIdentities(
     )]
 }
 
-private func launcherBundleIntegrityError(for identity: AVProcessIdentity) -> String? {
+private func launcherBundleIntegrityError(for identity: AVProcessIdentity, cancellation: ApprovalCancellation? = nil) -> String? {
     for startPID in launcherAncestorStartPIDs(identity) {
         var pid = startPID
         var seen = Set<pid_t>()
         for _ in 0..<32 {
+            if cancellation?.isCanceled == true { return "Request canceled" }
             guard pid > 1, seen.insert(pid).inserted else { break }
             var ancestor = AVProcessIdentity()
             guard av_process_identity(pid, &ancestor) else { break }
@@ -13425,7 +13472,7 @@ private func liveCodeIdentity(pid: pid_t) -> Data? {
     return liveProcessSigningInformation(pid: pid)?.information[kSecCodeInfoUnique] as? Data
 }
 
-private func executableSigningInfo(path: String) -> LiveSigningInfo? {
+private func verifiedExecutableInformation(path: String) -> (code: SecStaticCode, information: [CFString: Any])? {
     var staticCode: SecStaticCode?
     guard SecStaticCodeCreateWithPath(URL(fileURLWithPath: path) as CFURL, [], &staticCode) == errSecSuccess,
           let staticCode,
@@ -13437,11 +13484,16 @@ private func executableSigningInfo(path: String) -> LiveSigningInfo? {
     var info: CFDictionary?
     let flags = SecCSFlags(rawValue: kSecCSSigningInformation | kSecCSRequirementInformation)
     guard SecCodeCopySigningInformation(staticCode, flags, &info) == errSecSuccess,
-          let dictionary = info as? [CFString: Any],
-          let requirementValue = dictionary[kSecCodeInfoDesignatedRequirement]
+          let dictionary = info as? [CFString: Any]
     else {
         return nil
     }
+    return (staticCode, dictionary)
+}
+
+private func executableSigningInfo(path: String) -> LiveSigningInfo? {
+    guard let (staticCode, dictionary) = verifiedExecutableInformation(path: path),
+          let requirementValue = dictionary[kSecCodeInfoDesignatedRequirement] else { return nil }
     let requirement = requirementValue as! SecRequirement
     guard let requirementText = requirementString(requirement) else { return nil }
 
@@ -18364,6 +18416,8 @@ private func runApprovalProcessExecutionSelfCheck() -> Int32 {
     let pid = child.processIdentifier
     var identity = AVProcessIdentity()
     guard av_process_identity(pid, &identity) else { return 1 }
+    let version = av_process_execution_version(pid)
+    guard version > 0, identity.pidversion == 0 || identity.pidversion == version else { return 1 }
     let fullAncestry = approvalProcessIdentities(gateClientPID: pid, launcherPID: pid)
     guard identity.ppid > 1, fullAncestry.count > 1,
           fullAncestry.first?.pid == pid
