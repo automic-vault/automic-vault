@@ -24,7 +24,7 @@ fn aws_version_skips_secret_use() {
         .output()
         .unwrap();
 
-    assert!(output.status.success());
+    assert!(output.status.success(), "aws --version: {output:?}");
     assert_eq!(output.stdout, b"--version\n");
     assert!(output.stderr.is_empty());
     fs::remove_file(stub).unwrap();
