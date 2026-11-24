@@ -4,7 +4,14 @@ use std::process::Command;
 
 fn main() {
     let out = PathBuf::from(env::var("OUT_DIR").unwrap());
-    let profile_dir = out.ancestors().nth(3).unwrap();
+    // Cargo 1.100 split build/<package>-<hash>/out into build/<package>/<hash>/out.
+    let profile_dir = out
+        .ancestors()
+        .skip(2)
+        .take(2)
+        .find(|dir| dir.ends_with("build"))
+        .and_then(|dir| dir.parent())
+        .expect("unrecognized Cargo OUT_DIR layout");
     println!(
         "cargo:rustc-env=AV_CARGO_PROFILE_DIR={}",
         profile_dir.display()
