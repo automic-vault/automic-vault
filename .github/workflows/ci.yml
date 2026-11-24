@@ -44,18 +44,7 @@ jobs:
           persist-credentials: false
 
       - name: Run tests
-        run: |
-          (
-            until pid=$(pgrep -nx swiftpm-testing); do sleep 5; done
-            sleep 90
-            if kill -0 "$pid" 2>/dev/null; then
-              sample "$pid" 1 -file "$RUNNER_TEMP/swift-tests.sample"
-              cat "$RUNNER_TEMP/swift-tests.sample"
-            fi
-          ) &
-          sampler=$!
-          trap 'kill "$sampler" 2>/dev/null || true' EXIT
-          swift test --package-path src/menu-helper --disable-automatic-resolution
+        run: swift test --package-path src/menu-helper --disable-automatic-resolution
 
       - name: Test menu helper executable boundaries
         run: scripts/test-menu-helper-self-checks.sh

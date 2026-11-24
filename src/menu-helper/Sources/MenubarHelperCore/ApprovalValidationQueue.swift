@@ -7,13 +7,17 @@ package final class ApprovalValidationQueue: @unchecked Sendable {
         let run: @Sendable () -> Void
     }
 
-    private let workers = DispatchQueue(label: "com.automicvault.validation", qos: .utility, attributes: .concurrent)
+    private let workers: DispatchQueue
     private let workerLimit: Int
     private let lock = NSLock()
     private var active = Set<UUID>()
     private var waiting: [Request] = []
 
-    package init(activeProcessorCount: Int = ProcessInfo.processInfo.activeProcessorCount) {
+    package init(
+        activeProcessorCount: Int = ProcessInfo.processInfo.activeProcessorCount,
+        workers: DispatchQueue = DispatchQueue(label: "com.automicvault.validation", qos: .utility, attributes: .concurrent)
+    ) {
+        self.workers = workers
         workerLimit = min(4, max(1, activeProcessorCount / 4))
     }
 
