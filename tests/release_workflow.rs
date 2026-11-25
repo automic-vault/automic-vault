@@ -70,12 +70,18 @@ fn release_workflow_binds_the_dmg_to_reviewed_source() {
 }
 
 #[test]
-fn release_sbom_describes_the_built_crate_graph() {
-    assert!(!RELEASE_WORKFLOW.contains("cp Cargo.toml Cargo.lock target/sbom-input/"));
-    assert!(RELEASE_WORKFLOW.contains("cargo install sbom-attest --version 0.4.0 --locked"));
-    assert!(RELEASE_WORKFLOW.contains("sbom-attest generate --package av --locked"));
-    assert!(RELEASE_WORKFLOW.contains("output-file: target/sbom-swift.spdx.json"));
-    assert!(RELEASE_WORKFLOW.contains(">\"$ASSET_DIR/$SBOM_NAME\""));
+fn release_sbom_generation_is_isolated_from_signing() {
+    let (inventory, signing) = RELEASE_WORKFLOW.split_once("\n  release:\n").unwrap();
+    assert!(inventory.contains("permissions:\n      contents: read\n    steps:"));
+    assert!(!inventory.contains("environment: release"));
+    assert!(!inventory.contains("secrets."));
+    assert!(inventory.contains("sbom-attest generate --package av --locked"));
+    assert!(inventory.contains("uses: anchore/sbom-action@"));
+    assert!(inventory.contains("python3 scripts/test-release-sbom.py"));
+    assert!(signing.contains("needs: sbom"));
+    assert!(signing.contains("uses: actions/download-artifact@"));
+    assert!(!signing.contains("sbom-attest"));
+    assert!(!signing.contains("anchore/sbom-action"));
 }
 
 #[test]

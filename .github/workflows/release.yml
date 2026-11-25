@@ -22,8 +22,72 @@ concurrency:
   group: release
   cancel-in-progress: false
 
+env:
+  RUST_TOOLCHAIN: 1.96.0
+
 jobs:
+  sbom:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: macos-26
+    timeout-minutes: 20
+    outputs:
+      artifact: ${{ steps.upload.outputs.artifact-id }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Prepare SBOM inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal
+          rustup override set "$RUST_TOOLCHAIN"
+          mkdir -p target/sbom-input
+          cp src/menu-helper/Package.{swift,resolved} target/sbom-input/
+
+      - name: Generate Rust SBOM from the build graph
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo install sbom-attest --version 0.4.0 --locked
+          sbom-attest generate --package av --locked \
+            --target "$(rustc -vV | sed -n 's/^host: //p')" \
+            --spdx target/sbom-rust.spdx.json
+
+      - name: Generate SPDX SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        with:
+          path: target/sbom-input
+          format: spdx-json
+          output-file: target/sbom-swift.spdx.json
+          syft-version: v1.49.0
+          dependency-snapshot: false
+          upload-artifact: false
+          upload-release-assets: false
+
+      - name: Assemble and check the release inventory
+        shell: bash
+        run: |
+          set -euo pipefail
+          host="$(rustc -vV | sed -n 's/^host: //p')"
+          cargo tree --locked --package av --target "$host" -e normal,no-proc-macro \
+            --prefix none --format '{p}' > target/sbom-runtime.txt
+          python3 scripts/merge-release-sbom.py > target/release.spdx.json
+          python3 scripts/test-release-sbom.py
+
+      - id: upload
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: sbom-${{ github.sha }}-${{ github.run_attempt }}
+          path: target/release.spdx.json
+          if-no-files-found: error
+
   release:
+    needs: sbom
     if: github.event_name == 'workflow_dispatch'
     name: Build, attest, and draft
     runs-on: macos-26
@@ -40,7 +104,6 @@ jobs:
       DMG_NAME: Automic-Vault-${{ inputs.version }}.dmg
       SBOM_NAME: Automic-Vault-${{ inputs.version }}.spdx.json
       IMMUTABLE_RELEASES_ENABLED: ${{ vars.IMMUTABLE_RELEASES_ENABLED }}
-      RUST_TOOLCHAIN: 1.96.0
       GH_TOKEN: ${{ github.token }}
       RELEASE_NOTES: ${{ inputs.notes }}
 
@@ -111,6 +174,18 @@ jobs:
             echo "Tag $VERSION already exists; publish a new version." >&2
             exit 64
           fi
+
+      - name: Require the inventory artifact ID
+        shell: bash
+        env:
+          ARTIFACT_ID: ${{ needs.sbom.outputs.artifact }}
+        run: '[[ "$ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]]'
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          artifact-ids: ${{ needs.sbom.outputs.artifact }}
+          merge-multiple: true
+          path: ${{ runner.temp }}/release-sbom
 
       - name: Validate release secrets
         shell: bash
@@ -209,46 +284,13 @@ jobs:
           scripts/test-menu-helper-self-checks.sh --signed
           "target/swift/Automic Vault.app/Contents/MacOS/AutomicVaultMenubar"
 
-      - name: Stage release inputs
+      - name: Stage verified release assets
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p "$ASSET_DIR" target/sbom-input
+          mkdir -p "$ASSET_DIR"
           cp "target/swift/$DMG_NAME" "$ASSET_DIR/$DMG_NAME"
-          cp src/menu-helper/Package.swift \
-            src/menu-helper/Package.resolved \
-            target/sbom-input/
-
-      - name: Generate Rust SBOM from the build graph
-        shell: bash
-        run: |
-          set -euo pipefail
-          cargo install sbom-attest --version 0.4.0 --locked
-          sbom-attest generate --package av --locked \
-            --target "$(rustc -vV | sed -n 's/^host: //p')" \
-            --product-version "$VERSION" --spdx target/sbom-rust.spdx.json
-
-      - name: Generate SPDX SBOM
-        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
-        with:
-          path: target/sbom-input
-          format: spdx-json
-          output-file: target/sbom-swift.spdx.json
-          syft-version: v1.49.0
-          dependency-snapshot: false
-          upload-artifact: false
-          upload-release-assets: false
-
-      - name: Merge Rust and Swift SBOMs
-        shell: bash
-        run: |
-          set -euo pipefail
-          jq -s '.[0] + {
-              packages: (.[0].packages + .[1].packages),
-              files: ((.[0].files // []) + (.[1].files // [])),
-              relationships: (.[0].relationships + .[1].relationships)
-            }' target/sbom-rust.spdx.json target/sbom-swift.spdx.json \
-            >"$ASSET_DIR/$SBOM_NAME"
+          cp "$RUNNER_TEMP/release-sbom/release.spdx.json" "$ASSET_DIR/$SBOM_NAME"
 
       - name: Generate release checksums
         shell: bash
