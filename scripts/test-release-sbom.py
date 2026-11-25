@@ -35,12 +35,16 @@ while pending:
         reachable.add(current)
         pending.extend(dependencies[current])
 
-names = {packages[i]["name"] for i in reachable if i in packages}
-assert "serde" in names and "appupdater" in names, names
+rust = json.loads(Path("target/sbom-rust.spdx.json").read_text())
+rust_ids = {p["SPDXID"] for p in rust["packages"]}
+expected = {tuple(line.split()[:2]) for line in Path("target/sbom-runtime.txt").read_text().splitlines()}
+actual = {(packages[i]["name"], "v" + packages[i]["versionInfo"]) for i in reachable & rust_ids}
+assert actual == expected, {"missing": expected - actual, "extra": actual - expected}
+assert build_only == rust_ids - reachable, "Incorrect build-only relationships"
+
+names = {packages[i]["name"] for i in reachable - rust_ids if i in packages}
 pins = json.loads(Path("src/menu-helper/Package.resolved").read_text())["pins"]
 assert {p["identity"] for p in pins} <= names
 assert not any(p["name"].startswith("windows-") for p in packages.values())
-syn = {i for i, p in packages.items() if p["name"] == "syn"}
-assert syn and syn <= build_only and syn.isdisjoint(reachable)
 for path in ("target/sbom-rust.spdx.json", "target/sbom-swift.spdx.json"):
     assert doc["documentNamespace"] != json.loads(Path(path).read_text())["documentNamespace"]

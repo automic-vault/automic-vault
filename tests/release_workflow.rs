@@ -79,7 +79,8 @@ fn release_sbom_generation_is_isolated_from_signing() {
     assert!(inventory.contains("uses: anchore/sbom-action@"));
     assert!(inventory.contains("python3 scripts/test-release-sbom.py"));
     assert!(signing.contains("needs: sbom"));
-    assert!(signing.contains("uses: actions/download-artifact@"));
+    assert!(signing.contains("- *download-inventory"));
+    assert!(signing.contains("- *verify-inventory"));
     assert!(!signing.contains("sbom-attest"));
     assert!(!signing.contains("anchore/sbom-action"));
 }
