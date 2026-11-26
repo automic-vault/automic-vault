@@ -1,10 +1,10 @@
-#!/usr/local/bin/av inject -- /bin/bash
-# --- automic-vault
-# capabilities:
-#   gh: trusted
-#   aws: trusted
-#   gpg-signing: trusted
-#   ssh-agent: trusted
+#!/opt/bru/bin/bru run -- /bin/bash
+# --- irnbru
+# policies:
+#   gh: write
+#   aws: write
+#   gpg-signing: local-write
+#   git-ssh: write
 # ---
 # shellcheck shell=bash disable=SC1008,SC2096
 set -euo pipefail

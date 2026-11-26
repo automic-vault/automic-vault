@@ -146,13 +146,12 @@ fn release_builds_are_actions_only_and_fail_closed() {
     assert!(BUILD_SCRIPT.starts_with("#!/bin/bash\n"));
     assert!(!BUILD_SCRIPT.contains("av inject"));
     assert!(PUBLISH_SCRIPT.starts_with(
-        "#!/usr/local/bin/av inject -- /bin/bash\n\
-# --- automic-vault\n\
-# capabilities:\n\
-#   gh: trusted\n\
-#   aws: trusted\n\
-#   gpg-signing: trusted\n\
-#   ssh-agent: trusted\n\
+        "#!/opt/bru/bin/bru run -- /bin/bash\n\
+# --- irnbru\n\
+# policies:\n\
+#   gh: write\n\
+#   aws: write\n\
+#   gpg-signing: local-write\n\
 # ---\n"
     ));
     assert!(!PUBLISH_SCRIPT.contains("APPLE_PASSWORD"));
